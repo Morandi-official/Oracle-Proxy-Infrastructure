@@ -32,8 +32,8 @@ function Get-ReadOnlyWindowsDiagnostics {
     $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
     $drivers = @(Get-CimInstance Win32_SystemDriver -ErrorAction Stop)
     $adapters = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })
-    $ipv4Routes = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop)
-    $ipv6Routes = @(Get-NetRoute -AddressFamily IPv6 -DestinationPrefix '::/0' -ErrorAction Stop)
+    $ipv4Routes = @(Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' })
+    $ipv6Routes = @(Get-NetRoute -AddressFamily IPv6 -ErrorAction Stop | Where-Object { $_.DestinationPrefix -eq '::/0' })
     $physicalIndices = @($adapters | ForEach-Object { [int]$_.ifIndex })
 
     $serviceStates = [ordered]@{}

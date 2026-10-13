@@ -2,7 +2,7 @@ package dev.oracleproxy.client;
 
 import com.wireguard.config.Config;
 import com.wireguard.config.Peer;
-import com.wireguard.util.InetNetwork;
+import com.wireguard.config.InetNetwork;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;

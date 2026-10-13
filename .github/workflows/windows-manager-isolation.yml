@@ -50,7 +50,7 @@ jobs:
           $created = $false
           try {
             # GitHub-hosted Windows VM only. Start type is DEMAND, never automatic.
-            & sc.exe create $svc "binPath= `"$exe`" --manager-service" "start= demand" "obj= LocalSystem"
+            & sc.exe create $svc "binPath=" ("`"{0}`" --manager-service" -f $exe) "start=" "demand" "obj=" "LocalSystem"
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create isolated lab service' }
             $created = $true
             & sc.exe start $svc

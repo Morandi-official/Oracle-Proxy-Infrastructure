@@ -17,7 +17,7 @@ internal static class ConfigAclGate
         new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value;
 
     internal static void RequireProtectedLabInstallation(
-        string dllDirectory, string labConfigFile)
+        string dllDirectory, string labConfigFile, string profile = "lab-only")
     {
         string appData = Environment.GetFolderPath(
             Environment.SpecialFolder.CommonApplicationData);
@@ -25,7 +25,7 @@ internal static class ConfigAclGate
         string configFolder = Path.Combine(labRoot, "config");
 
         if (!string.Equals(Path.GetFullPath(labConfigFile),
-                Path.GetFullPath(EngineBundle.FixedConfigPath()),
+                Path.GetFullPath(EngineBundle.FixedConfigPath(profile)),
                 StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Lab config path is not fixed");
 

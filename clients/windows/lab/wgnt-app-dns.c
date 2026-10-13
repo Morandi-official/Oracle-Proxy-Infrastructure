@@ -157,6 +157,115 @@ done:
     if(client!=INVALID_SOCKET) closesocket(client);
     return ok;
 }
+
+/* G17 disposable CI only: actual IPv6 datagrams addressed to both narrow
+ * WireGuardNT tunnel addresses, plus synthetic DNS AAAA over inner IPv6.
+ * Same-host results do NOT prove end-to-end route or fail-close.
+ */
+static SOCKET bind_udp6(const char *address, unsigned short port) {
+    SOCKET s=socket(AF_INET6,SOCK_DGRAM,IPPROTO_UDP);
+    if(s==INVALID_SOCKET) return INVALID_SOCKET;
+    DWORD waitms=3500;
+    DWORD v6only=1;
+    if(setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,(char *)&waitms,sizeof(waitms)) ||
+       setsockopt(s,IPPROTO_IPV6,IPV6_V6ONLY,(char *)&v6only,sizeof(v6only))) goto fail;
+    struct sockaddr_in6 a={0};
+    a.sin6_family=AF_INET6; a.sin6_port=htons(port);
+    if(InetPtonA(AF_INET6,address,&a.sin6_addr)!=1 ||
+       bind(s,(struct sockaddr *)&a,sizeof(a))) goto fail;
+    return s;
+fail:
+    fprintf(stderr,"G17_TRACE: IPv6 bind/option failure err=%d\n",WSAGetLastError());
+    closesocket(s);
+    return INVALID_SOCKET;
+}
+static int ipv6_endpoint(const char *address,unsigned short port,struct sockaddr_in6 *dest) {
+    ZeroMemory(dest,sizeof(*dest));
+    dest->sin6_family=AF_INET6; dest->sin6_port=htons(port);
+    return InetPtonA(AF_INET6,address,&dest->sin6_addr)==1;
+}
+static int from_ipv6(const struct sockaddr_in6 *addr,const char *expected) {
+    struct in6_addr parsed={0};
+    return addr->sin6_family==AF_INET6 &&
+      InetPtonA(AF_INET6,expected,&parsed)==1 &&
+      memcmp(&addr->sin6_addr,&parsed,sizeof(parsed))==0;
+}
+static int exchange6(const char *source,const char *destination,unsigned short port) {
+    SOCKET client=INVALID_SOCKET,server=INVALID_SOCKET;
+    int ok=0;
+    client=bind_udp6(source,0); server=bind_udp6(destination,port);
+    if(client==INVALID_SOCKET || server==INVALID_SOCKET) goto done;
+    struct sockaddr_in6 dest={0},from={0},echo_from={0};
+    if(!ipv6_endpoint(destination,port,&dest)) goto done;
+    unsigned char sent[1200],received[1500];
+    memset(sent,0xc3,sizeof(sent));
+    memcpy(sent,"G17_IPV6_TUNNEL_APP",20); sent[1199]=0x17;
+    if(sendto(client,(char *)sent,sizeof(sent),0,(struct sockaddr *)&dest,sizeof(dest))!=(int)sizeof(sent)) {
+        fprintf(stderr,"G17_TRACE: IPv6 send err=%d\n",WSAGetLastError()); goto done;
+    }
+    int naddr=sizeof(from);
+    int n=recvfrom(server,(char *)received,sizeof(received),0,(struct sockaddr *)&from,&naddr);
+    if(n!=(int)sizeof(sent) || !from_ipv6(&from,source) ||
+       memcmp(sent,received,sizeof(sent))) {
+        fprintf(stderr,"G17_TRACE: IPv6 receive err=%d bytes=%d\n",WSAGetLastError(),n); goto done;
+    }
+    if(sendto(server,(char *)received,n,0,(struct sockaddr *)&from,naddr)!=n) goto done;
+    naddr=sizeof(echo_from);
+    n=recvfrom(client,(char *)received,sizeof(received),0,(struct sockaddr *)&echo_from,&naddr);
+    if(n!=(int)sizeof(sent) || !from_ipv6(&echo_from,destination) ||
+       ntohs(echo_from.sin6_port)!=port || memcmp(sent,received,sizeof(sent))) {
+        fprintf(stderr,"G17_TRACE: IPv6 echo err=%d bytes=%d\n",WSAGetLastError(),n); goto done;
+    }
+    ok=1;
+done:
+    if(client!=INVALID_SOCKET) closesocket(client);
+    if(server!=INVALID_SOCKET) closesocket(server);
+    return ok;
+}
+static int dns6_aaaa(void) {
+    SOCKET client=INVALID_SOCKET,server=INVALID_SOCKET;
+    int ok=0;
+    const char *src="fd42:14::1",*dst="fd42:14::2";
+    struct sockaddr_in6 destination={0},from={0},response_from={0};
+    unsigned char question[64]={0},incoming[512]={0},reply[128]={0},received[512]={0};
+    const unsigned char dnsname[]={3,'l','a','b',7,'i','n','v','a','l','i','d',0};
+    const unsigned char synthetic_aaaa[]={0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,0x17};
+    client=bind_udp6(src,0); server=bind_udp6(dst,53);
+    if(client==INVALID_SOCKET || server==INVALID_SOCKET) goto done;
+    if(!ipv6_endpoint(dst,53,&destination)) goto done;
+    put16(question,0x1717); put16(question+2,0x0100); put16(question+4,1);
+    memcpy(question+12,dnsname,sizeof(dnsname));
+    size_t qend=12+sizeof(dnsname);
+    put16(question+qend,28); put16(question+qend+2,1);
+    size_t qlen=qend+4;
+    if(sendto(client,(char *)question,(int)qlen,0,
+       (struct sockaddr *)&destination,sizeof(destination))!=(int)qlen) goto done;
+    int address_len=sizeof(from);
+    int n=recvfrom(server,(char *)incoming,sizeof(incoming),0,
+       (struct sockaddr *)&from,&address_len);
+    if(n!=(int)qlen || !from_ipv6(&from,src) || memcmp(question,incoming,qlen)) goto done;
+    memcpy(reply,question,qlen);
+    put16(reply+2,0x8180); put16(reply+6,1);
+    size_t i=qlen;
+    reply[i++]=0xc0; reply[i++]=0x0c;
+    put16(reply+i,28);i+=2;put16(reply+i,1);i+=2;
+    reply[i++]=0;reply[i++]=0;reply[i++]=0;reply[i++]=30;
+    put16(reply+i,(unsigned short)sizeof(synthetic_aaaa));i+=2;
+    memcpy(reply+i,synthetic_aaaa,sizeof(synthetic_aaaa));i+=sizeof(synthetic_aaaa);
+    if(sendto(server,(char *)reply,(int)i,0,(struct sockaddr *)&from,address_len)!=(int)i) goto done;
+    address_len=sizeof(response_from);
+    n=recvfrom(client,(char *)received,sizeof(received),0,
+       (struct sockaddr *)&response_from,&address_len);
+    if(n!=(int)i || !from_ipv6(&response_from,dst) ||
+       ntohs(response_from.sin6_port)!=53 || memcmp(reply,received,i)) goto done;
+    ok=1;
+done:
+    if(!ok) fprintf(stderr,"G17_TRACE: synthetic DNS-over-IPv6 query/reply failed err=%d\n",WSAGetLastError());
+    if(client!=INVALID_SOCKET) closesocket(client);
+    if(server!=INVALID_SOCKET) closesocket(server);
+    return ok;
+}
+
 int wmain(int argc,wchar_t **argv) {
     if(!is_ci() || argc!=2 || wcslen(argv[1])>500) {
         fputs("G14_REFUSED: disposable CI and fixed signed WireGuardNT DLL required\n",stderr);
@@ -199,6 +308,25 @@ int wmain(int argc,wchar_t **argv) {
         goto done;
     }
     puts("G14_PASS: two-way real Winsock UDP app socket delivery + inner synthetic DNS A/AAAA; genuine WireGuardNT Tx/Rx counters advanced. Localhost-only, not cross-host or no-leak proof.");
+    SNAP before6a={0},before6b={0},after6a={0},after6b={0};
+    if(!read_snap(query,a,&before6a) || !read_snap(query,b,&before6b)) goto done;
+    if(!exchange6("fd42:14::1","fd42:14::2",55161) ||
+       !exchange6("fd42:14::2","fd42:14::1",55162)) {
+        fputs("G17_FAIL: IPv6 UDP application reception/echo failed\n",stderr);
+        goto done;
+    }
+    if(!dns6_aaaa()) {
+        fputs("G17_FAIL: inner IPv6 UDP/53 AAAA query/reply failed\n",stderr);
+        goto done;
+    }
+    Sleep(800);
+    if(!read_snap(query,a,&after6a) || !read_snap(query,b,&after6b) ||
+       after6a.tx<=before6a.tx || after6a.rx<=before6a.rx ||
+       after6b.tx<=before6b.tx || after6b.rx<=before6b.rx) {
+        fputs("G17_FAIL: driver counters did not increase after IPv6 application packets\n",stderr);
+        goto done;
+    }
+    puts("G17_PASS: actual IPv6 Winsock two-way sockets plus DNS AAAA UDP/53 over IPv6 narrow lab peers; native counters advanced. NOT Internet IPv6/WFP no-leak or UU proof.");
     ok=1;
 done:
     if(wsa_started) WSACleanup();

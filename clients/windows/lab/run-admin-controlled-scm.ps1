@@ -71,7 +71,10 @@ try {
     $appRules = @(
         @{ Suffix='B-app'; Local='10.249.129.2'; Remote='10.249.129.1'; Port='55141' },
         @{ Suffix='A-app'; Local='10.249.129.1'; Remote='10.249.129.2'; Port='55142' },
-        @{ Suffix='B-dns'; Local='10.249.129.2'; Remote='10.249.129.1'; Port='53' }
+        @{ Suffix='B-dns'; Local='10.249.129.2'; Remote='10.249.129.1'; Port='53' },
+        @{ Suffix='B-app6'; Local='fd42:14::2'; Remote='fd42:14::1'; Port='55161' },
+        @{ Suffix='A-app6'; Local='fd42:14::1'; Remote='fd42:14::2'; Port='55162' },
+        @{ Suffix='B-dns6'; Local='fd42:14::2'; Remote='fd42:14::1'; Port='53' }
     )
     $createdRuleNames = New-Object 'System.Collections.Generic.List[string]'
     try {

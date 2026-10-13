@@ -26,14 +26,16 @@ def main() -> None:
         ("lab-peer-a", a_private, b_public, "10.249.129.1", "10.249.129.2", 52741, 52742),
         ("lab-peer-b", b_private, a_public, "10.249.129.2", "10.249.129.1", 52742, 52741),
     ):
+        ipv6_local = "fd42:14::1" if label == "lab-peer-a" else "fd42:14::2"
+        ipv6_remote = "fd42:14::2" if label == "lab-peer-a" else "fd42:14::1"
         text = (
             "[Interface]\n"
             f"PrivateKey = {base64.b64encode(private).decode('ascii')}\n"
-            f"Address = {local}/32\n"
+            f"Address = {local}/32, {ipv6_local}/128\n"
             f"ListenPort = {listener}\n"
             "\n[Peer]\n"
             f"PublicKey = {base64.b64encode(other_public).decode('ascii')}\n"
-            f"AllowedIPs = {remote}/32\n"
+            f"AllowedIPs = {remote}/32, {ipv6_remote}/128\n"
             f"Endpoint = 127.0.0.1:{endpoint}\n"
             "PersistentKeepalive = 1\n"
         )

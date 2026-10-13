@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'test/g17-windows-wireguardnt-ipv6')
+    if: github.event.pull_request.head.repo.full_name == github.repository && ((github.event.pull_request.head.ref == 'test/g17-windows-wireguardnt-ipv6' || github.event.pull_request.head.ref == 'integration/windows-safe-alpha'))
     runs-on: windows-latest
     timeout-minutes: 25
     steps:

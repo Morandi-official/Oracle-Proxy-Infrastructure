@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+
+# Local secrets and runtime files
+.env
+.env.*
+!.env.example
+*.key
+*.conf
+*.p12
+*.pfx
+*.pem
+*.sqlite
+*.sqlite3
+*.db
+data/
+snapshots/
+secrets/
+*.log
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

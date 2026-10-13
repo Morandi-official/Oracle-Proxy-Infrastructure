@@ -1,0 +1,92 @@
+name: Reproducible upstream tunnel.dll ABI lab (no VPN)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-embeddable-tunnel-abi.yml'
+      - 'docs/upstream-tunnel-build-lab.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tunnel-abi-only:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch immutable official WireGuard source revision
+        uses: actions/checkout@v4
+        with:
+          repository: WireGuard/wireguard-windows
+          ref: 6ece77bc487c8aa697e3c092197621c4f3e5ccb8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          check-latest: false
+      - name: Check signed-off pinned source and dependency toolchain
+        shell: pwsh
+        run: |
+          $sha = (git -C upstream rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($sha -ne '6ece77bc487c8aa697e3c092197621c4f3e5ccb8') {
+            throw 'WireGuard upstream Git revision mismatch'
+          }
+          $url = 'https://download.wireguard.com/windows-toolchain/distfiles/llvm-mingw-20260311-ucrt-x86_64.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'llvm-mingw.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($hash -ne 'dd4c67d98959479c7be2fb6709ba074475991590848cb9d0eb2620be06b182e1') {
+            throw 'Pinned upstream MinGW toolchain mismatch'
+          }
+          $toolDir = Join-Path $env:RUNNER_TEMP 'llvm-mingw-toolchain'
+          New-Item -Path $toolDir -ItemType Directory -Force | Out-Null
+          & tar -xf $zip -C $toolDir --strip-components 1
+          if ($LASTEXITCODE -ne 0) { throw 'Toolchain extraction failed' }
+          if (-not (Test-Path (Join-Path $toolDir 'bin/x86_64-w64-mingw32-gcc.exe'))) {
+            throw 'Pinned MinGW compiler is missing'
+          }
+          (Join-Path $toolDir 'bin') >> $env:GITHUB_PATH
+          Write-Host 'PASS: immutable WireGuard source revision and pinned compiler download verified'
+      - name: Build real official embeddable DLL (AMD64 only, never install)
+        shell: pwsh
+        timeout-minutes: 20
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '1'
+          CC: x86_64-w64-mingw32-gcc
+          CGO_CFLAGS: '-O3 -Wall -Wno-unused-function -Wno-switch -std=gnu11 -DWINVER=0x0A00'
+        run: |
+          New-Item -Path ./dist/upstream-test -ItemType Directory -Force | Out-Null
+          go -C ./upstream build -overlay .overlay/overlay.json -buildmode c-shared -ldflags="-w -s" -trimpath -o ../dist/upstream-test/tunnel.dll ./embeddable-dll-service
+          if ($LASTEXITCODE -ne 0) { throw 'Official source build did not complete' }
+          if (!(Test-Path ./dist/upstream-test/tunnel.dll -PathType Leaf)) {
+            throw 'Official tunnel.dll not produced'
+          }
+          Write-Host "Source-built upstream DLL SHA256: $((Get-FileHash ./dist/upstream-test/tunnel.dll -Algorithm SHA256).Hash.ToLowerInvariant())"
+      - name: Confirm genuine DLL export without invoking tunnel or driver
+        shell: pwsh
+        run: |
+          $dll = (Resolve-Path './dist/upstream-test/tunnel.dll').Path
+          $native = [IntPtr]::Zero
+          try {
+            $native = [System.Runtime.InteropServices.NativeLibrary]::Load($dll)
+            if ($native -eq [IntPtr]::Zero) { throw 'Upstream tunnel.dll cannot load' }
+            $proc = [System.Runtime.InteropServices.NativeLibrary]::GetExport(
+              $native, 'WireGuardTunnelService')
+            if ($proc -eq [IntPtr]::Zero) { throw 'Real upstream service export missing' }
+            Write-Host 'PASS: compiled official source DLL loaded and WireGuardTunnelService export resolved WITHOUT starting service'
+          }
+          finally {
+            if ($native -ne [IntPtr]::Zero) {
+              [System.Runtime.InteropServices.NativeLibrary]::Free($native)
+            }
+          }
+      - name: Do not redistribute lab-built native binaries
+        shell: pwsh
+        run: |
+          if (!(Test-Path ./dist/upstream-test/tunnel.dll)) { throw 'Missing test output' }
+          Write-Host 'SOURCE-ONLY ABI CHECK COMPLETE: no native DLLs uploaded or installed, no driver or network interface activated'

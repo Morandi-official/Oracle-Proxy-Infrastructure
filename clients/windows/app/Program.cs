@@ -22,6 +22,22 @@ internal static class Program
         {
             return ControlStateSelfTests.Run() ? 0 : 1;
         }
+        if (args.Length == 1 && args[0].StartsWith("--ci-lab-", StringComparison.Ordinal))
+        {
+            string? operation = args[0] switch {
+                "--ci-lab-start-a" => "StartLabPeerA",
+                "--ci-lab-stop-a" => "StopLabPeerA",
+                "--ci-lab-start-b" => "StartLabPeerB",
+                "--ci-lab-stop-b" => "StopLabPeerB",
+                _ => null
+            };
+            if (operation is null || !LabAdminControlClient.OnDisposableRunner()) return 3;
+            try {
+                return LabAdminControlClient.SendAsync(operation, CancellationToken.None)
+                    .GetAwaiter().GetResult() ? 0 : 3;
+            }
+            catch { return 3; }
+        }
         if (args.Length == 1 && args[0] == "--manager-status-self-test")
         {
             try

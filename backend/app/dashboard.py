@@ -1,7 +1,7 @@
-"""Browser-friendly, read-only dashboard for localhost / SSH-tunnel use only.
+"""Read-only Chinese dashboard for local development / protected SSH tunneling.
 
-No cookies, external assets, or scripts. Authentication uses a Basic password equal
-to ORACLE_PROXY_API_TOKEN; never send this across unencrypted public HTTP.
+No cookies, scripts or third-party resources. HTTP Basic password matches
+ORACLE_PROXY_API_TOKEN and must NEVER be sent over public unencrypted HTTP.
 """
 
 import base64
@@ -21,22 +21,26 @@ router = APIRouter()
 _STYLES = """
 :root{color-scheme:dark;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 *{box-sizing:border-box}
-body{margin:0;background:#0d111b;color:#edf1fa}
-main{max-width:1080px;margin:42px auto;padding:0 24px}
-h1{font-size:clamp(24px,4vw,37px);margin:6px 0 10px}
-p{color:#a4b0c9}
-.topline{color:#82baff;font-size:13px;letter-spacing:0.08em;font-weight:700}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:14px;margin:28px 0}
+body{margin:0;background:#0d111b;color:#edf1fa;line-height:1.55}
+main{max-width:1100px;margin:42px auto;padding:0 24px}
+h1{font-size:clamp(25px,4vw,38px);margin:6px 0 10px}
+h2{font-size:18px}
+p{color:#a9b7d0}
+.topline{color:#8dbdff;font-size:13px;letter-spacing:0.08em;font-weight:700}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin:28px 0}
 .card,.panel{border:1px solid #29364b;background:#161e2c;border-radius:14px;padding:18px}
-.card .label{color:#a4b0c9;font-size:12px;margin-bottom:9px}
-.card .value{font-size:24px;font-weight:700;overflow-wrap:anywhere}
+.card .label{color:#a9b7d0;font-size:13px;margin-bottom:9px}
+.card .value{font-size:25px;font-weight:700;overflow-wrap:anywhere}
 .panel{overflow-x:auto}
-table{width:100%;border-collapse:collapse;min-width:640px}
+table{width:100%;border-collapse:collapse;min-width:680px}
 td,th{border-bottom:1px solid #29364b;text-align:left;padding:13px 11px;font-size:13px}
-th{color:#a4b0c9;font-weight:600}
+th{color:#a9b7d0;font-weight:600}
 tbody tr:last-child td{border-bottom:0}
-.note{font-size:12px;margin-top:18px}
-code{color:#a3d6ff}
+.note{font-size:13px;margin-top:18px}
+code{color:#a8d4ff}
+.status{font-size:13px;border-radius:8px;padding:7px 10px;display:inline-block}
+.fresh{background:#173d31;color:#a4edce}
+.stale{background:#49361d;color:#ffe1a2}
 """
 
 
@@ -82,10 +86,26 @@ def _fmt_handshake(value: object) -> str:
     try:
         timestamp = int(value)
         if timestamp <= 0:
-            return "Never"
+            return "从未握手"
         return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     except (ValueError, TypeError, OverflowError, OSError):
-        return "Unknown"
+        return "未知"
+
+
+def _freshness(value: object) -> tuple[str, str]:
+    """Conservatively label *snapshot age*, not peer 'online' status."""
+    if not isinstance(value, str):
+        return ("采集时间未知", "stale")
+    try:
+        snapshot_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if snapshot_at.tzinfo is None:
+            return ("采集时间缺少时区", "stale")
+        seconds = (datetime.now(timezone.utc) - snapshot_at).total_seconds()
+    except (OverflowError, TypeError, ValueError):
+        return ("采集时间无效", "stale")
+    if -60 <= seconds <= 180:
+        return ("快照时间较近", "fresh")
+    return ("快照已过期或为演示数据", "stale")
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -93,40 +113,55 @@ def dashboard(authorization: str | None = Header(default=None)) -> HTMLResponse:
     _require_basic(authorization)
     data = wireguard_overview()
     rows = []
+    rx_total = 0
+    tx_total = 0
     for peer in data["peers"]:
         address_list = peer.get("allowed_ips", [])
         addresses = ", ".join(str(x) for x in address_list) if isinstance(address_list, list) else "—"
+        rx = peer.get("rx_bytes", 0)
+        tx = peer.get("tx_bytes", 0)
+        # Only sum validated nonnegative integer counters.
+        if isinstance(rx, int) and not isinstance(rx, bool) and rx >= 0:
+            rx_total += rx
+        if isinstance(tx, int) and not isinstance(tx, bool) and tx >= 0:
+            tx_total += tx
         fields = (
             peer.get("id", "—"),
             addresses,
             _fmt_handshake(peer.get("latest_handshake", 0)),
-            _fmt_bytes(peer.get("rx_bytes", 0)),
-            _fmt_bytes(peer.get("tx_bytes", 0)),
+            _fmt_bytes(rx),
+            _fmt_bytes(tx),
         )
         rows.append("<tr>" + "".join(f"<td>{escape(str(field))}</td>" for field in fields) + "</tr>")
 
-    body = "\n".join(rows) if rows else '<tr><td colspan="5">No peers in this snapshot</td></tr>'
+    body = "\n".join(rows) if rows else '<tr><td colspan="5">此快照中没有设备</td></tr>'
     interface = escape(str(data.get("interface", "—")))
     port = escape(str(data.get("listen_port", "—")))
     collected = escape(str(data.get("collected_at", "—")))
+    freshness, freshness_class = _freshness(data.get("collected_at"))
+    rx_total_display, tx_total_display = _fmt_bytes(rx_total), _fmt_bytes(tx_total)
     response = HTMLResponse(f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Oracle Proxy · Read-only dashboard</title>
+<title>Oracle Proxy · 只读管理面板</title>
 <style>{_STYLES}</style></head>
 <body><main><div class="topline">ORACLE PROXY / INFRASTRUCTURE</div>
-<h1>WireGuard overview</h1>
-<p>Read-only status from a sanitized snapshot. No changes are sent to the VPN server.</p>
+<h1>WireGuard 管理概览</h1>
+<p>只读管理原型。数据来自脱敏快照，不会更改 Oracle VPN 服务器。</p>
+<span class="status {freshness_class}">{escape(freshness)}</span>
 <div class="cards">
-<div class="card"><div class="label">Interface</div><div class="value">{interface}</div></div>
-<div class="card"><div class="label">Listen port</div><div class="value">{port}</div></div>
-<div class="card"><div class="label">Devices</div><div class="value">{data['peer_count']}</div></div>
-</div><div class="panel"><h2>Connected identities</h2><table>
-<thead><tr><th>Pseudonymous ID</th><th>Allowed IPs</th><th>Last handshake</th>
-<th>Received</th><th>Sent</th></tr></thead>
+<div class="card"><div class="label">隧道接口</div><div class="value">{interface}</div></div>
+<div class="card"><div class="label">监听端口</div><div class="value">{port}</div></div>
+<div class="card"><div class="label">已配置设备</div><div class="value">{data['peer_count']}</div></div>
+<div class="card"><div class="label">累计接收</div><div class="value">{rx_total_display}</div></div>
+<div class="card"><div class="label">累计发送</div><div class="value">{tx_total_display}</div></div>
+</div><div class="panel"><h2>设备与最近握手记录</h2><table>
+<thead><tr><th>脱敏设备标识</th><th>隧道 IP</th><th>上一次握手</th>
+<th>接收流量</th><th>发送流量</th></tr></thead>
 <tbody>{body}</tbody></table></div>
-<p class="note">Snapshot time: <code>{collected}</code>. Handshakes do not prove a device is currently online.
-Reload to read a fresh snapshot. This prototype must run on localhost or via SSH tunnel only.</p>
+<p class="note">采集时间：<code>{collected}</code>。握手时间不等于设备始终在线。
+演示数据不是真实服务器统计。刷新页面可重新读取最新快照。
+此原型仅可在本机或安全的 SSH 隧道内使用。</p>
 </main></body></html>""")
     response.headers.update({
         "Cache-Control": "no-store",

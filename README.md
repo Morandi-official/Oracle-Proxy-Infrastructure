@@ -75,3 +75,17 @@ The dashboard is read-only, does not auto-refresh or call third-party scripts, a
 This project uses GitHub-hosted Ubuntu runners for short unit tests. To avoid running the same tests twice for every branch push with an open PR, the workflow triggers on PRs and on pushes to `main` only. Concurrent runs for the same PR cancel the older run. Every job has a 10-minute timeout.
 
 View account-level consumption in GitHub account settings → **Billing and licensing** → **Usage**, filter to **Actions**, or inspect **Actions → workflow run → Usage** for one job. In **Budgets and alerts**, enable the included-usage 90% and 100% notifications. The GitHub Free personal allowance is 2,000 minutes/month for standard hosted jobs on private repositories; check your current plan directly in GitHub.
+
+## 中文管理页面与 Windows 演示（不接触真实服务器）
+
+在 Windows 的 PowerShell 中，进入克隆后的仓库目录，运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-demo.ps1
+```
+
+演示脚本会在 `backend/.venv` 创建独立 Python 环境、安装依赖并随机生成仅在本次进程中使用的演示密码。启动后在本机浏览器访问 `http://127.0.0.1:8765/dashboard`，输入终端显示的用户名和密码。**不要公开密码、截图或分享这次演示的登录凭据。** 结束时在 PowerShell 中按 `Ctrl+C`。
+
+本演示使用 `backend/tests/fixture_snapshot.json` **虚构设备数据**。它不连接 Oracle、不修改 WireGuard/WireSock、不创建用户、不打开公网端口，也不执行任何 VPN 连接。首次安装 Python 依赖需要联网。
+
+仓库现为 Public；上传任何真实服务器配置前，请先阅读 [SECURITY.md](SECURITY.md)。目前没有选定源码许可证，公开可见不代表其他人获得再分发的通用授权。

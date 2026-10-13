@@ -59,3 +59,28 @@ def test_dashboard_escapes_markup_and_filters_sensitive_fields(monkeypatch, tmp_
     assert "<script>" not in response.text
     assert "NEVER_SHOW_PRIVATE" not in response.text
     assert "NEVER_SHOW_ENDPOINT" not in response.text
+
+
+def test_dashboard_chinese_and_stale_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORACLE_PROXY_API_TOKEN", TOKEN)
+    path = tmp_path / "snapshot.json"
+    path.write_text(json.dumps({
+        "interface": "wg0",
+        "listen_port": 51820,
+        "collected_at": "2000-01-01T00:00:00Z",
+        "peers": [],
+    }), encoding="utf-8")
+    monkeypatch.setenv("ORACLE_PROXY_SNAPSHOT_PATH", str(path))
+    response = client.get("/dashboard", headers=auth())
+    assert response.status_code == 200
+    assert 'lang="zh-CN"' in response.text
+    assert "快照已过期或为演示数据" in response.text
+    assert "已配置设备" in response.text
+    assert "没有设备" in response.text
+    assert "在线设备" not in response.text
+
+
+def test_freshness_is_a_snapshot_label_not_online_flag():
+    from app.dashboard import _freshness
+    assert _freshness("invalid")[1] == "stale"
+    assert _freshness("2000-01-01T00:00:00Z")[1] == "stale"

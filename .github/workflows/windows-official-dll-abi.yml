@@ -1,0 +1,60 @@
+name: Official WireGuardNT 1.1 DLL ABI smoke (no VPN)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-official-dll-abi.yml'
+      - 'clients/windows/service-host/**'
+      - 'docs/windows-lab-gates.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  official-wireguard-nt-abi:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download upstream WireGuardNT SDK only (no installation)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://download.wireguard.com/wireguard-nt/wireguard-nt-1.1.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'wireguard-nt-sdk.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip -MaximumRedirection 2
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          Write-Host "Upstream WireGuardNT SDK v1.1 archive SHA256: $hash"
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'wg-sdk') -Force
+          $dll = Join-Path $env:RUNNER_TEMP 'wg-sdk/wireguard-nt/bin/amd64/wireguard.dll'
+          $license = Join-Path $env:RUNNER_TEMP 'wg-sdk/wireguard-nt/LICENSE.txt'
+          if (!(Test-Path $dll -PathType Leaf) -or !(Test-Path $license -PathType Leaf)) {
+            throw 'Upstream SDK DLL/license structure is missing'
+          }
+          Write-Host "Upstream driver DLL SHA256: $((Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant())"
+          $sig = Get-AuthenticodeSignature -FilePath $dll
+          Write-Host "Authenticode certificate status: $($sig.Status)"
+          if ($sig.Status -ne 'Valid') { throw 'Unsigned/untrusted upstream DLL' }
+          # One-step-only environment link. Never upload the DLL or SDK ZIP.
+          "WGNT_DLL_PATH=$dll" >> $env:GITHUB_ENV
+      - name: Probe exports of genuine official native DLL (without calling driver APIs)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dll = $env:WGNT_DLL_PATH
+          $handle = [IntPtr]::Zero
+          try {
+            $handle = [System.Runtime.InteropServices.NativeLibrary]::Load($dll)
+            if ($handle -eq [IntPtr]::Zero) { throw 'Official DLL cannot load' }
+            foreach ($export in @('WireGuardOpenAdapter', 'WireGuardCloseAdapter', 'WireGuardGetRunningDriverVersion')) {
+              $pointer = [System.Runtime.InteropServices.NativeLibrary]::GetExport($handle, $export)
+              if ($pointer -eq [IntPtr]::Zero) { throw "Required official export missing: $export" }
+            }
+            Write-Host 'PASS: actual upstream signed WireGuardNT x64 DLL loads and exposes supported native ABI; no adapter created or driver started'
+          }
+          finally {
+            if ($handle -ne [IntPtr]::Zero) {
+              [System.Runtime.InteropServices.NativeLibrary]::Free($handle)
+            }
+          }

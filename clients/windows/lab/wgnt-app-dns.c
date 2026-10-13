@@ -46,12 +46,12 @@ static SOCKET bind_udp(const char *addr, unsigned short port) {
     SOCKET s=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);
     if (s==INVALID_SOCKET) return INVALID_SOCKET;
     DWORD ms=3500;
-    if (setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,(char *)&ms,sizeof(ms))) goto fail;
+    if (setsockopt(s,SOL_SOCKET,SO_RCVTIMEO,(char *)&ms,sizeof(ms))) { fprintf(stderr,"G14_TRACE: socket timeout config err=%d\n",WSAGetLastError()); goto fail; }
     struct sockaddr_in a={0};
     a.sin_family=AF_INET;
     a.sin_port=htons(port);
     if (InetPtonA(AF_INET,addr,&a.sin_addr)!=1 ||
-        bind(s,(struct sockaddr *)&a,sizeof(a))) goto fail;
+        bind(s,(struct sockaddr *)&a,sizeof(a))) { fprintf(stderr,"G14_TRACE: socket bind err=%d\n",WSAGetLastError()); goto fail; }
     return s;
 fail:
     closesocket(s);
@@ -80,21 +80,19 @@ static int exchange(const char *src,const char *dst,unsigned short dstport) {
     sent[1199]=0x5a;
     int sentlen=sendto(client,(char *)sent,sizeof(sent),0,
                        (struct sockaddr *)&target,sizeof(target));
-    if(sentlen!=(int)sizeof(sent)) goto done;
+    if(sentlen!=(int)sizeof(sent)) { fprintf(stderr,"G14_TRACE: app send err=%d bytes=%d\n",WSAGetLastError(),sentlen); goto done; }
     int peerlen=sizeof(peer);
     int len=recvfrom(server,(char *)got,sizeof(got),0,
                      (struct sockaddr *)&peer,&peerlen);
     if (len!=(int)sizeof(sent) || !received_from(&peer,src) ||
-        memcmp(got,sent,sizeof(sent))) goto done;
+        memcmp(got,sent,sizeof(sent))) { fprintf(stderr,"G14_TRACE: app recv len=%d expected=%u err=%d\n",len,(unsigned)sizeof(sent),WSAGetLastError()); goto done; }
     /* Echo reply demonstrates the application socket also receives B->A. */
-    if (sendto(server,(char *)got,len,0,(struct sockaddr *)&peer,peerlen)!=len)
-        goto done;
+    if (sendto(server,(char *)got,len,0,(struct sockaddr *)&peer,peerlen)!=len) { fprintf(stderr,"G14_TRACE: app echo send err=%d\n",WSAGetLastError()); goto done; }
     int addrlen=sizeof(replyto);
     len=recvfrom(client,(char *)got,sizeof(got),0,
                  (struct sockaddr *)&replyto,&addrlen);
     if (len!=(int)sizeof(sent) || !received_from(&replyto,dst) ||
-        ntohs(replyto.sin_port)!=dstport || memcmp(got,sent,sizeof(sent)))
-        goto done;
+        ntohs(replyto.sin_port)!=dstport || memcmp(got,sent,sizeof(sent))) { fprintf(stderr,"G14_TRACE: app echo recv len=%d expected=%u err=%d\n",len,(unsigned)sizeof(sent),WSAGetLastError()); goto done; }
     ok=1;
 done:
     if (server!=INVALID_SOCKET) closesocket(server);

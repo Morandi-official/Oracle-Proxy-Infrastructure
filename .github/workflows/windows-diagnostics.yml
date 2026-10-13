@@ -1,0 +1,25 @@
+name: Windows read-only diagnostics
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/**'
+      - '.github/workflows/windows-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-diagnostics:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run offline-safe diagnostics tests
+        shell: pwsh
+        run: ./clients/windows/diagnostics/tests/Diagnostics.Tests.ps1

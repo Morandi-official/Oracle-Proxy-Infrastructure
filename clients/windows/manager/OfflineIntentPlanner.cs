@@ -84,12 +84,12 @@ internal sealed class OfflineIntentPlanner
 
         if (command is not ("ExplicitEnable" or "RequestExplicitDisable"))
             return Response(false, "MUTATION_UNSUPPORTED");
-        if (!_seen.Add(requestId)) return Response(false, "REPLAY_DENIED");
-        if (_seen.Count > MaxSeen)
-        {
-            // No eviction that silently re-admits an older replay.
+        if (_seen.Contains(requestId)) return Response(false, "REPLAY_DENIED");
+        // Refuse capacity exhaustion BEFORE reservation. This is a bounded
+        // negative cache with no eviction that would admit old request IDs.
+        if (_seen.Count >= MaxSeen)
             return Response(false, "REPLAY_CACHE_EXHAUSTED");
-        }
+        _seen.Add(requestId);
 
         if (command == "ExplicitEnable")
         {

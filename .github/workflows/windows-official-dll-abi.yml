@@ -26,13 +26,20 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $zip -MaximumRedirection 2
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
           Write-Host "Upstream WireGuardNT SDK v1.1 archive SHA256: $hash"
+          if ($hash -ne 'dceb30a9bc4be48cce0f74160fc88a585a2c2627366e8f846fc6658f9038dace') {
+            throw 'Upstream WireGuardNT SDK v1.1 archive does not match audited SHA-256'
+          }
           Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'wg-sdk') -Force
           $dll = Join-Path $env:RUNNER_TEMP 'wg-sdk/wireguard-nt/bin/amd64/wireguard.dll'
           $license = Join-Path $env:RUNNER_TEMP 'wg-sdk/wireguard-nt/LICENSE.txt'
           if (!(Test-Path $dll -PathType Leaf) -or !(Test-Path $license -PathType Leaf)) {
             throw 'Upstream SDK DLL/license structure is missing'
           }
-          Write-Host "Upstream driver DLL SHA256: $((Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant())"
+          $driverHash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Upstream driver DLL SHA256: $driverHash"
+          if ($driverHash -ne 'b1b85e072c45d81358be29d94c599dc76652f912be8c0f0a41e2d5d89a6461d3') {
+            throw 'Upstream WireGuardNT AMD64 DLL hash mismatch'
+          }
           $sig = Get-AuthenticodeSignature -FilePath $dll
           Write-Host "Authenticode certificate status: $($sig.Status)"
           if ($sig.Status -ne 'Valid') { throw 'Unsigned/untrusted upstream DLL' }

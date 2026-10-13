@@ -25,7 +25,18 @@ Assert-True ($report.vpn_connected -eq 'unknown') 'no false claim of VPN connect
 Assert-True ($report.network_lock -eq 'unknown') 'no false claim of leak protection'
 Assert-True ($null -ne $report.physical_network.ipv4_default_route_present) 'IPv4 default route flag'
 Assert-True ($null -ne $report.physical_network.ipv6_default_route_present) 'IPv6 default route flag'
-Assert-True ($report.uu_processes_present.PSObject.Properties.Count -eq 4) 'UU allowlisted process keys'
+# PowerShell's adapter may enumerate .Count for PSObject.Properties. Materialize
+# the property names explicitly so this is a single Boolean assertion.
+$uuKeys = @($report.uu_processes_present.PSObject.Properties | ForEach-Object { $_.Name })
+Assert-True -Condition ($uuKeys.Length -eq 4) -Message 'UU allowlisted process key count'
+foreach ($expectedName in @(
+    'GameViewer.exe',
+    'GameViewerServer.exe',
+    'GameViewerService.exe',
+    'GameViewerHealthd.exe'
+)) {
+    Assert-True -Condition ($uuKeys -contains $expectedName) -Message "Missing UU key: $expectedName"
+}
 
 # No private keys, peer endpoints, interface addresses, PIDs or raw command lines in output.
 Assert-True (-not ($json -match '(?i)private.?key|public.?key|endpoint|next.?hop|remote.?address|process.?id|command.?line|executable.?path')) 'redaction contract'

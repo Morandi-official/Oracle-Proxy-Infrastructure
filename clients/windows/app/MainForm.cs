@@ -67,6 +67,15 @@ internal sealed class MainForm : Form
         };
         managerButton.Click += async (_, _) => await CheckManagerAsync();
         buttons.Controls.Add(managerButton);
+        if (LabAdminControlClient.OnDisposableRunner())
+        {
+            var labOn = new Button { Text = "CI实验连接", Width = 135, Height = 38 };
+            var labOff = new Button { Text = "CI实验断开", Width = 135, Height = 38 };
+            labOn.Click += async (_, _) => await ToggleCiLabAsync(true);
+            labOff.Click += async (_, _) => await ToggleCiLabAsync(false);
+            buttons.Controls.Add(labOn);
+            buttons.Controls.Add(labOff);
+        }
         root.Controls.Add(buttons, 0, 3);
 
         root.Controls.Add(new Label {
@@ -141,6 +150,52 @@ internal sealed class MainForm : Form
                     "后台实验服务未安装、不可访问或响应不符合安全协议。\\n" +
                     "本客户端未修改任何 VPN 或网络设置。",
                     "后台服务不可用", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private async Task ToggleCiLabAsync(bool connect)
+    {
+        if (!LabAdminControlClient.OnDisposableRunner()) return;
+        if (MessageBox.Show(this,
+            "此按钮仅在 GitHub 一次性 Windows 测试虚拟机中控制两个临时实验隧道。\\n" +
+            "不会连接 Oracle，也没有断线保护。确认执行？",
+            "CI 实验环境确认", MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        try
+        {
+            bool success;
+            if (connect)
+            {
+                bool a = await LabAdminControlClient.SendAsync(
+                    "StartLabPeerA", _shutdown.Token);
+                bool b = a && await LabAdminControlClient.SendAsync(
+                    "StartLabPeerB", _shutdown.Token);
+                success = a && b;
+                if (a && !b)
+                    await LabAdminControlClient.SendAsync(
+                        "StopLabPeerA", _shutdown.Token);
+            }
+            else
+            {
+                bool b = await LabAdminControlClient.SendAsync(
+                    "StopLabPeerB", _shutdown.Token);
+                bool a = await LabAdminControlClient.SendAsync(
+                    "StopLabPeerA", _shutdown.Token);
+                success = a && b;
+            }
+            if (!_shutdown.IsCancellationRequested)
+                MessageBox.Show(this, success ?
+                    "临时实验服务状态已更新。必须另行核实真实握手和路由。" :
+                    "未获得后台服务的全部实验操作许可，可能需要独立回滚检查。",
+                    "CI 实验服务", MessageBoxButtons.OK,
+                    success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        catch
+        {
+            if (!_shutdown.IsCancellationRequested)
+                MessageBox.Show(this, "实验服务命令失败；没有触碰生产 VPN。",
+                    "CI 实验失败", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
         }
     }
 

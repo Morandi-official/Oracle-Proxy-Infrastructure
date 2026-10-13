@@ -1,0 +1,42 @@
+name: Windows Home no-change VM readiness validation
+
+on:
+  pull_request:
+    paths:
+      - 'lab/windows-home/**'
+      - '.github/workflows/windows-home-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-network-changes:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell 5.1 offline Home planning tests
+        shell: powershell
+        run: |
+          ./lab/windows-home/Read-OnlyVmReadiness.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 Home preflight checks failed' }
+      - name: PowerShell 7 offline Home planning tests
+        shell: pwsh
+        run: |
+          ./lab/windows-home/Read-OnlyVmReadiness.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 Home preflight checks failed' }
+      - name: Query only sanitized runner hardware (no admin or network calls)
+        shell: pwsh
+        run: |
+          $json = ./lab/windows-home/Read-OnlyVmReadiness.ps1 |
+            ConvertFrom-Json
+          if ($json.schema_version -ne 1 -or
+              $json.collection_mode -ne 'read_only_cim' -or
+              $json.actual_vm_installed -ne 'not_checked' -or
+              $json.independent_snapshot_rollback_tested -ne $false -or
+              $json.actual_wfp_fail_closed_verified -ne $false -or
+              $json.safe_to_install_virtual_network_drivers_unattended -ne $false) {
+            throw 'Read-only VM readiness fields misrepresent safety'
+          }
+          Write-Host 'PASS: live Windows hosted-runner CIM-only query; no network state modified'

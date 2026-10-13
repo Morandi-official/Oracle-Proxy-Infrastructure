@@ -19,7 +19,10 @@ internal static class Program
         if (args.Length == 1 && args[0] == "--self-test")
             return BundleSelfTests.Run() ? 0 : 1;
 
-        if (args.Length != 1 || args[0] != "--wireguard-service")
+        if (args.Length is < 1 or > 2 || args[0] != "--wireguard-service")
+            return 2;
+        string labProfile = args.Length == 2 ? args[1] : "lab-only";
+        if (!EngineBundle.IsAllowedLabProfile(labProfile))
             return 2;
 
         // No elevated action is ever possible through the preview UI or a
@@ -32,7 +35,7 @@ internal static class Program
             using WindowsIdentity identity = WindowsIdentity.GetCurrent();
             if (!identity.IsSystem || Process.GetCurrentProcess().SessionId != 0)
                 return 3;
-            return OfficialTunnelBridge.InvokeFromService();
+            return OfficialTunnelBridge.InvokeFromService(labProfile);
         }
         catch
         {

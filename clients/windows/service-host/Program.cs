@@ -10,6 +10,12 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--service-status")
+        {
+            Console.WriteLine(LabServiceStatus.SanitizedJson());
+            return 0;
+        }
+
         if (args.Length == 1 && args[0] == "--self-test")
             return BundleSelfTests.Run() ? 0 : 1;
 

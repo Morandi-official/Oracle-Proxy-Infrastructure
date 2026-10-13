@@ -67,6 +67,7 @@ internal sealed class MainForm : Form
         };
         managerButton.Click += async (_, _) => await CheckManagerAsync();
         buttons.Controls.Add(managerButton);
+#if ORACLE_DISPOSABLE_LAB
         if (LabAdminControlClient.OnDisposableRunner())
         {
             var labOn = new Button { Text = "CI实验连接", Width = 135, Height = 38 };
@@ -76,6 +77,7 @@ internal sealed class MainForm : Form
             buttons.Controls.Add(labOn);
             buttons.Controls.Add(labOff);
         }
+#endif
         root.Controls.Add(buttons, 0, 3);
 
         root.Controls.Add(new Label {
@@ -153,6 +155,7 @@ internal sealed class MainForm : Form
         }
     }
 
+#if ORACLE_DISPOSABLE_LAB
     private async Task ToggleCiLabAsync(bool connect)
     {
         if (!LabAdminControlClient.OnDisposableRunner()) return;
@@ -199,6 +202,7 @@ internal sealed class MainForm : Form
         }
     }
 
+#endif
     private static string Flag(bool value) => value ? "存在" : "未发现";
 
     private void ShowPolicySimulation()

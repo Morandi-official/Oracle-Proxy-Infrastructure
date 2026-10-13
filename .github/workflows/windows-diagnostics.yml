@@ -1,0 +1,46 @@
+name: Windows read-only diagnostics
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/**'
+      - '.github/workflows/windows-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-diagnostics:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run offline-safe tests in Windows PowerShell 5.1
+        shell: powershell
+        run: ./clients/windows/diagnostics/tests/Diagnostics.Tests.ps1
+      - name: Run offline-safe tests in PowerShell 7
+        shell: pwsh
+        run: ./clients/windows/diagnostics/tests/Diagnostics.Tests.ps1
+      - name: Simulate fail-closed states in Windows PowerShell 5.1
+        shell: powershell
+        run: ./clients/windows/simulation/tests/ProtectionPolicy.Tests.ps1
+      - name: Simulate fail-closed states in PowerShell 7
+        shell: pwsh
+        run: ./clients/windows/simulation/tests/ProtectionPolicy.Tests.ps1
+      - name: Print sanitized Windows runner diagnostics
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $json = & .\clients\windows\diagnostics\Collect-ReadOnly.ps1
+          $report = $json | ConvertFrom-Json
+          if ($report.mode -ne 'read_only_local' -or $report.vpn_connected -ne 'unknown') {
+            throw 'Unexpected diagnostic privacy or connectivity state.'
+          }
+          Write-Host '=== SANITIZED_DIAGNOSTICS_BEGIN ==='
+          $report | ConvertTo-Json -Depth 8
+          Write-Host '=== SANITIZED_DIAGNOSTICS_END ==='

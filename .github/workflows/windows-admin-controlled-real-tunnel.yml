@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe'
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:

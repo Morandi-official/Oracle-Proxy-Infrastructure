@@ -1,0 +1,14 @@
+{
+  "interface": "wg0",
+  "listen_port": 51820,
+  "collected_at": "2026-10-13T00:00:00Z",
+  "peers": [
+    {
+      "id": "sample-peer-not-real",
+      "allowed_ips": ["10.77.0.2/32"],
+      "latest_handshake": 0,
+      "rx_bytes": 0,
+      "tx_bytes": 0
+    }
+  ]
+}

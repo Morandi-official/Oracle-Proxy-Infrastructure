@@ -51,10 +51,11 @@ internal static class LabManagerSelfTests
             string testName = "OracleProxyLabSmoke." + Guid.NewGuid().ToString("N");
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             Task host = Task.Run(() =>
-                LabPipe.RunServerAsync(testName, true, stop.Token, 3));
+                LabPipe.RunServerAsync(testName, true, stop.Token, 4));
             string[] requests = {
                 Claim("Status"), Claim("DisableVpn"),
-                "{\"protocol_version\":1,\"command\":\"Status\",\"caller_sid\":\"S-1-5-18\"}"
+                "{\"protocol_version\":1,\"command\":\"Status\",\"caller_sid\":\"S-1-5-18\"}",
+                new string('x', 513)
             };
             for (int i = 0; i < requests.Length; i++)
             {

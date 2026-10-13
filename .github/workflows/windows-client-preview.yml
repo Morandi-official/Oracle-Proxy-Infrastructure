@@ -46,6 +46,14 @@ jobs:
           Write-Host "Native control-state simulation exit code: $($test.ExitCode)"
           if ($test.ExitCode -ne 0) { throw 'W3 control-state self-test failed' }
           Write-Host 'PASS: offline control-state crash, authorization and VPN intent matrix'
+      - name: Verify strict offline control protocol
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/windows-win-x64/OracleProxy.Windows.Preview.exe').Path
+          $test = Start-Process -FilePath $exe -ArgumentList '--protocol-self-test' -Wait -PassThru
+          Write-Host "Native protocol self-test exit code: $($test.ExitCode)"
+          if ($test.ExitCode -ne 0) { throw 'W4 mock protocol test failed' }
+          Write-Host 'PASS: untrusted, oversized, malformed, replayed and unauthorized mock requests denied'
       - name: Verify integrated sanitized diagnostics entrypoint
         shell: pwsh
         run: |

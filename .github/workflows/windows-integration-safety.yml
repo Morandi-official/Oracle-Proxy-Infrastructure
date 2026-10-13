@@ -1,0 +1,35 @@
+name: Safe alpha integration remains NOT GA
+
+on:
+  pull_request:
+    paths:
+      - 'release/**'
+      - '.github/workflows/windows-integration-safety.yml'
+      - 'lab/windows-home/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-blocker-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Negative tests refuse fake release attestations
+        run: python3 -m unittest discover -s release -p 'test_*.py' -v
+      - name: GA MUST remain blocked on unsigned alpha integration
+        shell: bash
+        run: |
+          if [[ -e release/ga-evidence.json ]]; then
+            echo 'Unexpected GA evidence manifest on alpha integration branch' >&2
+            exit 1
+          fi
+          if python3 release/check_evidence.py; then
+            echo 'GA gate wrongly allowed production release' >&2
+            exit 1
+          fi
+          echo 'PASS: release checker denies GA while evidence is missing'

@@ -101,6 +101,19 @@ internal static class BundleSelfTests
             ExpectReject(() => EngineBundle.Verify(temp, conf));
             WriteManifest();
 
+            // Duplicate manifest keys must be rejected rather than "last wins".
+            string duplicateVersion = File.ReadAllText(manifest).Replace(
+                "\"schema_version\":1", "\"schema_version\":1,\"schema_version\":1");
+            File.WriteAllText(manifest, duplicateVersion);
+            ExpectReject(() => EngineBundle.Verify(temp, conf));
+            WriteManifest();
+
+            // Missing native dependency must never be considered a valid bundle.
+            File.Delete(driver);
+            ExpectReject(() => EngineBundle.Verify(temp, conf));
+            File.WriteAllBytes(driver, Encoding.UTF8.GetBytes("not a native driver DLL"));
+            WriteManifest();
+
             ExpectReject(() => EngineBundle.Verify(temp, Path.Combine(configFolder, "other.conf")));
             ExpectReject(() => EngineBundle.Verify("relative", conf));
 
@@ -114,7 +127,7 @@ internal static class BundleSelfTests
         catch (Exception error)
         {
             Console.Error.WriteLine("FAIL: offline service-host selftest " +
-                error.GetType().Name);
+                error.GetType().Name + " (completed assertions=" + passed + ")");
             return false;
         }
         finally

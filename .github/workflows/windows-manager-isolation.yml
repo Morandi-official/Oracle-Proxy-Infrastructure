@@ -30,6 +30,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Manager compile failed' }
           if (Test-Path ./dist/manager-lab/tunnel.dll) { throw 'Unexpected tunnel DLL' }
           if (Test-Path ./dist/manager-lab/wireguard.dll) { throw 'Unexpected WireGuard driver DLL' }
+      - name: Build native GUI client (status-only pipe contract)
+        shell: pwsh
+        run: |
+          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/native-gui-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'Native GUI integration build failed' }
       - name: Exercise actual Windows named pipe in same-user offline lab
         shell: pwsh
         run: |
@@ -66,7 +71,15 @@ jobs:
                 $json.leak_protection -ne 'unverified') {
               throw 'Unexpected privileged manager response'
             }
-            Write-Host 'PASS: real LocalSystem SCM service responded via ACL-restricted Windows pipe, no VPN actions'
+            if (-not $json.authenticated_status_pipe -or $json.mutating_commands_available) {
+              throw 'Manager status pipe has wrong access contract'
+            }
+            $gui = (Resolve-Path './dist/native-gui-smoke/OracleProxy.Windows.Preview.exe').Path
+            $client = Start-Process -FilePath $gui -ArgumentList '--manager-status-self-test' -Wait -PassThru
+            if ($client.ExitCode -ne 0) {
+              throw 'Native GUI failed to read OS-authenticated status-only manager IPC'
+            }
+            Write-Host 'PASS: real SCM LocalSystem service and native GUI exchanged authenticated read-only IPC'
           }
           finally {
             if ($created) {

@@ -26,3 +26,15 @@ jobs:
       - name: Run offline-safe tests in PowerShell 7
         shell: pwsh
         run: ./clients/windows/diagnostics/tests/Diagnostics.Tests.ps1
+      - name: Print sanitized Windows runner diagnostics
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $json = & .\clients\windows\diagnostics\Collect-ReadOnly.ps1
+          $report = $json | ConvertFrom-Json
+          if ($report.mode -ne 'read_only_local' -or $report.vpn_connected -ne 'unknown') {
+            throw 'Unexpected diagnostic privacy or connectivity state.'
+          }
+          Write-Host '=== SANITIZED_DIAGNOSTICS_BEGIN ==='
+          $report | ConvertTo-Json -Depth 8
+          Write-Host '=== SANITIZED_DIAGNOSTICS_END ==='

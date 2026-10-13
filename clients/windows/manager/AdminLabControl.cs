@@ -19,10 +19,30 @@ internal sealed class AdminLabControl
     private readonly HashSet<Guid> _seen = new();
     private const int MaxRequests = 256;
 
-    internal static bool IsDisposableCiLab() =>
-        OperatingSystem.IsWindows() &&
-        Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" &&
-        Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") == "github-hosted";
+    // The short-lived SCM process does not inherit GitHub runner's job-level
+    // environment. A separately staged marker under an admin-owned lab-only
+    // directory is therefore also required for SYSTEM/Session0 activation.
+    // This marker is a lab safety tripwire, NOT an attestation or permission.
+    internal static bool IsDisposableCiLab()
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" &&
+            Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") == "github-hosted")
+            return true;
+        try
+        {
+            using var id = WindowsIdentity.GetCurrent();
+            if (!id.IsSystem || System.Diagnostics.Process.GetCurrentProcess().SessionId != 0)
+                return false;
+            string root = Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.CommonApplicationData), "OracleProxyLab");
+            string marker = Path.Combine(root, ".ci-control-approved");
+            return Directory.Exists(root) && File.Exists(marker) &&
+                (File.GetAttributes(marker) & FileAttributes.ReparsePoint) == 0 &&
+                File.ReadAllText(marker).Trim() == "DISPOSABLE_GITHUB_RUNNER_ONLY";
+        }
+        catch { return false; }
+    }
 
     internal static bool ApplyToCiLabService(LabControlAction action)
     {

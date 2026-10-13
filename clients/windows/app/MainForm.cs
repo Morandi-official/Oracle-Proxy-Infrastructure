@@ -62,6 +62,11 @@ internal sealed class MainForm : Form
         policyButton.Click += (_, _) => ShowPolicySimulation();
         buttons.Controls.Add(_refresh);
         buttons.Controls.Add(policyButton);
+        var managerButton = new Button {
+            Text = "查看后台服务", Width = 145, Height = 38
+        };
+        managerButton.Click += async (_, _) => await CheckManagerAsync();
+        buttons.Controls.Add(managerButton);
         root.Controls.Add(buttons, 0, 3);
 
         root.Controls.Add(new Label {
@@ -109,6 +114,33 @@ internal sealed class MainForm : Form
         {
             if (!_shutdown.IsCancellationRequested && !IsDisposed)
                 _refresh.Enabled = true;
+        }
+    }
+
+    private async Task CheckManagerAsync()
+    {
+        try
+        {
+            var report = await ManagerStatusClient.ReadAsync(_shutdown.Token);
+            if (_shutdown.IsCancellationRequested) return;
+            MessageBox.Show(this,
+                "已查询 Windows 后台服务的受限状态接口。\\n\\n" +
+                "服务接口：操作系统身份校验、只读模式\\n" +
+                "实际 VPN 握手：" + report.Connected + "\\n" +
+                "断线防泄漏：" + report.LeakProtection + "\\n" +
+                "允许修改 VPN：" + (report.MutationsAvailable ? "是" : "否") + "\\n\\n" +
+                "此按钮不会启动或停止 WireGuard。",
+                "实验后台服务状态", MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        catch
+        {
+            if (!_shutdown.IsCancellationRequested)
+                MessageBox.Show(this,
+                    "后台实验服务未安装、不可访问或响应不符合安全协议。\\n" +
+                    "本客户端未修改任何 VPN 或网络设置。",
+                    "后台服务不可用", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 

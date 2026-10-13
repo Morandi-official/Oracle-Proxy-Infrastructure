@@ -18,6 +18,19 @@ internal static class EngineBundle
 
     internal sealed record VerifiedFiles(string TunnelDll, string WireGuardDll, string Config);
 
+    internal static bool IsAllowedLabProfile(string profile) =>
+        profile is "lab-only" or "lab-peer-a" or "lab-peer-b";
+
+    internal static string FixedConfigPath(string profile)
+    {
+        if (!IsAllowedLabProfile(profile))
+            throw new InvalidOperationException("Profile is not in the static lab allowlist");
+        string root = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        if (string.IsNullOrWhiteSpace(root))
+            throw new InvalidOperationException("Unresolved ProgramData");
+        return Path.Combine(root, "OracleProxyLab", "config", profile + ".conf");
+    }
+
     internal static string FixedConfigPath()
     {
         string root = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
@@ -33,8 +46,8 @@ internal static class EngineBundle
 
         directory = Path.GetFullPath(directory);
         configPath = Path.GetFullPath(configPath);
-        if (!string.Equals(Path.GetFileName(configPath), FixedLabConfigFile,
-                StringComparison.OrdinalIgnoreCase))
+        if (!new[] { FixedLabConfigFile, "lab-peer-a.conf", "lab-peer-b.conf" }
+            .Contains(Path.GetFileName(configPath), StringComparer.OrdinalIgnoreCase))
             throw new InvalidOperationException("Only fixed lab config name allowed");
 
         CheckRealDirectory(directory);

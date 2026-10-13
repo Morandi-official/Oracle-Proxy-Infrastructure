@@ -104,9 +104,9 @@ internal static class LabPipe
         {
             int length = await pipe.ReadAsync(buffer.AsMemory(count, 1), token);
             if (length == 0) return null;
-            if (buffer[count] == (byte)'\\n')
+            if (buffer[count] == (byte)'\n')
             {
-                return Utf8.GetString(buffer, 0, count).TrimEnd('\\r');
+                return Utf8.GetString(buffer, 0, count).TrimEnd('\r');
             }
             count++;
         }

@@ -117,6 +117,38 @@ internal static class BundleSelfTests
             ExpectReject(() => EngineBundle.Verify(temp, Path.Combine(configFolder, "other.conf")));
             ExpectReject(() => EngineBundle.Verify("relative", conf));
 
+            // Verify the new real Windows NTFS DACL gate using fake config
+            // bytes only. No production file or private key is touched.
+            using (var currentUser = System.Security.Principal.WindowsIdentity.GetCurrent())
+            {
+                string callerSid = currentUser.User?.Value ??
+                    throw new InvalidOperationException("Missing Windows SID");
+                ExpectReject(() => ConfigAclGate.AssertProtectedFixture(conf, callerSid));
+                var fileInfo = new FileInfo(conf);
+                var fileSecurity = fileInfo.GetAccessControl();
+                fileSecurity.SetAccessRuleProtection(true, false);
+                fileSecurity.SetAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    currentUser.User!,
+                    System.Security.AccessControl.FileSystemRights.FullControl,
+                    System.Security.AccessControl.AccessControlType.Allow));
+                fileSecurity.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    new System.Security.Principal.SecurityIdentifier(
+                        System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
+                    System.Security.AccessControl.FileSystemRights.FullControl,
+                    System.Security.AccessControl.AccessControlType.Allow));
+                fileInfo.SetAccessControl(fileSecurity);
+                ConfigAclGate.AssertProtectedFixture(conf, callerSid);
+                passed++;
+
+                fileSecurity.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    new System.Security.Principal.SecurityIdentifier(
+                        System.Security.Principal.WellKnownSidType.WorldSid, null),
+                    System.Security.AccessControl.FileSystemRights.Read,
+                    System.Security.AccessControl.AccessControlType.Allow));
+                fileInfo.SetAccessControl(fileSecurity);
+                ExpectReject(() => ConfigAclGate.AssertProtectedFixture(conf, callerSid));
+            }
+
             // A normal CI user is NOT an elevated SYSTEM service. Actual
             // exported WireGuardTunnelService must never be invoked here.
             Check(accepted.TunnelDll.EndsWith("tunnel.dll", StringComparison.Ordinal));

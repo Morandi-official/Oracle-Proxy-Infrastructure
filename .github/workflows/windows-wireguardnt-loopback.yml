@@ -1,0 +1,47 @@
+name: G6 disposable Windows WireGuardNT localhost handshake
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-wireguardnt-loopback.yml'
+      - 'clients/windows/lab/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wgnt-loopback-lab
+  cancel-in-progress: true
+
+jobs:
+  real-loopback-handshake:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/windows-wireguardnt-loopback-handshake'
+    runs-on: windows-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preflight isolated VM and record default routes
+        shell: pwsh
+        run: ./clients/windows/lab/preflight.ps1
+      - name: Fetch and authenticate official signed native DLL and pinned compiler
+        shell: pwsh
+        run: ./clients/windows/lab/prepare-toolchain.ps1
+      - name: Compile real driver-interface loopback test
+        shell: pwsh
+        run: ./clients/windows/lab/compile-test.ps1
+      - name: Create ephemeral test-only peer keys
+        shell: pwsh
+        run: ./clients/windows/lab/generate-keys.ps1
+      - name: Run true two-peer WireGuardNT UDP localhost handshake
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./clients/windows/lab/run-handshake.ps1
+      - name: Always delete key material and inspect default routes
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup.ps1

@@ -9,8 +9,13 @@
     <RootNamespace>OracleProxy.Windows.Preview</RootNamespace>
     <Version>0.1.0-preview</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Lab-only native control must be intentionally enabled by the CI test build. -->
+    <EnableDisposableLabControls Condition="'$(EnableDisposableLabControls)' == ''">false</EnableDisposableLabControls>
+    <DefineConstants Condition="'$(EnableDisposableLabControls)' == 'true'">$(DefineConstants);ORACLE_DISPOSABLE_LAB</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Not even compiled into default end-user preview builds. -->
+    <Compile Remove="LabAdminControlClient.cs" Condition="'$(EnableDisposableLabControls)' != 'true'" />
     <Content Include="../diagnostics/Diagnostics.psm1">
       <Link>diagnostics/Diagnostics.psm1</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

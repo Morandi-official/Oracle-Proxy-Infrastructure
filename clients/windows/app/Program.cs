@@ -22,6 +22,7 @@ internal static class Program
         {
             return ControlStateSelfTests.Run() ? 0 : 1;
         }
+#if ORACLE_DISPOSABLE_LAB
         if (args.Length == 1 && args[0].StartsWith("--ci-lab-", StringComparison.Ordinal))
         {
             string? operation = args[0] switch {
@@ -38,6 +39,7 @@ internal static class Program
             }
             catch { return 3; }
         }
+#endif
         if (args.Length == 1 && args[0] == "--manager-status-self-test")
         {
             try

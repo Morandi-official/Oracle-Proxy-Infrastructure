@@ -45,6 +45,8 @@ jobs:
           & $exe --wireguard-service
           if ($LASTEXITCODE -ne 3) { throw "Unsafe service mode returned $LASTEXITCODE" }
           Write-Host 'PASS: non-SYSTEM process cannot activate WireGuard export'
+          # The expected nonzero exit is a successful *negative* assertion.
+          $global:LASTEXITCODE = 0
       - name: Upload lab-only host binary for review
         uses: actions/upload-artifact@v4
         with:

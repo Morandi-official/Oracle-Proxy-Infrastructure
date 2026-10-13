@@ -60,3 +60,9 @@ def wireguard_overview() -> dict:
         "peer_count": len(peers),
         "peers": peers,
     }
+
+
+# Keep the HTML dashboard in a separate, read-only router.
+from .dashboard import router as dashboard_router  # noqa: E402
+
+app.include_router(dashboard_router)

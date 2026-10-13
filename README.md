@@ -62,3 +62,16 @@ It requires OS authorization to read WireGuard status. Do **not** add broad sudo
 6. **M5**: production security hardening: fail-closed policies, boot/restart tests, IPv6/DNS/WebRTC leak tests, backup and recovery.
 
 Never commit SSH keys, WireGuard private keys or exported client configs.
+
+## Read-only local dashboard (prototype)
+
+Run the API as shown above, then open `http://127.0.0.1:8765/dashboard`.
+The browser's HTTP Basic prompt uses username `admin` and password equal to your locally generated `ORACLE_PROXY_API_TOKEN` value. No token is stored in repository files, HTML, cookies or localStorage. Do not share the token or browse through plain-HTTP networks; run locally or through a properly secured SSH tunnel only. Closing the browser does not necessarily clear cached HTTP Basic credentials; use a private browsing session if appropriate.
+
+The dashboard is read-only, does not auto-refresh or call third-party scripts, and only displays sanitized snapshot fields. The fixture is synthetic data. This is a preliminary view, **not a production-ready authenticated multiuser admin console**.
+
+## CI and free Actions minutes
+
+This project uses GitHub-hosted Ubuntu runners for short unit tests. To avoid running the same tests twice for every branch push with an open PR, the workflow triggers on PRs and on pushes to `main` only. Concurrent runs for the same PR cancel the older run. Every job has a 10-minute timeout.
+
+View account-level consumption in GitHub account settings → **Billing and licensing** → **Usage**, filter to **Actions**, or inspect **Actions → workflow run → Usage** for one job. In **Budgets and alerts**, enable the included-usage 90% and 100% notifications. The GitHub Free personal allowance is 2,000 minutes/month for standard hosted jobs on private repositories; check your current plan directly in GitHub.

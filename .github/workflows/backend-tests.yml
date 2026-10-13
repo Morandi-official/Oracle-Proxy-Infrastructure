@@ -1,14 +1,19 @@
 name: Backend tests
 on:
   push:
+    branches: [main]
     paths: ["backend/**", ".github/workflows/backend-tests.yml"]
   pull_request:
     paths: ["backend/**", ".github/workflows/backend-tests.yml"]
+concurrency:
+  group: backend-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: backend

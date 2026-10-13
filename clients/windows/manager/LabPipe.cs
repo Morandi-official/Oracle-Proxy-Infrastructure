@@ -54,14 +54,15 @@ internal static class LabPipe
             string reply;
             try
             {
-                using var reader = new StreamReader(pipe, Utf8, false, 512, true);
                 using var writer = new StreamWriter(pipe, Utf8, 512, true)
                 {
                     AutoFlush = true
                 };
-                // A connected client cannot stall this service indefinitely.
-                string? frame = await reader.ReadLineAsync().WaitAsync(
-                    TimeSpan.FromSeconds(4), token);
+                // Bound input BEFORE decoding/parsing; StreamReader.ReadLine
+                // would otherwise buffer arbitrarily large client input.
+                using var readDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+                readDeadline.CancelAfter(TimeSpan.FromSeconds(4));
+                string? frame = await ReadBoundedFrameAsync(pipe, readDeadline.Token);
 
                 // Verify identity through Windows impersonation; never trust
                 // a SID, path, or permission claimed in JSON.
@@ -92,6 +93,25 @@ internal static class LabPipe
                 continue;
             }
         }
+    }
+
+    private static async Task<string?> ReadBoundedFrameAsync(
+        Stream pipe, CancellationToken token)
+    {
+        byte[] buffer = new byte[513];
+        int count = 0;
+        while (count <= 512)
+        {
+            int length = await pipe.ReadAsync(buffer.AsMemory(count, 1), token);
+            if (length == 0) return null;
+            if (buffer[count] == (byte)'\\n')
+            {
+                return Utf8.GetString(buffer, 0, count).TrimEnd('\\r');
+            }
+            count++;
+        }
+        // Over-limit input is dropped without allocating further memory.
+        return null;
     }
 
     internal static string EvaluateFrame(string? frame, bool osCallerAllowed)

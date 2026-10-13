@@ -35,6 +35,12 @@ New-Item -ItemType Directory -Path $root | Out-Null
 # removes a preexisting directory if staging refused it.
 'created-by-disposable-github-runner' | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'oracle-lab-owned.flag') -Encoding ascii
 Protect-LabPath $root
+# This scoped marker is generated only on the one-off CI runner, protected
+# by the lab root's Admin/System NTFS DACL. It is not production attestation.
+$ciMarker = Join-Path $root '.ci-control-approved'
+'DISPOSABLE_GITHUB_RUNNER_ONLY' |
+    Set-Content -LiteralPath $ciMarker -Encoding ascii
+Protect-LabPath $ciMarker
 $cfgdir = Join-Path $root 'config'
 New-Item -ItemType Directory -Path $cfgdir | Out-Null
 Protect-LabPath $cfgdir

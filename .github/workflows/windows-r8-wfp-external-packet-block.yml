@@ -1,0 +1,44 @@
+name: R8 real Windows WFP scoped external TCP deny and restore
+
+on:
+  pull_request:
+    paths:
+      - 'lab/wfp-scoped/**'
+      - '.github/workflows/windows-r8-wfp-external-packet-block.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actual-cloud-packet-block:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ensure script refuses non-disposable environments
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'invalid'
+          $refused=$false
+          try { ./lab/wfp-scoped/Test-ExternalSocketBlock.ps1 } catch { $refused=$true }
+          if (-not $refused) { throw 'R8 test accepted forbidden runner' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R8-CI-*').Count -ne 0) {
+            throw 'R8 refusal created unexpected filter'
+          }
+      - name: Verify actual outbound TCP denial and recovery under program/address/port WFP filter
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./lab/wfp-scoped/Test-ExternalSocketBlock.ps1
+      - name: ALWAYS check no synthetic policies remain
+        if: always()
+        shell: pwsh
+        run: |
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R8-CI-*').Count -ne 0) {
+            throw 'R8 temporary policy remained - discard ephemeral Windows runner'
+          }
+          Write-Host 'R8_FINAL_CLEAN: no synthetic test firewall rule remains'

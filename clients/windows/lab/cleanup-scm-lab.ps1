@@ -36,10 +36,28 @@ if (Test-Path $marker -PathType Leaf) {
 $key = Join-Path $env:RUNNER_TEMP 'wg-lab-session.bin'
 if (Test-Path $key) { Remove-Item -LiteralPath $key -Force }
 # Confirm the only route prefixes this lab can add are absent once stopped.
-$leftovers = @(Get-NetRoute -ErrorAction SilentlyContinue | Where-Object {
-    $_.DestinationPrefix -in @('10.249.129.1/32', '10.249.129.2/32')
-})
-if ($leftovers.Count -gt 0) {
-    throw 'Narrow lab routes remain; disposable VM is destroyed after this job'
+# Network adapter removal may lag SCM Stop/Delete. Wait briefly for the
+# actual IPv4/IPv6 kernel routes to disappear, not just the service state.
+$scopedRoutePrefixes = @(
+    '10.249.129.1/32', '10.249.129.2/32',
+    'fd42:14::1/128', 'fd42:14::2/128'
+)
+$deadline = [DateTime]::UtcNow.AddSeconds(18)
+do {
+    $leftovers = @(Get-NetRoute -ErrorAction SilentlyContinue |
+        Where-Object { $_.DestinationPrefix -in $scopedRoutePrefixes })
+    $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @('lab-peer-a','lab-peer-b') })
+    $services = @(Get-Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @('WireGuardTunnel$lab-peer-a','WireGuardTunnel$lab-peer-b') })
+    if ($leftovers.Count -eq 0 -and $adapters.Count -eq 0 -and $services.Count -eq 0) {
+        break
+    }
+    Start-Sleep -Milliseconds 600
+} while ([DateTime]::UtcNow -lt $deadline)
+
+if ($leftovers.Count -gt 0 -or $adapters.Count -gt 0 -or $services.Count -gt 0) {
+    throw "R6_FAIL: residual lab IPv4/IPv6 routes=$($leftovers.Count) adapters=$($adapters.Count) services=$($services.Count)"
 }
+Write-Host 'R6_TUNNEL_ROLLBACK_PASS: no synthetic IPv4/IPv6 routes, adapters or SCM peer services remain'
 Write-Host 'LAB_CLEANUP: only owned test services/files stopped/deleted, fresh keys removed'

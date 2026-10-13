@@ -50,6 +50,8 @@ internal static class Program
                     return await LabManagerSelfTests.RunAsync() ? 0 : 1;
                 case "--admin-lab-self-test":
                     return await AdminLabControlSelfTests.RunAsync() ? 0 : 1;
+                case "--offline-intent-planner-self-test":
+                    return OfflineIntentPlannerSelfTests.Run() ? 0 : 1;
 
                 default: return 2;
             }

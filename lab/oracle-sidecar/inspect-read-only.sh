@@ -7,7 +7,11 @@ self_test() {
   for port in 52911 52912 52913; do
     [[ "$port" =~ ^[0-9]{5}$ ]] && (( port > 49152 && port < 65535 )) || exit 1
   done
-  printf 'R9_SELF_TEST_PASS: no writes, no credentials, lab port bounds valid\n'
+  # ss -H -lun columns are STATE RECV-Q SEND-Q LOCAL PEER; inspect LOCAL ($4).
+  sample='UNCONN 0 0 0.0.0.0:52911 0.0.0.0:*'
+  printf '%s\n' "$sample" | awk '$4 ~ /:52911$/ {seen=1} END {exit !seen}' || exit 1
+  printf '%s\n' "$sample" | awk '$4 ~ /:52912$/ {seen=1} END {exit !seen}' && exit 1
+  printf 'R9_SELF_TEST_PASS: no writes; ss local-port fixture parsing; lab port bounds valid\n'
 }
 if [[ "$#" == 1 && "$1" == "--self-test" ]]; then self_test; exit 0; fi
 if [[ "$#" != 0 ]]; then
@@ -51,7 +55,7 @@ if command -v ss >/dev/null 2>&1; then
   listeners="$(ss -H -lun 2>/dev/null || :)"
   for port in 52911 52912 52913; do
     if printf '%s\n' "$listeners" | awk -v port="$port" '{
-        if ($5 ~ ":" port "$") used=1
+        if ($4 ~ ":" port "$") used=1
       } END {exit !used}'; then
       printf 'candidate_udp_%s=already_listening\n' "$port"
     else

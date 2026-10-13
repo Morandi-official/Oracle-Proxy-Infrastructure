@@ -57,6 +57,11 @@ try {
 
     & $observer $env:WG_LAB_DLL
     if ($LASTEXITCODE -ne 0) { throw 'Actual peer LastHandshake records absent' }
+    $dataProbe = (Resolve-Path './dist/loopback/wgnt-data-plane.exe').Path
+    & $dataProbe $env:WG_LAB_DLL
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Real IPv4 UDP data did not traverse both native WireGuardNT interfaces'
+    }
 
     Run-GuiAdminLab '--ci-lab-stop-b'
     Run-GuiAdminLab '--ci-lab-stop-a'

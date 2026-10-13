@@ -10,6 +10,20 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         if (!OperatingSystem.IsWindows()) return 3;
+        if (args.Length == 2 && args[0] == "--manager-service" &&
+            args[1] == "--ci-lab-control")
+        {
+            if (!AdminLabControl.IsDisposableCiLab()) return 3;
+            try
+            {
+                using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+                if (!identity.IsSystem || Process.GetCurrentProcess().SessionId != 0)
+                    return 3;
+                ServiceBase.Run(new LabManagerService(enableAdminCiLabControl: true));
+                return 0;
+            }
+            catch { return 3; }
+        }
         if (args.Length != 1) return 2;
 
         try
@@ -34,6 +48,8 @@ internal static class Program
 
                 case "--ipc-self-test":
                     return await LabManagerSelfTests.RunAsync() ? 0 : 1;
+                case "--admin-lab-self-test":
+                    return await AdminLabControlSelfTests.RunAsync() ? 0 : 1;
 
                 default: return 2;
             }

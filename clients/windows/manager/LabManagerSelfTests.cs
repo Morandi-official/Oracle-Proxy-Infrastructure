@@ -48,14 +48,17 @@ internal static class LabManagerSelfTests
                     .RootElement.GetProperty("ok").GetBoolean());
             }
 
+            Assert(!JsonDocument.Parse(
+                LabPipe.EvaluateFrame(new string('x', 513), true))
+                .RootElement.GetProperty("ok").GetBoolean());
+
             string testName = "OracleProxyLabSmoke." + Guid.NewGuid().ToString("N");
             using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             Task host = Task.Run(() =>
-                LabPipe.RunServerAsync(testName, true, stop.Token, 4));
+                LabPipe.RunServerAsync(testName, true, stop.Token, 3));
             string[] requests = {
                 Claim("Status"), Claim("DisableVpn"),
-                "{\"protocol_version\":1,\"command\":\"Status\",\"caller_sid\":\"S-1-5-18\"}",
-                new string('x', 513)
+                "{\"protocol_version\":1,\"command\":\"Status\",\"caller_sid\":\"S-1-5-18\"}"
             };
             for (int i = 0; i < requests.Length; i++)
             {

@@ -19,6 +19,6 @@ New-Item -ItemType Directory -Path './dist/loopback' -Force | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Read-only SCM handshake observer failed to compile' }
 dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/lab-admin-manager
 if ($LASTEXITCODE -ne 0) { throw 'Lab manager build failed' }
-dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/lab-client-gui
+dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=true -o ./dist/lab-client-gui
 if ($LASTEXITCODE -ne 0) { throw 'Lab GUI build failed' }
 Write-Host 'PASS: official tunnel DLL, service host, admin manager, native GUI and observer compiled'

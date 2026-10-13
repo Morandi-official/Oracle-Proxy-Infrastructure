@@ -26,8 +26,8 @@ internal static class LabPipe
                 PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         }
 
-        // Service mode: ACL grants ONLY LocalSystem and the local Administrators
-        // group. A standard local account cannot connect even for Status.
+        // STATUS-ONLY pipe: Windows-authenticated local users can query
+        // generic indicators. There are no mutating commands on this pipe.
         var security = new PipeSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         security.AddAccessRule(new PipeAccessRule(
@@ -35,6 +35,9 @@ internal static class LabPipe
             PipeAccessRights.FullControl, AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
             PipeAccessRights.ReadWrite, AccessControlType.Allow));
 
         return NamedPipeServerStreamAcl.Create(name, PipeDirection.InOut, 1,
@@ -72,8 +75,8 @@ internal static class LabPipe
                 {
                     using var id = WindowsIdentity.GetCurrent();
                     callerSid = id.User?.Value;
-                    callerAllowed = id.IsSystem ||
-                        new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator);
+                    callerAllowed = id.IsAuthenticated && id.User is not null &&
+                        !id.User.IsWellKnown(WellKnownSidType.AnonymousSid);
                 });
                 if (currentUserOnly)
                 {
@@ -155,6 +158,8 @@ internal static class LabPipe
             schema_version = 1,
             ok, code,
             manager_mode = "read_only_real_windows_service",
+            authenticated_status_pipe = true,
+            mutating_commands_available = false,
             wireguard_tunnel_connected = "unverified",
             leak_protection = "unverified",
             native_dll_loaded = false

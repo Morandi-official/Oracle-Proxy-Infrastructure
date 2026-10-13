@@ -22,6 +22,18 @@ internal static class Program
         {
             return ControlStateSelfTests.Run() ? 0 : 1;
         }
+        if (args.Length == 1 && args[0] == "--manager-status-self-test")
+        {
+            try
+            {
+                var result = ManagerStatusClient.ReadAsync(CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                return result.StatusPipeAuthenticated && !result.MutationsAvailable &&
+                       result.Connected == "unverified" &&
+                       result.LeakProtection == "unverified" ? 0 : 1;
+            }
+            catch { return 1; }
+        }
         if (args.Length == 1 && args[0] == "--diagnostics-self-test")
         {
             try

@@ -63,6 +63,12 @@ try {
         throw 'Real IPv4 UDP data did not traverse both native WireGuardNT interfaces'
     }
 
+    $appDnsProbe = (Resolve-Path './dist/loopback/wgnt-app-dns.exe').Path
+    & $appDnsProbe $env:WG_LAB_DLL
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Windows application-layer UDP and synthetic DNS delivery did not succeed across isolated WireGuard peers'
+    }
+
     Run-GuiAdminLab '--ci-lab-stop-b'
     Run-GuiAdminLab '--ci-lab-stop-a'
     foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {

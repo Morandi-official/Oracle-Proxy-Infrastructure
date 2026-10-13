@@ -14,6 +14,10 @@ internal static class Program
         {
             return PolicySelfTests.Run() ? 0 : 1;
         }
+        if (args.Length == 1 && args[0] == "--control-self-test")
+        {
+            return ControlStateSelfTests.Run() ? 0 : 1;
+        }
         if (args.Length == 1 && args[0] == "--diagnostics-self-test")
         {
             try

@@ -14,6 +14,17 @@ internal static class Program
         {
             return PolicySelfTests.Run() ? 0 : 1;
         }
+        if (args.Length == 1 && args[0] == "--diagnostics-self-test")
+        {
+            try
+            {
+                var report = SanitizedDiagnostics.CollectAsync(
+                    CancellationToken.None).GetAwaiter().GetResult();
+                return report.PhysicalAdapterCount >= 0 &&
+                       !string.IsNullOrWhiteSpace(report.CollectedAtUtc) ? 0 : 1;
+            }
+            catch { return 1; }
+        }
         if (args.Length > 0)
         {
             return 2;

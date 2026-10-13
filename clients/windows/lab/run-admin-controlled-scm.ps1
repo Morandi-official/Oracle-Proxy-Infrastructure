@@ -57,6 +57,49 @@ try {
 
     & $observer $env:WG_LAB_DLL
     if ($LASTEXITCODE -ne 0) { throw 'Actual peer LastHandshake records absent' }
+    $dataProbe = (Resolve-Path './dist/loopback/wgnt-data-plane.exe').Path
+    & $dataProbe $env:WG_LAB_DLL
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Real IPv4 UDP data did not traverse both native WireGuardNT interfaces'
+    }
+
+    $appDnsProbe = (Resolve-Path './dist/loopback/wgnt-app-dns.exe').Path
+    # The CI runner may drop inbound virtual-adapter UDP at its default
+    # Windows Firewall. Never disable or globally relax the firewall.
+    # Exact program, synthetic IP pairs, protocol and destination ports only.
+    $ruleSuffix = [guid]::NewGuid().ToString('N')
+    $appRules = @(
+        @{ Suffix='B-app'; Local='10.249.129.2'; Remote='10.249.129.1'; Port='55141' },
+        @{ Suffix='A-app'; Local='10.249.129.1'; Remote='10.249.129.2'; Port='55142' },
+        @{ Suffix='B-dns'; Local='10.249.129.2'; Remote='10.249.129.1'; Port='53' }
+    )
+    $createdRuleNames = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        foreach ($setting in $appRules) {
+            $name = "OracleProxy-G14-TEMP-$ruleSuffix-$($setting.Suffix)"
+            if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
+                throw 'Refuse to replace any preexisting firewall rule'
+            }
+            $ruleArgs = @{
+                Name=$name; DisplayName=$name; Direction='Inbound'; Action='Allow'
+                Protocol='UDP'; LocalAddress=$setting.Local; RemoteAddress=$setting.Remote
+                LocalPort=$setting.Port; Program=$appDnsProbe; Profile='Any'
+                Enabled='True'; ErrorAction='Stop'
+            }
+            New-NetFirewallRule @ruleArgs | Out-Null
+            $createdRuleNames.Add($name)
+        }
+        & $appDnsProbe $env:WG_LAB_DLL
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Windows application UDP or synthetic DNS not delivered despite narrowly scoped CI test allow-rules'
+        }
+    }
+    finally {
+        foreach ($name in $createdRuleNames) {
+            Remove-NetFirewallRule -Name $name -ErrorAction Stop
+        }
+        Write-Host 'G14_FW_CLEANUP: exact temporary per-program test firewall rules removed'
+    }
 
     Run-GuiAdminLab '--ci-lab-stop-b'
     Run-GuiAdminLab '--ci-lab-stop-a'

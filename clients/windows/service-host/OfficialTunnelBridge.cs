@@ -25,15 +25,15 @@ internal static class OfficialTunnelBridge
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool FreeLibrary(IntPtr module);
 
-    internal static int InvokeFromService()
+    internal static int InvokeFromService(string profile = "lab-only")
     {
         // No CLI-supplied file path, tunnel name or arbitrary DLL locations.
         EngineBundle.VerifiedFiles files =
-            EngineBundle.Verify(AppContext.BaseDirectory, EngineBundle.FixedConfigPath());
+            EngineBundle.Verify(AppContext.BaseDirectory, EngineBundle.FixedConfigPath(profile));
         // Mandatory lab config/binary ownership and DACL preflight; refuses
         // installation from a user-writable folder. Does not change ACLs.
         ConfigAclGate.RequireProtectedLabInstallation(
-            AppContext.BaseDirectory, files.Config);
+            AppContext.BaseDirectory, files.Config, profile);
 
         // Explicit secure DLL search flags avoid current-working-directory
         // dependency loading. It is STILL necessary to validate signature,

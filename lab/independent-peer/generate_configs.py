@@ -28,8 +28,11 @@ def key(value: str) -> str:
 
 
 def private_key_file(path: str) -> str:
-    filename = Path(path).resolve(strict=True)
-    if not filename.is_file() or filename.is_symlink():
+    requested = Path(path)
+    if requested.is_symlink():
+        raise ValueError("Symlink private-key input prohibited")
+    filename = requested.resolve(strict=True)
+    if not filename.is_file():
         raise ValueError("No ordinary private key file")
     if os.name != "nt" and filename.stat().st_mode & 0o077:
         raise ValueError("Lab private key file must be owner-only")
@@ -78,8 +81,10 @@ def config(mode: str, private: str, remote_pub: str,
 
 def safe_write(destination: str, text: str) -> None:
     path = Path(destination)
+    if path.parent.is_symlink():
+        raise ValueError("Symlink output directory prohibited")
     parent = path.parent.resolve(strict=True)
-    if parent.is_symlink() or not parent.is_dir():
+    if not parent.is_dir():
         raise ValueError("Unsafe lab output directory")
     if path.exists() or path.is_symlink() or path.suffix.lower() != ".conf":
         raise ValueError("Refuse to overwrite or redirect lab config")

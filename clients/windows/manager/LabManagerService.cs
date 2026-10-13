@@ -9,9 +9,12 @@ internal sealed class LabManagerService : ServiceBase
     internal const string FixedServiceName = "OracleProxyLabManager";
     private CancellationTokenSource? _stop;
     private Task? _worker;
+    private Task? _adminLabWorker;
+    private readonly bool _enableAdminCiLabControl;
 
-    internal LabManagerService()
+    internal LabManagerService(bool enableAdminCiLabControl = false)
     {
+        _enableAdminCiLabControl = enableAdminCiLabControl;
         ServiceName = FixedServiceName;
         CanStop = true;
         CanPauseAndContinue = false;
@@ -24,12 +27,24 @@ internal sealed class LabManagerService : ServiceBase
         _stop = new CancellationTokenSource();
         _worker = Task.Run(() => LabPipe.RunServerAsync(
             LabPipe.ProductionPipeName, false, _stop.Token));
+        if (_enableAdminCiLabControl && AdminLabControl.IsDisposableCiLab())
+        {
+            // NOT active with the normal production service arguments.
+            var control = new AdminLabControl();
+            _adminLabWorker = Task.Run(() => control.ServeAsync(
+                AdminLabControl.PipeName, false,
+                AdminLabControl.ApplyToCiLabService, _stop.Token));
+        }
     }
 
     protected override void OnStop()
     {
         _stop?.Cancel();
-        try { _worker?.Wait(TimeSpan.FromSeconds(5)); }
+        try
+        {
+            _worker?.Wait(TimeSpan.FromSeconds(5));
+            _adminLabWorker?.Wait(TimeSpan.FromSeconds(5));
+        }
         catch (AggregateException) { /* cancellation during shutdown */ }
         finally { _stop?.Dispose(); }
     }

@@ -57,6 +57,22 @@ not verify Authenticode publisher chains or all parent-directory reparse
 points, and does not pin a vendor-signed binary release version. The missing
 secure lab installer is an intentional blocker to real activation.
 
+## Real Windows Service Control Manager observation (read-only)
+
+The host also supports `OracleProxy.WireGuardHost.exe --service-status`.
+This calls Windows `OpenSCManagerW`, `OpenServiceW`, and
+`QueryServiceStatusEx` with **query-only permissions** for the single fixed
+lab service `WireGuardTunnel$OracleProxyLab`. It does not enumerate other
+services, start/stop any service, ask for elevation, or change a setting.
+
+The output is sanitized JSON: service name, service state (including
+`absent`), and explicit `false` flags for handshake verification and
+actual fail-close verification. A running SCM service does **not** prove
+any WireGuard peer has handshaken.
+
+GitHub Windows CI tests this real read-only SCM query on its disposable
+runner; it does not register any tunnel service.
+
 ## CI safety
 
 GitHub Actions builds a self-contained win-x64 executable and calls

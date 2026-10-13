@@ -31,6 +31,9 @@ function Protect-LabPath([string]$path) {
     Set-Acl -LiteralPath $path -AclObject $acl
 }
 New-Item -ItemType Directory -Path $root | Out-Null
+# Only this disposable runner may create the ownership flag; cleanup NEVER
+# removes a preexisting directory if staging refused it.
+'created-by-disposable-github-runner' | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'oracle-lab-owned.flag') -Encoding ascii
 Protect-LabPath $root
 $cfgdir = Join-Path $root 'config'
 New-Item -ItemType Directory -Path $cfgdir | Out-Null

@@ -104,6 +104,43 @@ try {
         Write-Host 'G14_FW_CLEANUP: exact temporary per-program test firewall rules removed'
     }
 
+    # R15: WFP guard remains enforced while real WireGuard SCM peers are active.
+    # Proves only one CI PowerShell process, public IPv4 TCP/443 endpoint.
+    if ($env:ORACLE_R15_GUARD_NAME) {
+        $name = $env:ORACLE_R15_GUARD_NAME
+        $remote = $env:ORACLE_R15_GUARD_REMOTE
+        $program = $env:ORACLE_R15_GUARD_PROGRAM
+        if ($name -notmatch '^OracleProxy-R15-CI-[a-f0-9]{32}$' -or
+            $remote -notin @('1.1.1.1','8.8.8.8') -or
+            -not [string]::Equals($program, (Get-Process -Id $PID).Path,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'R15_FAIL: invalid WFP guard binding while tunnel connected'
+        }
+        $live = Get-NetFirewallRule -Name $name -PolicyStore ActiveStore -ErrorAction Stop
+        $ports = $live | Get-NetFirewallPortFilter -ErrorAction Stop
+        $addresses = $live | Get-NetFirewallAddressFilter -ErrorAction Stop
+        $app = $live | Get-NetFirewallApplicationFilter -ErrorAction Stop
+        if ($live.Direction -ne 'Outbound' -or $live.Action -ne 'Block' -or
+            [string]$ports.Protocol -notin @('TCP','6') -or
+            [string]$ports.RemotePort -ne '443' -or
+            [string]$addresses.RemoteAddress -ne $remote -or
+            -not [string]::Equals($app.Program, $program,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'R15_FAIL: WFP scope widened or changed during live tunnel'
+        }
+        Start-Sleep -Milliseconds 650
+        $tcp = [System.Net.Sockets.TcpClient]::new()
+        $escaped = $false
+        try {
+            $destination = [System.Net.IPAddress]::Parse($remote)
+            $connect = $tcp.ConnectAsync($destination, 443)
+            $escaped = $connect.Wait(2500) -and $tcp.Connected
+        } catch { $escaped = $false }
+        finally { $tcp.Dispose() }
+        if ($escaped) { throw 'R15_FAIL: external TCP socket bypassed WFP guard' }
+        Write-Host 'R15_LIVE_TUNNEL_WFP_DENY_PASS: encrypted peers and synthetic app/DNS worked while narrow external TCP blocked'
+    }
+
     Run-GuiAdminLab '--ci-lab-stop-b'
     Run-GuiAdminLab '--ci-lab-stop-a'
     foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {

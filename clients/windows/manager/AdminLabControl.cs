@@ -10,7 +10,7 @@ namespace OracleProxy.LabManager;
 // Separate high-trust named pipe. This can control ONLY disposable lab
 // services, and ONLY when explicitly enabled under a GitHub-hosted runner.
 // Never allowed in the default production/service startup mode.
-internal enum LabControlAction { StartA, StopA, StartB, StopB }
+internal enum LabControlAction { StartA, StopA, StartB, StopB, InstallCiWfp, VerifyCiWfp, RemoveCiWfp }
 
 internal sealed class AdminLabControl
 {
@@ -47,6 +47,12 @@ internal sealed class AdminLabControl
     internal static bool ApplyToCiLabService(LabControlAction action)
     {
         if (!IsDisposableCiLab()) return false;
+        if (action is LabControlAction.InstallCiWfp)
+            return CiSystemWfpGuard.Install();
+        if (action is LabControlAction.VerifyCiWfp)
+            return CiSystemWfpGuard.Verify();
+        if (action is LabControlAction.RemoveCiWfp)
+            return CiSystemWfpGuard.Remove();
         string profile = action is LabControlAction.StartA or LabControlAction.StopA
             ? "lab-peer-a" : "lab-peer-b";
         string root = Path.Combine(Environment.GetFolderPath(
@@ -132,6 +138,9 @@ internal sealed class AdminLabControl
                 "StopLabPeerA" => LabControlAction.StopA,
                 "StartLabPeerB" => LabControlAction.StartB,
                 "StopLabPeerB" => LabControlAction.StopB,
+                "InstallCiWfpGuard" => LabControlAction.InstallCiWfp,
+                "VerifyCiWfpGuard" => LabControlAction.VerifyCiWfp,
+                "RemoveCiWfpGuard" => LabControlAction.RemoveCiWfp,
                 _ => (LabControlAction)(-1)
             };
             if ((int)action < 0) return Reply(false, "COMMAND_NOT_IN_ALLOWLIST");

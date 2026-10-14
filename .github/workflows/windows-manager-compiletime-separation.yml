@@ -39,6 +39,9 @@ jobs:
           if ($LASTEXITCODE -ne 2) { throw 'Forbidden lab admin entrypoint survived release compile' }
           & $exe --manager-service --ci-lab-control
           if ($LASTEXITCODE -ne 2) { throw 'Forbidden lab SCM entrypoint survived release compile' }
+          & $exe --manager-service --ci-lab-control --ci-wfp-guard
+          if ($LASTEXITCODE -ne 2) { throw 'R21 CI-only SYSTEM WFP installer survived default release compile' }
+          Write-Host 'R21_RELEASE_HAS_NO_WFP_INSTALLER_PASS'
           Write-Host 'R10_RELEASE_REFUSAL_PASS: spoofed CI environment did not enable any privileged lab entrypoint'
           # Explicit negative tests leave a native LASTEXITCODE=2; neutralize after all assertions.
           exit 0

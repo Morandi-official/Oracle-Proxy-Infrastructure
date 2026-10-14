@@ -14,7 +14,7 @@
   </PropertyGroup>
   <ItemGroup Condition="'$(EnableDisposableLabControls)' != 'true'">
     <!-- Removing source items keeps live CI admin pipe code OUT of release assemblies. -->
-    <Compile Remove="AdminLabControl.cs;AdminLabControlSelfTests.cs;CiSystemWfpGuard.cs" />
+    <Compile Remove="AdminLabControl.cs;AdminLabControlSelfTests.cs" />
   </ItemGroup>
   <Target Name="ValidateLabOptIn" BeforeTargets="CoreCompile">
     <Error Condition="'$(EnableDisposableLabControls)' != 'true' and '$(EnableDisposableLabControls)' != 'false'"

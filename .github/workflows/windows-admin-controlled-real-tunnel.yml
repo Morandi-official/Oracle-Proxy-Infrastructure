@@ -12,6 +12,7 @@ on:
       - 'clients/windows/lab/generate_service_pair.py'
       - 'clients/windows/lab/run-admin-controlled-scm.ps1'
       - 'lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1'
+      - 'lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1'
       - 'clients/windows/lab/cleanup-scm-lab.ps1'
       - 'clients/windows/lab/wgnt-service-observe.c'
 
@@ -24,7 +25,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -85,8 +86,32 @@ jobs:
           if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R15-CI-*').Count -ne 0) {
             throw 'R15 WFP rule escaped exact cleanup'
           }
+      - name: 'R18 negative: refuse non-disposable WFP operation'
+        if: github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'forbidden'
+          $refused = $false
+          try { ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 } catch { $refused = $true }
+          if (-not $refused) { throw 'R18 allowed unauthorized WFP installation' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R18-CI-*').Count -ne 0) {
+            throw 'R18 denial created a filter'
+          }
+      - name: R18 genuine WG traffic with process-wide WFP TCP and UDP DNS denial
+        if: github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        shell: pwsh
+        timeout-minutes: 9
+        run: ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1
+      - name: R18 ALWAYS check no broad WFP policy remains
+        if: always() && github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        shell: pwsh
+        run: |
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R18-CI-*').Count -ne 0) {
+            throw 'R18 firewall guard escaped cleanup'
+          }
       - name: Verified Windows GUI admin IPC controls two real SCM tunnel services
-        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction'
+        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
         shell: pwsh
         timeout-minutes: 4
         run: ./clients/windows/lab/run-admin-controlled-scm.ps1

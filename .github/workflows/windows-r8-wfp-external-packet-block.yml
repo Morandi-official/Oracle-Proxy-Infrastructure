@@ -42,3 +42,103 @@ jobs:
             throw 'R8 temporary policy remained - discard ephemeral Windows runner'
           }
           Write-Host 'R8_FINAL_CLEAN: no synthetic test firewall rule remains'
+
+  r18-native-tunnel-wfp:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: WireGuard/wireguard-windows
+          ref: 6ece77bc487c8aa697e3c092197621c4f3e5ccb8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preflight disposable VM and preserve IPv4/IPv6 default routes
+        shell: pwsh
+        run: ./clients/windows/lab/preflight.ps1
+      - name: Verify signed official WireGuardNT and pinned source toolchain
+        shell: pwsh
+        run: ./clients/windows/lab/prepare-toolchain.ps1
+      - name: Compile genuine upstream tunnel.dll plus independent service host
+        shell: pwsh
+        run: ./clients/windows/lab/build-scm-components.ps1
+      - name: Generate two ephemeral test X25519 keypairs
+        shell: pwsh
+        run: ./clients/windows/lab/generate-keys.ps1
+      - name: Stage narrow-route lab configurations and NTFS protected DLLs
+        shell: pwsh
+        run: ./clients/windows/lab/stage-scm-lab.ps1
+      - name: R15 negative CI boundary test (cannot install WFP outside disposable runner)
+        if: github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction'
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'forbidden'
+          $refused = $false
+          try { ./lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1 } catch { $refused = $true }
+          if (-not $refused) { throw 'R15 unauthorized WFP rule request succeeded' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R15-CI-*').Count -ne 0) {
+            throw 'R15 denial left a firewall rule'
+          }
+      - name: R15 real GUI/SCM WireGuard peers + persistent narrow WFP rule
+        if: github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction'
+        shell: pwsh
+        timeout-minutes: 8
+        run: ./lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1
+      - name: R15 ALWAYS check no synthetic WFP rules remain
+        if: always() && github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction'
+        shell: pwsh
+        run: |
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R15-CI-*').Count -ne 0) {
+            throw 'R15 WFP rule escaped exact cleanup'
+          }
+      - name: 'R18 negative: refuse non-disposable WFP operation'
+        if: github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'forbidden'
+          $refused = $false
+          try { ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 } catch { $refused = $true }
+          if (-not $refused) { throw 'R18 allowed unauthorized WFP installation' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R18-CI-*').Count -ne 0) {
+            throw 'R18 denial created a filter'
+          }
+      - name: R18 genuine WG traffic with process-wide WFP TCP and UDP DNS denial
+        if: github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        shell: pwsh
+        timeout-minutes: 9
+        run: ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1
+      - name: R18 ALWAYS check no broad WFP policy remains
+        if: always() && github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        shell: pwsh
+        run: |
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R18-CI-*').Count -ne 0) {
+            throw 'R18 firewall guard escaped cleanup'
+          }
+      - name: Verified Windows GUI admin IPC controls two real SCM tunnel services
+        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./clients/windows/lab/run-admin-controlled-scm.ps1
+      - name: ALWAYS remove only disposable SCM services, native DLLs and secrets
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup-scm-lab.ps1
+      - name: ALWAYS verify IPv4/IPv6 default routes were not changed
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup.ps1

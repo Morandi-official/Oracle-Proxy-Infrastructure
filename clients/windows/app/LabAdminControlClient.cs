@@ -11,7 +11,8 @@ namespace OracleProxy.Windows.Preview;
 internal static class LabAdminControlClient
 {
     private static readonly HashSet<string> Allowed = new(StringComparer.Ordinal) {
-        "StartLabPeerA", "StopLabPeerA", "StartLabPeerB", "StopLabPeerB"
+        "StartLabPeerA", "StopLabPeerA", "StartLabPeerB", "StopLabPeerB",
+        "InstallCiWfpGuard", "VerifyCiWfpGuard", "RemoveCiWfpGuard"
     };
 
     internal static bool OnDisposableRunner() =>

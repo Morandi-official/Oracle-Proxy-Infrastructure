@@ -1,0 +1,41 @@
+name: R11 real Windows scoped UDP DNS deny and recovery (not a kill switch)
+
+on:
+  pull_request:
+    paths:
+      - 'lab/wfp-scoped/Test-ExternalUdpDnsBlock.ps1'
+      - '.github/workflows/windows-r11-wfp-udp-dns.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'lab/wfp-scoped/Test-ExternalUdpDnsBlock.ps1'
+      - '.github/workflows/windows-r11-wfp-udp-dns.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r11-wfp-dns-disposable
+  cancel-in-progress: true
+
+jobs:
+  external-dns-udp-packets:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Scoped DNS UDP denial and exact-rule restoration
+        shell: pwsh
+        timeout-minutes: 12
+        run: ./lab/wfp-scoped/Test-ExternalUdpDnsBlock.ps1
+      - name: Always verify no owned test rule remains
+        if: always()
+        shell: pwsh
+        run: |
+          $left = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.Name -like 'OracleProxy-R11-CI-*' })
+          if ($left.Count -ne 0) { throw 'R11_ABORTED: discard hosted VM; owned firewall rules remain' }
+          Write-Host 'R11_FINAL_CLEANUP_PASS'

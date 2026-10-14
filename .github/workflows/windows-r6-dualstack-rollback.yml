@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'test/r6-windows-dualstack-revoke-postconditions' || github.event.pull_request.head.ref == 'integration/windows-safe-alpha')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'test/r6-windows-dualstack-revoke-postconditions' || github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'feat/manager-compiletime-lab-isolation')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:

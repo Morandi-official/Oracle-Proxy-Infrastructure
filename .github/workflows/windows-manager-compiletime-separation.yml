@@ -1,0 +1,63 @@
+name: R10 compile-time Windows SYSTEM manager lab-control separation
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/manager/**'
+      - '.github/workflows/windows-manager-compiletime-separation.yml'
+      - 'clients/windows/lab/build-scm-components.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-separated-managers:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build default distribution manager with NO lab command sources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=false -o ./dist/r10-release-manager
+          if ($LASTEXITCODE -ne 0) { throw 'Default manager build failed' }
+          $exe = (Resolve-Path './dist/r10-release-manager/OracleProxy.LabManager.exe').Path
+          & $exe --ipc-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Status pipe test failed' }
+          & $exe --offline-intent-planner-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Offline intent self-test failed' }
+          $env:GITHUB_ACTIONS='true'
+          $env:RUNNER_ENVIRONMENT='github-hosted'
+          & $exe --admin-lab-self-test
+          if ($LASTEXITCODE -ne 2) { throw 'Forbidden lab admin entrypoint survived release compile' }
+          & $exe --manager-service --ci-lab-control
+          if ($LASTEXITCODE -ne 2) { throw 'Forbidden lab SCM entrypoint survived release compile' }
+          Write-Host 'R10_RELEASE_REFUSAL_PASS: spoofed CI environment did not enable any privileged lab entrypoint'
+      - name: Build explicitly opted-in CI-only manager with ADMIN lab tests, never distribute
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=true -o ./dist/R10-CI-ONLY-DO-NOT-UPLOAD
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit CI-only manager compilation failed' }
+          $exe = (Resolve-Path './dist/R10-CI-ONLY-DO-NOT-UPLOAD/OracleProxy.LabManager.exe').Path
+          & $exe --admin-lab-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'CI-only admin parser OS identity regression' }
+          & $exe --ipc-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'CI-only status pipe regression' }
+          Write-Host 'R10_OPT_IN_LAB_PASS: admin test code exists only in explicit CI lab build; no installation performed'
+      - name: Never install services or mutate Windows networking
+        shell: pwsh
+        run: |
+          foreach ($name in @('OracleProxyLabManager','WireGuardTunnel$lab-peer-a','WireGuardTunnel$lab-peer-b')) {
+            if (Get-Service -Name $name -ErrorAction SilentlyContinue) {
+              throw "R10 must not install service: $name"
+            }
+          }
+          Write-Host 'R10_NO_OS_MUTATION_PASS: purely compilation and unprivileged protocol tests'

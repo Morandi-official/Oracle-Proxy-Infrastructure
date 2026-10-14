@@ -68,4 +68,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'OS identity status IPC test failed' }
           & $exe --offline-intent-planner-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Offline state model failed' }
+          # Even spoofing environment hints cannot add an omitted compile unit.
+          $env:GITHUB_ACTIONS = 'true'
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          & $exe --admin-lab-self-test
+          if ($LASTEXITCODE -ne 2) { throw 'Default manager accepted forbidden lab-test entrypoint' }
+          & $exe --manager-service --ci-lab-control
+          if ($LASTEXITCODE -ne 2) { throw 'Default manager accepted privileged tunnel service entrypoint' }
           Write-Host 'MAIN_WINDOWS_SOURCE_PASS: read-only executable, no SCM install/route/DNS/WFP modifications'

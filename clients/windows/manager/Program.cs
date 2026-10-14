@@ -10,6 +10,7 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         if (!OperatingSystem.IsWindows()) return 3;
+#if ENABLE_DISPOSABLE_LAB_CONTROLS
         if (args.Length == 2 && args[0] == "--manager-service" &&
             args[1] == "--ci-lab-control")
         {
@@ -24,6 +25,7 @@ internal static class Program
             }
             catch { return 3; }
         }
+#endif
         if (args.Length != 1) return 2;
 
         try
@@ -48,8 +50,10 @@ internal static class Program
 
                 case "--ipc-self-test":
                     return await LabManagerSelfTests.RunAsync() ? 0 : 1;
+#if ENABLE_DISPOSABLE_LAB_CONTROLS
                 case "--admin-lab-self-test":
                     return await AdminLabControlSelfTests.RunAsync() ? 0 : 1;
+#endif
                 case "--offline-intent-planner-self-test":
                     return OfflineIntentPlannerSelfTests.Run() ? 0 : 1;
 

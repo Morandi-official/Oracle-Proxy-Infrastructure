@@ -100,10 +100,11 @@ if ($LiveCheck) {
     Write-Host 'R21_LIVE_WG_WFP_TCP_UDP_DNS_DENY_PASS'
     return
 }
-$beforeRules = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name)
-$before = $beforeRules.Count
-$profiles = @(Get-NetFirewallProfile -ErrorAction Stop |
-    Sort-Object Name | ForEach-Object { "$($_.Name):$($_.Enabled)" })
+# Observe external TCP/DNS first. Win11 may autonomously initialize an OS
+# network rule on the first socket. Record the firewall baseline AFTER that.
+$beforeRules = @()
+$before = -1
+$profiles = @()
 $name = 'OracleProxy-R21-CI-SYSTEM-OnlyGuard'
 $owned = $false
 try {
@@ -119,7 +120,15 @@ try {
     if (-not $v6) {
         Write-Host 'R21_IPV6_EXTERNAL_UNAVAILABLE: no IPv6 packet-denial proof'
     }
-    if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
+    $beforeRules = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name)
+    $before = $beforeRules.Count
+    $profiles = @(Get-NetFirewallProfile -ErrorAction Stop |
+        Sort-Object Name | ForEach-Object { "$($_.Name):$($_.Enabled)" })
+    # NetSecurity's -Name missing lookup can throw a terminating CIM exception.
+    # Enumerate the ActiveStore instead; do not treat a lookup error as absence.
+    $existing = @(Get-NetFirewallRule -ErrorAction Stop |
+        Where-Object Name -eq $name)
+    if ($existing.Count -ne 0) {
         throw 'R21_REFUSED: preexisting filter'
     }
     # SYSTEM SCM service owns WFP; test PowerShell never creates it.
@@ -159,14 +168,20 @@ finally {
                        'ORACLE_R21_SYSTEM_GUARD','ORACLE_R19_CRASH_TEST')) {
         Remove-Item -Path ('Env:' + $key) -ErrorAction SilentlyContinue
     }
-    if ($owned -and (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue)) {
+    if ($owned -and @(Get-NetFirewallRule -ErrorAction Stop |
+        Where-Object Name -eq $name).Count -gt 0) {
         VerifyGuard $name
         Remove-NetFirewallRule -Name $name -ErrorAction Stop
     }
-    if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
+    if (@(Get-NetFirewallRule -ErrorAction Stop |
+        Where-Object Name -eq $name).Count -gt 0) {
         throw 'R21_FAIL: owned filter survived cleanup'
     }
     $afterRules = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name)
+    if ($before -lt 0) {
+        Write-Host "R21_EARLY_ABORT: before actual WFP baseline; no R21 service installation occurred"
+        return
+    }
     if ($afterRules.Count -ne $before -or
         @(Compare-Object -ReferenceObject $beforeRules -DifferenceObject $afterRules).Count -gt 0) {
         $difference = @(Compare-Object -ReferenceObject $beforeRules -DifferenceObject $afterRules)

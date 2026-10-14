@@ -54,6 +54,9 @@ internal static class Program
                 case "--admin-lab-self-test":
                     return await AdminLabControlSelfTests.RunAsync() ? 0 : 1;
 #endif
+                case "--safe-control-gate-self-test":
+                    return SafeControlGateSelfTests.Run() ? 0 : 1;
+
                 case "--offline-intent-planner-self-test":
                     return OfflineIntentPlannerSelfTests.Run() ? 0 : 1;
 

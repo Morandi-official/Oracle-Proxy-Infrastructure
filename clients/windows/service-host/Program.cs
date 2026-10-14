@@ -16,6 +16,14 @@ internal static class Program
             return 0;
         }
 
+        if (args.Length == 2 && args[0] == "--signed-driver-ci-self-test")
+        {
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true" ||
+                Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT") != "github-hosted")
+                return 3;
+            return NativeDriverTrustSelfTests.Run(args[1]) ? 0 : 1;
+        }
+
         if (args.Length == 1 && args[0] == "--self-test")
             return BundleSelfTests.Run() ? 0 : 1;
 

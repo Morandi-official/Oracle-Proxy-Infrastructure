@@ -177,18 +177,28 @@ try {
     # SYSTEM SCM service owns WFP; test PowerShell never creates it.
     $owned = $true
     $env:ORACLE_R21_SYSTEM_GUARD = 'CI_FIXED_SYSTEM_POLICY'
-    $env:ORACLE_R19_CRASH_TEST = 'CI_OWNED_MANAGER_ONLY'
+    if ($env:ORACLE_R22_TAMPER_TEST -ne 'CI_ONLY') {
+        $env:ORACLE_R19_CRASH_TEST = 'CI_OWNED_MANAGER_ONLY'
+    }
     $env:ORACLE_R21_GUARD_NAME = $name
     $env:ORACLE_R21_TCP = $tcp
     $env:ORACLE_R21_DNS = $dns
     $env:ORACLE_R21_IPV6 = $v6
     & ./clients/windows/lab/run-admin-controlled-scm.ps1
     if ($LASTEXITCODE -ne 0) { throw 'R21_FAIL: GUI/SCM tunnel lab failed' }
-    VerifyGuard $name
-    Denied $tcp $dns $v6
-    Write-Host 'R21_SYSTEM_GUARD_SURVIVED_SYSTEM_MANAGER_CRASH_PASS'
-    Remove-R21OwnedComRule $name
-    $owned = $false
+    if ($env:ORACLE_R22_TAMPER_TEST -eq 'CI_ONLY') {
+        if (@(Get-NetFirewallRule -ErrorAction Stop |
+            Where-Object DisplayName -eq $name).Count -ne 0) {
+            throw 'R22_FAIL: removed guard unexpectedly still active'
+        }
+        Write-Host 'R22_OS_GUARD_TAMPER_RECOGNIZED_PASS: manager refused peer restart'
+    } else {
+        VerifyGuard $name
+        Denied $tcp $dns $v6
+        Write-Host 'R21_SYSTEM_GUARD_SURVIVED_SYSTEM_MANAGER_CRASH_PASS'
+        Remove-R21OwnedComRule $name
+        $owned = $false
+    }
     Start-Sleep -Milliseconds 650
     if (-not (Tcp $tcp) -or -not (Dns $dns)) {
         throw 'R21_FAIL: IPv4 TCP/UDP did not restore'

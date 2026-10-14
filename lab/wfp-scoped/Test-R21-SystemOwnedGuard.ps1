@@ -80,6 +80,44 @@ function VerifyGuard([string]$name) {
         throw 'R21_FAIL: active WFP guard scope incorrect'
     }
 }
+function Remove-R21OwnedComRule([string]$name) {
+    # A COM INetFwRule uses its friendly .Name; PowerShell NetSecurity may
+    # project it as a GUID InstanceID, for which Remove-NetFirewallRule fails.
+    # First check actual WFP ActiveStore dimensions, then delete by the exact
+    # COM name. No wildcard removal or default-policy changes are allowed.
+    VerifyGuard $name
+    $type = [Type]::GetTypeFromProgID('HNetCfg.FwPolicy2', $true)
+    $policy = [Activator]::CreateInstance($type)
+    try {
+        $matches = @($policy.Rules | Where-Object {
+            [string]::Equals([string]$_.Name, $name,
+                [StringComparison]::Ordinal)
+        })
+        if ($matches.Count -ne 1) {
+            throw 'R21_FAIL: cannot uniquely locate COM-owned rule for removal'
+        }
+        $program=(Get-Process -Id $PID -ErrorAction Stop).Path
+        if (-not [string]::Equals([string]$matches[0].ApplicationName,
+                $program,[StringComparison]::OrdinalIgnoreCase) -or
+            [int]$matches[0].Action -ne 0 -or
+            [int]$matches[0].Direction -ne 2 -or
+            [int]$matches[0].Protocol -ne 256) {
+            throw 'R21_FAIL: refusing to delete modified/untrusted COM policy'
+        }
+        $policy.Rules.Remove($name)
+    }
+    finally {
+        if ($null -ne $policy -and
+            [Runtime.InteropServices.Marshal]::IsComObject($policy)) {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($policy)
+        }
+    }
+    if (@(Get-NetFirewallRule -ErrorAction Stop |
+        Where-Object DisplayName -eq $name).Count -ne 0) {
+        throw 'R21_FAIL: COM rule remained after explicit removal'
+    }
+}
+
 function Denied([string]$tcp,[string]$dns,[string]$v6) {
     Start-Sleep -Milliseconds 750
     if (Tcp $tcp) { throw 'R21_FAIL: IPv4 physical TCP escaped WFP' }
@@ -149,13 +187,7 @@ try {
     VerifyGuard $name
     Denied $tcp $dns $v6
     Write-Host 'R21_SYSTEM_GUARD_SURVIVED_SYSTEM_MANAGER_CRASH_PASS'
-    # COM rules may be indexed by generated GUID in NetSecurity. Resolve by
-    # exact DisplayName after verifying all application/protocol restrictions.
-    VerifyGuard $name
-    $exact = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
-        Where-Object DisplayName -eq $name)
-    if ($exact.Count -ne 1) { throw 'R21_FAIL: guard ambiguous at explicit release' }
-    $exact[0] | Remove-NetFirewallRule -ErrorAction Stop
+    Remove-R21OwnedComRule $name
     $owned = $false
     Start-Sleep -Milliseconds 650
     if (-not (Tcp $tcp) -or -not (Dns $dns)) {
@@ -181,11 +213,7 @@ finally {
     }
     if ($owned -and @(Get-NetFirewallRule -ErrorAction Stop |
         Where-Object DisplayName -eq $name).Count -gt 0) {
-        VerifyGuard $name
-        $exact = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
-            Where-Object DisplayName -eq $name)
-        if ($exact.Count -ne 1) { throw 'R21_FAIL: cannot safely identify owned COM rule for cleanup' }
-        $exact[0] | Remove-NetFirewallRule -ErrorAction Stop
+        Remove-R21OwnedComRule $name
     }
     if (@(Get-NetFirewallRule -ErrorAction Stop |
         Where-Object DisplayName -eq $name).Count -gt 0) {

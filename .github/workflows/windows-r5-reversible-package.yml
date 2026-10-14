@@ -59,6 +59,10 @@ jobs:
         shell: pwsh
         timeout-minutes: 5
         run: ./lab/windows-packaging/Test-DisposableLifecycle.ps1 -ManagerExe ./dist/r5-manager/OracleProxy.LabManager.exe -GuiExe ./dist/r5-gui/OracleProxy.Windows.Preview.exe
+      - name: R20 injection at stage create start and safe clean retry
+        shell: pwsh
+        timeout-minutes: 6
+        run: ./lab/windows-packaging/Test-R20-FaultInjection.ps1 -ManagerExe ./dist/r5-manager/OracleProxy.LabManager.exe -GuiExe ./dist/r5-gui/OracleProxy.Windows.Preview.exe
       - name: Always reject any leftover service or staged directory
         if: always()
         shell: pwsh

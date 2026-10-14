@@ -38,7 +38,17 @@ internal sealed class LabManagerService : ServiceBase
         // LocalSystem SCM process BEFORE any pipe begins accepting requests.
         // Never available in the normal manager binary or service arguments.
         if (_enableCiWfpGuard)
-            CiOnlyWfpGuard.Install();
+        {
+            try { CiOnlyWfpGuard.Install(); }
+            catch (Exception ex)
+            {
+                // Numeric CI-only startup failure classes, no sensitive
+                // configuration paths or native COM messages in logs.
+                ExitCode = ex is System.Runtime.InteropServices.COMException ? 91 :
+                    ex is InvalidOperationException ? 92 : 93;
+                throw;
+            }
+        }
 #endif
         _stop = new CancellationTokenSource();
         _worker = Task.Run(() => LabPipe.RunServerAsync(

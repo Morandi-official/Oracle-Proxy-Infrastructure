@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' || github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -110,8 +110,22 @@ jobs:
           if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R18-CI-*').Count -ne 0) {
             throw 'R18 firewall guard escaped cleanup'
           }
+      - name: R19 owned SYSTEM manager crash with live persistent WFP and WireGuard
+        if: github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence'
+        shell: pwsh
+        timeout-minutes: 9
+        env:
+          ORACLE_R19_CRASH_TEST: CI_OWNED_MANAGER_ONLY
+        run: ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1
+      - name: R19 ALWAYS check no WFP policy from the owned manager crash remains
+        if: always() && github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence'
+        shell: pwsh
+        run: |
+          $remaining = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R18-CI-*')
+          if ($remaining.Count -ne 0) { throw 'R19 left persistent process-scoped WFP filter on ephemeral runner' }
+          Write-Host 'R19_CRASH_RECOVERY_POLICY_CLEAN_PASS'
       - name: Verified Windows GUI admin IPC controls two real SCM tunnel services
-        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
+        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' && github.event.pull_request.head.ref != 'test/r19-manager-crash-wfp-persistence'
         shell: pwsh
         timeout-minutes: 4
         run: ./clients/windows/lab/run-admin-controlled-scm.ps1

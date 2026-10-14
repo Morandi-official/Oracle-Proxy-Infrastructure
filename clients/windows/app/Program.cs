@@ -45,6 +45,20 @@ internal static class Program
             return ManagerStatusSelfTests.RejectRoguePipeAsync()
                 .GetAwaiter().GetResult() ? 0 : 1;
         }
+        if (args.Length == 1 && args[0] == "--manager-control-denial-test")
+        {
+            try
+            {
+                bool connectDenied = ManagerControlClient.VerifySafetyDenialAsync(
+                    "RequestConnect", CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                bool disconnectDenied = ManagerControlClient.VerifySafetyDenialAsync(
+                    "RequestExplicitDisconnect", CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                return connectDenied && disconnectDenied ? 0 : 1;
+            }
+            catch { return 1; }
+        }
         if (args.Length == 1 && args[0] == "--manager-status-self-test")
         {
             try

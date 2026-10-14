@@ -59,8 +59,9 @@ jobs:
         run: |
           # The fake pipe is owned by this ordinary CI process, NOT the SCM service.
           $gui = (Resolve-Path './dist/native-gui-smoke/OracleProxy.Windows.Preview.exe').Path
-          & $gui --manager-spoof-test
-          if ($LASTEXITCODE -ne 0) { throw 'GUI accepted fake or unverified pipe endpoint' }
+          # WinExe processes do not reliably populate $LASTEXITCODE in pwsh.
+          $probe = Start-Process -FilePath $gui -ArgumentList '--manager-spoof-test' -Wait -PassThru
+          if ($probe.ExitCode -ne 0) { throw 'GUI accepted fake or unverified pipe endpoint' }
           Write-Host 'PASS: SCM manager process PID binding rejects fake status server'
       - name: Install, query, stop and remove STATUS-ONLY LocalSystem service on disposable CI VM
         shell: pwsh

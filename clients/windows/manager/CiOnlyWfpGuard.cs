@@ -47,20 +47,17 @@ internal static class CiOnlyWfpGuard
             policyObject = Activator.CreateInstance(policyType)
                 ?? throw new InvalidOperationException("Cannot open Windows Firewall");
             dynamic policy = policyObject;
-            // An existing rule by the same name is never overwritten.
-            // INetFwRules.Item(name) returns HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
-            // or ERROR_NOT_FOUND only for an absent name.
-            try
+            // Enumerate existing rules rather than relying on COM's
+            // platform-dependent not-found HRESULT. Any enumeration failure
+            // aborts installation; no existing named rule is overwritten.
+            foreach (object candidate in policy.Rules)
             {
-                dynamic already = policy.Rules.Item(RuleName);
-                _ = already;
-                throw new InvalidOperationException("Existing R21 guard must not be replaced");
-            }
-            catch (COMException ex) when (
-                ex.HResult == unchecked((int)0x80070002) ||
-                ex.HResult == unchecked((int)0x80070490))
-            {
-                // Precisely "not found" -- all other errors fail closed.
+                dynamic existing = candidate;
+                string existingName = (string)existing.Name;
+                if (string.Equals(existingName, RuleName,
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "Existing R21 guard must not be replaced");
             }
 
             ruleObject = Activator.CreateInstance(ruleType)

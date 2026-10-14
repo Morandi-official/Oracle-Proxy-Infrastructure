@@ -100,7 +100,8 @@ if ($LiveCheck) {
     Write-Host 'R21_LIVE_WG_WFP_TCP_UDP_DNS_DENY_PASS'
     return
 }
-$before = @(Get-NetFirewallRule -ErrorAction Stop).Count
+$beforeRules = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name)
+$before = $beforeRules.Count
 $profiles = @(Get-NetFirewallProfile -ErrorAction Stop |
     Sort-Object Name | ForEach-Object { "$($_.Name):$($_.Enabled)" })
 $name = 'OracleProxy-R21-CI-SYSTEM-OnlyGuard'
@@ -144,6 +145,13 @@ try {
         throw 'R21_FAIL: IPv6 TCP not restored'
     }
     Write-Host 'R21_EXPLICIT_RELEASE_TCP_UDP_RESTORED_PASS'
+} catch {
+    # Keep the FIRST real failure visible even if strict cleanup checks fail.
+    $reason = $_.Exception.GetType().Name
+    $detail = $_.Exception.Message
+    if ($detail.Length -gt 180) { $detail = $detail.Substring(0,180) }
+    Write-Host "R21_PRIMARY_FAILURE: type=$reason detail=$detail"
+    throw
 }
 finally {
     foreach ($key in @('ORACLE_R21_GUARD_NAME','ORACLE_R21_TCP',
@@ -158,8 +166,17 @@ finally {
     if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
         throw 'R21_FAIL: owned filter survived cleanup'
     }
-    if (@(Get-NetFirewallRule -ErrorAction Stop).Count -ne $before) {
-        throw 'R21_FAIL: firewall rule count changed'
+    $afterRules = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name)
+    if ($afterRules.Count -ne $before -or
+        @(Compare-Object -ReferenceObject $beforeRules -DifferenceObject $afterRules).Count -gt 0) {
+        $difference = @(Compare-Object -ReferenceObject $beforeRules -DifferenceObject $afterRules)
+        Write-Host "R21_FIREWALL_BASELINE_MISMATCH: before=$before after=$($afterRules.Count)"
+        foreach ($entry in $difference | Select-Object -First 12) {
+            $ruleId = [string]$entry.InputObject
+            if ($ruleId.Length -gt 100) { $ruleId = $ruleId.Substring(0,100) }
+            Write-Host "R21_FIREWALL_DELTA: side=$($entry.SideIndicator) name=$ruleId"
+        }
+        throw 'R21_FAIL: firewall rule inventory changed'
     }
     $after = @(Get-NetFirewallProfile -ErrorAction Stop |
         Sort-Object Name | ForEach-Object { "$($_.Name):$($_.Enabled)" })

@@ -61,7 +61,12 @@ function VerifyGuard([string]$name) {
     if ($name -notmatch '^OracleProxy-R21-CI-SYSTEM-OnlyGuard$') {
         throw 'R21_FAIL: unowned filter identifier'
     }
-    $rule = Get-NetFirewallRule -Name $name -PolicyStore ActiveStore -ErrorAction Stop
+    $matches = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+        Where-Object DisplayName -eq $name)
+    if ($matches.Count -ne 1) {
+        throw 'R21_FAIL: exact COM-owned active firewall rule missing or duplicate'
+    }
+    $rule = $matches[0]
     $port = $rule | Get-NetFirewallPortFilter -ErrorAction Stop
     $app = $rule | Get-NetFirewallApplicationFilter -ErrorAction Stop
     $addr = $rule | Get-NetFirewallAddressFilter -ErrorAction Stop
@@ -127,7 +132,7 @@ try {
     # NetSecurity's -Name missing lookup can throw a terminating CIM exception.
     # Enumerate the ActiveStore instead; do not treat a lookup error as absence.
     $existing = @(Get-NetFirewallRule -ErrorAction Stop |
-        Where-Object Name -eq $name)
+        Where-Object DisplayName -eq $name)
     if ($existing.Count -ne 0) {
         throw 'R21_REFUSED: preexisting filter'
     }
@@ -144,7 +149,13 @@ try {
     VerifyGuard $name
     Denied $tcp $dns $v6
     Write-Host 'R21_SYSTEM_GUARD_SURVIVED_SYSTEM_MANAGER_CRASH_PASS'
-    Remove-NetFirewallRule -Name $name -ErrorAction Stop
+    # COM rules may be indexed by generated GUID in NetSecurity. Resolve by
+    # exact DisplayName after verifying all application/protocol restrictions.
+    VerifyGuard $name
+    $exact = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+        Where-Object DisplayName -eq $name)
+    if ($exact.Count -ne 1) { throw 'R21_FAIL: guard ambiguous at explicit release' }
+    $exact[0] | Remove-NetFirewallRule -ErrorAction Stop
     $owned = $false
     Start-Sleep -Milliseconds 650
     if (-not (Tcp $tcp) -or -not (Dns $dns)) {
@@ -169,12 +180,15 @@ finally {
         Remove-Item -Path ('Env:' + $key) -ErrorAction SilentlyContinue
     }
     if ($owned -and @(Get-NetFirewallRule -ErrorAction Stop |
-        Where-Object Name -eq $name).Count -gt 0) {
+        Where-Object DisplayName -eq $name).Count -gt 0) {
         VerifyGuard $name
-        Remove-NetFirewallRule -Name $name -ErrorAction Stop
+        $exact = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+            Where-Object DisplayName -eq $name)
+        if ($exact.Count -ne 1) { throw 'R21_FAIL: cannot safely identify owned COM rule for cleanup' }
+        $exact[0] | Remove-NetFirewallRule -ErrorAction Stop
     }
     if (@(Get-NetFirewallRule -ErrorAction Stop |
-        Where-Object Name -eq $name).Count -gt 0) {
+        Where-Object DisplayName -eq $name).Count -gt 0) {
         throw 'R21_FAIL: owned filter survived cleanup'
     }
     $afterRules = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name)

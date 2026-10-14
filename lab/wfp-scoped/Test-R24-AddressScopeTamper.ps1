@@ -55,7 +55,7 @@ try {
     # general egress. Old weak verifiers would incorrectly accept this.
     $rule.RemoteAddresses = '192.0.2.1'
     $mutated = $true
-    if ([string]$policy.Rules.Item($name).RemoteAddresses -ne '192.0.2.1') {
+    if ([string]$policy.Rules.Item($name).RemoteAddresses -notin @('192.0.2.1','192.0.2.1/255.255.255.255')) {
         throw 'R24_FAIL: remote-address tamper did not persist'
     }
     Write-Host 'R24_WFP_ADDRESS_SCOPE_TAMPER_INJECTED_PASS'
@@ -100,7 +100,7 @@ finally {
     if ($mutated) {
         try {
             $original = $policy.Rules.Item($name)
-            if ([string]$original.RemoteAddresses -eq '192.0.2.1') {
+            if ([string]$original.RemoteAddresses -in @('192.0.2.1','192.0.2.1/255.255.255.255')) {
                 $original.RemoteAddresses = '*'
             }
         } catch { throw 'R24_FAIL: cannot restore CI guard after failed assertion' }

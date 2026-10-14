@@ -11,6 +11,10 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Link R4 strict parser into OFFLINE test executable, not the live manager. -->
+    <Compile Include="../manager/OfflineIntentPlanner.cs" Link="OfflineIntentPlanner.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,51 @@
+name: R12 offline Windows durable intent bridge (no actual VPN control)
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/intent-lab/**'
+      - 'clients/windows/manager/OfflineIntentPlanner.cs'
+      - '.github/workflows/windows-r12-durable-intent-bridge.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'clients/windows/intent-lab/**'
+      - 'clients/windows/manager/OfflineIntentPlanner.cs'
+      - '.github/workflows/windows-r12-durable-intent-bridge.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  durable-intent-offline:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build offline-only manager planner and real Windows DPAPI bridge
+        shell: pwsh
+        run: |
+          dotnet publish './clients/windows/intent-lab/OracleProxy.IntentLab.csproj' -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/r12-intent
+          if ($LASTEXITCODE -ne 0) { throw 'R12 DPAPI/intent planner compilation failed' }
+      - name: Verify restart, corruption, replay, default fail-close and NO automatic Off
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/r12-intent/OracleProxy.IntentLab.exe').Path
+          & $exe --offline-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Existing R1 DPAPI regression' }
+          & $exe --durable-bridge-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R12 bridge regression' }
+          Write-Host 'R12_NO_VPN_MUTE_PASS: network and SCM never mutated'
+      - name: Package content must not contain native VPN engine or privileged service
+        shell: pwsh
+        run: |
+          foreach ($name in @('wireguard.dll','tunnel.dll','OracleProxy.LabManager.exe')) {
+            if (@(Get-ChildItem ./dist/r12-intent -File -Recurse | Where-Object Name -eq $name).Count -gt 0) { throw "R12 unexpectedly packages $name" }
+          }
+          Write-Host 'R12_DISTRIBUTION_ISOLATION_PASS: offline test, not installer'

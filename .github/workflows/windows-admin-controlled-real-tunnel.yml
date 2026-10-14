@@ -86,7 +86,7 @@ jobs:
           if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R15-CI-*').Count -ne 0) {
             throw 'R15 WFP rule escaped exact cleanup'
           }
-      - name: R18 negative: refuse non-disposable WFP operation
+      - name: 'R18 negative: refuse non-disposable WFP operation'
         if: github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist'
         shell: pwsh
         run: |

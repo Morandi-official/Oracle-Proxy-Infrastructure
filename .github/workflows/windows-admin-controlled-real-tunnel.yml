@@ -14,6 +14,7 @@ on:
       - 'lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1'
       - 'lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1'
       - 'lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1'
+      - 'lab/wfp-scoped/Test-R22-GuardTamper.ps1'
       - 'clients/windows/lab/cleanup-scm-lab.ps1'
       - 'clients/windows/lab/wgnt-service-observe.c'
 
@@ -26,7 +27,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' || github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence' || github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' || github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence' || github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard' || github.event.pull_request.head.ref == 'test/r22-ci-manager-wfp-tamper-response')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -151,8 +152,31 @@ jobs:
           if ($left.Count -ne 0) {
             throw 'R21 persistent SYSTEM filter escaped explicit cleanup'
           }
+      - name: R22 negative guard self-test refuses non-CI invocation
+        if: github.event.pull_request.head.ref == 'test/r22-ci-manager-wfp-tamper-response'
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'forbidden'
+          $denied = $false
+          try { ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 } catch { $denied = $true }
+          if (-not $denied) { throw 'R22 unsafe runner gate bypass' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+      - name: R22 real SYSTEM service halts live WG on WFP tamper and refuses reconnect
+        if: github.event.pull_request.head.ref == 'test/r22-ci-manager-wfp-tamper-response'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          ORACLE_R22_TAMPER_TEST: CI_ONLY
+        run: ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1
+      - name: R22 ALWAYS enforce zero remaining test WFP rules
+        if: always() && github.event.pull_request.head.ref == 'test/r22-ci-manager-wfp-tamper-response'
+        shell: pwsh
+        run: |
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard').Count -ne 0) {
+            throw 'R22 owned CI WFP rule survived expected exact cleanup'
+          }
       - name: Verified Windows GUI admin IPC controls two real SCM tunnel services
-        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' && github.event.pull_request.head.ref != 'test/r19-manager-crash-wfp-persistence' && github.event.pull_request.head.ref != 'feat/r21-system-owned-wfp-ci-guard'
+        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' && github.event.pull_request.head.ref != 'test/r19-manager-crash-wfp-persistence' && github.event.pull_request.head.ref != 'feat/r21-system-owned-wfp-ci-guard' && github.event.pull_request.head.ref != 'test/r22-ci-manager-wfp-tamper-response'
         shell: pwsh
         timeout-minutes: 4
         run: ./clients/windows/lab/run-admin-controlled-scm.ps1

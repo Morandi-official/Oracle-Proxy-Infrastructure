@@ -55,7 +55,27 @@ try {
     & sc.exe start $managerName | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Cannot start isolated SCM manager' }
     $mgr = Get-Service -Name $managerName
-    $mgr.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+    try {
+        $mgr.WaitForStatus('Running', [TimeSpan]::FromSeconds(25))
+    }
+    catch {
+        if ($env:ORACLE_R21_SYSTEM_GUARD) {
+            $status = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction SilentlyContinue
+            if ($status) {
+                Write-Host "R21_SCM_STARTUP_DIAGNOSTIC: state=$($status.State) exit_code=$($status.ExitCode) service_code=$($status.ServiceSpecificExitCode) has_pid=$([bool]($status.ProcessId -gt 0))"
+            }
+            $recent = @(Get-WinEvent -FilterHashtable @{
+                LogName='System'; ProviderName='Service Control Manager'
+                StartTime=[DateTime]::Now.AddMinutes(-3)
+            } -ErrorAction SilentlyContinue | Where-Object {
+                $_.Message -like '*OracleProxyLabManager*'
+            } | Select-Object -Last 6)
+            foreach ($ev in $recent) {
+                Write-Host "R21_SCM_EVENT_ID=$($ev.Id)"
+            }
+        }
+        throw
+    }
     if ($env:ORACLE_R21_SYSTEM_GUARD) {
         & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
         if (-not $?) { throw 'R21_FAIL: SYSTEM policy absent before tunnel activation' }

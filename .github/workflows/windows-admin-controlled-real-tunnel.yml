@@ -1,0 +1,74 @@
+name: G11 native GUI admin IPC controls disposable WireGuard SCM services
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-admin-controlled-real-tunnel.yml'
+      - 'clients/windows/service-host/**'
+      - 'clients/windows/manager/**'
+      - 'clients/windows/app/**'
+      - 'clients/windows/lab/build-scm-components.ps1'
+      - 'clients/windows/lab/stage-scm-lab.ps1'
+      - 'clients/windows/lab/generate_service_pair.py'
+      - 'clients/windows/lab/run-admin-controlled-scm.ps1'
+      - 'clients/windows/lab/cleanup-scm-lab.ps1'
+      - 'clients/windows/lab/wgnt-service-observe.c'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-tunnel-admin-ipc-disposable-lab
+  cancel-in-progress: true
+
+jobs:
+  scm-controlled-by-gui:
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate')
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: WireGuard/wireguard-windows
+          ref: 6ece77bc487c8aa697e3c092197621c4f3e5ccb8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preflight disposable VM and preserve IPv4/IPv6 default routes
+        shell: pwsh
+        run: ./clients/windows/lab/preflight.ps1
+      - name: Verify signed official WireGuardNT and pinned source toolchain
+        shell: pwsh
+        run: ./clients/windows/lab/prepare-toolchain.ps1
+      - name: Compile genuine upstream tunnel.dll plus independent service host
+        shell: pwsh
+        run: ./clients/windows/lab/build-scm-components.ps1
+      - name: Generate two ephemeral test X25519 keypairs
+        shell: pwsh
+        run: ./clients/windows/lab/generate-keys.ps1
+      - name: Stage narrow-route lab configurations and NTFS protected DLLs
+        shell: pwsh
+        run: ./clients/windows/lab/stage-scm-lab.ps1
+      - name: Verified Windows GUI admin IPC controls two real SCM tunnel services
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./clients/windows/lab/run-admin-controlled-scm.ps1
+      - name: ALWAYS remove only disposable SCM services, native DLLs and secrets
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup-scm-lab.ps1
+      - name: ALWAYS verify IPv4/IPv6 default routes were not changed
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup.ps1

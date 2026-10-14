@@ -1,0 +1,14 @@
+{
+  "isolated_vm_no_oracle_or_uu_production": false,
+  "out_of_band_console_verified": false,
+  "snapshot_restore_performed_without_guest_network": false,
+  "automatic_wfp_rollback_tested": false,
+  "service_crash_and_forced_reboot_recovered": false,
+  "ipv4_tcp_udp_no_physical_egress_when_vpn_enabled": false,
+  "ipv6_tcp_udp_no_physical_egress_when_vpn_enabled": false,
+  "dns_ipv4_ipv6_no_physical_egress_when_vpn_enabled": false,
+  "unknown_process_no_egress_when_vpn_down": false,
+  "verified_uu_udp_p2p_remains_direct_when_vpn_down": false,
+  "authorized_user_off_restores_normal_direct": false,
+  "cold_boot_fails_closed_before_user_sign_in": false
+}

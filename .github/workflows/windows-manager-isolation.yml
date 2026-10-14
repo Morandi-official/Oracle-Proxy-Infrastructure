@@ -1,0 +1,104 @@
+name: Windows privileged manager isolated lab
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/manager/**'
+      - '.github/workflows/windows-manager-isolation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-manager-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manager-lab:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile isolated service binary (NO WireGuard driver)
+        shell: pwsh
+        run: |
+          dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/manager-lab
+          if ($LASTEXITCODE -ne 0) { throw 'Manager compile failed' }
+          if (Test-Path ./dist/manager-lab/tunnel.dll) { throw 'Unexpected tunnel DLL' }
+          if (Test-Path ./dist/manager-lab/wireguard.dll) { throw 'Unexpected WireGuard driver DLL' }
+      - name: Build native GUI client (status-only pipe contract)
+        shell: pwsh
+        run: |
+          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/native-gui-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'Native GUI integration build failed' }
+      - name: Exercise actual Windows named pipe in same-user offline lab
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          & $exe --ipc-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Windows OS-token pipe tests failed' }
+          Write-Host 'PASS: OS-token checked; mutation and forged SID commands rejected'
+      - name: Exercise OS-authenticated admin lab control parser (no actual tunnel)
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          & $exe --admin-lab-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Admin lab pipe security regression' }
+          Write-Host 'PASS: privileged tunnel control interface is isolated and never active in normal service mode'
+      - name: Install, query, stop and remove STATUS-ONLY LocalSystem service on disposable CI VM
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $svc = 'OracleProxyLabManager'
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
+            throw 'Refuse to modify existing service'
+          }
+          $created = $false
+          try {
+            # GitHub-hosted Windows VM only. Start type is DEMAND, never automatic.
+            & sc.exe create $svc "binPath=" ("`"{0}`" --manager-service" -f $exe) "start=" "demand" "obj=" "LocalSystem"
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create isolated lab service' }
+            $created = $true
+            & sc.exe start $svc
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to start isolated lab service' }
+            $s = Get-Service -Name $svc
+            $s.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+            $response = & $exe --ipc-status
+            if ($LASTEXITCODE -ne 0) { throw 'Privileged manager IPC unavailable' }
+            $json = $response | ConvertFrom-Json
+            if (-not $json.ok -or $json.code -ne 'STATUS_ONLY' -or
+                $json.manager_mode -ne 'read_only_real_windows_service' -or
+                $json.native_dll_loaded -ne $false -or
+                $json.leak_protection -ne 'unverified') {
+              throw 'Unexpected privileged manager response'
+            }
+            if (-not $json.authenticated_status_pipe -or $json.mutating_commands_available) {
+              throw 'Manager status pipe has wrong access contract'
+            }
+            $gui = (Resolve-Path './dist/native-gui-smoke/OracleProxy.Windows.Preview.exe').Path
+            $client = Start-Process -FilePath $gui -ArgumentList '--manager-status-self-test' -Wait -PassThru
+            if ($client.ExitCode -ne 0) {
+              throw 'Native GUI failed to read OS-authenticated status-only manager IPC'
+            }
+            Write-Host 'PASS: real SCM LocalSystem service and native GUI exchanged authenticated read-only IPC'
+          }
+          finally {
+            if ($created) {
+              try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch {}
+              & sc.exe delete $svc
+              if ($LASTEXITCODE -ne 0) { Write-Warning 'CI lab SCM cleanup returned an error' }
+            }
+          }
+      - name: Upload unsigned LAB review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-proxy-windows-manager-status-only-lab
+          path: ./dist/manager-lab/**
+          if-no-files-found: error
+          retention-days: 7

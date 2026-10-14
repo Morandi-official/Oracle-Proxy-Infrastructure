@@ -24,6 +24,44 @@ internal static class CiOnlyWfpGuard
         }
     }
 
+    // Query the CURRENT OS-owned rule; caller JSON/environment cannot assert
+    // readiness. Any ambiguous/missing/mutated policy returns false.
+    internal static bool IsActive()
+    {
+        if (!OperatingSystem.IsWindows() || !AdminLabControl.IsDisposableCiLab())
+            return false;
+        object? policyObject = null;
+        try
+        {
+            Type type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2", true)
+                ?? throw new InvalidOperationException("Windows Firewall unavailable");
+            policyObject = Activator.CreateInstance(type);
+            if (policyObject == null) return false;
+            dynamic policy = policyObject;
+            int matches = 0;
+            foreach (object candidate in policy.Rules)
+            {
+                dynamic live = candidate;
+                if (!string.Equals((string)live.Name, RuleName,
+                    StringComparison.OrdinalIgnoreCase)) continue;
+                matches++;
+                if (matches != 1 ||
+                    !(bool)live.Enabled || (int)live.Action != 0 ||
+                    (int)live.Protocol != 256 || (int)live.Direction != 2 ||
+                    !string.Equals((string)live.ApplicationName, FixedProgram,
+                        StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            return matches == 1;
+        }
+        catch { return false; }
+        finally
+        {
+            if (policyObject != null && Marshal.IsComObject(policyObject))
+                Marshal.ReleaseComObject(policyObject);
+        }
+    }
+
     internal static void Install()
     {
         using var identity = WindowsIdentity.GetCurrent();

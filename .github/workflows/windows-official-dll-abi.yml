@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
       - name: Download upstream WireGuardNT SDK only (no installation)
         shell: pwsh
         run: |
@@ -65,3 +68,16 @@ jobs:
               [System.Runtime.InteropServices.NativeLibrary]::Free($handle)
             }
           }
+
+      - name: Native .NET service host must reject unsigned or tampered official DLL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/r16-trust
+          if ($LASTEXITCODE -ne 0) { throw 'Native service host did not compile' }
+          $hostExe = (Resolve-Path ./dist/r16-trust/OracleProxy.WireGuardHost.exe).Path
+          & $hostExe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle integrity self-test failed' }
+          & $hostExe --signed-driver-ci-self-test $env:WGNT_DLL_PATH
+          if ($LASTEXITCODE -ne 0) { throw 'R16 native signed driver trust/refusal self-test failed' }
+          Write-Host 'R16: trusted official driver accepted; unsigned and modified driver refused'

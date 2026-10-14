@@ -6,8 +6,12 @@ WireSock or for important UU remote sessions.
 
 This repository now hosts the working source baseline consolidated from the
 previous stacked engineering branches. The default Windows GUI build is
-read-only, not a production connect/disconnect client. Privileged tunnel
-controls are allowed only in explicitly isolated disposable GitHub CI labs.
+read-only for network effects, not a production connect/disconnect client.
+The GUI can send administrator-authenticated fixed-profile connect/disconnect
+**safety-check requests** to a real LocalSystem service, but the manager
+unconditionally rejects any network mutation until real OS WFP fail-close
+is implemented and verified. Working tunnel controls remain isolated to
+explicit disposable GitHub CI labs.
 The CI-only administration build must not be redistributed.
 
 ## Verified engineering capabilities (cloud labs only)

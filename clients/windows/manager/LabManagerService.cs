@@ -9,6 +9,7 @@ internal sealed class LabManagerService : ServiceBase
     internal const string FixedServiceName = "OracleProxyLabManager";
     private CancellationTokenSource? _stop;
     private Task? _worker;
+    private Task? _safeControlWorker;
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
     private Task? _adminLabWorker;
     private readonly bool _enableAdminCiLabControl;
@@ -32,6 +33,10 @@ internal sealed class LabManagerService : ServiceBase
         _stop = new CancellationTokenSource();
         _worker = Task.Run(() => LabPipe.RunServerAsync(
             LabPipe.ProductionPipeName, false, _stop.Token));
+        // Admin-only, fixed-profile control requests always deny OS mutations
+        // until independent, real WFP enforcement is available.
+        _safeControlWorker = Task.Run(() =>
+            new SafeControlGate().ServeAsync(_stop.Token));
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
         if (_enableAdminCiLabControl && AdminLabControl.IsDisposableCiLab())
         {
@@ -50,6 +55,7 @@ internal sealed class LabManagerService : ServiceBase
         try
         {
             _worker?.Wait(TimeSpan.FromSeconds(5));
+            _safeControlWorker?.Wait(TimeSpan.FromSeconds(5));
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
             _adminLabWorker?.Wait(TimeSpan.FromSeconds(5));
 #endif

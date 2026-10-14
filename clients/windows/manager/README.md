@@ -1,4 +1,4 @@
-# Windows LabManager — actual SCM service, STATUS ONLY
+# Windows LabManager — actual SCM service, NO NETWORK MUTATIONS
 
 This is a functional `.NET 8` Windows service **runtime**, but it is NOT a
 VPN control service or kill switch. It is intentionally a separate process
@@ -14,9 +14,16 @@ not contain or load any native VPN DLL.
   LocalSystem and local Administrators only. The server impersonates its
   caller using `RunAsClient`, inspecting a real Windows-issued identity
   token instead of trusting any claimed JSON fields.
-- The sole control request is
+- The status pipe accepts only
   `{"protocol_version":1,"command":"Status"}`. All mutating commands,
   unknown fields and malformed requests are rejected.
+- A **separate admin-only control pipe** accepts exactly the two fixed-profile
+  requests `RequestConnect` / `RequestExplicitDisconnect` after actual
+  impersonated elevated Administrator verification. This is an intentionally
+  **non-operational** safety gate: every authorized request is denied with
+  `WFP_FAIL_CLOSED_NOT_IMPLEMENTED` and performs **no network operation**.
+  The GUI independently checks the SCM manager server PID before connecting.
+  No arbitrary profile paths or service names may be submitted.
 - Client input is capped at **512 UTF-8 bytes before decoding**, with a
   four-second read deadline. Responses expose no user paths, keys, peer
   addresses or process IDs.
@@ -26,7 +33,7 @@ not contain or load any native VPN DLL.
 - `--ipc-status` connects to the installed lab service without invoking
   service control APIs or touching drivers.
 
-GitHub Windows CI registers the **status-only** manager with the SCM on
+GitHub Windows CI registers the **nonmutating** manager with the SCM on
 a disposable hosted VM, starts it, queries it, then stops and deletes it.
 It never installs `wireguard.dll`, creates a VPN tunnel, adds any WFP
 filter, or changes the live Oracle server.
@@ -37,7 +44,7 @@ This application DOES NOT allow Start/Stop/Install of the actual WireGuard
 service, edit configs, flip user intent, or execute shell commands. It
 does not persist VPN intent and cannot enforce traffic fail-close.
 
-A SYSTEM service responding to Status does **not** establish readiness for
+A SYSTEM service answering protected requests does **not** establish readiness for
 privileged tunnel management. In a later review we must implement:
 - authenticated, narrowly scoped *mutating* IPC after security review;
 - protected persisted user intent and independent startup recovery;

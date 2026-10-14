@@ -54,6 +54,12 @@ jobs:
           Write-Host 'PASS: default manager binary excludes lab admin-control entrypoints'
           # Explicit negative tests leave a native LASTEXITCODE=2; neutralize after all assertions.
           exit 0
+      - name: Validate safe fixed-profile privileged control gate (no OS changes)
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          & $exe --safe-control-gate-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Admin-only fixed-profile protocol regressions failed' }
       - name: Reject rogue local STATUS pipe before SCM manager is installed
         shell: pwsh
         run: |
@@ -100,6 +106,13 @@ jobs:
             if ($client.ExitCode -ne 0) {
               throw 'Native GUI failed to read OS-authenticated status-only manager IPC'
             }
+            # Valid elevated Windows admin requests reach the SYSTEM gate, but
+            # cannot start/stop any real tunnel before WFP is implemented.
+            $denials = Start-Process -FilePath $gui -ArgumentList '--manager-control-denial-test' -Wait -PassThru
+            if ($denials.ExitCode -ne 0) {
+              throw 'Expected OS-token-authenticated SYSTEM control requests to be safely refused'
+            }
+            Write-Host 'PASS: real SCM manager received and safely denied connect/disconnect requests'
             Write-Host 'PASS: real SCM LocalSystem service and native GUI exchanged authenticated read-only IPC'
           }
           finally {

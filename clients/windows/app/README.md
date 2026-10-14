@@ -1,12 +1,16 @@
 # Oracle Proxy Windows native preview (W2)
 
 **This is a real Windows desktop executable but is NOT a working VPN client.**
-It displays sanitized local WireSock/UU diagnostics and runs a pure offline
-fail-close policy demonstration. It cannot start WireGuard, modify firewall
+It displays sanitized local WireSock/UU diagnostics, runs a pure offline
+fail-close policy demonstration and shows **connection/disconnection safety
+checks** which must be rejected by the real LocalSystem manager until WFP
+fail-close exists. It cannot start WireGuard, modify firewall
 rules, or enforce leak protection.
 
 The preview is intentionally independent of the live Oracle VM and WireSock
-UDP 443 session. It does not need administrator privileges or any keys.
+UDP 443 session. Ordinary diagnostics do not need elevation or any keys;
+admin-only safety checks require an installed test manager and an elevated
+Windows administrator token. Neither check starts/stops a tunnel.
 
 ## Build from Windows
 
@@ -45,6 +49,8 @@ The GUI displays:
 - Whether a local physical network adapter/default route is detected;
 - Whether a known WireSock/WireGuard service or driver is running;
 - Whether the UU GameViewerServer.exe process is present;
+- Explicit **safe-control checks** that verify the manager refuses real
+  connect/disconnect before WFP readiness; these are not VPN switches;
 - A clearly labeled **simulation** of allowing verified UU direct egress
   while denying other physical egress if the VPN unexpectedly disconnects.
 

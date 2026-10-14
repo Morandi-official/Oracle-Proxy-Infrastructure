@@ -14,8 +14,8 @@ internal sealed class MainForm : Form
     {
         Text = "Oracle Proxy · Windows 客户端预览版";
         Width = 740;
-        Height = 530;
-        MinimumSize = new Size(630, 460);
+        Height = 560;
+        MinimumSize = new Size(630, 500);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Microsoft YaHei UI", 10f);
         BackColor = Color.White;
@@ -27,7 +27,7 @@ internal sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
         Controls.Add(root);
 
@@ -67,6 +67,18 @@ internal sealed class MainForm : Form
         };
         managerButton.Click += async (_, _) => await CheckManagerAsync();
         buttons.Controls.Add(managerButton);
+        var connectCheck = new Button {
+            Text = "连接安全检查", Width = 156, Height = 38
+        };
+        var disconnectCheck = new Button {
+            Text = "断开安全检查", Width = 156, Height = 38
+        };
+        connectCheck.Click += async (_, _) =>
+            await CheckSafeControlAsync("RequestConnect");
+        disconnectCheck.Click += async (_, _) =>
+            await CheckSafeControlAsync("RequestExplicitDisconnect");
+        buttons.Controls.Add(connectCheck);
+        buttons.Controls.Add(disconnectCheck);
 #if ORACLE_DISPOSABLE_LAB
         if (LabAdminControlClient.OnDisposableRunner())
         {
@@ -125,6 +137,33 @@ internal sealed class MainForm : Form
         {
             if (!_shutdown.IsCancellationRequested && !IsDisposed)
                 _refresh.Enabled = true;
+        }
+    }
+
+    // Preview buttons exercise the real OS-token-verified SYSTEM request
+    // gate; they must never start or stop VPN without verified WFP.
+    private async Task CheckSafeControlAsync(string command)
+    {
+        try
+        {
+            bool deniedSafely = await ManagerControlClient.VerifySafetyDenialAsync(
+                command, _shutdown.Token);
+            if (_shutdown.IsCancellationRequested) return;
+            MessageBox.Show(this, deniedSafely
+                ? "后台服务已验证身份，并按安全策略拒绝执行。\\n" +
+                  "当前尚无经验证的 WFP 断线防泄漏保护，不能连接或断开 VPN。"
+                : "后台服务不可用，管理员授权不足或安全返回不符合协议。\\n" +
+                  "没有执行任何 VPN 控制。",
+                "VPN 安全控制尚未开放",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        catch
+        {
+            if (!_shutdown.IsCancellationRequested)
+                MessageBox.Show(this, "无法验证后台安全控制通道。\\n" +
+                    "没有执行任何 VPN 操作。", "安全检查失败",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 

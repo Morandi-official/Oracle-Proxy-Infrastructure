@@ -14,6 +14,8 @@ internal sealed class LabManagerService : ServiceBase
     private Task? _adminLabWorker;
     private readonly bool _enableAdminCiLabControl;
     private readonly bool _enableCiWfpGuard;
+    private Task? _ciWfpWatch;
+    private int _ciWfpCompromised;
 
     internal LabManagerService(bool enableAdminCiLabControl = false,
                                bool enableCiWfpGuard = false)
@@ -64,10 +66,52 @@ internal sealed class LabManagerService : ServiceBase
             var control = new AdminLabControl();
             _adminLabWorker = Task.Run(() => control.ServeAsync(
                 AdminLabControl.PipeName, false,
-                AdminLabControl.ApplyToCiLabService, _stop.Token));
+                action =>
+                {
+                    if (_enableCiWfpGuard &&
+                        (action is LabControlAction.StartA or LabControlAction.StartB) &&
+                        (Volatile.Read(ref _ciWfpCompromised) != 0 ||
+                         !CiOnlyWfpGuard.IsActive()))
+                        return false;
+                    return AdminLabControl.ApplyToCiLabService(action);
+                }, _stop.Token));
+            if (_enableCiWfpGuard)
+                _ciWfpWatch = Task.Run(() => WatchCiWfpAsync(_stop.Token));
         }
 #endif
     }
+
+#if ENABLE_DISPOSABLE_LAB_CONTROLS
+    // Lab-only tamper response. The actual OS firewall rule persists through
+    // manager death; if an administrator deletes it while we are alive,
+    // latch a permanent start refusal and stop only fixed CI tunnel peers.
+    // 750ms polling is not packet-atomic and is NOT production fail-close.
+    private async Task WatchCiWfpAsync(CancellationToken token)
+    {
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                if (!CiOnlyWfpGuard.IsActive())
+                {
+                    Interlocked.Exchange(ref _ciWfpCompromised, 1);
+                    AdminLabControl.ApplyToCiLabService(LabControlAction.StopA);
+                    AdminLabControl.ApplyToCiLabService(LabControlAction.StopB);
+                    return;
+                }
+                await Task.Delay(750, token);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch
+        {
+            Interlocked.Exchange(ref _ciWfpCompromised, 1);
+            // Even on transient verifier errors, do not permit new starts.
+            AdminLabControl.ApplyToCiLabService(LabControlAction.StopA);
+            AdminLabControl.ApplyToCiLabService(LabControlAction.StopB);
+        }
+    }
+#endif
 
     protected override void OnStop()
     {
@@ -78,6 +122,7 @@ internal sealed class LabManagerService : ServiceBase
             _safeControlWorker?.Wait(TimeSpan.FromSeconds(5));
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
             _adminLabWorker?.Wait(TimeSpan.FromSeconds(5));
+            _ciWfpWatch?.Wait(TimeSpan.FromSeconds(5));
 #endif
         }
         catch (AggregateException) { /* cancellation during shutdown */ }

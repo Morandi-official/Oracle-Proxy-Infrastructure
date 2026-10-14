@@ -11,8 +11,10 @@ internal static class Program
     {
         if (!OperatingSystem.IsWindows()) return 3;
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
-        if (args.Length == 2 && args[0] == "--manager-service" &&
-            args[1] == "--ci-lab-control")
+        if ((args.Length == 2 || args.Length == 3) &&
+            args[0] == "--manager-service" &&
+            args[1] == "--ci-lab-control" &&
+            (args.Length == 2 || args[2] == "--ci-wfp-guard"))
         {
             if (!AdminLabControl.IsDisposableCiLab()) return 3;
             try
@@ -20,7 +22,8 @@ internal static class Program
                 using WindowsIdentity identity = WindowsIdentity.GetCurrent();
                 if (!identity.IsSystem || Process.GetCurrentProcess().SessionId != 0)
                     return 3;
-                ServiceBase.Run(new LabManagerService(enableAdminCiLabControl: true));
+                ServiceBase.Run(new LabManagerService(enableAdminCiLabControl: true,
+                    enableCiWfpGuard: args.Length == 3));
                 return 0;
             }
             catch { return 3; }

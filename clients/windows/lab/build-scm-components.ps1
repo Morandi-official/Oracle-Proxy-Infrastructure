@@ -21,7 +21,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Read-only SCM handshake observer failed to com
 if ($LASTEXITCODE -ne 0) { throw 'Native encrypted data-plane integration probe failed to compile' }
 & $env:WG_LAB_GCC -std=gnu11 -O2 -Wall -Wextra -municode -I $env:WG_LAB_INCLUDE './clients/windows/lab/wgnt-app-dns.c' -o './dist/loopback/wgnt-app-dns.exe' -lws2_32
 if ($LASTEXITCODE -ne 0) { throw 'Native Windows tunneled application and synthetic DNS delivery probe failed to compile' }
-dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/lab-admin-manager
+dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:EnableDisposableLabControls=true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/lab-admin-manager
 if ($LASTEXITCODE -ne 0) { throw 'Lab manager build failed' }
 dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=true -o ./dist/lab-client-gui
 if ($LASTEXITCODE -ne 0) { throw 'Lab GUI build failed' }

@@ -36,11 +36,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'R4 offline intent security self-test failed' }
           & $exe --ipc-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Read-only OS identity IPC regression' }
+          # Compile-time release build MUST reject even offline-only lab switches.
+          $env:GITHUB_ACTIONS = 'true'
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
           & $exe --admin-lab-self-test
-          if ($LASTEXITCODE -ne 0) { throw 'Lab OS authenticated IPC parser regression' }
+          if ($LASTEXITCODE -ne 2) { throw 'Default manager unexpectedly contains lab-only admin parser entrypoint' }
           foreach ($name in @('OracleProxyLabManager','WireGuardTunnel$lab-peer-a','WireGuardTunnel$lab-peer-b')) {
             if (Get-Service -Name $name -ErrorAction SilentlyContinue) {
               throw "R4 must not install or start any service: $name"
             }
           }
           Write-Host 'R4_SUCCESS: in-memory fail-safe intent planner, no service, VPN or firewall mutation'
+          # Explicit negative tests leave a native LASTEXITCODE=2; neutralize after all assertions.
+          exit 0

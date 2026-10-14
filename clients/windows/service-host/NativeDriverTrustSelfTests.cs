@@ -26,7 +26,7 @@ internal static class NativeDriverTrustSelfTests
             // test input to replace the genuine upstream binary at will.
             if (!File.Exists(signedSource)) return false;
             byte[] expected = Convert.FromHexString(
-                "b1b85e072c45d81358be29d94c599dc76652f912be8c0f0a41e2d5d89a6461d3");
+                NativeDriverTrust.OfficialWireGuardNtV11Sha256);
             using (var stream = File.OpenRead(signedSource))
                 Require(CryptographicOperations.FixedTimeEquals(
                     SHA256.HashData(stream), expected));
@@ -36,12 +36,15 @@ internal static class NativeDriverTrustSelfTests
             File.Copy(signedSource, copied);
             Require(NativeDriverTrust.IsTrustedLocalSignature(signedSource));
             Require(NativeDriverTrust.IsTrustedLocalSignature(copied));
-            NativeDriverTrust.RequireTrustedSignature(copied);
+            NativeDriverTrust.RequireTrustedPinnedOfficialDriver(copied);
             assertions++;
+            Require(NativeDriverTrust.IsPinnedOfficialDriver(signedSource));
+            Require(NativeDriverTrust.IsPinnedOfficialDriver(copied));
 
             string unsigned = Path.Combine(scratch, "unsigned.dll");
             File.WriteAllBytes(unsigned, new byte[4096]);
             Require(!NativeDriverTrust.IsTrustedLocalSignature(unsigned));
+            Require(!NativeDriverTrust.IsPinnedOfficialDriver(unsigned));
             Require(!NativeDriverTrust.IsTrustedLocalSignature(scratch));
             Require(!NativeDriverTrust.IsTrustedLocalSignature("relative.dll"));
             Require(!NativeDriverTrust.IsTrustedLocalSignature(""));
@@ -51,10 +54,22 @@ internal static class NativeDriverTrustSelfTests
             copy[4096] ^= 0x5a; // modify signed PE section, not certificate table
             File.WriteAllBytes(copied, copy);
             Require(!NativeDriverTrust.IsTrustedLocalSignature(copied));
+            Require(!NativeDriverTrust.IsPinnedOfficialDriver(copied));
             bool threw = false;
-            try { NativeDriverTrust.RequireTrustedSignature(copied); }
+            try { NativeDriverTrust.RequireTrustedPinnedOfficialDriver(copied); }
             catch (InvalidOperationException) { threw = true; }
             Require(threw);
+            // A different Windows-signed binary is still prohibited even
+            // if its Authenticode chain is trusted by Windows.
+            string otherSigned = Path.Combine(Environment.SystemDirectory,
+                "kernel32.dll");
+            Require(File.Exists(otherSigned));
+            Require(!NativeDriverTrust.IsPinnedOfficialDriver(otherSigned));
+            bool otherThrew = false;
+            try { NativeDriverTrust.RequireTrustedPinnedOfficialDriver(otherSigned); }
+            catch (InvalidOperationException) { otherThrew = true; }
+            Require(otherThrew);
+            Console.WriteLine("R23_HARD_PIN_PASS: signed alternative rejected by compiled hash");
             Console.WriteLine("R16_DRIVER_TRUST_PASS: " + assertions +
                 " real Windows trust/hash/tamper/refusal assertions");
             return true;

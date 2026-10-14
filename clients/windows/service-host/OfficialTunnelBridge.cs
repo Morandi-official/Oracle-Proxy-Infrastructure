@@ -36,7 +36,7 @@ internal static class OfficialTunnelBridge
             AppContext.BaseDirectory, files.Config, profile);
         // Runtime attestation: reject unsigned/altered driver even if a
         // local manifest was regenerated. The service never fixes signatures.
-        NativeDriverTrust.RequireTrustedSignature(files.WireGuardDll);
+        NativeDriverTrust.RequireTrustedPinnedOfficialDriver(files.WireGuardDll);
 
         // Explicit secure DLL search flags avoid current-working-directory
         // dependency loading. It is STILL necessary to validate signature,

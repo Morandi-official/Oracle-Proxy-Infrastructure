@@ -146,7 +146,9 @@ jobs:
         if: always() && github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard'
         shell: pwsh
         run: |
-          if (Get-NetFirewallRule -Name OracleProxy-R21-CI-SYSTEM-OnlyGuard -ErrorAction SilentlyContinue) {
+          $left = @(Get-NetFirewallRule -ErrorAction Stop |
+            Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+          if ($left.Count -ne 0) {
             throw 'R21 persistent SYSTEM filter escaped explicit cleanup'
           }
       - name: Verified Windows GUI admin IPC controls two real SCM tunnel services

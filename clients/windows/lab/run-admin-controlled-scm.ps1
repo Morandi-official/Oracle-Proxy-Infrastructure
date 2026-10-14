@@ -44,7 +44,8 @@ try {
     $managerArgs = ('"{0}" --manager-service --ci-lab-control' -f $managerExe)
     if ($env:ORACLE_R21_SYSTEM_GUARD) {
         if ($env:ORACLE_R21_SYSTEM_GUARD -ne 'CI_FIXED_SYSTEM_POLICY' -or
-            $env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY') {
+            ($env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY' -and
+             $env:ORACLE_R22_TAMPER_TEST -ne 'CI_ONLY')) {
             throw 'R21_REFUSED: only CI manager crash + pinned guard proof'
         }
         $managerArgs += ' --ci-wfp-guard'
@@ -140,6 +141,11 @@ try {
         & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
         if (-not $?) { throw 'R21_FAIL: WFP did not remain during encrypted traffic' }
         Write-Host 'R21_SYSTEM_WFP_LIVE_NATIVE_TUNNEL_PASS'
+    }
+
+    if ($env:ORACLE_R22_TAMPER_TEST) {
+        & ./lab/wfp-scoped/Test-R22-GuardTamper.ps1
+        if (-not $?) { throw 'R22_FAIL: tamper-response verification failed' }
     }
 
     # R18: independently verify active process-scoped all-protocol WFP

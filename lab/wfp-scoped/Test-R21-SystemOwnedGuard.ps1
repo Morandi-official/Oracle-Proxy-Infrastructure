@@ -179,11 +179,10 @@ finally {
     }
     $afterRules = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name)
     if ($before -lt 0) {
-        Write-Host "R21_EARLY_ABORT: before actual WFP baseline; no R21 service installation occurred"
-        return
+        Write-Host "R21_EARLY_ABORT: before firewall baseline; preserving original exception"
     }
-    if ($afterRules.Count -ne $before -or
-        @(Compare-Object -ReferenceObject $beforeRules -DifferenceObject $afterRules).Count -gt 0) {
+    if ($before -ge 0 -and ($afterRules.Count -ne $before -or
+        @(Compare-Object -ReferenceObject $beforeRules -DifferenceObject $afterRules).Count -gt 0)) {
         $difference = @(Compare-Object -ReferenceObject $beforeRules -DifferenceObject $afterRules)
         Write-Host "R21_FIREWALL_BASELINE_MISMATCH: before=$before after=$($afterRules.Count)"
         foreach ($entry in $difference | Select-Object -First 12) {
@@ -195,7 +194,7 @@ finally {
     }
     $after = @(Get-NetFirewallProfile -ErrorAction Stop |
         Sort-Object Name | ForEach-Object { "$($_.Name):$($_.Enabled)" })
-    if (($after -join '|') -ne ($profiles -join '|')) {
+    if ($before -ge 0 -and ($after -join '|') -ne ($profiles -join '|')) {
         throw 'R21_FAIL: firewall profile states changed'
     }
     Write-Host 'R21_WFP_CLEANUP_PASS'

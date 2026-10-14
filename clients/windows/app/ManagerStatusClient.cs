@@ -74,7 +74,7 @@ internal static class ManagerStatusClient
     // The SCM exposes the current PID of the named own-process service;
     // compare it with Windows' PID for the ACTUAL connected pipe server.
     // No process ID or service name is accepted from pipe JSON.
-    private static bool IsBoundToExpectedService(NamedPipeClientStream pipe)
+    internal static bool IsBoundToExpectedService(NamedPipeClientStream pipe)
     {
         if (!OperatingSystem.IsWindows() ||
             !GetNamedPipeServerProcessId(pipe.SafePipeHandle, out uint serverPid) ||

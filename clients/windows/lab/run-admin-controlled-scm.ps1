@@ -104,6 +104,13 @@ try {
         Write-Host 'G14_FW_CLEANUP: exact temporary per-program test firewall rules removed'
     }
 
+    # R18: independently verify active process-scoped all-protocol WFP
+    # while BOTH native WireGuard SCM peers carry real app and DNS UDP data.
+    if ($env:ORACLE_R18_GUARD_NAME) {
+        & ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 -LiveCheck
+        if (-not $?) { throw 'R18 live WG/WFP verification failed' }
+    }
+
     # R15: WFP guard remains enforced while real WireGuard SCM peers are active.
     # Proves only one CI PowerShell process, public IPv4 TCP/443 endpoint.
     if ($env:ORACLE_R15_GUARD_NAME) {

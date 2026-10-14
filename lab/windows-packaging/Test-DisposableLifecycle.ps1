@@ -2,7 +2,9 @@
 # Never installs a VPN engine, WireSock, WFP, a firewall rule or a network route.
 # Hard CI gate; NOT FOR USER MACHINES.
 param([Parameter(Mandatory=$true)][string]$ManagerExe,
-      [Parameter(Mandatory=$true)][string]$GuiExe)
+      [Parameter(Mandatory=$true)][string]$GuiExe,
+      [ValidateSet('None','AfterStage','AfterScmCreate','AfterScmStart')]
+      [string]$InjectFailureAt = 'None')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $principal = [Security.Principal.WindowsPrincipal]::new(
@@ -75,10 +77,12 @@ try {
     }
     $record | ConvertTo-Json -Compress |
         Set-Content -LiteralPath $marker -Encoding ascii -ErrorAction Stop
+    if ($InjectFailureAt -eq 'AfterStage') { throw 'R20_INJECTED_AFTER_STAGE' }
     $execArg = '"' + $stagedExe + '" --manager-service'
     & sc.exe create $serviceName 'binPath=' $execArg 'start=' 'demand' 'obj=' 'LocalSystem' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'R5 SCM create failed' }
     $createdService = $true
+    if ($InjectFailureAt -eq 'AfterScmCreate') { throw 'R20_INJECTED_AFTER_SCM_CREATE' }
     $registered = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     if (-not $registered -or $registered.StartMode -ne 'Manual' -or
         $registered.StartName -ne 'LocalSystem' -or
@@ -88,6 +92,7 @@ try {
     & sc.exe start $serviceName | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'R5 status-only SCM start failed' }
     (Get-Service $serviceName).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
+    if ($InjectFailureAt -eq 'AfterScmStart') { throw 'R20_INJECTED_AFTER_SCM_START' }    (Get-Service $serviceName).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
     $result = & $stagedExe --ipc-status
     if ($LASTEXITCODE -ne 0) { throw 'R5 status IPC request failed' }
     $json = $result | ConvertFrom-Json -ErrorAction Stop

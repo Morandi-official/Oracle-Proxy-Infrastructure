@@ -13,6 +13,7 @@ on:
       - 'clients/windows/lab/run-admin-controlled-scm.ps1'
       - 'lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1'
       - 'lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1'
+      - 'lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1'
       - 'clients/windows/lab/cleanup-scm-lab.ps1'
       - 'clients/windows/lab/wgnt-service-observe.c'
 
@@ -25,7 +26,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' || github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' || github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence' || github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -124,8 +125,34 @@ jobs:
           $remaining = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R18-CI-*')
           if ($remaining.Count -ne 0) { throw 'R19 left persistent process-scoped WFP filter on ephemeral runner' }
           Write-Host 'R19_CRASH_RECOVERY_POLICY_CLEAN_PASS'
+      - name: R21 negative refuse non CI policy installation
+        if: github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard'
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'forbidden'
+          $refused = $false
+          try { ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 } catch { $refused = $true }
+          if (-not $refused) { throw 'R21 system guard test accepted non CI environment' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          if (Get-NetFirewallRule -Name OracleProxy-R21-CI-SYSTEM-OnlyGuard -ErrorAction SilentlyContinue) {
+            throw 'R21 unauthorized guard created'
+          }
+      - name: R21 actual LocalSystem installs WFP rule and rule survives hard manager crash
+        if: github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard'
+        shell: pwsh
+        timeout-minutes: 9
+        run: ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1
+      - name: R21 ALWAYS assert fixed SYSTEM guard absent after job
+        if: always() && github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard'
+        shell: pwsh
+        run: |
+          $left = @(Get-NetFirewallRule -ErrorAction Stop |
+            Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+          if ($left.Count -ne 0) {
+            throw 'R21 persistent SYSTEM filter escaped explicit cleanup'
+          }
       - name: Verified Windows GUI admin IPC controls two real SCM tunnel services
-        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' && github.event.pull_request.head.ref != 'test/r19-manager-crash-wfp-persistence'
+        if: github.event.pull_request.head.ref != 'test/r15-wfp-wireguard-scm-transaction' && github.event.pull_request.head.ref != 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' && github.event.pull_request.head.ref != 'test/r19-manager-crash-wfp-persistence' && github.event.pull_request.head.ref != 'feat/r21-system-owned-wfp-ci-guard'
         shell: pwsh
         timeout-minutes: 4
         run: ./clients/windows/lab/run-admin-controlled-scm.ps1

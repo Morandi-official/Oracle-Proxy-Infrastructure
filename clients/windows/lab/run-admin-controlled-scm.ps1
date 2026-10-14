@@ -42,13 +42,45 @@ try {
     }
 
     $managerArgs = ('"{0}" --manager-service --ci-lab-control' -f $managerExe)
+    if ($env:ORACLE_R21_SYSTEM_GUARD) {
+        if ($env:ORACLE_R21_SYSTEM_GUARD -ne 'CI_FIXED_SYSTEM_POLICY' -or
+            $env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY') {
+            throw 'R21_REFUSED: only CI manager crash + pinned guard proof'
+        }
+        $managerArgs += ' --ci-wfp-guard'
+    }
     & sc.exe create $managerName 'binPath=' $managerArgs 'start=' 'demand' 'obj=' 'LocalSystem' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Cannot create admin-only isolated manager' }
     $createdServices.Add($managerName)
     & sc.exe start $managerName | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Cannot start isolated SCM manager' }
     $mgr = Get-Service -Name $managerName
-    $mgr.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+    try {
+        $mgr.WaitForStatus('Running', [TimeSpan]::FromSeconds(25))
+    }
+    catch {
+        if ($env:ORACLE_R21_SYSTEM_GUARD) {
+            $status = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction SilentlyContinue
+            if ($status) {
+                Write-Host "R21_SCM_STARTUP_DIAGNOSTIC: state=$($status.State) exit_code=$($status.ExitCode) service_code=$($status.ServiceSpecificExitCode) has_pid=$([bool]($status.ProcessId -gt 0))"
+            }
+            $recent = @(Get-WinEvent -FilterHashtable @{
+                LogName='System'; ProviderName='Service Control Manager'
+                StartTime=[DateTime]::Now.AddMinutes(-3)
+            } -ErrorAction SilentlyContinue | Where-Object {
+                $_.Message -like '*OracleProxyLabManager*'
+            } | Select-Object -Last 6)
+            foreach ($ev in $recent) {
+                Write-Host "R21_SCM_EVENT_ID=$($ev.Id)"
+            }
+        }
+        throw
+    }
+    if ($env:ORACLE_R21_SYSTEM_GUARD) {
+        & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+        if (-not $?) { throw 'R21_FAIL: SYSTEM policy absent before tunnel activation' }
+        Write-Host 'R21_SYSTEM_WFP_BEFORE_TUNNEL_PASS'
+    }
 
     # The *real* GUI executable, not a direct sc.exe or powershell command,
     # issues authenticated StartLabPeerA/B requests over the admin-only pipe.
@@ -104,6 +136,12 @@ try {
         Write-Host 'G14_FW_CLEANUP: exact temporary per-program test firewall rules removed'
     }
 
+    if ($env:ORACLE_R21_SYSTEM_GUARD) {
+        & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+        if (-not $?) { throw 'R21_FAIL: WFP did not remain during encrypted traffic' }
+        Write-Host 'R21_SYSTEM_WFP_LIVE_NATIVE_TUNNEL_PASS'
+    }
+
     # R18: independently verify active process-scoped all-protocol WFP
     # while BOTH native WireGuard SCM peers carry real app and DNS UDP data.
     if ($env:ORACLE_R18_GUARD_NAME) {
@@ -156,7 +194,7 @@ try {
             $env:GITHUB_ACTIONS -ne 'true' -or
             $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
             -not $createdServices.Contains($managerName) -or
-            -not $env:ORACLE_R18_GUARD_NAME) {
+            -not ($env:ORACLE_R18_GUARD_NAME -or $env:ORACLE_R21_SYSTEM_GUARD)) {
             throw 'R19_REFUSED: no exact owned manager and WFP guard'
         }
         $serviceRecord = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
@@ -187,8 +225,14 @@ try {
         }
         # OS-stored persistent WFP rule MUST survive the controller crash
         # and continue denying physical TCP and direct UDP DNS on test app.
-        & ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 -LiveCheck
-        if (-not $?) { throw 'R19_FAIL: WFP leaked after manager crash' }
+        if ($env:ORACLE_R21_SYSTEM_GUARD) {
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R21_FAIL: SYSTEM-owned WFP lost on hard manager crash' }
+            Write-Host 'R21_SYSTEM_OWNED_WFP_SURVIVED_MANAGER_CRASH_PASS'
+        } else {
+            & ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R19_FAIL: WFP leaked after manager crash' }
+        }
         Write-Host 'R19_MANAGER_KILLED_WG_STILL_UP_WFP_PERSISTENT_PASS'
     } else {
         Run-GuiAdminLab '--ci-lab-stop-b'

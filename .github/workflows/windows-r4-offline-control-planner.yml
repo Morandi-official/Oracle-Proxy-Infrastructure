@@ -47,3 +47,5 @@ jobs:
             }
           }
           Write-Host 'R4_SUCCESS: in-memory fail-safe intent planner, no service, VPN or firewall mutation'
+          # Explicit negative tests leave a native LASTEXITCODE=2; neutralize after all assertions.
+          exit 0

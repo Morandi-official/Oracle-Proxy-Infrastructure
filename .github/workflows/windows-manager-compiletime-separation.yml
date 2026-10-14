@@ -40,6 +40,8 @@ jobs:
           & $exe --manager-service --ci-lab-control
           if ($LASTEXITCODE -ne 2) { throw 'Forbidden lab SCM entrypoint survived release compile' }
           Write-Host 'R10_RELEASE_REFUSAL_PASS: spoofed CI environment did not enable any privileged lab entrypoint'
+          # Explicit negative tests leave a native LASTEXITCODE=2; neutralize after all assertions.
+          exit 0
       - name: Build explicitly opted-in CI-only manager with ADMIN lab tests, never distribute
         shell: pwsh
         run: |

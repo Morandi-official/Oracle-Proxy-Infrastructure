@@ -76,3 +76,5 @@ jobs:
           & $exe --manager-service --ci-lab-control
           if ($LASTEXITCODE -ne 2) { throw 'Default manager accepted privileged tunnel service entrypoint' }
           Write-Host 'MAIN_WINDOWS_SOURCE_PASS: read-only executable, no SCM install/route/DNS/WFP modifications'
+          # Explicit negative tests leave a native LASTEXITCODE=2; neutralize after all assertions.
+          exit 0

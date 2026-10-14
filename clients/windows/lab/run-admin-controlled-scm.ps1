@@ -148,13 +148,57 @@ try {
         Write-Host 'R15_LIVE_TUNNEL_WFP_DENY_PASS: encrypted peers and synthetic app/DNS worked while narrow external TCP blocked'
     }
 
-    Run-GuiAdminLab '--ci-lab-stop-b'
-    Run-GuiAdminLab '--ci-lab-stop-a'
-    foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
-        $s = Get-Service -Name ('WireGuardTunnel$' + $profile)
-        $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+    if ($env:ORACLE_R19_CRASH_TEST) {
+        # R19: kill ONLY the manager service this disposable job just created,
+        # never any user/system service. The two native tunnel peers continue
+        # until separate CI-owned recovery removes them in finally.
+        if ($env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY' -or
+            $env:GITHUB_ACTIONS -ne 'true' -or
+            $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
+            -not $createdServices.Contains($managerName) -or
+            -not $env:ORACLE_R18_GUARD_NAME) {
+            throw 'R19_REFUSED: no exact owned manager and WFP guard'
+        }
+        $serviceRecord = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
+        if (-not $serviceRecord -or $serviceRecord.State -ne 'Running' -or
+            $serviceRecord.ProcessId -le 4) {
+            throw 'R19_REFUSED: expected dedicated running SCM manager absent'
+        }
+        $managerPid = [int]$serviceRecord.ProcessId
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$managerPid" -ErrorAction Stop
+        if (-not $process -or -not $process.ExecutablePath -or
+            -not [string]::Equals(
+                [System.IO.Path]::GetFullPath($process.ExecutablePath),
+                [System.IO.Path]::GetFullPath($managerExe),
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'R19_REFUSED: SCM PID does not point at this CI manager binary'
+        }
+        Stop-Process -Id $managerPid -Force -ErrorAction Stop
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 350
+            $status = (Get-Service -Name $managerName -ErrorAction Stop).Status
+        } while ($status -ne 'Stopped' -and [DateTime]::UtcNow -lt $deadline)
+        if ($status -ne 'Stopped') { throw 'R19_FAIL: manager process was not stopped' }
+        foreach ($profile in @('lab-peer-a','lab-peer-b')) {
+            if ((Get-Service -Name ('WireGuardTunnel$' + $profile) -ErrorAction Stop).Status -ne 'Running') {
+                throw 'R19_FAIL: native WireGuard tunnel did not outlive crashed manager'
+            }
+        }
+        # OS-stored persistent WFP rule MUST survive the controller crash
+        # and continue denying physical TCP and direct UDP DNS on test app.
+        & ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 -LiveCheck
+        if (-not $?) { throw 'R19_FAIL: WFP leaked after manager crash' }
+        Write-Host 'R19_MANAGER_KILLED_WG_STILL_UP_WFP_PERSISTENT_PASS'
+    } else {
+        Run-GuiAdminLab '--ci-lab-stop-b'
+        Run-GuiAdminLab '--ci-lab-stop-a'
+        foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
+            $s = Get-Service -Name ('WireGuardTunnel$' + $profile)
+            $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+        Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
     }
-    Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
 }
 finally {
     # Worst-case independent cleanup does not require the IPC/GUI to work.

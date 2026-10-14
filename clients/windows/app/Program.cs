@@ -40,6 +40,11 @@ internal static class Program
             catch { return 3; }
         }
 #endif
+        if (args.Length == 1 && args[0] == "--manager-spoof-test")
+        {
+            return ManagerStatusSelfTests.RejectRoguePipeAsync()
+                .GetAwaiter().GetResult() ? 0 : 1;
+        }
         if (args.Length == 1 && args[0] == "--manager-status-self-test")
         {
             try

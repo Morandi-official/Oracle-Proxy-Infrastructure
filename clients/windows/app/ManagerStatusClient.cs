@@ -1,4 +1,7 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
@@ -13,7 +16,8 @@ internal sealed record ManagerSnapshot(
 
 internal static class ManagerStatusClient
 {
-    private const string PipeName = "OracleProxyLabManager.Status.v1";
+    internal const string PipeName = "OracleProxyLabManager.Status.v1";
+    internal const string UntrustedEndpointMessage = "后台服务身份不可验证";
     internal static async Task<ManagerSnapshot> ReadAsync(CancellationToken token)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -22,6 +26,12 @@ internal static class ManagerStatusClient
             PipeDirection.InOut, PipeOptions.Asynchronous,
             TokenImpersonationLevel.Impersonation);
         await pipe.ConnectAsync(2500, deadline.Token);
+        // A named pipe DACL authenticates the CLIENT, not the SERVER.
+        // Reject a user-created replacement pipe before sending a request or
+        // consuming a forged status report. SCM PID binding is necessary but
+        // NOT a substitute for future installer ACLs and Authenticode checks.
+        if (!IsBoundToExpectedService(pipe))
+            throw new InvalidOperationException(UntrustedEndpointMessage);
 
         // No self-asserted identity, address or executable path in request.
         var utf8 = new UTF8Encoding(false, true);
@@ -60,4 +70,83 @@ internal static class ManagerStatusClient
             connection, leak,
             root.GetProperty("native_dll_loaded").GetBoolean());
     }
+
+    // The SCM exposes the current PID of the named own-process service;
+    // compare it with Windows' PID for the ACTUAL connected pipe server.
+    // No process ID or service name is accepted from pipe JSON.
+    private static bool IsBoundToExpectedService(NamedPipeClientStream pipe)
+    {
+        if (!OperatingSystem.IsWindows() ||
+            !GetNamedPipeServerProcessId(pipe.SafePipeHandle, out uint serverPid) ||
+            serverPid == 0 || serverPid > int.MaxValue)
+            return false;
+
+        IntPtr scm = OpenSCManager(null, null, 0x0001); // SC_MANAGER_CONNECT
+        if (scm == IntPtr.Zero) return false;
+        try
+        {
+            IntPtr service = OpenService(scm, "OracleProxyLabManager",
+                0x0004); // SERVICE_QUERY_STATUS
+            if (service == IntPtr.Zero) return false;
+            try
+            {
+                if (!QueryServiceStatusEx(service, 0, out var status,
+                    (uint)Marshal.SizeOf<ServiceStatusProcess>(), out _))
+                    return false;
+                if (status.ProcessId != serverPid ||
+                    (status.ServiceType & 0x10) == 0 || // SERVICE_WIN32_OWN_PROCESS
+                    status.CurrentState != 4)          // SERVICE_RUNNING
+                    return false;
+                // Reject non-session-zero impostors even if SCM reports a PID.
+                return Process.GetProcessById((int)serverPid).SessionId == 0;
+            }
+            finally { CloseServiceHandle(service); }
+        }
+        catch
+        {
+            // Lack of SCM/process query access fails closed.
+            return false;
+        }
+        finally { CloseServiceHandle(scm); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceStatusProcess
+    {
+        public uint ServiceType;
+        public uint CurrentState;
+        public uint ControlsAccepted;
+        public uint Win32ExitCode;
+        public uint ServiceSpecificExitCode;
+        public uint CheckPoint;
+        public uint WaitHint;
+        public uint ProcessId;
+        public uint ServiceFlags;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeServerProcessId(
+        SafePipeHandle pipe, out uint serverProcessId);
+
+    [DllImport("advapi32.dll", EntryPoint = "OpenSCManagerW",
+        CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenSCManager(
+        string? machineName, string? databaseName, uint desiredAccess);
+
+    [DllImport("advapi32.dll", EntryPoint = "OpenServiceW",
+        CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenService(
+        IntPtr scm, string serviceName, uint desiredAccess);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryServiceStatusEx(
+        IntPtr service, int infoLevel, out ServiceStatusProcess status,
+        uint bufferSize, out uint bytesNeeded);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseServiceHandle(IntPtr handle);
+
 }

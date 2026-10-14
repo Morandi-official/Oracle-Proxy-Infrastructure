@@ -13,10 +13,13 @@ internal sealed class LabManagerService : ServiceBase
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
     private Task? _adminLabWorker;
     private readonly bool _enableAdminCiLabControl;
+    private readonly bool _enableCiWfpGuard;
 
-    internal LabManagerService(bool enableAdminCiLabControl = false)
+    internal LabManagerService(bool enableAdminCiLabControl = false,
+                               bool enableCiWfpGuard = false)
     {
         _enableAdminCiLabControl = enableAdminCiLabControl;
+        _enableCiWfpGuard = enableCiWfpGuard;
 #else
     internal LabManagerService()
     {
@@ -30,6 +33,13 @@ internal sealed class LabManagerService : ServiceBase
 
     protected override void OnStart(string[] args)
     {
+#if ENABLE_DISPOSABLE_LAB_CONTROLS
+        // The OS-backed, persistent WFP filter is installed by this actual
+        // LocalSystem SCM process BEFORE any pipe begins accepting requests.
+        // Never available in the normal manager binary or service arguments.
+        if (_enableCiWfpGuard)
+            CiOnlyWfpGuard.Install();
+#endif
         _stop = new CancellationTokenSource();
         _worker = Task.Run(() => LabPipe.RunServerAsync(
             LabPipe.ProductionPipeName, false, _stop.Token));

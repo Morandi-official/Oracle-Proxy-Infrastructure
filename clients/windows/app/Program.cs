@@ -30,9 +30,6 @@ internal static class Program
                 "--ci-lab-stop-a" => "StopLabPeerA",
                 "--ci-lab-start-b" => "StartLabPeerB",
                 "--ci-lab-stop-b" => "StopLabPeerB",
-                "--ci-lab-wfp-install" => "InstallCiWfpGuard",
-                "--ci-lab-wfp-verify" => "VerifyCiWfpGuard",
-                "--ci-lab-wfp-remove" => "RemoveCiWfpGuard",
                 _ => null
             };
             if (operation is null || !LabAdminControlClient.OnDisposableRunner()) return 3;

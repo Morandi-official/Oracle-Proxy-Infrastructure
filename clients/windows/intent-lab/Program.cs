@@ -9,6 +9,7 @@ internal static class Program
         return args[0] switch {
             "--offline-self-test" => IntentSelfTests.Run() ? 0 : 1,
             "--durable-bridge-self-test" => DurableBridgeSelfTests.Run() ? 0 : 1,
+            "--peer-secret-self-test" => PeerSecretStoreSelfTests.Run() ? 0 : 1,
             _ => 3
         };
     }

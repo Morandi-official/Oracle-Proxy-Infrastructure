@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 
 namespace OracleProxy.WireGuardHost;
@@ -109,6 +110,44 @@ internal static class NativeDriverTrust
             // must not get a native-load opportunity.
             return false;
         }
+    }
+
+    // Compile-time fixed vendor SDK v1.1 AMD64 driver SHA-256. Unlike a
+    // mutable companion engine-pins.json, this is part of the compiled host.
+    internal const string OfficialWireGuardNtV11Sha256 =
+        "b1b85e072c45d81358be29d94c599dc76652f912be8c0f0a41e2d5d89a6461d3";
+
+    internal static bool IsPinnedOfficialDriver(string path)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(path) ||
+            !Path.IsPathFullyQualified(path))
+            return false;
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists || fi.Length is < 1024 or > 20_000_000 ||
+                (fi.Attributes & FileAttributes.ReparsePoint) != 0)
+                return false;
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read);
+            byte[] digest = SHA256.HashData(stream);
+            byte[] known = Convert.FromHexString(OfficialWireGuardNtV11Sha256);
+            try { return CryptographicOperations.FixedTimeEquals(digest, known); }
+            finally {
+                CryptographicOperations.ZeroMemory(digest);
+                CryptographicOperations.ZeroMemory(known);
+            }
+        }
+        catch { return false; }
+    }
+
+    internal static void RequireTrustedPinnedOfficialDriver(string path)
+    {
+        // Both checks are mandatory, even if an attacker can replace a local
+        // manifest with hashes for a different signed Windows system DLL.
+        if (!IsPinnedOfficialDriver(path) || !IsTrustedLocalSignature(path))
+            throw new InvalidOperationException(
+                "Native WireGuard driver does not match pinned signed upstream v1.1");
     }
 
     internal static void RequireTrustedSignature(string path)

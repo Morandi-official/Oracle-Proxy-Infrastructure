@@ -35,6 +35,12 @@ try {
     })
     if ($matches.Count -ne 1) { throw 'R24_REFUSED: exact SYSTEM guard missing' }
     $rule = $matches[0]
+    Write-Host ("R24_OBSERVED_POLICY: action={0} direction={1} protocol={2} profiles={3} local={4} remote={5} probe_exe_matches={6}" -f
+        [int]$rule.Action, [int]$rule.Direction, [int]$rule.Protocol,
+        [int]$rule.Profiles, [string]$rule.LocalAddresses,
+        [string]$rule.RemoteAddresses,
+        [string]::Equals([string]$rule.ApplicationName,$probeExe,
+            [StringComparison]::OrdinalIgnoreCase))
     if ([int]$rule.Action -ne 0 -or [int]$rule.Direction -ne 2 -or
         [int]$rule.Protocol -ne 256 -or [int]$rule.Profiles -ne 2147483647 -or
         [string]$rule.LocalAddresses -ne '*' -or
@@ -103,14 +109,21 @@ finally {
         [string]::Equals([string]$_.Name,$name,[StringComparison]::Ordinal)
     })
     if ($guard.Count -eq 1) {
-        if ([int]$guard[0].Action -ne 0 -or
-            [int]$guard[0].Direction -ne 2 -or
-            [int]$guard[0].Protocol -ne 256 -or
-            [string]$guard[0].RemoteAddresses -ne '*' -or
-            -not [string]::Equals([string]$guard[0].ApplicationName,$probeExe,
+        $ownedRule = $guard[0]
+        Write-Host ("R24_FINAL_RULE: action={0} protocol={1} remote={2} same_program={3}" -f
+            [int]$ownedRule.Action, [int]$ownedRule.Protocol,
+            [string]$ownedRule.RemoteAddresses,
+            [string]::Equals([string]$ownedRule.ApplicationName,$probeExe,
+                [StringComparison]::OrdinalIgnoreCase))
+        if ([int]$ownedRule.Action -ne 0 -or
+            [int]$ownedRule.Direction -ne 2 -or
+            [int]$ownedRule.Protocol -ne 256 -or
+            -not [string]::Equals([string]$ownedRule.ApplicationName,$probeExe,
                 [StringComparison]::OrdinalIgnoreCase)) {
-            throw 'R24_FAIL: refusing to remove unexpected/modified policy'
+            throw 'R24_FAIL: refusing to remove wrong-owner test policy'
         }
+        # Only exact named, CI-pinned policy is removed. It may legitimately
+        # still be narrowed after injected failure; NEVER leave it installed.
         $policy.Rules.Remove($name)
     }
     if ($null -ne $policy -and

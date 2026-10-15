@@ -1,0 +1,123 @@
+using System.Security.Cryptography;
+
+namespace OracleProxy.LabManager;
+
+internal static class ProductionVpnCoordinatorSelfTests
+{
+    private sealed class FakeKernel : IProductionVpnKernel
+    {
+        internal readonly List<string> Calls = new();
+        internal string? FailAt;
+        internal byte[]? Secret;
+        private bool Check(string step)
+        {
+            Calls.Add(step);
+            return step != FailAt;
+        }
+        public WfpCoverage AuditExistingSystemWfp()
+        {
+            bool valid = Check("Wfp");
+            return new WfpCoverage(valid, valid, valid, valid, valid, valid,
+                valid, valid, valid, valid, valid, valid);
+        }
+        public bool VerifyPinnedSignedTunnel() => Check("Trust");
+        public ProtectedKeyLease OpenProtectedPeerKey()
+        {
+            if (!Check("Unseal")) throw new CryptographicException();
+            Secret = RandomNumberGenerator.GetBytes(32);
+            return new ProtectedKeyLease(Secret);
+        }
+        public void StartFixedTunnel(ReadOnlySpan<byte> secret)
+        {
+            if (secret.Length != 32 || !Check("Start"))
+                throw new InvalidOperationException();
+        }
+        public bool VerifyEncryptedTunnelAndRoutes() => Check("Handshake");
+        public void StopFixedTunnel() { if (!Check("Stop")) throw new InvalidOperationException(); }
+        public bool VerifyTunnelStopped() => Check("Stopped");
+        public bool StageOwnedRouteDnsRecovery() => Check("RestoreStage");
+        public bool PersistExplicitOffIntent() => Check("OffDurable");
+        public bool ReleaseOnlyOwnedWfp() => Check("Release");
+        public bool VerifyDirectNetworkRestored() => Check("Direct");
+    }
+
+    internal static bool Run()
+    {
+        int assertions = 0;
+        void Check(bool ok)
+        {
+            if (!ok) throw new InvalidOperationException("R27 assertion " + assertions);
+            assertions++;
+        }
+        try
+        {
+            var production = new ProductionVpnCoordinator(new UnavailableProductionKernel());
+            Check(production.State == ProductionTunnelState.UnknownFailClosed);
+            Check(production.Connect() == "WFP_FAIL_CLOSED_NOT_IMPLEMENTED");
+            Check(production.ExplicitDisconnect() == "DISCONNECT_REQUIRES_RECOVERY");
+            Check(production.State == ProductionTunnelState.UnknownFailClosed);
+
+            // Insufficient *one* dimension must reject prior to decrypt/start.
+            var all = new WfpCoverage(true,true,true,true,true,true,true,true,
+                true,true,true,false);
+            Check(!all.AllVerified);
+            foreach (var failedStep in new [] {"Wfp","Trust","Unseal","Start","Handshake"})
+            {
+                var fake = new FakeKernel { FailAt = failedStep };
+                var tx = new ProductionVpnCoordinator(fake);
+                string code = tx.Connect();
+                if (failedStep is "Wfp" or "Trust")
+                {
+                    Check(code is "WFP_FAIL_CLOSED_NOT_IMPLEMENTED" or
+                        "TUNNEL_TRUST_NOT_VERIFIED");
+                    Check(!fake.Calls.Contains("Unseal"));
+                    Check(!fake.Calls.Contains("Start"));
+                }
+                else
+                {
+                    Check(code == "CONNECT_FAILED_LOCKED");
+                    Check(fake.Calls.Contains("Stop"));
+                    Check(!fake.Calls.Contains("Release"));
+                    Check(tx.Connect() == "RECOVERY_REQUIRED");
+                    Check(tx.ExplicitDisconnect() == "DISCONNECT_REQUIRES_RECOVERY");
+                }
+                if (fake.Secret is not null)
+                    Check(fake.Secret.All(b => b == 0));
+            }
+            foreach (var fail in new [] {"Stop","Stopped","Wfp","RestoreStage",
+                                       "OffDurable","Release","Direct"})
+            {
+                var fake = new FakeKernel();
+                var tx = new ProductionVpnCoordinator(fake);
+                Check(tx.Connect() == "CONNECTED_VERIFIED");
+                Check(fake.Secret is not null && fake.Secret.All(b => b == 0));
+                fake.FailAt = fail;
+                fake.Calls.Clear();
+                Check(tx.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
+                if (fail is "Stop" or "Stopped" or "Wfp" or
+                    "RestoreStage" or "OffDurable")
+                    Check(!fake.Calls.Contains("Release"));
+                Check(tx.Connect() == "RECOVERY_REQUIRED");
+            }
+            var successful = new FakeKernel();
+            var coordinator = new ProductionVpnCoordinator(successful);
+            Check(coordinator.Connect() == "CONNECTED_VERIFIED");
+            Check(coordinator.Connect() == "ALREADY_CONNECTED");
+            Check(successful.Secret is not null && successful.Secret.All(b => b == 0));
+            Check(coordinator.ExplicitDisconnect() == "DISCONNECTED_VERIFIED");
+            Check(successful.Calls.IndexOf("Stop") < successful.Calls.IndexOf("Release"));
+            Check(successful.Calls.IndexOf("OffDurable") < successful.Calls.IndexOf("Release"));
+            Check(coordinator.State == ProductionTunnelState.UnknownFailClosed);
+            Check(assertions >= 65);
+            Console.WriteLine("R27_PRODUCTION_TRANSITION_CONTRACT_PASS: " + assertions +
+                " offline safety assertions; no real OS mutation or production permission");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("R27_PRODUCTION_TRANSITION_CONTRACT_FAIL: " +
+                ex.GetType().Name + " assertion=" + assertions);
+            return false;
+        }
+    }
+}

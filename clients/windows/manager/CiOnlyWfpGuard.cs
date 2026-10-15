@@ -99,8 +99,26 @@ internal static class CiOnlyWfpGuard
                 string existingName = (string)existing.Name;
                 if (string.Equals(existingName, RuleName,
                     StringComparison.OrdinalIgnoreCase))
+                {
+                    // Crash recovery must NOT replace or weaken an OS-owned
+                    // existing policy. Adopt ONLY the bit-for-bit expected
+                    // security dimensions after SYSTEM + protected CI marker
+                    // authorization. A narrowed/forged same-name rule fails.
+                    if ((bool)existing.Enabled &&
+                        (int)existing.Action == 0 &&
+                        (int)existing.Protocol == 256 &&
+                        (int)existing.Direction == 2 &&
+                        (int)existing.Profiles == int.MaxValue &&
+                        string.Equals((string)existing.LocalAddresses, "*",
+                            StringComparison.Ordinal) &&
+                        string.Equals((string)existing.RemoteAddresses, "*",
+                            StringComparison.Ordinal) &&
+                        string.Equals((string)existing.ApplicationName, program,
+                            StringComparison.OrdinalIgnoreCase))
+                        return;
                     throw new InvalidOperationException(
-                        "Existing R21 guard must not be replaced");
+                        "Existing CI WFP policy unsafe: refuse service restart");
+                }
             }
 
             ruleObject = Activator.CreateInstance(ruleType)

@@ -41,6 +41,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Existing R1 DPAPI regression' }
           & $exe --durable-bridge-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R12 bridge regression' }
+          & $exe --durable-recovery-ledger-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R32 recovery journal crash/tamper regression' }
           & $exe --peer-secret-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R17 DPAPI peer secret and ACL regression' }
           Write-Host 'R12_NO_VPN_MUTE_PASS: network and SCM never mutated'

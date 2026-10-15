@@ -75,4 +75,17 @@ foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
     $pins | ConvertTo-Json -Compress | Set-Content -LiteralPath $manifest -Encoding ascii
     Protect-LabPath $manifest
 }
+if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+    foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
+        $hostExe = Join-Path (Join-Path $root $profile) 'OracleProxy.WireGuardHost.exe'
+        & $hostExe --ci-seal-config $profile
+        if ($LASTEXITCODE -ne 0) { throw 'R30 cannot seal owned CI profile' }
+        if (Test-Path (Join-Path $cfgdir "$profile.conf")) {
+            throw 'R30 source plaintext config survived sealing'
+        }
+        $sealed = Join-Path $cfgdir "$profile.conf.dpapi"
+        if (!(Test-Path $sealed -PathType Leaf)) { throw 'R30 DPAPI ciphertext missing' }
+    }
+    Write-Host 'R30_SEALED_CONFIGURATION_STAGED_PASS'
+}
 Write-Host 'PASS: two fixed lab profiles, protected source-built DLLs and SHA-256 manifest files staged; no service started'

@@ -12,7 +12,7 @@ go -C ./upstream build -overlay .overlay/overlay.json -buildmode c-shared -ldfla
 if ($LASTEXITCODE -ne 0 -or !(Test-Path './dist/upstream-test/tunnel.dll')) {
     throw 'Official upstream tunnel.dll cannot be built at pinned source revision'
 }
-dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/service-host
+dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableCiSealedConfig=$($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') -o ./dist/service-host
 if ($LASTEXITCODE -ne 0) { throw 'Lab service host publish failed' }
 New-Item -ItemType Directory -Path './dist/loopback' -Force | Out-Null
 & $env:WG_LAB_GCC -std=gnu11 -O2 -Wall -Wextra -municode -I $env:WG_LAB_INCLUDE './clients/windows/lab/wgnt-service-observe.c' -o './dist/loopback/wgnt-service-observe.exe' -lws2_32

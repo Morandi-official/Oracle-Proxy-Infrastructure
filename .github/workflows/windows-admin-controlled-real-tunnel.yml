@@ -19,6 +19,7 @@ on:
       - 'lab/wfp-scoped/Test-R26-InterfaceScopeTamper.ps1'
       - 'clients/windows/lab/cleanup-scm-lab.ps1'
       - 'clients/windows/lab/wgnt-service-observe.c'
+      - 'clients/windows/service-host/CiSealedConfig.cs'
 
 permissions:
   contents: read
@@ -29,9 +30,11 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' || github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence' || github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard' || github.event.pull_request.head.ref == 'test/r22-ci-manager-wfp-tamper-response' || github.event.pull_request.head.ref == 'feat/r23-hardpin-official-wireguard-nt-runtime' || github.event.pull_request.head.ref == 'test/r24-wfp-scope-narrowing-denial' || github.event.pull_request.head.ref == 'feat/r25-clean-system-wfp-adoption' || github.event.pull_request.head.ref == 'feat/r26-ci-wfp-interface-scope-lock')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/windows-admin-lab-control-pipe' || github.event.pull_request.head.ref == 'feat/windows-release-separation-gate' || github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction' || github.event.pull_request.head.ref == 'feat/r16-native-driver-authenticode-runtime-gate' || github.event.pull_request.head.ref == 'test/r18-wfp-tcp-udp-dns-tunnel-coexist' || github.event.pull_request.head.ref == 'test/r19-manager-crash-wfp-persistence' || github.event.pull_request.head.ref == 'feat/r21-system-owned-wfp-ci-guard' || github.event.pull_request.head.ref == 'test/r22-ci-manager-wfp-tamper-response' || github.event.pull_request.head.ref == 'feat/r23-hardpin-official-wireguard-nt-runtime' || github.event.pull_request.head.ref == 'test/r24-wfp-scope-narrowing-denial' || github.event.pull_request.head.ref == 'feat/r25-clean-system-wfp-adoption' || github.event.pull_request.head.ref == 'feat/r26-ci-wfp-interface-scope-lock' || github.event.pull_request.head.ref == 'feat/r30-ci-system-dpapi-native-tunnel')
     runs-on: windows-latest
     timeout-minutes: 25
+    env:
+      ORACLE_R30_DPAPI_TEST: ${{ github.event.pull_request.head.ref == 'feat/r30-ci-system-dpapi-native-tunnel' && 'CI_ONLY' || 'DISABLED' }}
     steps:
       - uses: actions/checkout@v4
         with:

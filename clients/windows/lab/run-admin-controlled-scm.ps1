@@ -34,6 +34,9 @@ try {
         $service = 'WireGuardTunnel$' + $profile
         $exe = Join-Path (Join-Path $root $profile) 'OracleProxy.WireGuardHost.exe'
         $cmd = ('"{0}" --wireguard-service {1}' -f $exe, $profile)
+        if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+            $cmd = ('"{0}" --ci-sealed-wireguard-service {1}' -f $exe, $profile)
+        }
         & sc.exe create $service 'binPath=' $cmd 'start=' 'demand' 'depend=' 'Nsi/TcpIp' 'obj=' 'LocalSystem' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Cannot create lab tunnel service' }
         $createdServices.Add($service)
@@ -89,6 +92,17 @@ try {
     # issues authenticated StartLabPeerA/B requests over the admin-only pipe.
     Run-GuiAdminLab '--ci-lab-start-a'
     Run-GuiAdminLab '--ci-lab-start-b'
+
+    if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+        foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
+            $active = Join-Path (Join-Path $root 'config') "$profile.conf"
+            if (!(Test-Path $active -PathType Leaf) -or
+                !(Test-Path "$active.dpapi" -PathType Leaf)) {
+                throw 'R30_FAIL: native service did not consume sealed config'
+            }
+        }
+        Write-Host 'R30_SYSTEM_NATIVE_ACTIVE_CONFIG_VERIFIED_PASS'
+    }
 
     & $observer $env:WG_LAB_DLL
     if ($LASTEXITCODE -ne 0) { throw 'Actual peer LastHandshake records absent' }
@@ -315,6 +329,21 @@ try {
         foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
             $s = Get-Service -Name ('WireGuardTunnel$' + $profile)
             $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+        if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+            foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
+                $active = Join-Path (Join-Path $root 'config') "$profile.conf"
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                while ((Test-Path $active -PathType Leaf) -and
+                       [DateTime]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 250
+                }
+                if ((Test-Path $active -PathType Leaf) -or
+                    !(Test-Path "$active.dpapi" -PathType Leaf)) {
+                    throw 'R30_FAIL: plaintext config remained after graceful stop'
+                }
+            }
+            Write-Host 'R30_GRACEFUL_SYSTEM_CONFIG_CLEANUP_PASS'
         }
         Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
     }

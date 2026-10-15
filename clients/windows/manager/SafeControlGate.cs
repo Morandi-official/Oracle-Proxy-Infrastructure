@@ -19,6 +19,11 @@ internal sealed class SafeControlGate
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private readonly HashSet<Guid> _seen = new();
     private const int MaxSeen = 128;
+    // The live SYSTEM pipe now uses the same transaction contract tested in R27.
+    // Only the permanently denying adapter can be constructed here: neither
+    // a client packet nor a CI lab build can inject a mutating backend.
+    private readonly ProductionVpnCoordinator _coordinator =
+        new(new UnavailableProductionKernel());
 
     private static string Reply(string code) => JsonSerializer.Serialize(new
     {
@@ -86,10 +91,13 @@ internal sealed class SafeControlGate
             _seen.Add(id);
         }
 
-        // NEVER accept a JSON "policy_ready", admin, or VPN status assertion.
-        // The future SYSTEM-owned WFP policy verifier must be implemented
-        // before any transition can be enabled; it is intentionally absent.
-        return Reply("WFP_FAIL_CLOSED_NOT_IMPLEMENTED");
+        // Real OS token authentication is done by pipe impersonation above.
+        // The wired production backend remains unavailable, so no RPC is
+        // allowed to decrypt a key, launch a tunnel, change WFP or release it.
+        // A disconnect must not be reported as committed on unknown startup.
+        string code = command == "RequestConnect"
+            ? _coordinator.Connect() : _coordinator.ExplicitDisconnect();
+        return Reply(code);
     }
 
     private static NamedPipeServerStream CreateServer()

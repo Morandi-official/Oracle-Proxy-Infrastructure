@@ -52,7 +52,9 @@ internal static class ManagerControlClient
         return root.ValueKind == JsonValueKind.Object &&
             root.GetProperty("schema_version").GetInt32() == 1 &&
             root.GetProperty("ok").ValueKind == JsonValueKind.False &&
-            root.GetProperty("code").GetString() == "WFP_FAIL_CLOSED_NOT_IMPLEMENTED" &&
+            root.GetProperty("code").GetString() == (command == "RequestConnect"
+                ? "WFP_FAIL_CLOSED_NOT_IMPLEMENTED"
+                : "DISCONNECT_REQUIRES_RECOVERY") &&
             root.GetProperty("profile").GetString() == FixedProfile &&
             !root.GetProperty("network_operation_performed").GetBoolean() &&
             !root.GetProperty("native_tunnel_control_enabled").GetBoolean() &&

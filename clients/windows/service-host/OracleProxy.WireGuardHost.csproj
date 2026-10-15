@@ -7,9 +7,18 @@
     <AssemblyName>OracleProxy.WireGuardHost</AssemblyName>
     <Version>0.1.0-lab</Version>
     <PlatformTarget>x64</PlatformTarget>
+    <EnableCiSealedConfig Condition="'$(EnableCiSealedConfig)' == ''">false</EnableCiSealedConfig>
+    <DefineConstants Condition="'$(EnableCiSealedConfig)' == 'true'">$(DefineConstants);ENABLE_CI_SEALED_CONFIG</DefineConstants>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
+  <Target Name="ValidateCiSealedOptIn" BeforeTargets="CoreCompile">
+    <Error Condition="'$(EnableCiSealedConfig)' != 'true' and '$(EnableCiSealedConfig)' != 'false'" Text="EnableCiSealedConfig must be exactly true or false" />
+  </Target>
+  <ItemGroup Condition="'$(EnableCiSealedConfig)' != 'true'">
+    <Compile Remove="CiSealedConfig.cs" />
+  </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
   </ItemGroup>
 </Project>

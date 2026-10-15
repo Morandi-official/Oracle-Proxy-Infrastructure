@@ -34,6 +34,8 @@ jobs:
           $exe = (Resolve-Path './dist/r4-privileged-planner/OracleProxy.LabManager.exe').Path
           & $exe --offline-intent-planner-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R4 offline intent security self-test failed' }
+          & $exe --production-transition-contract-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R27 production-transition default-deny transaction contract failed' }
           & $exe --ipc-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Read-only OS identity IPC regression' }
           # Compile-time release build MUST reject even offline-only lab switches.

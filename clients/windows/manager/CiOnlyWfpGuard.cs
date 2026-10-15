@@ -48,6 +48,11 @@ internal static class CiOnlyWfpGuard
                 if (matches != 1 ||
                     !(bool)live.Enabled || (int)live.Action != 0 ||
                     (int)live.Protocol != 256 || (int)live.Direction != 2 ||
+                    (int)live.Profiles != int.MaxValue ||
+                    !string.Equals((string)live.LocalAddresses, "*",
+                        StringComparison.Ordinal) ||
+                    !string.Equals((string)live.RemoteAddresses, "*",
+                        StringComparison.Ordinal) ||
                     !string.Equals((string)live.ApplicationName, FixedProgram,
                         StringComparison.OrdinalIgnoreCase))
                     return false;
@@ -105,6 +110,10 @@ internal static class CiOnlyWfpGuard
             rule.Description = "Disposable CI only: SYSTEM persists a pwsh-only outbound guard";
             rule.ApplicationName = program;
             rule.Protocol = 256; // NET_FW_IP_PROTOCOL_ANY, includes UDP and TCP
+            // Explicitly pin unrestricted local/remote addresses. A matching
+            // friendly name with narrowed addresses is not an active guard.
+            rule.LocalAddresses = "*";
+            rule.RemoteAddresses = "*";
             rule.Direction = 2;  // NET_FW_RULE_DIR_OUT
             rule.Action = 0;     // NET_FW_ACTION_BLOCK
             rule.Profiles = 2147483647; // NET_FW_PROFILE2_ALL
@@ -114,6 +123,11 @@ internal static class CiOnlyWfpGuard
             dynamic live = policy.Rules.Item(RuleName);
             if (!(bool)live.Enabled || (int)live.Action != 0 ||
                 (int)live.Protocol != 256 || (int)live.Direction != 2 ||
+                (int)live.Profiles != int.MaxValue ||
+                !string.Equals((string)live.LocalAddresses, "*",
+                    StringComparison.Ordinal) ||
+                !string.Equals((string)live.RemoteAddresses, "*",
+                    StringComparison.Ordinal) ||
                 !string.Equals((string)live.ApplicationName, program,
                     StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("R21 guard activation not verified");

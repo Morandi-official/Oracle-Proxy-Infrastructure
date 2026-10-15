@@ -60,6 +60,9 @@ internal static class Program
                 case "--safe-control-gate-self-test":
                     return SafeControlGateSelfTests.Run() ? 0 : 1;
 
+                case "--production-transition-contract-self-test":
+                    return ProductionVpnCoordinatorSelfTests.Run() ? 0 : 1;
+
                 case "--offline-intent-planner-self-test":
                     return OfflineIntentPlannerSelfTests.Run() ? 0 : 1;
 

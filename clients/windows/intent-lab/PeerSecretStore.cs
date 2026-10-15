@@ -154,6 +154,18 @@ internal sealed class PeerSecretStore
         finally { CryptographicOperations.ZeroMemory(cipher); }
     }
 
+    // Callback-scoped unsealing: never return the raw key to a caller that
+    // may forget to clear it. Supports native-memory handoff experiments only
+    // when independently authorized; no service or driver is invoked here.
+    // The callback MUST NOT retain a reference/copy of the key.
+    internal void WithDecryptedKey(Action<ReadOnlyMemory<byte>> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        byte[] plain = Open();
+        try { callback(new ReadOnlyMemory<byte>(plain)); }
+        finally { CryptographicOperations.ZeroMemory(plain); }
+    }
+
     internal void Delete()
     {
         RequireProtectedFile();

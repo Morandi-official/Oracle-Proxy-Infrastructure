@@ -34,6 +34,9 @@ try {
         $service = 'WireGuardTunnel$' + $profile
         $exe = Join-Path (Join-Path $root $profile) 'OracleProxy.WireGuardHost.exe'
         $cmd = ('"{0}" --wireguard-service {1}' -f $exe, $profile)
+        if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+            $cmd = ('"{0}" --ci-sealed-wireguard-service {1}' -f $exe, $profile)
+        }
         & sc.exe create $service 'binPath=' $cmd 'start=' 'demand' 'depend=' 'Nsi/TcpIp' 'obj=' 'LocalSystem' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Cannot create lab tunnel service' }
         $createdServices.Add($service)

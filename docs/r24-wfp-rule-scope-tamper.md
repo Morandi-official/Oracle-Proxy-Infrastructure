@@ -28,3 +28,8 @@ activate a production tunnel or ship the synthetic system guard to users.
 No production Oracle, WireSock, UU or Windows machine is modified.
 
 Tracked release blocker: #34.
+
+Validation requirement: R24's **own** Windows G11 CI run must complete
+successfully. A cancelled run is not acceptance evidence, even if a stacked
+branch passed. Keep this PR unmerged until that direct run confirms the
+rule-scope tamper response and exact cleanup.

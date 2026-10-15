@@ -51,9 +51,17 @@ try {
         [string]$port.RemotePort -ne 'Any') {
         throw 'R31_FAIL: not a genuine all-process all-protocol rule'
     }
-    $actual = @([string]$addr.RemoteAddress -split ',' |
-        ForEach-Object { $_.Trim() } | Sort-Object)
-    $expected = @($destinations | Sort-Object)
+    # NetSecurity projects this property as a string array on some Windows
+    # versions and a delimited scalar on others. Normalize both, and compare
+    # numeric IP identities (IPv6 canonical text can differ).
+    $actual = @($addr.RemoteAddress | ForEach-Object {
+        @([string]$_ -split '[,; ]+') | Where-Object { $_ } | ForEach-Object {
+            [System.Net.IPAddress]::Parse($_).ToString()
+        }
+    } | Sort-Object -Unique)
+    $expected = @($destinations | ForEach-Object {
+        [System.Net.IPAddress]::Parse($_).ToString()
+    } | Sort-Object -Unique)
     if (($actual -join '|') -ne ($expected -join '|')) {
         throw 'R31_FAIL: target addresses altered'
     }

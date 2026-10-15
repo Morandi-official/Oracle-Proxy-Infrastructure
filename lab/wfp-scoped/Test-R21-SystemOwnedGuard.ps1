@@ -178,7 +178,8 @@ try {
     $owned = $true
     $env:ORACLE_R21_SYSTEM_GUARD = 'CI_FIXED_SYSTEM_POLICY'
     if ($env:ORACLE_R22_TAMPER_TEST -ne 'CI_ONLY' -and
-        $env:ORACLE_R24_NARROW_TAMPER -ne 'CI_ONLY') {
+        $env:ORACLE_R24_NARROW_TAMPER -ne 'CI_ONLY' -and
+        $env:ORACLE_R26_INTERFACE_TAMPER -ne 'CI_ONLY') {
         $env:ORACLE_R19_CRASH_TEST = 'CI_OWNED_MANAGER_ONLY'
     }
     $env:ORACLE_R21_GUARD_NAME = $name
@@ -188,10 +189,11 @@ try {
     & ./clients/windows/lab/run-admin-controlled-scm.ps1
     if ($LASTEXITCODE -ne 0) { throw 'R21_FAIL: GUI/SCM tunnel lab failed' }
     if ($env:ORACLE_R22_TAMPER_TEST -eq 'CI_ONLY' -or
-        $env:ORACLE_R24_NARROW_TAMPER -eq 'CI_ONLY') {
+        $env:ORACLE_R24_NARROW_TAMPER -eq 'CI_ONLY' -or
+        $env:ORACLE_R26_INTERFACE_TAMPER -eq 'CI_ONLY') {
         if (@(Get-NetFirewallRule -ErrorAction Stop |
             Where-Object DisplayName -eq $name).Count -ne 0) {
-            throw 'R22_FAIL: removed guard unexpectedly still active'
+            throw 'R21_FAIL: tamper-injection guard unexpectedly still active'
         }
         Write-Host 'R21_OS_GUARD_TAMPER_RECOGNIZED_PASS: manager refused peer restart'
     } else {

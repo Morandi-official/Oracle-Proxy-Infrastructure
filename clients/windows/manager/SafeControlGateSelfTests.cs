@@ -41,7 +41,7 @@ internal static class SafeControlGateSelfTests
                 "WFP_FAIL_CLOSED_NOT_IMPLEMENTED");
             Check(Eval(connect).GetProperty("code").GetString() == "REPLAY_DENIED");
             Check(Eval(Request("RequestExplicitDisconnect")).GetProperty("code")
-                .GetString() == "WFP_FAIL_CLOSED_NOT_IMPLEMENTED");
+                .GetString() == "DISCONNECT_REQUIRES_RECOVERY");
             foreach (var raw in new[] {
                 "", "null", "{}", "[]", "{", new string('x', 513),
                 "{\"protocol_version\":1,\"request_id\":\"x\",\"command\":\"RequestConnect\",\"profile\":\"oracle-proxy-main\"}",

@@ -46,7 +46,8 @@ try {
         if ($env:ORACLE_R21_SYSTEM_GUARD -ne 'CI_FIXED_SYSTEM_POLICY' -or
             ($env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY' -and
              $env:ORACLE_R22_TAMPER_TEST -ne 'CI_ONLY' -and
-              $env:ORACLE_R24_NARROW_TAMPER -ne 'CI_ONLY')) {
+              $env:ORACLE_R24_NARROW_TAMPER -ne 'CI_ONLY' -and
+              $env:ORACLE_R26_INTERFACE_TAMPER -ne 'CI_ONLY')) {
             throw 'R21_REFUSED: only CI manager crash + pinned guard proof'
         }
         $managerArgs += ' --ci-wfp-guard'
@@ -151,6 +152,10 @@ try {
     if ($env:ORACLE_R24_NARROW_TAMPER) {
         & ./lab/wfp-scoped/Test-R24-AddressScopeTamper.ps1
         if (-not $?) { throw 'R24_FAIL: address-scope tamper response failed' }
+    }
+    if ($env:ORACLE_R26_INTERFACE_TAMPER) {
+        & ./lab/wfp-scoped/Test-R26-InterfaceScopeTamper.ps1
+        if (-not $?) { throw 'R26_FAIL: interface-scope tamper response failed' }
     }
 
     # R18: independently verify active process-scoped all-protocol WFP

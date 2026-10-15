@@ -77,8 +77,8 @@ foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
 }
 if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
     foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
-        $host = Join-Path (Join-Path $root $profile) 'OracleProxy.WireGuardHost.exe'
-        & $host --ci-seal-config $profile
+        $hostExe = Join-Path (Join-Path $root $profile) 'OracleProxy.WireGuardHost.exe'
+        & $hostExe --ci-seal-config $profile
         if ($LASTEXITCODE -ne 0) { throw 'R30 cannot seal owned CI profile' }
         if (Test-Path (Join-Path $cfgdir "$profile.conf")) {
             throw 'R30 source plaintext config survived sealing'

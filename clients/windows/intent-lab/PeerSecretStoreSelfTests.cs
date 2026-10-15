@@ -61,6 +61,30 @@ internal static class PeerSecretStoreSelfTests
             CryptographicOperations.ZeroMemory(recovered);
             Check(recovered.AsSpan().IndexOfAnyExcept((byte)0) == -1);
 
+            // A callback observes a valid 32-byte secret only while it runs.
+            // Force a callback exception and prove the very same managed
+            // array was zeroed by finally (even on exceptional control flow).
+            ReadOnlyMemory<byte> held = default;
+            restarted.WithDecryptedKey(key => {
+                Check(key.Length == 32);
+                Check(CryptographicOperations.FixedTimeEquals(key.Span, expected));
+                held = key; // CI-only deliberate borrowed view, never a real API consumer.
+            });
+            Check(held.Span.IndexOfAnyExcept((byte)0) == -1);
+            held = default;
+            bool callbackThrown = false;
+            try {
+                restarted.WithDecryptedKey(key => {
+                    held = key;
+                    throw new IOException("CI callback failure");
+                });
+            }
+            catch (IOException) { callbackThrown = true; }
+            Check(callbackThrown);
+            Check(held.Span.IndexOfAnyExcept((byte)0) == -1);
+            try { restarted.WithDecryptedKey(null!); throw new InvalidOperationException("null accepted"); }
+            catch (ArgumentNullException) { checks++; }
+
             // Disturb ciphertext; DPAPI must refuse the untrusted bytes.
             byte[] modified = (byte[])ciphertext.Clone();
             modified[modified.Length / 2] ^= 0x5a;

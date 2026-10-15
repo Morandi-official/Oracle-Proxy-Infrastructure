@@ -33,6 +33,16 @@ jobs:
           & $exe --offline-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Real Windows DPAPI intent tests failed' }
           Write-Host 'PASS: DPAPI + offline choice persistence, no OS network mutations'
+      - name: R29 real DPAPI key lease normal and exceptional cleanup
+        shell: pwsh
+        env:
+          RUNNER_ENVIRONMENT: github-hosted
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path './dist/intent-selftest/OracleProxy.IntentLab.exe').Path
+          & $exe --peer-secret-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R29 protected 32-byte key lifecycle failed' }
+          Write-Host 'R29_DPAPI_KEY_LEASE_CI_PASS: no native tunnel or production secrets'
       - name: No implicit production deployment or driver files
         shell: pwsh
         run: |

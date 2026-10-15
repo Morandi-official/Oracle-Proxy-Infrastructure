@@ -10,6 +10,12 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+#if ENABLE_CI_SEALED_CONFIG
+        if (args.Length == 2 && args[0] == "--ci-seal-config")
+            return CiSealedConfig.SealOnDisposableRunner(args[1]);
+        if (args.Length == 2 && args[0] == "--ci-sealed-wireguard-service")
+            return CiSealedConfig.InvokeFromSystemService(args[1]);
+#endif
         if (args.Length == 1 && args[0] == "--service-status")
         {
             Console.WriteLine(LabServiceStatus.SanitizedJson());

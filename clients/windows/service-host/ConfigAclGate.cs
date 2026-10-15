@@ -43,6 +43,12 @@ internal static class ConfigAclGate
         RequireFileProtected(labConfigFile, true);
     }
 
+    // Used only by the R30 lab bridge; also validates its temporary plaintext.
+    internal static void RequireProtectedLabSealedFile(string path)
+    {
+        RequireFileProtected(path, true);
+    }
+
     private static void RequireDirectoryProtected(string path)
     {
         var dir = new DirectoryInfo(path);

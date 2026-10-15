@@ -47,7 +47,7 @@ try {
         [string]$rule.InterfaceTypes -ne 'All' -or
         -not [string]::Equals([string]$rule.ApplicationName,$probeExe,
             [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'R26_REFUSED: guard was not original fixed, full-address policy'
+        throw 'R26_REFUSED: guard was not original fixed, all-interface policy'
     }
 
     # Narrow the block to only Wireless interfaces: its friendly
@@ -56,7 +56,7 @@ try {
     $rule.InterfaceTypes = 'Wireless'
     $mutated = $true
     if ([string]$policy.Rules.Item($name).InterfaceTypes -ne 'Wireless') {
-        throw 'R26_FAIL: remote-interface tamper did not persist'
+        throw 'R26_FAIL: interface-type tamper did not persist'
     }
     Write-Host 'R26_WFP_INTERFACE_SCOPE_TAMPER_INJECTED_PASS'
 
@@ -91,7 +91,7 @@ try {
     $attempt = Start-Process -FilePath $gui -ArgumentList '--ci-lab-start-a' -Wait -PassThru
     if ($attempt.ExitCode -eq 0 -or
         (Get-Service 'WireGuardTunnel$lab-peer-a').Status -ne 'Stopped') {
-        throw 'R26_FAIL: manager reset compromised latch on restored rule'
+        throw 'R26_FAIL: manager reset compromised latch on restored all-interface rule'
     }
     Write-Host 'R26_REPAIRED_WFP_STILL_DENIES_RECONNECT_PASS'
 }

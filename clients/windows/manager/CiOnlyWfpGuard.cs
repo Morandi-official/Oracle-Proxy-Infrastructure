@@ -49,6 +49,8 @@ internal static class CiOnlyWfpGuard
                     !(bool)live.Enabled || (int)live.Action != 0 ||
                     (int)live.Protocol != 256 || (int)live.Direction != 2 ||
                     (int)live.Profiles != int.MaxValue ||
+                    !string.Equals((string)live.InterfaceTypes, "All",
+                        StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals((string)live.LocalAddresses, "*",
                         StringComparison.Ordinal) ||
                     !string.Equals((string)live.RemoteAddresses, "*",
@@ -109,6 +111,8 @@ internal static class CiOnlyWfpGuard
                         (int)existing.Protocol == 256 &&
                         (int)existing.Direction == 2 &&
                         (int)existing.Profiles == int.MaxValue &&
+                        string.Equals((string)existing.InterfaceTypes, "All",
+                            StringComparison.OrdinalIgnoreCase) &&
                         string.Equals((string)existing.LocalAddresses, "*",
                             StringComparison.Ordinal) &&
                         string.Equals((string)existing.RemoteAddresses, "*",
@@ -135,6 +139,9 @@ internal static class CiOnlyWfpGuard
             rule.Direction = 2;  // NET_FW_RULE_DIR_OUT
             rule.Action = 0;     // NET_FW_ACTION_BLOCK
             rule.Profiles = 2147483647; // NET_FW_PROFILE2_ALL
+            // R26: the filter must cover ALL interface classes, not just LAN,
+            // Wi-Fi or RemoteAccess. Otherwise real egress can bypass it.
+            rule.InterfaceTypes = "All";
             rule.Enabled = true;
             policy.Rules.Add(rule);
             // Verify persisted metadata. External CI does packet-level proof.
@@ -142,6 +149,8 @@ internal static class CiOnlyWfpGuard
             if (!(bool)live.Enabled || (int)live.Action != 0 ||
                 (int)live.Protocol != 256 || (int)live.Direction != 2 ||
                 (int)live.Profiles != int.MaxValue ||
+                !string.Equals((string)live.InterfaceTypes, "All",
+                    StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals((string)live.LocalAddresses, "*",
                     StringComparison.Ordinal) ||
                 !string.Equals((string)live.RemoteAddresses, "*",

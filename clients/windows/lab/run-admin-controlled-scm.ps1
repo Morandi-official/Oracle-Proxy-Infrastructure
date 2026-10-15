@@ -245,6 +245,65 @@ try {
             if (-not $?) { throw 'R19_FAIL: WFP leaked after manager crash' }
         }
         Write-Host 'R19_MANAGER_KILLED_WG_STILL_UP_WFP_PERSISTENT_PASS'
+        if ($env:ORACLE_R25_RESTART_TEST) {
+            if ($env:ORACLE_R25_RESTART_TEST -ne 'CI_ONLY' -or
+                $env:ORACLE_R21_SYSTEM_GUARD -ne 'CI_FIXED_SYSTEM_POLICY' -or
+                $env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY') {
+                throw 'R25_REFUSED: not a fixed disposable protected restart'
+            }
+            $rule = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+                Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+            if ($rule.Count -ne 1) { throw 'R25_FAIL: guard absent/duplicate before restart' }
+            & sc.exe start $managerName | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R25_FAIL: SYSTEM manager refused valid preserved guard'
+            }
+            (Get-Service -Name $managerName).WaitForStatus('Running',
+                [TimeSpan]::FromSeconds(25))
+            $restarted = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
+            if ($restarted.State -ne 'Running' -or $restarted.ProcessId -le 4 -or
+                $restarted.ProcessId -eq $managerPid) {
+                throw 'R25_FAIL: did not start a new manager process'
+            }
+            $newProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($restarted.ProcessId)" -ErrorAction Stop
+            if (-not $newProcess -or -not [string]::Equals(
+                [IO.Path]::GetFullPath($newProcess.ExecutablePath),
+                [IO.Path]::GetFullPath($managerExe),
+                [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'R25_FAIL: newly running manager has wrong executable'
+            }
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R25_FAIL: rebooted manager reused unverified WFP' }
+            $rulesAfter = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+                Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+            if ($rulesAfter.Count -ne 1) {
+                throw 'R25_FAIL: WFP guard duplicated at SCM restart'
+            }
+            Write-Host 'R25_CRASH_RESTART_STRICT_WFP_ADOPTION_PASS'
+
+            # Authenticated native GUI -> restarted SCM manager can still
+            # safely control the fixed lab peers; exact persistent rule stays.
+            Run-GuiAdminLab '--ci-lab-stop-a'
+            (Get-Service -Name 'WireGuardTunnel$lab-peer-a').WaitForStatus(
+                'Stopped',[TimeSpan]::FromSeconds(20))
+            Run-GuiAdminLab '--ci-lab-start-a'
+            (Get-Service -Name 'WireGuardTunnel$lab-peer-a').WaitForStatus(
+                'Running',[TimeSpan]::FromSeconds(20))
+            & $observer $env:WG_LAB_DLL
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R25_FAIL: real native WG handshake lost after manager restart'
+            }
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R25_FAIL: WFP lost after reconnect' }
+            Run-GuiAdminLab '--ci-lab-stop-b'
+            Run-GuiAdminLab '--ci-lab-stop-a'
+            foreach ($profile in @('lab-peer-b','lab-peer-a')) {
+                (Get-Service -Name ('WireGuardTunnel$' + $profile)).WaitForStatus(
+                    'Stopped',[TimeSpan]::FromSeconds(20))
+            }
+            Write-Host 'R25_AUTHENTICATED_GUI_RECONNECT_AND_SAFE_STOP_PASS'
+        }
+
     } else {
         Run-GuiAdminLab '--ci-lab-stop-b'
         Run-GuiAdminLab '--ci-lab-stop-a'

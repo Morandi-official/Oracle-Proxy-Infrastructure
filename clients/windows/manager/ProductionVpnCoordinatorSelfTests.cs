@@ -32,7 +32,13 @@ internal static class ProductionVpnCoordinatorSelfTests
             if (secret.Length != 32 || !Check("Start"))
                 throw new InvalidOperationException();
         }
-        public bool VerifyEncryptedTunnelAndRoutes() => Check("Handshake");
+        public AuthenticatedTunnelProof ReadAuthenticatedTunnelProof()
+        {
+            bool valid = Check("Handshake");
+            return new AuthenticatedTunnelProof(true, true, valid, true, valid,
+                true, true, 100, valid ? 200 : 100, 200,
+                valid ? 300 : 200, 1, valid ? 1 : 0);
+        }
         public void StopFixedTunnel() { if (!Check("Stop")) throw new InvalidOperationException(); }
         public bool VerifyTunnelStopped() => Check("Stopped");
         public bool StageOwnedRouteDnsRecovery() => Check("RestoreStage");
@@ -108,7 +114,26 @@ internal static class ProductionVpnCoordinatorSelfTests
             Check(successful.Calls.IndexOf("Stop") < successful.Calls.IndexOf("Release"));
             Check(successful.Calls.IndexOf("OffDurable") < successful.Calls.IndexOf("Release"));
             Check(coordinator.State == ProductionTunnelState.UnknownFailClosed);
-            Check(assertions >= 65);
+            // The proof is negative by default, including 92-byte handshake-only
+            // traffic, unchanged counter snapshots and mismatched challenges.
+            var baseline = new AuthenticatedTunnelProof(true, true, true, true,
+                true, true, true, 100, 200, 300, 400, 1, 1);
+            Check(baseline.Verified);
+            Check(!default(AuthenticatedTunnelProof).Verified);
+            Check(!(baseline with { EchoRepliesMatched = 0 }).Verified);
+            Check(!(baseline with { EchoRepliesMatched = 2 }).Verified);
+            Check(!(baseline with { EchoRequestsSent = 0 }).Verified);
+            Check(!(baseline with { SingleUseProbeNonceMatched = false }).Verified);
+            Check(!(baseline with { ProbeSocketBoundToOwnedTunnel = false }).Verified);
+            Check(!(baseline with { DnsProtectedBySystemWfp = false }).Verified);
+            Check(!(baseline with { FixedSignedPeerConfirmed = false }).Verified);
+            Check(!(baseline with { FreshAuthenticatedHandshake = false }).Verified);
+            Check(!(baseline with { EncryptedRxAfter = 300 }).Verified);
+            Check(!(baseline with { EncryptedTxAfter = 100 }).Verified);
+            Check(!(baseline with { EncryptedRxBefore = -1 }).Verified);
+            Check(!(baseline with { OwnedRoutesVerified = false }).Verified);
+            Check(!(baseline with { NativeServiceRunning = false }).Verified);
+            Check(assertions >= 80);
             Console.WriteLine("R27_PRODUCTION_TRANSITION_CONTRACT_PASS: " + assertions +
                 " offline safety assertions; no real OS mutation or production permission");
             return true;

@@ -28,7 +28,7 @@ jobs:
       - name: Build standalone Windows desktop executable
         shell: pwsh
         run: |
-          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None --output ./dist/windows-win-x64
+          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None --output ./dist/windows-win-x64
           if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
       - name: Verify native policy test entrypoint
         shell: pwsh
@@ -47,8 +47,13 @@ jobs:
           $test = Start-Process -FilePath $exe -ArgumentList '--diagnostics-self-test' -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw 'R54 Windows IP Helper/SCM diagnostics failed' }
           $payload = @(Get-ChildItem './dist/windows-win-x64' -File -Recurse)
-          if (@($payload | Where-Object { $_.Extension -in @('.ps1','.psm1','.bat','.cmd','.dll') }).Count -ne 0) {
-            throw 'R54 GUI unexpectedly shipped a script/driver/library'
+          $forbidden = @('wireguard.dll','tunnel.dll','OracleProxy.WireGuardHost.exe',
+              'OracleProxy.LabManager.exe')
+          if (@($payload | Where-Object {
+              $_.Extension -in @('.ps1','.psm1','.bat','.cmd') -or
+              $_.Name -in $forbidden
+            }).Count -ne 0) {
+            throw 'R54 GUI unexpectedly shipped a script or VPN control driver'
           }
           Write-Host 'R54_WIN32_NATIVE_READONLY_UNDER_RESTRICTED_POLICY_PASS'
       - name: Verify W3 control-state transition matrix

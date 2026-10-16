@@ -47,6 +47,7 @@ jobs:
           $exe = (Resolve-Path './dist/r55-ssh-socks/OracleProxy.AppSocks5.Experimental.exe').Path
           $tests = @(
             @('--self-test', 0),
+            @('--job-self-test', 0),
             @('--help', 0),
             @('--bogus', 2)
           )

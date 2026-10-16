@@ -56,6 +56,15 @@ jobs:
           & $release --ci-system-native-dpapi-negative
           if ($LASTEXITCODE -ne 2) { throw 'R47 release executable unexpectedly parsed CI-native command' }
           $lab = (Resolve-Path './dist/r47-manager/OracleProxy.LabManager.exe').Path
+          & $lab --ci-r48-address-scope-negative-self-test
+          if ($LASTEXITCODE -ne 0) {
+            throw 'R48 exact-address canonicalization or broader-range rejection failed'
+          }
+          & $release --ci-r48-address-scope-negative-self-test
+          if ($LASTEXITCODE -ne 2) {
+            throw 'R48 normal release unexpectedly includes CI WFP scope test'
+          }
+          Write-Host 'R48_EXACT_SINGLE_IP_COM_SERIALIZATION_AND_NEGATIVE_SCOPE_PASS'
           & $lab --manager-service --ci-system-native-dpapi
           if ($LASTEXITCODE -ne 3) { throw 'R47 non-System account allowed CI-native service' }
           exit 0

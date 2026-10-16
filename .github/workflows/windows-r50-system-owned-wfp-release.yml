@@ -201,7 +201,9 @@ jobs:
               }
               $r50Created = $false
               $r50Error = $null
+              $r50Phase = 0
               try {
+                $r50Phase = 10
                 $releasePath = ('"{0}" --manager-service --ci-owned-wfp-release' -f $manager)
                 & sc.exe create $r50Service 'binPath=' $releasePath 'start=' 'demand' 'obj=' 'LocalSystem' | Out-Null
                 if ($LASTEXITCODE -ne 0) { throw 'R50 release service creation refused' }
@@ -219,27 +221,39 @@ jobs:
                   throw 'R50 unapproved SYSTEM filter release was admitted'
                 }
                 ./lab/wfp-scoped/Test-R48-SystemOwnedTargets.ps1 -Phase During
+                $r50Phase = 20
                 Write-Host 'R50_SYSTEM_RELEASE_WITHOUT_EXPLICIT_APPROVAL_REFUSED_PASS'
 
                 'R50_CI_RELEASE_ONLY' | Set-Content -LiteralPath (
                   Join-Path $stage '.r50-release-approved') -Encoding ascii -NoNewline
+                $r50Phase = 30
                 & sc.exe start $r50Service | Out-Null
                 if ($LASTEXITCODE -ne 0) { throw 'R50 approved SCM startup failed' }
+                $r50Phase = 40
                 (Get-Service -Name $r50Service).WaitForStatus(
                   'Running',[TimeSpan]::FromSeconds(15))
+                $r50Phase = 50
                 $ownedReceipt = Join-Path $stage '.r50-release-result'
                 if (!(Test-Path $ownedReceipt -PathType Leaf) -or
                     (Get-Content -LiteralPath $ownedReceipt -Raw).Trim() -ne 'PASS') {
                   throw 'R50 SYSTEM owned policy release not proved'
                 }
+                $r50Phase = 60
                 if (@(Get-NetFirewallRule -ErrorAction Stop |
                     Where-Object DisplayName -eq
                       'OracleProxy-R48-CI-SYSTEM-AllApps-FixedDestinations').Count -ne 0) {
                   throw 'R50 SYSTEM release left owned WFP record'
                 }
+                $r50Phase = 70
                 Write-Host 'R50_EXPLICIT_SYSTEM_OWNED_WFP_RELEASE_PASS'
               }
-              catch { $r50Error = $_ }
+              catch {
+                $r50Error = $_
+                Write-Host "R50_CI_RELEASE_STAGE_FAILED=$r50Phase"
+                $remaining = @(Get-NetFirewallRule -ErrorAction Stop |
+                  Where-Object DisplayName -eq 'OracleProxy-R48-CI-SYSTEM-AllApps-FixedDestinations').Count
+                Write-Host "R50_CI_OWNED_FILTER_REMAINS=$remaining"
+              }
               finally {
                 if ($r50Created) {
                   $ownedRelease = Get-CimInstance Win32_Service -Filter "Name='$r50Service'"

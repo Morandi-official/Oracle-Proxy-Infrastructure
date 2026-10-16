@@ -21,6 +21,9 @@ internal sealed class MainForm : Form
     private readonly Button _connect = new() { Text = "连接应用级代理", Width = 165, Height = 40 };
     private readonly Button _disconnect = new() { Text = "断开代理", Width = 105, Height = 40, Enabled = false };
     private readonly Button _verify = new() { Text = "验证 SOCKS5 出口", Width = 145, Height = 40, Enabled = false };
+    private readonly Button _addressDiagnostic = new() {
+        Text = "Google 双栈诊断", Dock = DockStyle.Fill, Enabled = false
+    };
     private readonly Label _probeStatus = new() {
         Dock = DockStyle.Fill, ForeColor = Color.DarkSlateBlue,
         Text = "普通 Edge 不会自动使用 SOCKS5；请通过下方验证按钮检查真实出口。"
@@ -33,11 +36,12 @@ internal sealed class MainForm : Form
     private bool _resourcesDisposed;
     private bool _socksReady;
     private bool _verifying;
+    private bool _diagnosing;
     private CancellationTokenSource? _verificationCancel;
 
     internal MainForm()
     {
-        Text = "Oracle Proxy R57 · Windows 应用代理实验版（非 VPN）";
+        Text = "Oracle Proxy R58 · Windows 应用代理实验版（非 VPN）";
         Width = 690;
         Height = 548;
         MinimumSize = new Size(640, 520);
@@ -97,8 +101,10 @@ internal sealed class MainForm : Form
         _connect.Click += async (_, _) => await ConnectAsync();
         _disconnect.Click += (_, _) => Disconnect();
         _verify.Click += async (_, _) => await VerifyExitAsync();
+        _addressDiagnostic.Click += async (_, _) => await CompareAddressFamilyAsync();
 
         layout.Controls.Add(_status, 1, 6);
+        layout.Controls.Add(_addressDiagnostic, 0, 7);
         layout.Controls.Add(_probeStatus, 1, 7);
 
         var notes = new Label {
@@ -138,8 +144,10 @@ internal sealed class MainForm : Form
         if (_isClosing || IsDisposed) return;
         _connect.Enabled = !_busy && _lease is null;
         _disconnect.Enabled = _lease is not null;
-        _verify.Enabled = !_verifying && _socksReady && !_isClosing &&
+        _verify.Enabled = !_verifying && !_diagnosing && _socksReady && !_isClosing &&
             _lease is not null && _lease.Running;
+        _addressDiagnostic.Enabled = !_verifying && !_diagnosing && _socksReady &&
+            !_isClosing && _lease is not null && _lease.Running;
         _host.Enabled = _user.Enabled = _port.Enabled = _key.Enabled =
             _browse.Enabled = _lease is null && !_busy;
     }
@@ -264,6 +272,44 @@ internal sealed class MainForm : Form
                 _verificationCancel = null;
             token.Dispose();
             _verifying = false;
+            SetButtons();
+        }
+    }
+
+    private async Task CompareAddressFamilyAsync()
+    {
+        if (_diagnosing || _verifying || !_socksReady || _isClosing ||
+            _lease is null || !_lease.Running) return;
+        if (!SshInput.TryParse(_host.Text.Trim(), _user.Text.Trim(),
+            _port.Text.Trim(), _key.Text, out var options) || options is null)
+        {
+            _probeStatus.Text = "双栈诊断拒绝执行：SSH 身份、私钥或主机密钥配置无效。";
+            return;
+        }
+        var owner = _lease;
+        using var token = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
+        _verificationCancel = token;
+        _diagnosing = true;
+        _probeStatus.Text = "只读比较 Google 域名和 Oracle IPv4 的 SOCKS5 CONNECT（可能需要约一分钟）…";
+        SetButtons();
+        try
+        {
+            var result = await SocksAddressFamilyDiagnostic.CompareAsync(
+                options, token.Token);
+            if (!_isClosing && ReferenceEquals(_lease, owner))
+                _probeStatus.Text = result.Summary;
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            if (!_isClosing && ReferenceEquals(_lease, owner))
+                _probeStatus.Text = "Google 双栈诊断失败；未更改 Oracle、DNS、系统代理或防火墙。";
+        }
+        finally
+        {
+            if (ReferenceEquals(_verificationCancel, token))
+                _verificationCancel = null;
+            _diagnosing = false;
             SetButtons();
         }
     }

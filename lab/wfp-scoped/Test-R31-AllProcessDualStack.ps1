@@ -24,6 +24,58 @@ $destinations = @('1.1.1.1', '8.8.8.8',
 $existing = @(Get-NetFirewallRule -ErrorAction Stop |
     Where-Object DisplayName -eq $name)
 if ($existing.Count -ne 0) { throw 'R31_REFUSED: owned rule already exists' }
+# R46: actual new application sockets on disposable CI, fixed allowlisted
+# resolver destinations. Successful baseline required before test-only block.
+function Test-R46Tcp([string]$address) {
+    $ip = [Net.IPAddress]::Parse($address)
+    $client = [Net.Sockets.TcpClient]::new($ip.AddressFamily)
+    try {
+        $attempt = $client.ConnectAsync($ip, 443)
+        return $attempt.Wait(2000) -and $client.Connected
+    }
+    catch { return $false }
+    finally { $client.Dispose() }
+}
+function Test-R46Dns([string]$address) {
+    $ip = [Net.IPAddress]::Parse($address)
+    $udp = [Net.Sockets.UdpClient]::new($ip.AddressFamily)
+    try {
+        $udp.Connect($ip, 53)
+        $nonce = [Security.Cryptography.RandomNumberGenerator]::GetInt32(1, 65536)
+        [byte[]]$question = @(
+          [byte]($nonce -shr 8),[byte]($nonce -band 255), 1,0,0,1,0,0,0,0,0,0,
+          7,101,120,97,109,112,108,101,3,99,111,109,0,0,1,0,1)
+        [void]$udp.Send($question,$question.Length)
+        $reply = $udp.ReceiveAsync()
+        if (-not $reply.Wait(2500)) { return $false }
+        [byte[]]$data = $reply.Result.Buffer
+        return $data.Length -ge 12 -and
+            (([int]$data[0] -shl 8) -bor [int]$data[1]) -eq $nonce -and
+            ($data[2] -band 0x80) -ne 0 -and
+            ($data[3] -band 15) -eq 0
+    }
+    catch { return $false }
+    finally { $udp.Dispose() }
+}
+$r46Tcp = $null
+$r46Dns = $null
+$r46V6 = $null
+$r46BaselineReady = $false
+if ($env:ORACLE_R46_PACKET_PROBE -eq 'CI_ONLY') {
+    $r46Tcp = @('1.1.1.1','8.8.8.8') |
+        Where-Object { (Test-R46Tcp $_) -and (Test-R46Tcp $_) } |
+        Select-Object -First 1
+    $r46Dns = @('1.1.1.1','8.8.8.8') |
+        Where-Object { (Test-R46Dns $_) -and (Test-R46Dns $_) } |
+        Select-Object -First 1
+    if (!$r46Tcp -or !$r46Dns) {
+        throw 'R46_BASELINE_UNAVAILABLE: real IPv4 TCP and UDP DNS cannot be independently observed'
+    }
+    $r46V6 = @('2606:4700:4700::1111','2001:4860:4860::8888') |
+        Where-Object { Test-R46Tcp $_ } | Select-Object -First 1
+    $r46BaselineReady = $true
+    Write-Host 'R46_UNBLOCKED_IPV4_TCP_DNS_BASELINE_PASS'
+}
 $routesBefore = @(Get-NetRoute -ErrorAction Stop |
     Where-Object DestinationPrefix -in @('0.0.0.0/0','::/0') |
     Sort-Object ifIndex,DestinationPrefix,NextHop |
@@ -87,6 +139,24 @@ try {
         # The exact owned rule is removed in finally, not "repaired" by
         # widening someone else's preexisting policy.
     }
+    if ($env:ORACLE_R46_PACKET_PROBE -eq 'CI_ONLY') {
+        if (!$r46BaselineReady) { throw 'R46 no valid baseline' }
+        Start-Sleep -Milliseconds 750
+        if ((Test-R46Tcp $r46Tcp) -or (Test-R46Dns $r46Dns) -or
+            (Test-R46Dns $r46Dns)) {
+            throw 'R46_PACKET_ESCAPE: physical fixed-destination IPv4 TCP or UDP DNS'
+        }
+        Write-Host 'R46_OS_WFP_IPV4_TCP_UDP_DNS_DENIED_PASS'
+        if ($r46V6) {
+            if (Test-R46Tcp $r46V6) {
+                throw 'R46_PACKET_ESCAPE: physical IPv6 TCP'
+            }
+            Write-Host 'R46_OS_WFP_IPV6_TCP_DENIED_PASS'
+        }
+        else {
+            Write-Host 'R46_IPV6_PACKET_PROOF_UNAVAILABLE: no IPv6 baseline, not a pass'
+        }
+    }
     Write-Host 'R31_OS_ALL_APPLICATION_IPV4_IPV6_WFP_RULE_ACTIVE_PASS'
     # OS metadata verifies cross-process applicability but not real remote
     # packet denial: no packet-level claim without independent witness.
@@ -113,6 +183,16 @@ finally {
     if (($routesBefore -join '|') -ne ($routesAfter -join '|') -or
         ($profilesBefore -join '|') -ne ($profilesAfter -join '|')) {
         throw 'R31_FAIL: unrelated routes or firewall profiles changed'
+    }
+    if ($r46BaselineReady -and $created) {
+        Start-Sleep -Milliseconds 650
+        if (!(Test-R46Tcp $r46Tcp) -or !(Test-R46Dns $r46Dns)) {
+            throw 'R46_FAIL: IPv4 TCP or UDP DNS did not recover after owned rule removal'
+        }
+        if ($r46V6 -and !(Test-R46Tcp $r46V6)) {
+            throw 'R46_FAIL: IPv6 TCP did not recover after owned rule removal'
+        }
+        Write-Host 'R46_OS_WFP_REAL_TCP_DNS_RESTORE_PASS'
     }
     Write-Host 'R31_OWNED_WFP_RELEASE_AND_OS_BASELINE_PASS'
 }

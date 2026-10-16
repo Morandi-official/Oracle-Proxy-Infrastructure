@@ -1,0 +1,170 @@
+name: R56 Windows GUI app-scoped SSH proxy connection and cleanup
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/app-socks5-gui/**'
+      - 'clients/windows/app-socks5/**'
+      - 'docs/r56-gui-ssh-socks5-experiment.md'
+      - '.github/workflows/windows-r56-gui-app-socks5.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  gui-ssh-app-proxy-only:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Create independent route/DNS/firewall baseline before non-network lifecycle checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $snapshot = [ordered]@{
+            routes = @((Get-NetRoute | Where-Object {
+              $_.DestinationPrefix -in @('0.0.0.0/0','::/0')
+            } | Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+              Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+              ConvertTo-Json -Compress -Depth 5) -join '')
+            dns = @((Get-DnsClientServerAddress |
+              Select-Object InterfaceIndex,AddressFamily,ServerAddresses |
+              Sort-Object InterfaceIndex,AddressFamily |
+              ConvertTo-Json -Compress -Depth 5) -join '')
+            firewall_rule_count = @(Get-NetFirewallRule).Count
+          }
+          $snapshot | ConvertTo-Json -Compress -Depth 5 |
+            Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'r56-baseline.json') -Encoding utf8
+
+      - name: Publish GUI and independent proven R55 helper without drivers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/app-socks5/OracleProxy.AppSocks5.Experimental.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o ./dist/r56-helper
+          if ($LASTEXITCODE -ne 0) { throw 'R56 R55 SSH helper failed build' }
+          dotnet publish ./clients/windows/app-socks5-gui/OracleProxy.AppSocks5.GUI.Experimental.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o ./dist/r56-gui
+          if ($LASTEXITCODE -ne 0) { throw 'R56 Windows WinForms GUI failed build' }
+          Copy-Item './dist/r56-helper/OracleProxy.AppSocks5.Experimental.exe' './dist/r56-gui/OracleProxy.AppSocks5.Experimental.exe' -ErrorAction Stop
+          $items = @(Get-ChildItem ./dist/r56-gui -File -Recurse)
+          $allowed = @('OracleProxy.AppSocks5.GUI.Experimental.exe','OracleProxy.AppSocks5.Experimental.exe')
+          if (@($items | Where-Object { $_.Name -notin $allowed }).Count -ne 0) {
+            $items | Select-Object Name,Length | Format-Table
+            throw 'R56 GUI contains an unexpected library/script/native executable'
+          }
+          $source = @(
+            Get-Content './clients/windows/app-socks5-gui/MainForm.cs' -Raw
+            Get-Content './clients/windows/app-socks5-gui/ChildProcessLease.cs' -Raw
+          ) -join [Environment]::NewLine
+          foreach ($unsafe in @('netsh.exe','powershell.exe','Set-NetFirewallRule',
+              'New-NetFirewallRule','Set-DnsClientServerAddress','Set-NetRoute',
+              'WireGuardTunnel$','ProcessStartInfo("cmd.exe"')) {
+            if ($source.Contains($unsafe)) {
+              throw "Unexpected system networking or shell code detected: $unsafe"
+            }
+          }
+          Write-Host 'R56_GUI_PLUS_R55_EXECUTABLES_ALLOWLIST_PASS'
+
+      - name: Actual GUI child-job termination and offline untrusted-input rejection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $gui=(Resolve-Path './dist/r56-gui/OracleProxy.AppSocks5.GUI.Experimental.exe').Path
+          $helper=(Resolve-Path './dist/r56-gui/OracleProxy.AppSocks5.Experimental.exe').Path
+          $cases=@(
+            @{exe=$gui;args='--offline-self-test';exit=0},
+            @{exe=$gui;args='--form-self-test';exit=0},
+            @{exe=$gui;args='--job-self-test';exit=0},
+            @{exe=$gui;args='--invalid-option';exit=2},
+            @{exe=$helper;args='--self-test';exit=0},
+            @{exe=$helper;args='--job-self-test';exit=0}
+          )
+          foreach ($case in $cases) {
+            $process=Start-Process -FilePath $case.exe -ArgumentList $case.args -Wait -PassThru
+            if ($process.ExitCode -ne $case.exit) {
+              throw "R56 GUI/R55 negative or child-job lifecycle test failed: $($case.args), exit=$($process.ExitCode)"
+            }
+          }
+          if (@(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 10880 -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw 'R56 GUI self-tests unexpectedly activated the SOCKS5 listener'
+          }
+          Write-Host 'R56_GUI_OFFLINE_POLICY_AND_REAL_KILL_ON_CLOSE_PASS'
+
+      - name: Compare OS network state after GUI/headless lifecycle self-tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $old=Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'r56-baseline.json') -Raw | ConvertFrom-Json
+          $newRoutes=@((Get-NetRoute | Where-Object {
+            $_.DestinationPrefix -in @('0.0.0.0/0','::/0')
+          } | Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            ConvertTo-Json -Compress -Depth 5) -join '')
+          $newDns=@((Get-DnsClientServerAddress |
+            Select-Object InterfaceIndex,AddressFamily,ServerAddresses |
+            Sort-Object InterfaceIndex,AddressFamily |
+            ConvertTo-Json -Compress -Depth 5) -join '')
+          if ($old.routes -cne $newRoutes -or $old.dns -cne $newDns -or
+              $old.firewall_rule_count -ne @(Get-NetFirewallRule).Count) {
+            throw 'R56 offline GUI changed network baseline'
+          }
+          Write-Host 'R56_ROUTING_DNS_AND_FIREWALL_BASELINE_UNCHANGED_PASS'
+
+      - name: Create unsigned opt-in R56 GUI release receipt with SHA-256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dir=(Resolve-Path './dist/r56-gui').Path
+          $gui=(Join-Path $dir 'OracleProxy.AppSocks5.GUI.Experimental.exe')
+          $helper=(Join-Path $dir 'OracleProxy.AppSocks5.Experimental.exe')
+          $guiHash=(Get-FileHash -LiteralPath $gui -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helperHash=(Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            'Oracle Proxy R56: UNSIGNED experimental Windows GUI plus R55 SSH helper'
+            'This is a user-level APP-SCOPED SSH SOCKS5 proxy, not a WireGuard VPN.'
+            'No system proxy, drivers, WFP, network service, route/DNS mutations or autostart.'
+            'Connection requires explicit Oracle SSH host, user, locally present private key and known_hosts.'
+            'Strict SSH host key identity checking remains enabled. Never send/share your private key.'
+            'Click Connect to start localhost-only 127.0.0.1:10880 SOCKS5; click Disconnect to close helper and SSH.'
+            'You must independently set up a SEPARATE Edge test instance with SOCKS5 to use the proxy.'
+            'Opening, closing or disconnecting the GUI never alters global Edge or Windows settings.'
+            'GUI started only via user action. No private keys or server details are included.'
+            'Unsigned release: DO NOT disable SmartScreen, antivirus or corporate security to run.'
+            'Both binaries must remain side by side in the extracted folder.'
+            'Test on independently accessible/noncritical Windows PC before any remote-only PC.'
+            'Windows CI has not operated against your Oracle instance. Local GUI use unverified.'
+            "GUI SHA256: $guiHash"
+            "R55 helper SHA256: $helperHash"
+            "Build revision: $env:GITHUB_SHA"
+          ) | Set-Content -LiteralPath (Join-Path $dir 'READ_ME_FIRST.txt') -Encoding utf8
+          $manifest=[ordered]@{
+            schema_version=1;channel='r56-unsigned-app-socks5-gui-experimental'
+            version='0.3.0-gui-experimental'; gui_sha256=$guiHash
+            helper_sha256=$helperHash;commit=$env:GITHUB_SHA
+            signed=$false;no_default_connection=$true
+            local_only_socks5='127.0.0.1:10880'
+            requires_verified_known_hosts=$true
+            private_keys_included=$false
+            system_proxy_modified=$false;firewall_modified=$false
+            dns_routes_modified=$false;vpn_driver_included=$false
+            physical_gui_tested=$false;oracle_live_tested_by_ci=$false
+            gui_controls_only_owned_r55_process=$true
+            full_device_wireguard_vpn=$false
+            leak_protection_implemented=$false
+          }
+          $manifest|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (
+            Join-Path $dir 'build-manifest.json') -Encoding utf8
+          Write-Host 'R56_UNSIGNED_WINDOWS_SOCKS_GUI_WITH_MANIFEST_PASS'
+      - name: Upload experimental Windows GUI and R55 SSH SOCKS5 backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-proxy-r56-WINDOWS-GUI-SSH-SOCKS5-EXPERIMENTAL-win-x64
+          path: ./dist/r56-gui/**
+          if-no-files-found: error
+          retention-days: 7

@@ -63,6 +63,9 @@ internal static class Program
                 case "--wfp-readonly-self-test":
                     return NativeWfpReadOnlySelfTests.Run(expectSystem: false) ? 0 : 1;
 
+                case "--startup-recovery-boundary-self-test":
+                    return SystemStartupRecoveryBoundarySelfTests.Run() ? 0 : 1;
+
                 case "--production-transition-contract-self-test":
                     return ProductionVpnCoordinatorSelfTests.Run() ? 0 : 1;
 

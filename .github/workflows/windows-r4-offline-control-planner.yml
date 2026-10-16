@@ -36,6 +36,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'R4 offline intent security self-test failed' }
           & $exe --production-transition-contract-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R27 production-transition default-deny transaction contract failed' }
+          & $exe --startup-recovery-boundary-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R36 startup recovery deny-only matrix failed' }
           & $exe --ipc-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Read-only OS identity IPC regression' }
           # Compile-time release build MUST reject even offline-only lab switches.

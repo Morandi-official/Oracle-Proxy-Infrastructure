@@ -35,8 +35,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     env:
-      ORACLE_R30_DPAPI_TEST: ${{ github.event.pull_request.head.ref == ('feat/r30-ci-system-dpapi-native-tunnel' || github.event.pull_request.head.ref == 'feature/r38-ci-system-dpapi-nonce-integration') && 'CI_ONLY' || 'DISABLED' }}
-      ORACLE_R34_NONCE_PROBE: ${{ github.event.pull_request.head.ref == ('feature/r34-ci-cryptographic-nonce-echo' || github.event.pull_request.head.ref == 'feature/r38-ci-system-dpapi-nonce-integration') && 'CI_ONLY' || 'DISABLED' }}
+      ORACLE_R30_DPAPI_TEST: ${{ (github.event.pull_request.head.ref == 'feat/r30-ci-system-dpapi-native-tunnel' || github.event.pull_request.head.ref == 'feature/r38-ci-system-dpapi-nonce-integration') && 'CI_ONLY' || 'DISABLED' }}
+      ORACLE_R34_NONCE_PROBE: ${{ (github.event.pull_request.head.ref == 'feature/r34-ci-cryptographic-nonce-echo' || github.event.pull_request.head.ref == 'feature/r38-ci-system-dpapi-nonce-integration') && 'CI_ONLY' || 'DISABLED' }}
     steps:
       - uses: actions/checkout@v4
         with:

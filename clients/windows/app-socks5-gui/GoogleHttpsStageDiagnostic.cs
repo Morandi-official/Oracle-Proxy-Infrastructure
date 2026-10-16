@@ -240,6 +240,17 @@ internal static class GoogleHttpsStageDiagnostic
             bool protocolSeen = await mock.WaitAsync(cancel.Token);
             bool pass = protocolSeen && result.Outcome ==
                 "TLS 证书验证或握手失败" && result.SocksMs >= 0;
+            // Offline CI diagnostics only. No files written in normal GUI.
+            if (!pass && Environment.GetEnvironmentVariable("CI") == "true")
+            {
+                string runner = Environment.GetEnvironmentVariable("RUNNER_TEMP") ??
+                    Path.GetTempPath();
+                File.WriteAllText(Path.Combine(runner, "r59-tls-test-status.txt"),
+                    "protocolSeen=" + protocolSeen + "\n" +
+                    "stage=" + result.Outcome + "\n" +
+                    "socksMs=" + result.SocksMs + "\n" +
+                    "tlsMs=" + result.TlsMs + "\n");
+            }
             if (pass)
                 Console.WriteLine(
                     "R59_TLS_CERTIFICATE_VALIDATION_AND_SOCKS_DOMAIN_NO_DIRECT_PASS");

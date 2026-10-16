@@ -46,6 +46,13 @@ internal sealed class LabManagerService : ServiceBase
             recovery.AllowUnattendedDirectNetworking)
             throw new InvalidOperationException("R36 startup recovery invariant");
 
+        // R43: native OS route inventory on the actual Session-0 SYSTEM
+        // startup path. Routing facts NEVER assert native WFP coverage.
+        var routes = NativeRouteInventory.Read();
+        if (!routes.QueriesSucceeded || routes.CompleteWfpCoverageVerified ||
+            routes.AuthorizesConnectionOrGuardRelease)
+            throw new InvalidOperationException("R43 native route preflight unavailable");
+
         NativeWfpReadOnlySnapshot snapshot = NativeWfpReadOnlyAudit.Read();
         if (!snapshot.LocalSystemSessionZero || snapshot.MayStartTunnel ||
             snapshot.MayReleaseFilter || snapshot.FullDeviceFailClosedVerified)

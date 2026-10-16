@@ -15,9 +15,11 @@ concurrency:
 
 jobs:
   real-loopback-handshake:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/windows-wireguardnt-loopback-handshake'
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'test/windows-wireguardnt-loopback-handshake' || github.event.pull_request.head.ref == 'feature/r44-dpapi-native-memory-wireguardnt')
     runs-on: windows-latest
     timeout-minutes: 18
+    env:
+      ORACLE_R44_DPAPI_TEST: ${{ github.event.pull_request.head.ref == 'feature/r44-dpapi-native-memory-wireguardnt' && 'CI_ONLY' || 'DISABLED' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,6 +36,22 @@ jobs:
       - name: Compile real driver-interface loopback test
         shell: pwsh
         run: ./clients/windows/lab/compile-test.ps1
+      - name: R44 refuse DPAPI key generation outside disposable Windows CI
+        if: env.ORACLE_R44_DPAPI_TEST == 'CI_ONLY'
+        shell: pwsh
+        run: |
+          $env:WG_LAB_EPHEMERAL_KEY_FILE = Join-Path $env:RUNNER_TEMP 'wg-r44-session.dpapi'
+          $env:RUNNER_ENVIRONMENT = 'unauthorized'
+          $rejected = $false
+          try { python './clients/windows/lab/generate_lab_keys_dpapi.py' 2>$null } catch { $rejected = $true }
+          if (!$rejected -and $LASTEXITCODE -eq 0) {
+            throw 'R44 key generator allowed an unapproved CI environment'
+          }
+          if (Test-Path $env:WG_LAB_EPHEMERAL_KEY_FILE) {
+            throw 'R44 unapproved generator wrote private data'
+          }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          Write-Host 'R44_UNAUTHORIZED_KEY_GENERATION_REFUSED'
       - name: Create ephemeral test-only peer keys
         shell: pwsh
         run: ./clients/windows/lab/generate-keys.ps1

@@ -79,6 +79,7 @@ jobs:
           $helper=(Resolve-Path './dist/r56-gui/OracleProxy.AppSocks5.Experimental.exe').Path
           $cases=@(
             @{exe=$gui;args='--offline-self-test';exit=0},
+            @{exe=$gui;args='--form-self-test';exit=0},
             @{exe=$gui;args='--job-self-test';exit=0},
             @{exe=$gui;args='--invalid-option';exit=2},
             @{exe=$helper;args='--self-test';exit=0},

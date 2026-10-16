@@ -152,6 +152,52 @@ internal static class CiSystemFixedTargetWfpGuard
         }
     }
 
+    // R50: strict SYSTEM-only owned-rule release for a disposable runner.
+    // Never accept a missing, duplicate, mutated or widened rule. Removal
+    // is not a production safe-Off and cannot authorize direct networking.
+    internal static bool RemoveExactVerifiedOnly()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            !CiSystemDpapiKeyLease.IsSystemServiceIdentity() ||
+            !IsActive())
+            return false;
+        object? policy = null;
+        try
+        {
+            Type type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2", true)
+                ?? throw new InvalidOperationException();
+            policy = Activator.CreateInstance(type);
+            if (policy is null) return false;
+            dynamic fw = policy;
+            int seen = 0;
+            foreach (object candidate in fw.Rules)
+            {
+                dynamic rule = candidate;
+                if (!string.Equals((string)rule.Name, RuleName,
+                    StringComparison.OrdinalIgnoreCase)) continue;
+                ++seen;
+                if (seen != 1 || !CorrectRule(rule)) return false;
+            }
+            if (seen != 1) return false;
+            fw.Rules.Remove(RuleName);
+            // Unlike !IsActive(), this checks for residual same-name
+            // records even if their scope is no longer acceptable.
+            foreach (object candidate in fw.Rules)
+            {
+                dynamic item = candidate;
+                if (string.Equals((string)item.Name, RuleName,
+                    StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+        catch { return false; }
+        finally
+        {
+            if (policy is not null && Marshal.IsComObject(policy))
+                Marshal.FinalReleaseComObject(policy);
+        }
+    }
+
     internal static void Install()
     {
         if (!OperatingSystem.IsWindows() ||

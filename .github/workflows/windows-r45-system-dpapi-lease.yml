@@ -1,0 +1,136 @@
+name: R45 LocalSystem DPAPI in-memory key lease (disposable SCM CI only)
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/manager/**'
+      - '.github/workflows/windows-r45-system-dpapi-lease.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  system-in-memory-lease:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/r45-system-dpapi-memory-lease-ci'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build segregated opt-in SCM lab and default deny-only release variant
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or
+              $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
+              $env:RUNNER_OS -ne 'Windows') { throw 'R45 CI-only runner preflight failed' }
+          dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:EnableDisposableLabControls=true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/r45-ci-manager
+          if ($LASTEXITCODE -ne 0) { throw 'R45 CI manager build failed' }
+          dotnet publish ./clients/windows/manager/OracleProxy.LabManager.csproj -c Release -r win-x64 --self-contained true -p:EnableDisposableLabControls=false -p:PublishSingleFile=true -p:DebugType=None -o ./dist/r45-production-deny
+          if ($LASTEXITCODE -ne 0) { throw 'Default deny-only manager failed to build' }
+      - name: Refuse non-SYSTEM key unseal and verify default release parser excludes CI mode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $lab = (Resolve-Path './dist/r45-ci-manager/OracleProxy.LabManager.exe').Path
+          $release = (Resolve-Path './dist/r45-production-deny/OracleProxy.LabManager.exe').Path
+          & $lab --ci-system-dpapi-negative-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R45 ordinary admin attempted SYSTEM key lease' }
+          & $release --ci-system-dpapi-negative-self-test
+          if ($LASTEXITCODE -ne 2) { throw 'R45 default distribution exposed CI-only key lease control' }
+          Write-Host 'R45_NON_SYSTEM_DPAPI_REFUSED_AND_RELEASE_ISOLATED_PASS'
+          exit 0
+      - name: Actual LocalSystem SCM start performs ephemeral DPAPI protect/unprotect before IPC
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw 'R45 unauthorized runner'
+          }
+          $svc = 'OracleProxyLabManager'
+          $exe = (Resolve-Path './dist/r45-ci-manager/OracleProxy.LabManager.exe').Path
+          if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
+            throw 'R45 preexisting service; refuse to modify'
+          }
+          $routesBefore = @(Get-NetRoute -ErrorAction Stop |
+            Where-Object DestinationPrefix -in @('0.0.0.0/0','::/0') |
+            Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            ConvertTo-Json -Compress -Depth 5) -join ''
+          $dnsBefore = @(Get-DnsClientServerAddress -ErrorAction Stop |
+            Select-Object InterfaceIndex,AddressFamily,ServerAddresses |
+            Sort-Object InterfaceIndex,AddressFamily |
+            ConvertTo-Json -Compress -Depth 5) -join ''
+          $rulesBefore = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name | Sort-Object)
+          $created = $false
+          try {
+            $args = ('"{0}" --manager-service --ci-system-dpapi-lease' -f $exe)
+            & sc.exe create $svc 'binPath=' $args 'start=' 'demand' 'obj=' 'LocalSystem' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'R45 SCM create failed' }
+            $created = $true
+            $registration = Get-CimInstance Win32_Service -Filter "Name='$svc'"
+            if (-not $registration -or $registration.StartName -ne 'LocalSystem' -or
+                $registration.StartMode -ne 'Manual' -or
+                $registration.PathName -notlike '*--ci-system-dpapi-lease*') {
+              throw 'R45 unexpected SCM identity/arguments'
+            }
+            & sc.exe start $svc | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'R45 SCM start failed' }
+            (Get-Service -Name $svc).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
+            # OnStart returns Running ONLY after RunSystemOnly() verifies DPAPI,
+            # erases the 32-byte lease and rejects tampered ciphertext.
+            $status = & $exe --ipc-status | ConvertFrom-Json -ErrorAction Stop
+            if ($LASTEXITCODE -ne 0 -or !$status.ok -or
+                $status.code -ne 'STATUS_ONLY' -or
+                $status.mutating_commands_available -or
+                $status.leak_protection -ne 'unverified') {
+              throw 'R45 CI service exposed unsafe production controls'
+            }
+            Write-Host 'R45_REAL_LOCAL_SYSTEM_DPAPI_IN_MEMORY_LEASE_PASS: service started, no key path/network mutation'
+          }
+          finally {
+            if ($created) {
+              $existing = Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue
+              if (-not $existing -or $existing.PathName -notlike '*--ci-system-dpapi-lease*') {
+                throw 'R45 cannot identify owned disposable service for cleanup'
+              }
+              try { Stop-Service -Name $svc -ErrorAction SilentlyContinue } catch {}
+              & sc.exe delete $svc | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw 'R45 exact SCM delete failed' }
+              $deadline = [datetime]::UtcNow.AddSeconds(30)
+              while ((Get-Service -Name $svc -ErrorAction SilentlyContinue) -and
+                  [datetime]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 350
+              }
+              if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
+                throw 'R45 CI service persisted after cleanup'
+              }
+            }
+            $routesAfter = @(Get-NetRoute -ErrorAction Stop |
+              Where-Object DestinationPrefix -in @('0.0.0.0/0','::/0') |
+              Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+              Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+              ConvertTo-Json -Compress -Depth 5) -join ''
+            $dnsAfter = @(Get-DnsClientServerAddress -ErrorAction Stop |
+              Select-Object InterfaceIndex,AddressFamily,ServerAddresses |
+              Sort-Object InterfaceIndex,AddressFamily |
+              ConvertTo-Json -Compress -Depth 5) -join ''
+            $rulesAfter = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name | Sort-Object)
+            if ($routesBefore -ne $routesAfter -or $dnsBefore -ne $dnsAfter -or
+                @(Compare-Object $rulesBefore $rulesAfter).Count -gt 0) {
+              throw 'R45 unrelated Windows route/DNS/firewall state changed'
+            }
+            Write-Host 'R45_LOCAL_SYSTEM_LAB_CLEANUP_AND_NETWORK_BASELINE_PASS'
+          }
+      - name: ALWAYS ensure no CI service survives
+        if: always()
+        shell: pwsh
+        run: |
+          if (Get-Service OracleProxyLabManager -ErrorAction SilentlyContinue) {
+            throw 'R45 residual SCM manager; discard disposable runner'
+          }

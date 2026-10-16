@@ -11,6 +11,17 @@ internal static class Program
     {
         if (!OperatingSystem.IsWindows()) return 3;
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
+        if (args.Length == 2 && args[0] == "--manager-service" &&
+            args[1] == "--ci-system-dpapi-lease")
+        {
+            try
+            {
+                if (!CiSystemDpapiKeyLease.IsSystemServiceIdentity()) return 3;
+                ServiceBase.Run(new LabManagerService(enableCiSystemDpapiLease: true));
+                return 0;
+            }
+            catch { return 3; }
+        }
         if ((args.Length == 2 || args.Length == 3) &&
             args[0] == "--manager-service" &&
             args[1] == "--ci-lab-control" &&
@@ -54,6 +65,9 @@ internal static class Program
                 case "--ipc-self-test":
                     return await LabManagerSelfTests.RunAsync() ? 0 : 1;
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
+                case "--ci-system-dpapi-negative-self-test":
+                    return !CiSystemDpapiKeyLease.RunSystemOnly() ? 0 : 1;
+
                 case "--admin-lab-self-test":
                     return await AdminLabControlSelfTests.RunAsync() ? 0 : 1;
 #endif

@@ -70,6 +70,40 @@ try {
     }
     Set-Acl -LiteralPath $installRoot -AclObject $security -ErrorAction Stop
     Copy-Item -LiteralPath $manager -Destination $stagedExe -ErrorAction Stop
+    $fileAcl = [Security.AccessControl.FileSecurity]::new()
+    $fileAcl.SetOwner($administrators)
+    $fileAcl.SetAccessRuleProtection($true,$false)
+    foreach ($sid in @($administrators,$system)) {
+        $fileAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,[Security.AccessControl.FileSystemRights]::FullControl,
+            [Security.AccessControl.AccessControlType]::Allow))
+    }
+    Set-Acl -LiteralPath $stagedExe -AclObject $fileAcl -ErrorAction Stop
+    # R39: verify staged executable inherits only Admin/SYSTEM access.
+    # An unexpected inherited ACE, reparse point or source/stage mismatch
+    # fails before any SCM registration. No ACL repair on user-owned paths.
+    foreach ($file in @($stagedExe)) {
+        $info = Get-Item -LiteralPath $file -ErrorAction Stop
+        if (($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'R39_REFUSED: staged executable reparse point'
+        }
+        $access = Get-Acl -LiteralPath $file -ErrorAction Stop
+        $allowed = @('S-1-5-18','S-1-5-32-544')
+        foreach ($entry in $access.Access) {
+            $sid = $entry.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]).Value
+            if ($entry.AccessControlType -eq 'Allow' -and $sid -notin $allowed) {
+                throw 'R39_REFUSED: untrusted staged executable access'
+            }
+        }
+        if ($access.AreAccessRulesProtected -ne $true) {
+            throw 'R39_REFUSED: inherited executable permissions'
+        }
+    }
+    $sourceHash = (Get-FileHash -LiteralPath $manager -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sourceHash -ne (Get-FileHash -LiteralPath $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()) {
+        throw 'R39_REFUSED: copied manager executable hash differs from built artifact'
+    }
     $hash = (Get-FileHash -LiteralPath $stagedExe -Algorithm SHA256).Hash.ToLowerInvariant()
     $record = [ordered]@{
         schema_version = 1; channel = 'ci-only-status-manager'

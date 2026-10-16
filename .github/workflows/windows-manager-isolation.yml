@@ -82,9 +82,9 @@ jobs:
           }
           $native4 = [int]$Matches[1]
           $native6 = [int]$Matches[2]
-          $os4 = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop |
+          $os4 = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty InterfaceIndex -Unique).Count
-          $os6 = @(Get-NetRoute -DestinationPrefix '::/0' -ErrorAction Stop |
+          $os6 = @(Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty InterfaceIndex -Unique).Count
           if ($native4 -ne $os4 -or $native6 -ne $os6) {
             throw 'R43 OS NetTCPIP disagrees with native route interface inventory'

@@ -138,6 +138,27 @@ internal static class CiSystemFixedTargetWfpGuard
             // No ApplicationName assignment: all processes and executables.
             guard.Rules.Add(rule);
             Stage(50);
+            // Numeric flags reveal only which expected CI rule dimensions
+            // Windows COM actually accepted, never addresses or secrets.
+            int matched = 0;
+            try
+            {
+                dynamic live = guard.Rules.Item(RuleName);
+                if ((bool)live.Enabled) matched |= 1;
+                if ((int)live.Action == 0) matched |= 2;
+                if ((int)live.Direction == 2) matched |= 4;
+                if ((int)live.Protocol == 256) matched |= 8;
+                if ((int)live.Profiles == int.MaxValue) matched |= 16;
+                if (string.Equals((string)live.InterfaceTypes, "All",
+                    StringComparison.OrdinalIgnoreCase)) matched |= 32;
+                if (string.Equals((string)live.LocalAddresses, "*",
+                    StringComparison.Ordinal)) matched |= 64;
+                object? app = live.ApplicationName;
+                if (string.IsNullOrWhiteSpace(app as string)) matched |= 128;
+                if (CorrectAddresses((string)live.RemoteAddresses)) matched |= 256;
+            }
+            catch { /* fail closed with partial metric only */ }
+            Stage(5000 + matched);
             if (!IsActive())
                 throw new InvalidOperationException("R48 owned WFP guard not verified");
             Stage(60);

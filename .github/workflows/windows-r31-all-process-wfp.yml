@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   disposable-fixed-destination-guard:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/r31-system-all-process-address-family-wfp' || github.event.pull_request.head.ref == 'feature/r37-ci-system-wfp-dualstack-audit')
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feat/r31-system-all-process-address-family-wfp' || github.event.pull_request.head.ref == 'feature/r37-ci-system-wfp-dualstack-audit' || github.event.pull_request.head.ref == 'test/r46-ci-allprocess-wfp-packet-probe')
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -37,6 +37,7 @@ jobs:
           RUNNER_ENVIRONMENT: github-hosted
           ORACLE_R31_NARROW_OS_WFP: CI_ONLY
           ORACLE_R37_SCOPE_TAMPER: ${{ github.event.pull_request.head.ref == 'feature/r37-ci-system-wfp-dualstack-audit' && 'CI_ONLY' || 'DISABLED' }}
+          ORACLE_R46_PACKET_PROBE: ${{ github.event.pull_request.head.ref == 'test/r46-ci-allprocess-wfp-packet-probe' && 'CI_ONLY' || 'DISABLED' }}
         run: ./lab/wfp-scoped/Test-R31-AllProcessDualStack.ps1
       - name: ALWAYS check exact rule is absent
         if: always()

@@ -65,6 +65,15 @@ jobs:
             throw 'R48 normal release unexpectedly includes CI WFP scope test'
           }
           Write-Host 'R48_EXACT_SINGLE_IP_COM_SERIALIZATION_AND_NEGATIVE_SCOPE_PASS'
+          & $release --manager-service --ci-owned-wfp-release
+          if ($LASTEXITCODE -ne 2) {
+            throw 'R50 default manager unexpectedly includes SYSTEM WFP-release entrypoint'
+          }
+          & $lab --manager-service --ci-owned-wfp-release
+          if ($LASTEXITCODE -ne 3) {
+            throw 'R50 CI manager accepted unauthorized non-SYSTEM release'
+          }
+          Write-Host 'R50_DEFAULT_BINARY_EXCLUDES_RELEASE_AND_NON_SYSTEM_REFUSED_PASS'
           & $lab --manager-service --ci-system-native-dpapi
           if ($LASTEXITCODE -ne 3) { throw 'R47 non-System account allowed CI-native service' }
           exit 0

@@ -6,7 +6,9 @@ param([switch]$ReviewOnly)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if (-not $ReviewOnly) { throw 'R40_REFUSED: explicit ReviewOnly required' }
-if (-not $IsWindows) { throw 'R40_REFUSED: Windows only' }
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+    throw 'R40_REFUSED: Windows only'
+}
 $serviceStatus = @('BFE','MpsSvc') | ForEach-Object {
     $svc = Get-Service -Name $_ -ErrorAction Stop
     $svc.Status -eq 'Running'

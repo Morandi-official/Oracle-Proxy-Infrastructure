@@ -58,13 +58,13 @@ jobs:
           # Supplying the human phrase is NOT enough on a hosted CI session.
           # The branch's CiExercise path is separately signed by CI context.
           Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class R52RunnerConsole {
-    [DllImport("kernel32.dll")]
-    public static extern uint WTSGetActiveConsoleSessionId();
-}
-'@
+          using System;
+          using System.Runtime.InteropServices;
+          public static class R52RunnerConsole {
+              [DllImport("kernel32.dll")]
+              public static extern uint WTSGetActiveConsoleSessionId();
+          }
+          '@
           # A CI runner may legitimately report a physical console. In that
           # case do NOT call a fully approved attended mutation path here.
           # The separate no-approval refusal above always runs.

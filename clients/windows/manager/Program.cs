@@ -93,6 +93,10 @@ internal static class Program
                 case "--ipc-self-test":
                     return await LabManagerSelfTests.RunAsync() ? 0 : 1;
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
+                case "--ci-r48-address-scope-negative-self-test":
+                    return CiSystemFixedTargetWfpGuard.ExactHostNormalizationSelfTest()
+                        ? 0 : 1;
+
                 case "--ci-system-dpapi-negative-self-test":
                     return !CiSystemDpapiKeyLease.RunSystemOnly() ? 0 : 1;
 

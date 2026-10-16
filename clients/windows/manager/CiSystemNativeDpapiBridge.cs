@@ -46,13 +46,15 @@ internal static class CiSystemNativeDpapiBridge
         catch { return false; }
     }
 
-    internal static async Task RunAsync(CancellationToken token)
+    internal static async Task RunAsync(CancellationToken token,
+        bool fixedWfpRequired = false)
     {
         bool ok = false;
         Process? child = null;
         try
         {
-            if (!Preflight()) return;
+            if (!Preflight() ||
+                (fixedWfpRequired && !CiSystemFixedTargetWfpGuard.IsActive())) return;
             var startup = new ProcessStartInfo
             {
                 FileName = Path.Combine(StageRoot, Binaries[0]),
@@ -77,7 +79,8 @@ internal static class CiSystemNativeDpapiBridge
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
             limit.CancelAfter(TimeSpan.FromSeconds(85));
             await child.WaitForExitAsync(limit.Token);
-            ok = child.ExitCode == 0 && !token.IsCancellationRequested;
+            ok = child.ExitCode == 0 && !token.IsCancellationRequested &&
+                (!fixedWfpRequired || CiSystemFixedTargetWfpGuard.IsActive());
         }
         catch { ok = false; }
         finally

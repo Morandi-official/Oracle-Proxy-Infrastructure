@@ -8,6 +8,8 @@ internal static class ProductionVpnCoordinatorSelfTests
     {
         internal readonly List<string> Calls = new();
         internal string? FailAt;
+        internal int FailWfpOnAuditNumber;
+        private int _wfpAudits;
         internal byte[]? Secret;
         private bool Check(string step)
         {
@@ -16,7 +18,9 @@ internal static class ProductionVpnCoordinatorSelfTests
         }
         public WfpCoverage AuditExistingSystemWfp()
         {
-            bool valid = Check("Wfp");
+            _wfpAudits++;
+            bool valid = Check("Wfp") &&
+                (FailWfpOnAuditNumber == 0 || _wfpAudits != FailWfpOnAuditNumber);
             return new WfpCoverage(valid, valid, valid, valid, valid, valid,
                 valid, valid, valid, valid, valid, valid);
         }
@@ -105,6 +109,19 @@ internal static class ProductionVpnCoordinatorSelfTests
                     Check(!fake.Calls.Contains("Release"));
                 Check(tx.Connect() == "RECOVERY_REQUIRED");
             }
+            // Audit #1 before Start, #2 after challenge, #3 during Off
+            // preparation, #4 immediately before WFP release. No release
+            // may run if the OS evidence changes at the last moment.
+            var tamperedBeforeRelease = new FakeKernel { FailWfpOnAuditNumber = 4 };
+            var guardedOff = new ProductionVpnCoordinator(tamperedBeforeRelease);
+            Check(guardedOff.Connect() == "CONNECTED_VERIFIED");
+            tamperedBeforeRelease.Calls.Clear();
+            Check(guardedOff.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
+            Check(!tamperedBeforeRelease.Calls.Contains("Release"));
+            Check(tamperedBeforeRelease.Calls.Contains("OffDurable"));
+            Check(guardedOff.State == ProductionTunnelState.RecoveryRequired);
+            Check(guardedOff.Connect() == "RECOVERY_REQUIRED");
+            Check(guardedOff.ExplicitDisconnect() == "DISCONNECT_REQUIRES_RECOVERY");
             var successful = new FakeKernel();
             var coordinator = new ProductionVpnCoordinator(successful);
             Check(coordinator.Connect() == "CONNECTED_VERIFIED");

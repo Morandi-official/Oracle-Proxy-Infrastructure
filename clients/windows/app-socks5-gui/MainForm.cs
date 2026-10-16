@@ -25,6 +25,7 @@ internal sealed class MainForm : Form
     private ChildProcessLease? _lease;
     private bool _busy;
     private bool _isClosing;
+    private bool _resourcesDisposed;
 
     internal MainForm()
     {
@@ -259,8 +260,9 @@ internal sealed class MainForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !_resourcesDisposed)
         {
+            _resourcesDisposed = true;
             _isClosing = true;
             _closing.Cancel();
             Disconnect();

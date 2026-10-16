@@ -14,6 +14,16 @@ internal static class CiSystemFixedTargetWfpGuard
 {
     internal const string RuleName =
         "OracleProxy-R48-CI-SYSTEM-AllApps-FixedDestinations";
+    private static void Stage(int id)
+    {
+        try
+        {
+            File.WriteAllText(Path.Combine(CiSystemNativeDpapiBridge.StageRoot,
+                ".r48-stage"), id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch { /* disposable CI prints missing stage separately */ }
+    }
+
     private const string ExactTargets =
         "1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888";
 
@@ -89,6 +99,7 @@ internal static class CiSystemFixedTargetWfpGuard
             !CiSystemDpapiKeyLease.IsSystemServiceIdentity() ||
             !CiSystemNativeDpapiBridge.Preflight())
             throw new InvalidOperationException("R48 CI SYSTEM policy gate closed");
+        Stage(10);
         object? policy = null;
         object? newRule = null;
         try
@@ -99,6 +110,7 @@ internal static class CiSystemFixedTargetWfpGuard
                 ?? throw new InvalidOperationException();
             policy = Activator.CreateInstance(policyType)
                 ?? throw new InvalidOperationException();
+            Stage(20);
             dynamic guard = policy;
             foreach (object candidate in guard.Rules)
             {
@@ -108,6 +120,7 @@ internal static class CiSystemFixedTargetWfpGuard
                     throw new InvalidOperationException(
                         "R48 preexisting rule, do not adopt or overwrite");
             }
+            Stage(30);
             newRule = Activator.CreateInstance(ruleType)
                 ?? throw new InvalidOperationException();
             dynamic rule = newRule;
@@ -121,10 +134,13 @@ internal static class CiSystemFixedTargetWfpGuard
             rule.InterfaceTypes = "All";
             rule.LocalAddresses = "*";
             rule.RemoteAddresses = ExactTargets;
+            Stage(40);
             // No ApplicationName assignment: all processes and executables.
             guard.Rules.Add(rule);
+            Stage(50);
             if (!IsActive())
                 throw new InvalidOperationException("R48 owned WFP guard not verified");
+            Stage(60);
         }
         finally
         {

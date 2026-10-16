@@ -16,6 +16,7 @@ internal sealed class LabManagerService : ServiceBase
     private readonly bool _enableCiWfpGuard;
     private readonly bool _enableCiSystemDpapiLease;
     private readonly bool _enableCiSystemNativeDpapi;
+    private readonly bool _enableCiSystemFixedTargetWfp;
     private Task? _ciSystemNativeWorker;
     private Task? _ciWfpWatch;
     private int _ciWfpCompromised;
@@ -23,12 +24,14 @@ internal sealed class LabManagerService : ServiceBase
     internal LabManagerService(bool enableAdminCiLabControl = false,
                                bool enableCiWfpGuard = false,
                                bool enableCiSystemDpapiLease = false,
-                               bool enableCiSystemNativeDpapi = false)
+                               bool enableCiSystemNativeDpapi = false,
+                               bool enableCiSystemFixedTargetWfp = false)
     {
         _enableAdminCiLabControl = enableAdminCiLabControl;
         _enableCiWfpGuard = enableCiWfpGuard;
         _enableCiSystemDpapiLease = enableCiSystemDpapiLease;
         _enableCiSystemNativeDpapi = enableCiSystemNativeDpapi;
+        _enableCiSystemFixedTargetWfp = enableCiSystemFixedTargetWfp;
 #else
     internal LabManagerService()
     {
@@ -88,6 +91,11 @@ internal sealed class LabManagerService : ServiceBase
             !CiSystemDpapiKeyLease.RunSystemOnly())
             throw new InvalidOperationException("R45 SYSTEM DPAPI lease refused");
 
+        // R48 experimental ALL-APPLICATIONS rule is still limited to
+        // four immutable destinations. Install before any tunnel worker.
+        if (_enableCiSystemFixedTargetWfp)
+            CiSystemFixedTargetWfpGuard.Install();
+
         // The OS-backed, persistent WFP filter is installed by this actual
         // LocalSystem SCM process BEFORE any pipe begins accepting requests.
         // Never available in the normal manager binary or service arguments.
@@ -116,7 +124,8 @@ internal sealed class LabManagerService : ServiceBase
         // and disposable SYSTEM-native test after service reaches RUNNING.
         if (_enableCiSystemNativeDpapi)
             _ciSystemNativeWorker = Task.Run(() =>
-                CiSystemNativeDpapiBridge.RunAsync(_stop.Token));
+                CiSystemNativeDpapiBridge.RunAsync(_stop.Token,
+                    _enableCiSystemFixedTargetWfp));
 #endif
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
         if (_enableAdminCiLabControl && AdminLabControl.IsDisposableCiLab())

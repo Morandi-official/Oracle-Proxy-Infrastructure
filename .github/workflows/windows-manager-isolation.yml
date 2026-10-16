@@ -76,77 +76,8 @@ jobs:
           $result = & $exe --native-route-inventory-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R43 native Win32 IP Helper route inventory failed' }
           $line = @($result | Where-Object { $_ -like 'R43_NATIVE_ROUTE_INVENTORY_PASS*' })
-          if ($line.Count -ne 1 -or
-              $line[0] -notmatch '^R43_NATIVE_ROUTE_INVENTORY_PASS ipv4_defaults=(\d+) ipv6_defaults=(\d+) wfp_verified=false operations_enabled=false
-        shell: pwsh
-        run: |
-          # The fake pipe is owned by this ordinary CI process, NOT the SCM service.
-          $gui = (Resolve-Path './dist/native-gui-smoke/OracleProxy.Windows.Preview.exe').Path
-          # WinExe processes do not reliably populate $LASTEXITCODE in pwsh.
-          $probe = Start-Process -FilePath $gui -ArgumentList '--manager-spoof-test' -Wait -PassThru
-          if ($probe.ExitCode -ne 0) { throw 'GUI accepted fake or unverified pipe endpoint' }
-          Write-Host 'PASS: SCM manager process PID binding rejects fake status server'
-      - name: Install, query, stop and remove STATUS-ONLY LocalSystem service on disposable CI VM
-        shell: pwsh
-        timeout-minutes: 4
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $svc = 'OracleProxyLabManager'
-          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
-          if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-            throw 'Refuse to modify existing service'
-          }
-          $created = $false
-          try {
-            # GitHub-hosted Windows VM only. Start type is DEMAND, never automatic.
-            & sc.exe create $svc "binPath=" ("`"{0}`" --manager-service" -f $exe) "start=" "demand" "obj=" "LocalSystem"
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to create isolated lab service' }
-            $created = $true
-            & sc.exe start $svc
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to start isolated lab service' }
-            $s = Get-Service -Name $svc
-            $s.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
-            $response = & $exe --ipc-status
-            if ($LASTEXITCODE -ne 0) { throw 'Privileged manager IPC unavailable' }
-            $json = $response | ConvertFrom-Json
-            if (-not $json.ok -or $json.code -ne 'STATUS_ONLY' -or
-                $json.manager_mode -ne 'read_only_real_windows_service' -or
-                $json.native_dll_loaded -ne $false -or
-                $json.leak_protection -ne 'unverified') {
-              throw 'Unexpected privileged manager response'
-            }
-            if (-not $json.authenticated_status_pipe -or $json.mutating_commands_available) {
-              throw 'Manager status pipe has wrong access contract'
-            }
-            $gui = (Resolve-Path './dist/native-gui-smoke/OracleProxy.Windows.Preview.exe').Path
-            $client = Start-Process -FilePath $gui -ArgumentList '--manager-status-self-test' -Wait -PassThru
-            if ($client.ExitCode -ne 0) {
-              throw 'Native GUI failed to read OS-authenticated status-only manager IPC'
-            }
-            # Valid elevated Windows admin requests reach the SYSTEM gate, but
-            # cannot start/stop any real tunnel before WFP is implemented.
-            $denials = Start-Process -FilePath $gui -ArgumentList '--manager-control-denial-test' -Wait -PassThru
-            if ($denials.ExitCode -ne 0) {
-              throw 'Expected OS-token-authenticated SYSTEM control requests to be safely refused'
-            }
-            Write-Host 'PASS: real SCM manager received and safely denied connect/disconnect requests'
-            Write-Host 'PASS: real SCM LocalSystem service and native GUI exchanged authenticated read-only IPC'
-          }
-          finally {
-            if ($created) {
-              try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch {}
-              & sc.exe delete $svc
-              if ($LASTEXITCODE -ne 0) { Write-Warning 'CI lab SCM cleanup returned an error' }
-            }
-          }
-      - name: Upload unsigned LAB review artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: oracle-proxy-windows-manager-status-only-lab
-          path: ./dist/manager-lab/**
-          if-no-files-found: error
-          retention-days: 7
-) {
+          if ($line.Count -ne 1) { throw 'R43 missing or ambiguous native route evidence' }
+          if ($line[0] -notmatch '^R43_NATIVE_ROUTE_INVENTORY_PASS ipv4_defaults=(\d+) ipv6_defaults=(\d+) wfp_verified=false operations_enabled=false$') {
             throw 'R43 incorrect native read-only evidence or unexpected log'
           }
           $native4 = [int]$Matches[1]

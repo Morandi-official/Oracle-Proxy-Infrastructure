@@ -28,7 +28,7 @@ jobs:
       - name: Build standalone Windows desktop executable
         shell: pwsh
         run: |
-          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None --output ./dist/windows-win-x64
+          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None --output ./dist/windows-win-x64
           if ($LASTEXITCODE -ne 0) { throw 'Publish failed' }
       - name: Verify native policy test entrypoint
         shell: pwsh
@@ -38,6 +38,24 @@ jobs:
           Write-Host "Native policy self-test exit code: $($test.ExitCode)"
           if ($test.ExitCode -ne 0) { throw 'Native policy self-test failed' }
           Write-Host 'PASS: native policy self-tests on Windows host'
+      - name: R54 run pure Windows native diagnostics without PowerShell under Restricted
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path './dist/windows-win-x64/OracleProxy.Windows.Preview.exe').Path
+          $env:PSExecutionPolicyPreference='Restricted'
+          $test = Start-Process -FilePath $exe -ArgumentList '--diagnostics-self-test' -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw 'R54 Windows IP Helper/SCM diagnostics failed' }
+          $payload = @(Get-ChildItem './dist/windows-win-x64' -File -Recurse)
+          $forbidden = @('wireguard.dll','tunnel.dll','OracleProxy.WireGuardHost.exe',
+              'OracleProxy.LabManager.exe')
+          if (@($payload | Where-Object {
+              $_.Extension -in @('.ps1','.psm1','.bat','.cmd') -or
+              $_.Name -in $forbidden
+            }).Count -ne 0) {
+            throw 'R54 GUI unexpectedly shipped a script or VPN control driver'
+          }
+          Write-Host 'R54_WIN32_NATIVE_READONLY_UNDER_RESTRICTED_POLICY_PASS'
       - name: Verify W3 control-state transition matrix
         shell: pwsh
         run: |
@@ -65,7 +83,7 @@ jobs:
       - name: Upload unsigned test-only preview ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: oracle-proxy-windows-preview-win-x64
+          name: oracle-proxy-windows-v0.2-managed-readonly-test-win-x64
           path: ./dist/windows-win-x64/**
           if-no-files-found: error
           retention-days: 7

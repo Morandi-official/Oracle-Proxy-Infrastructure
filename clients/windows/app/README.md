@@ -1,63 +1,69 @@
-# Oracle Proxy Windows native preview (W2)
+# Oracle Proxy Windows v0.2 — unsigned, portable, read-only user test
 
-**This is a real Windows desktop executable but is NOT a working VPN client.**
-It displays sanitized local WireSock/UU diagnostics, runs a pure offline
-fail-close policy demonstration and shows **connection/disconnection safety
-checks** which must be rejected by the real LocalSystem manager until WFP
-fail-close exists. It cannot start WireGuard, modify firewall
-rules, or enforce leak protection.
+**This is a genuine standalone Windows desktop application, but not yet
+a working VPN, Oracle proxy or replacement for WireSock.** It does not
+create a VPN tunnel, forward Internet traffic, install a driver, add WFP
+rules, change routes, change DNS, or take over UU remote control.
 
-The preview is intentionally independent of the live Oracle VM and WireSock
-UDP 443 session. Ordinary diagnostics do not need elevation or any keys;
-admin-only safety checks require an installed test manager and an elevated
-Windows administrator token. Neither check starts/stops a tunnel.
+It is offered so users can **try the GUI on their own Windows PC today**
+without risking the computer's network. The release-blocking all-device
+WFP and safe production Off are **not implemented**.
 
-## Build from Windows
+## What v0.2 can actually do
 
-Requires .NET 8 SDK.
+- Open a real native .NET 8 WinForms graphical app without elevation.
+- Refresh local, sanitized OS diagnostics using **C# + native Windows
+  APIs**, without launching PowerShell or changing `ExecutionPolicy`.
+- Read the set of active Ethernet/Wi-Fi **candidate** interfaces and
+  OS IP Helper IPv4/IPv6 default-route/interface association, with no
+  IP address, gateway, DNS server, interface index or MAC emitted.
+  Candidate interfaces are not a proof of physical ownership.
+- Read three fixed known Windows service/driver states using read-only
+  Service Control Manager requests and the presence of the allowlisted
+  UU GameViewerServer process by name only.
+- Show offline WFP fail-close policy simulations, clearly labeled
+  **NOT active Windows network protection**.
+- If a separately installed status-only experimental SCM service exists,
+  read its OS-authenticated pipe status and exercise *negative safety
+  checks*. Otherwise show a clear "service unavailable" message.
 
-```powershell
-dotnet publish .\clients\windows\app\OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o .\dist\windows-win-x64
-```
+## Try without installation
 
-Offline smoke checks:
+1. From GitHub Actions `Windows release isolation and unsigned preview
+   package`, download artifact
+   `oracle-proxy-windows-v0.2-UNSIGNED-READONLY-TEST-win-x64`.
+2. Open the downloaded ZIP and inspect `READ_ME_FIRST.txt` and
+   `build-manifest.json` before running anything. The manifest contains
+   a SHA-256 hash of the one executable.
+3. Extract the package to a new ordinary folder on an **independently
+   accessible, noncritical** Windows 10/11 x64 PC.
+4. Double-click `OracleProxy.Windows.Preview.exe` normally, as a regular
+   user; do NOT choose Run as Administrator. Refresh diagnostics.
+5. Close the window and delete the extracted folder to remove this
+   portable preview. It adds no SCM service, startup task, firewall rule,
+   driver, VPN profile, proxy setting or persistent install.
+6. If Windows security policy or SmartScreen blocks this unsigned build,
+   **stop**. Do not disable protection, lower script execution policy or
+   bypass endpoint protection for this experiment.
 
-```powershell
-& ".\dist\windows-win-x64\OracleProxy.Windows.Preview.exe" --self-test
-$LASTEXITCODE
-& ".\dist\windows-win-x64\OracleProxy.Windows.Preview.exe" --diagnostics-self-test
-$LASTEXITCODE
-```
+`--self-test` and `--diagnostics-self-test` are optional CLI
+selftests, not VPN connections. The GUI will NOT tunnel Oracle traffic.
 
-Each returns exit code 0 on success. `--diagnostics-self-test` reads local
-sanitized Windows state and requires the adjacent `diagnostics` files.
+## Evidence and precautions
 
-## Downloading the GitHub build
+GitHub Windows hosted CI builds the x64 executable, runs real Windows
+native route/SCM/UU diagnostics under a Restricted-policy runner
+environment, executes policy/control protocol regression tests,
+excludes native drivers, power-shell scripts and CI-only tunnel code
+from the download, and packages SHA-256 evidence. This is not a
+physical Win11 graphical usability test, a production signing audit,
+or proof of real UU continuity.
 
-The `Windows native preview build` GitHub Actions run uploads
-`oracle-proxy-windows-preview-win-x64`. Download and extract the **entire ZIP**
-to a noncritical Windows 10/11 x64 test computer. Keep its `diagnostics`
-folder beside the executable. Run `OracleProxy.Windows.Preview.exe` normally
-without administrator elevation.
+Your second Windows test PC has previously experienced intermittent
+browser connectivity and blocked direct-public-IP TCP443 baselines.
+Do not run WFP/mutating diagnostics there as part of trying this GUI.
+No VPN or proxy connection will be attempted by this v0.2 build.
 
-Preview artifacts are **unsigned**. Do not disable security software or
-bypass alerts to run them. Do not deploy to the UU-dependent remote Windows PC.
-
-## Limitations / acceptance
-
-The GUI displays:
-- Whether a local physical network adapter/default route is detected;
-- Whether a known WireSock/WireGuard service or driver is running;
-- Whether the UU GameViewerServer.exe process is present;
-- Explicit **safe-control checks** that verify the manager refuses real
-  connect/disconnect before WFP readiness; these are not VPN switches;
-- A clearly labeled **simulation** of allowing verified UU direct egress
-  while denying other physical egress if the VPN unexpectedly disconnects.
-
-A process/service name cannot prove executable identity or VPN connectivity.
-The UI always labels real VPN connection and real network-lock state unknown.
-
-Successful GitHub CI validates packaging, pure .NET policy checks and the
-local sanitized collector on a Windows hosted runner. It does **not** prove
-graphics usability on Windows 11 or actual UU continuity. Those require
-controlled manual testing and an independent rollback before riskier stages.
+R42–R50's true SYSTEM/WireGuardNT/WFP tests remain separate, fixed-
+destination disposable GitHub Windows experiments. Those are
+**not shipped** in this test app. GA issue #34 remains OPEN.

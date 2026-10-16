@@ -12,7 +12,7 @@ internal sealed class MainForm : Form
 
     internal MainForm()
     {
-        Text = "Oracle Proxy · Windows 客户端预览版";
+        Text = "Oracle Proxy · Windows 自研客户端 v0.2 测试版（只读）";
         Width = 740;
         Height = 560;
         MinimumSize = new Size(630, 500);
@@ -32,7 +32,7 @@ internal sealed class MainForm : Form
         Controls.Add(root);
 
         root.Controls.Add(new Label {
-            Text = "Oracle Proxy · 自研 Windows 客户端",
+            Text = "Oracle Proxy · 自研客户端 v0.2（只读测试）",
             Dock = DockStyle.Fill,
             Font = new Font("Microsoft YaHei UI", 15f, FontStyle.Bold),
             TextAlign = ContentAlignment.MiddleLeft
@@ -94,8 +94,8 @@ internal sealed class MainForm : Form
 
         root.Controls.Add(new Label {
             Dock = DockStyle.Fill, ForeColor = Color.Firebrick,
-            Text = "开发预览版：尚不能连接 VPN，也不提供断线防泄漏保护。\n" +
-                   "不会修改 WireSock、UU、Windows 防火墙或 Oracle 服务器。",
+            Text = "v0.2 只读测试版：不能连接 Oracle VPN，不能代理上网，没有断线防泄漏。\n" +
+                   "无须管理员权限；不启动 PowerShell，不改 UU、WireSock、路由或防火墙。",
             TextAlign = ContentAlignment.MiddleLeft
         }, 0, 4);
 
@@ -112,9 +112,9 @@ internal sealed class MainForm : Form
             var d = await SanitizedDiagnostics.CollectAsync(_shutdown.Token);
             if (_shutdown.IsCancellationRequested) return;
             _details.Text =
-                $"物理网络适配器：{d.PhysicalAdapterCount} 个\n" +
-                $"IPv4 默认路由：{Flag(d.IPv4DefaultRoute)}\n" +
-                $"IPv6 默认路由：{Flag(d.IPv6DefaultRoute)}\n\n" +
+                $"活动以太网/Wi-Fi 候选接口：{d.PhysicalAdapterCount} 个\n" +
+                $"候选接口关联 IPv4 默认路由：{Flag(d.IPv4DefaultRoute)}\n" +
+                $"候选接口关联 IPv6 默认路由：{Flag(d.IPv6DefaultRoute)}\n\n" +
                 $"WireSock 驱动：{d.WireSockDriverState}\n" +
                 $"WireSock 服务：{d.WireSockServiceState}\n" +
                 $"WireGuard 管理服务：{d.WireGuardManagerState}\n" +

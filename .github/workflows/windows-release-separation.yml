@@ -36,6 +36,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Read-only preview build failed' }
           if (!(Test-Path './dist/release-preview/OracleProxy.Windows.Preview.exe')) { throw 'GUI missing' }
 
+      - name: R54 test pure Win32 diagnostics with Restricted execution policy and no subprocess
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Get-Content './clients/windows/app/SanitizedDiagnostics.cs' -Raw
+          if ($source.Contains('ProcessStartInfo') -or
+              $source.Contains('ArgumentList.Add') -or
+              $source.Contains('new Process(') -or
+              $source.Contains('powershell.exe') -or
+              $source.Contains('Collect-ReadOnly.ps1')) {
+            throw 'R54 test app launches a script interpreter or subprocess'
+          }
+          $exe = (Resolve-Path './dist/release-preview/OracleProxy.Windows.Preview.exe').Path
+          $env:PSExecutionPolicyPreference='Restricted'
+          $p = Start-Process -FilePath $exe -ArgumentList '--diagnostics-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw 'R54 native Windows route/SCM/UU diagnostics failed' }
+          $p2 = Start-Process -FilePath $exe -ArgumentList '--protocol-self-test' -PassThru -Wait
+          if ($p2.ExitCode -ne 0) { throw 'R54 status-only protocol regression' }
+          Write-Host 'R54_NATIVE_MANAGED_DIAGNOSTICS_RESTRICTED_POLICY_PASS: no PowerShell launched'
+
       - name: Negative test — spoofing CI variables never enables VPN in default build
         shell: pwsh
         run: |
@@ -68,13 +88,11 @@ jobs:
           $files = @(Get-ChildItem -LiteralPath $dir -Recurse -File)
           $relative = @($files | ForEach-Object { $_.FullName.Substring($dir.Length + 1).Replace('\','/') })
           $allow = @('OracleProxy.Windows.Preview.exe',
-                     'OracleProxy.Windows.Preview.pdb',
-                     'diagnostics/Diagnostics.psm1',
-                     'diagnostics/Collect-ReadOnly.ps1')
+                     'OracleProxy.Windows.Preview.pdb')
           foreach ($name in $relative) {
             if ($name -notin $allow) { throw "Unreviewed file in unsigned preview: $name" }
           }
-          foreach ($required in @('OracleProxy.Windows.Preview.exe','diagnostics/Diagnostics.psm1','diagnostics/Collect-ReadOnly.ps1')) {
+          foreach ($required in @('OracleProxy.Windows.Preview.exe')) {
             if ($required -notin $relative) { throw "Missing expected file: $required" }
           }
           if ($relative -contains 'OracleProxy.WireGuardHost.exe' -or
@@ -83,17 +101,20 @@ jobs:
           }
           $sha = (Get-FileHash -Algorithm SHA256 (Join-Path $dir 'OracleProxy.Windows.Preview.exe')).Hash.ToLowerInvariant()
           @(
-            'Oracle Proxy Windows — READ-ONLY UNSIGNED PREVIEW'
-            'NOT A VPN. NO VPN CONNECTION, KILL SWITCH, UU BYPASS OR LEAK PROTECTION.'
-            'Unsigned and not for production installation.'
-            'Do not run on the critical UU-dependent remote Windows computer.'
-            'This artifact contains only a WinForms status/diagnostics preview.'
+            'Oracle Proxy Windows v0.2 — UNSIGNED READ-ONLY TEST BUILD'
+            'v0.2 只读试用版：不具备 Oracle VPN 连接或代理上网功能，不具备断线防泄漏。'
+            '运行方式：解压后双击 OracleProxy.Windows.Preview.exe；不需要管理员权限。'
+            '只读诊断使用 Windows 原生 API，不启动 PowerShell，不修改执行策略。'
+            '此软件未签名。不要关闭 SmartScreen、杀毒软件或系统安全保护来运行。'
+            '如果 Windows 阻止运行，停止试用并保留原有 WireSock / UU。'
+            'Do not run on critical remote-only, production or UU-dependent computer.'
+            'Not a VPN. No connection, kill switch, DNS filtering or leak protection.'
             "Application SHA256: $sha"
             "Build commit: $env:GITHUB_SHA"
           ) | Set-Content -LiteralPath (Join-Path $dir 'READ_ME_FIRST.txt') -Encoding utf8
           $manifest = [ordered]@{
             manifest_schema_version = 1
-            channel = 'unsigned-read-only-preview'
+            channel = 'unsigned-managed-read-only-test-v0.2'
             commit = $env:GITHUB_SHA
             application_sha256 = $sha
             tunnel_implementation_included = $false
@@ -101,6 +122,10 @@ jobs:
             real_kill_switch_implemented = $false
             uu_live_bypass_verified = $false
             signed = $false
+            version = '0.2.0-test'
+            diagnostic_execution_mode = 'native-managed-no-powershell'
+            requires_administrator = $false
+            powershell_policy_override = $false
           }
           $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $dir 'build-manifest.json') -Encoding utf8
           Write-Host "PASS: reviewed allowlisted preview contains no engine/service/native driver; SHA256=$sha"
@@ -108,7 +133,7 @@ jobs:
       - name: Upload strictly read-only, unsigned preview ZIP — NOT GA
         uses: actions/upload-artifact@v4
         with:
-          name: oracle-proxy-windows-UNSIGNED-READONLY-preview
+          name: oracle-proxy-windows-v0.2-UNSIGNED-READONLY-TEST-win-x64
           path: ./dist/release-preview/**
           if-no-files-found: error
           retention-days: 7

@@ -13,11 +13,13 @@ internal static class Program
             return ChildProcessLease.JobSelfTest() ? 0 : 1;
         if (args is ["--proxy-path-self-test"])
             return ExitIpProbe.SelfTestAsync().GetAwaiter().GetResult() ? 0 : 1;
+        if (args is ["--address-family-probe-self-test"])
+            return SocksAddressFamilyDiagnostic.SelfTestAsync().GetAwaiter().GetResult() ? 0 : 1;
         if (args is ["--form-self-test"])
         {
             ApplicationConfiguration.Initialize();
             using var testForm = new MainForm();
-            return testForm.Text.Contains("R57", StringComparison.Ordinal) &&
+            return testForm.Text.Contains("R58", StringComparison.Ordinal) &&
                 testForm.Controls.Count > 0 ? 0 : 1;
         }
         if (args.Length != 0)

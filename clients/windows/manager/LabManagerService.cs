@@ -53,6 +53,15 @@ internal sealed class LabManagerService : ServiceBase
             routes.AuthorizesConnectionOrGuardRelease)
             throw new InvalidOperationException("R43 native route preflight unavailable");
 
+        // Query native BFE reserved sublayer/filter objects on actual
+        // SYSTEM startup. Presence cannot authorize any action; all-device
+        // enforcement requires separate independently verified evidence.
+        var filters = NativeWfpReservedFilterAudit.Read();
+        if (!filters.EngineOpened || !filters.AllLookupsResolved ||
+            filters.ActualDeviceLeakPreventionVerified ||
+            filters.MayConnectTunnel || filters.MayReleaseWfp)
+            throw new InvalidOperationException("R45 reserved WFP audit unavailable");
+
         NativeWfpReadOnlySnapshot snapshot = NativeWfpReadOnlyAudit.Read();
         if (!snapshot.LocalSystemSessionZero || snapshot.MayStartTunnel ||
             snapshot.MayReleaseFilter || snapshot.FullDeviceFailClosedVerified)

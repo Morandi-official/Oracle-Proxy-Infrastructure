@@ -69,6 +69,9 @@ internal static class Program
                 case "--native-route-inventory-self-test":
                     return NativeRouteInventorySelfTests.Run() ? 0 : 1;
 
+                case "--native-wfp-reserved-filter-self-test":
+                    return NativeWfpReservedFilterSelfTests.Run() ? 0 : 1;
+
                 case "--production-transition-contract-self-test":
                     return ProductionVpnCoordinatorSelfTests.Run() ? 0 : 1;
 

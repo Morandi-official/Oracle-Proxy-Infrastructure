@@ -90,6 +90,13 @@ jobs:
             throw 'R43 OS NetTCPIP disagrees with native route interface inventory'
           }
           Write-Host 'R43_WIN32_OS_ROUTE_TABLE_CROSSCHECK_PASS: counts only, no WFP release authorization'
+      - name: R45 real BFE reserved filter/sublayer lookup must not attest protection
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          & $exe --native-wfp-reserved-filter-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R45 failed native WFP filter/sublayer queries or false GA claims' }
+          Write-Host 'R45_NATIVE_WFP_NO_GUARD_PROOF_PASS'
       - name: Reject rogue local STATUS pipe before SCM manager is installed
         shell: pwsh
         run: |

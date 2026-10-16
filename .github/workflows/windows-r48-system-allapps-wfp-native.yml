@@ -141,6 +141,14 @@ jobs:
                 }
               }
               else { Write-Host 'R48_SYSTEM_WFP_STARTUP_PHASE=UNAVAILABLE' }
+              $remoteFormatPath = Join-Path $stage '.r48-remote-diagnostic'
+              if (Test-Path -LiteralPath $remoteFormatPath -PathType Leaf) {
+                $remoteFormat = (Get-Content -LiteralPath $remoteFormatPath -Raw).Trim()
+                if ($remoteFormat.Length -gt 0 -and $remoteFormat.Length -le 256 -and
+                    $remoteFormat -match '^[0-9a-fA-F.:/,; -]+$') {
+                  Write-Host "R48_FIXED_PUBLIC_COM_REMOTE_ADDRESS_SERIALIZATION=$remoteFormat"
+                }
+              }
               throw
             }
             $receiptPath = Join-Path $stage '.r47-result'

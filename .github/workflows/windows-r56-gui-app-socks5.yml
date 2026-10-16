@@ -1,4 +1,4 @@
-name: R57 Windows GUI app-scoped SOCKS5 verified exit check and cleanup
+name: R58 Windows GUI SOCKS5 Google address-family diagnostics and cleanup
 
 on:
   pull_request:
@@ -81,6 +81,7 @@ jobs:
             @{exe=$gui;args='--offline-self-test';exit=0},
             @{exe=$gui;args='--form-self-test';exit=0},
             @{exe=$gui;args='--proxy-path-self-test';exit=0},
+            @{exe=$gui;args='--address-family-probe-self-test';exit=0},
             @{exe=$gui;args='--job-self-test';exit=0},
             @{exe=$gui;args='--invalid-option';exit=2},
             @{exe=$helper;args='--self-test';exit=0},
@@ -95,7 +96,7 @@ jobs:
           if (@(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 10880 -State Listen -ErrorAction SilentlyContinue).Count -ne 0) {
             throw 'R56 GUI self-tests unexpectedly activated the SOCKS5 listener'
           }
-          Write-Host 'R57_GUI_OFFLINE_POLICY_SOCKS5_REMOTE_DNS_FAIL_CLOSED_AND_REAL_JOB_KILL_PASS'
+          Write-Host 'R58_SOCKS5_IPV4_AND_DOMAIN_PROTOCOL_SAFETY_JOB_CLEANUP_PASS'
 
       - name: Compare OS network state after GUI/headless lifecycle self-tests
         shell: pwsh
@@ -127,26 +128,26 @@ jobs:
           $guiHash=(Get-FileHash -LiteralPath $gui -Algorithm SHA256).Hash.ToLowerInvariant()
           $helperHash=(Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash.ToLowerInvariant()
           @(
-            'Oracle Proxy R57: UNSIGNED Windows SOCKS5 GUI with built-in proxy-only exit-IP check'
+            'Oracle Proxy R58: UNSIGNED Windows app SOCKS5 GUI with Google domain-vs-IPv4 diagnostic'
             'This is a user-level APP-SCOPED SSH SOCKS5 proxy, not a WireGuard VPN.'
             'No system proxy, drivers, WFP, network service, route/DNS mutations or autostart.'
             'Connection requires explicit Oracle SSH host, user, locally present private key and known_hosts.'
             'Strict SSH host key identity checking remains enabled. Never send/share your private key.'
             'Click Connect to start localhost-only 127.0.0.1:10880 SOCKS5; click Disconnect to close helper and SSH.'
-            'Ordinary Edge does not automatically use SOCKS5. R57 GUI Verify SOCKS5 Exit button uses explicit loopback SOCKS5 and two HTTPS IP-echo sites.'
+            'Ordinary Edge does not automatically use SOCKS5. R57 exit verification remains, and R58 Google diagnostics compare SOCKS5 CONNECT by domain versus OCI-resolved IPv4.'
             'Opening, closing or disconnecting the GUI never alters global Edge or Windows settings.'
             'GUI started only via user action. No private keys or server details are included.'
             'Unsigned release: DO NOT disable SmartScreen, antivirus or corporate security to run.'
             'Both binaries must remain side by side in the extracted folder.'
             'Test on independently accessible/noncritical Windows PC before any remote-only PC.'
-            'Windows CI has not operated against your Oracle instance. GUI HTTPS verification must be tested physically.'
+            'Windows CI has not operated against your Oracle instance. R58 GUI and remote read-only getent DNS lookup remain unverified on a physical PC.'
             "GUI SHA256: $guiHash"
             "R55 helper SHA256: $helperHash"
             "Build revision: $env:GITHUB_SHA"
           ) | Set-Content -LiteralPath (Join-Path $dir 'READ_ME_FIRST.txt') -Encoding utf8
           $manifest=[ordered]@{
-            schema_version=1;channel='r57-unsigned-app-socks5-gui-proxy-exit-experiment'
-            version='0.4.0-socks-exit-test'; gui_sha256=$guiHash
+            schema_version=1;channel='r58-unsigned-app-socks5-gui-address-family-diagnostic'
+            version='0.5.0-address-family-diagnostic'; gui_sha256=$guiHash
             helper_sha256=$helperHash;commit=$env:GITHUB_SHA
             signed=$false;no_default_connection=$true
             local_only_socks5='127.0.0.1:10880'
@@ -159,6 +160,8 @@ jobs:
             exit_probe_explicit_local_socks5=$true
             exit_probe_no_direct_fallback_ci_tested=$true
             exit_probe_requires_two_https_200_ipv4_matches=$true
+            diagnostic_compares_remote_hostname_vs_ipv4=$true
+            diagnostic_server_commands='getent ahostsv4 accounts.google.com (read-only)'
             full_device_wireguard_vpn=$false
             leak_protection_implemented=$false
           }
@@ -168,7 +171,7 @@ jobs:
       - name: Upload experimental Windows GUI and R55 SSH SOCKS5 backend
         uses: actions/upload-artifact@v4
         with:
-          name: oracle-proxy-r57-WINDOWS-GUI-SOCKS5-VERIFY-UNSIGNED-win-x64
+          name: oracle-proxy-r58-WINDOWS-GUI-ADDRESS-FAMILY-DIAGNOSTIC-UNSIGNED-win-x64
           path: ./dist/r56-gui/**
           if-no-files-found: error
           retention-days: 7

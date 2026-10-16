@@ -32,6 +32,9 @@ internal interface IProductionVpnKernel
     bool PersistExplicitOffIntent();
     bool ReleaseOnlyOwnedWfp();
     bool VerifyDirectNetworkRestored();
+    // Compensating best-effort protection after an ambiguous or failed release.
+    // Must only touch independently owned OS policy. Never a release or connect.
+    bool TryReestablishOwnedWfpGuard();
 }
 
 // A lease owns precisely 32 decrypted bytes, with no plaintext file or
@@ -75,6 +78,7 @@ internal sealed class UnavailableProductionKernel : IProductionVpnKernel
     public bool PersistExplicitOffIntent() => false;
     public bool ReleaseOnlyOwnedWfp() => false;
     public bool VerifyDirectNetworkRestored() => false;
+    public bool TryReestablishOwnedWfpGuard() => false;
 }
 
 internal enum ProductionTunnelState
@@ -138,6 +142,7 @@ internal sealed class ProductionVpnCoordinator
             if (_locked || _state != ProductionTunnelState.Connected)
                 return "DISCONNECT_REQUIRES_RECOVERY";
             _state = ProductionTunnelState.DisconnectPending;
+            bool releaseAttempted = false;
             try
             {
                 // The OS guard remains active until the tunnel has stopped,
@@ -154,6 +159,7 @@ internal sealed class ProductionVpnCoordinator
                 // NOT atomic with WFP and is not a production implementation.
                 if (!_kernel.AuditExistingSystemWfp().AllVerified)
                     throw new InvalidOperationException("WFP changed before release");
+                releaseAttempted = true; // even an exception/false can mean partial release
                 if (!_kernel.ReleaseOnlyOwnedWfp() ||
                     !_kernel.VerifyDirectNetworkRestored())
                     throw new InvalidOperationException("Unsafe network release");
@@ -166,7 +172,21 @@ internal sealed class ProductionVpnCoordinator
             {
                 _locked = true;
                 _state = ProductionTunnelState.RecoveryRequired;
-                // Never perform an additional release or auto reconnect.
+                if (releaseAttempted)
+                {
+                    // A failed/ambiguous WFP release is not a safe Off. Try to
+                    // re-establish ONLY this app's owned guard, never auto
+                    // reconnect, never report restored or clear the latch.
+                    // The kernel must independently audit ownership and OS
+                    // policy before implementing any mutation. Failure here
+                    // still requires out-of-band recovery and may have leaked.
+                    try
+                    {
+                        if (_kernel.TryReestablishOwnedWfpGuard())
+                            _ = _kernel.AuditExistingSystemWfp().AllVerified;
+                    }
+                    catch { /* retain hard recovery requirement */ }
+                }
                 return "DISCONNECT_FAILED_LOCKED";
             }
         }

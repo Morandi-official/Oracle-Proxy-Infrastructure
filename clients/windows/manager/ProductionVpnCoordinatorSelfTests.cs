@@ -9,6 +9,7 @@ internal static class ProductionVpnCoordinatorSelfTests
         internal readonly List<string> Calls = new();
         internal string? FailAt;
         internal int FailWfpOnAuditNumber;
+        internal bool ReprotectThrows;
         private int _wfpAudits;
         internal byte[]? Secret;
         private bool Check(string step)
@@ -49,6 +50,11 @@ internal static class ProductionVpnCoordinatorSelfTests
         public bool PersistExplicitOffIntent() => Check("OffDurable");
         public bool ReleaseOnlyOwnedWfp() => Check("Release");
         public bool VerifyDirectNetworkRestored() => Check("Direct");
+        public bool TryReestablishOwnedWfpGuard()
+        {
+            if (ReprotectThrows) { Calls.Add("Reprotect"); throw new InvalidOperationException(); }
+            return Check("Reprotect");
+        }
     }
 
     internal static bool Run()
@@ -106,7 +112,15 @@ internal static class ProductionVpnCoordinatorSelfTests
                 Check(tx.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
                 if (fail is "Stop" or "Stopped" or "Wfp" or
                     "RestoreStage" or "OffDurable")
+                {
                     Check(!fake.Calls.Contains("Release"));
+                    Check(!fake.Calls.Contains("Reprotect"));
+                }
+                else
+                {
+                    Check(fake.Calls.Contains("Reprotect"));
+                    Check(fake.Calls.IndexOf("Release") < fake.Calls.IndexOf("Reprotect"));
+                }
                 Check(tx.Connect() == "RECOVERY_REQUIRED");
             }
             // Audit #1 before Start, #2 after challenge, #3 during Off
@@ -122,6 +136,18 @@ internal static class ProductionVpnCoordinatorSelfTests
             Check(guardedOff.State == ProductionTunnelState.RecoveryRequired);
             Check(guardedOff.Connect() == "RECOVERY_REQUIRED");
             Check(guardedOff.ExplicitDisconnect() == "DISCONNECT_REQUIRES_RECOVERY");
+            // Even if best-effort re-protection throws, never claim safe Off.
+            var unrecoverable = new FakeKernel { ReprotectThrows = true };
+            var uncertain = new ProductionVpnCoordinator(unrecoverable);
+            Check(uncertain.Connect() == "CONNECTED_VERIFIED");
+            unrecoverable.FailAt = "Direct";
+            unrecoverable.Calls.Clear();
+            Check(uncertain.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
+            Check(unrecoverable.Calls.Contains("Reprotect"));
+            Check(uncertain.State == ProductionTunnelState.RecoveryRequired);
+            Check(uncertain.Connect() == "RECOVERY_REQUIRED");
+            Check(uncertain.ExplicitDisconnect() == "DISCONNECT_REQUIRES_RECOVERY");
+
             var successful = new FakeKernel();
             var coordinator = new ProductionVpnCoordinator(successful);
             Check(coordinator.Connect() == "CONNECTED_VERIFIED");
@@ -130,6 +156,7 @@ internal static class ProductionVpnCoordinatorSelfTests
             Check(coordinator.ExplicitDisconnect() == "DISCONNECTED_VERIFIED");
             Check(successful.Calls.IndexOf("Stop") < successful.Calls.IndexOf("Release"));
             Check(successful.Calls.IndexOf("OffDurable") < successful.Calls.IndexOf("Release"));
+            Check(!successful.Calls.Contains("Reprotect"));
             Check(coordinator.State == ProductionTunnelState.UnknownFailClosed);
             // The proof is negative by default, including 92-byte handshake-only
             // traffic, unchanged counter snapshots and mismatched challenges.

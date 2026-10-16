@@ -1,0 +1,57 @@
+& {
+    # R53: paste as ONE outer PowerShell block. Nothing runs before final }.
+    # Only real IPv4 TCP443 outbound connect attempts to five fixed public IPs.
+    # No scripts, execution policy changes, VPN, DNS, routes or WFP writes.
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        throw 'R53_REFUSED: Windows required'
+    }
+
+    $ruleName = 'OracleProxy-R51-Attended-TCP443-1.1.1.1'
+    $taskName = 'OracleProxy-R51-SafetyAutoUndo'
+    if (@(Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue).Count -ne 0 -or
+        @(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw 'R53_REFUSED: previous R51 rule or watchdog task requires cleanup'
+    }
+    # Immutable allowlist. A TCP connection is a baseline, NOT an
+    # authorization to alter any firewall rule or automatically switch tests.
+    $fixedTargets = @('1.1.1.1','1.0.0.1','8.8.8.8','9.9.9.9','208.67.222.222')
+    $measurements = @(
+        foreach ($target in $fixedTargets) {
+            $successes = 0
+            for ($attempt = 0; $attempt -lt 2; ++$attempt) {
+                $client = [Net.Sockets.TcpClient]::new(
+                    [Net.Sockets.AddressFamily]::InterNetwork)
+                try {
+                    $ip = [Net.IPAddress]::Parse($target)
+                    $connect = $client.ConnectAsync($ip, 443)
+                    if ($connect.Wait(2500) -and $client.Connected) {
+                        ++$successes
+                    }
+                } catch {
+                    # Timeout / destination refusal / TCP failure: NOT reachable.
+                    # Never classify a failed target as a working test baseline.
+                } finally {
+                    $client.Dispose()
+                }
+            }
+            [pscustomobject][ordered]@{
+                target = $target
+                port = 443
+                successes = $successes
+                attempts = 2
+                twice_reachable = ($successes -eq 2)
+            }
+        }
+    )
+    [pscustomobject][ordered]@{
+        schema_version = 1
+        mode = 'READ_ONLY_BASELINE'
+        network_mutation_performed = $false
+        production_vpn_authorized = $false
+        any_usable_candidate = (@($measurements |
+            Where-Object { $_.twice_reachable }).Count -gt 0)
+        candidates = $measurements
+    } | ConvertTo-Json -Compress -Depth 5
+}

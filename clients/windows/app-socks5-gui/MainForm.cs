@@ -24,6 +24,9 @@ internal sealed class MainForm : Form
     private readonly Button _addressDiagnostic = new() {
         Text = "Google 双栈诊断", Dock = DockStyle.Fill, Enabled = false
     };
+    private readonly Button _httpsDiagnostic = new() {
+        Text = "Google HTTPS 诊断", Dock = DockStyle.Fill, Enabled = false
+    };
     private readonly Label _probeStatus = new() {
         Dock = DockStyle.Fill, ForeColor = Color.DarkSlateBlue,
         Text = "普通 Edge 不会自动使用 SOCKS5；请通过下方验证按钮检查真实出口。"
@@ -37,11 +40,12 @@ internal sealed class MainForm : Form
     private bool _socksReady;
     private bool _verifying;
     private bool _diagnosing;
+    private bool _httpsDiagnosing;
     private CancellationTokenSource? _verificationCancel;
 
     internal MainForm()
     {
-        Text = "Oracle Proxy R58 · Windows 应用代理实验版（非 VPN）";
+        Text = "Oracle Proxy R59 · Windows 应用代理实验版（非 VPN）";
         Width = 690;
         Height = 548;
         MinimumSize = new Size(640, 520);
@@ -102,9 +106,17 @@ internal sealed class MainForm : Form
         _disconnect.Click += (_, _) => Disconnect();
         _verify.Click += async (_, _) => await VerifyExitAsync();
         _addressDiagnostic.Click += async (_, _) => await CompareAddressFamilyAsync();
+        _httpsDiagnostic.Click += async (_, _) => await DiagnoseHttpsAsync();
 
         layout.Controls.Add(_status, 1, 6);
-        layout.Controls.Add(_addressDiagnostic, 0, 7);
+        var diagnosticButtons = new TableLayoutPanel {
+            Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1
+        };
+        diagnosticButtons.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        diagnosticButtons.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+        diagnosticButtons.Controls.Add(_addressDiagnostic, 0, 0);
+        diagnosticButtons.Controls.Add(_httpsDiagnostic, 0, 1);
+        layout.Controls.Add(diagnosticButtons, 0, 7);
         layout.Controls.Add(_probeStatus, 1, 7);
 
         var notes = new Label {
@@ -144,10 +156,13 @@ internal sealed class MainForm : Form
         if (_isClosing || IsDisposed) return;
         _connect.Enabled = !_busy && _lease is null;
         _disconnect.Enabled = _lease is not null;
-        _verify.Enabled = !_verifying && !_diagnosing && _socksReady && !_isClosing &&
+        _verify.Enabled = !_verifying && !_diagnosing && !_httpsDiagnosing &&
+            _socksReady && !_isClosing &&
             _lease is not null && _lease.Running;
-        _addressDiagnostic.Enabled = !_verifying && !_diagnosing && _socksReady &&
-            !_isClosing && _lease is not null && _lease.Running;
+        _addressDiagnostic.Enabled = !_verifying && !_diagnosing && !_httpsDiagnosing &&
+            _socksReady && !_isClosing && _lease is not null && _lease.Running;
+        _httpsDiagnostic.Enabled = !_verifying && !_diagnosing && !_httpsDiagnosing &&
+            _socksReady && !_isClosing && _lease is not null && _lease.Running;
         _host.Enabled = _user.Enabled = _port.Enabled = _key.Enabled =
             _browse.Enabled = _lease is null && !_busy;
     }
@@ -310,6 +325,44 @@ internal sealed class MainForm : Form
             if (ReferenceEquals(_verificationCancel, token))
                 _verificationCancel = null;
             _diagnosing = false;
+            SetButtons();
+        }
+    }
+
+    private async Task DiagnoseHttpsAsync()
+    {
+        if (_httpsDiagnosing || _verifying || _diagnosing ||
+            !_socksReady || _isClosing || _lease is null || !_lease.Running)
+            return;
+        var owner = _lease;
+        using var token = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
+        _verificationCancel = token;
+        _httpsDiagnosing = true;
+        _probeStatus.Text =
+            "正在通过 SOCKS5 分别检查 Google 的 TCP、TLS 和 HTTPS 响应；不读取邮件…";
+        SetButtons();
+        try
+        {
+            var result = await GoogleHttpsStageDiagnostic.DiagnoseAsync(token.Token);
+            if (!_isClosing && ReferenceEquals(_lease, owner))
+            {
+                _probeStatus.Text = "HTTPS 分阶段诊断已结束，请查看弹窗中的详细结果。";
+                MessageBox.Show(this, result.Summary,
+                    "Google HTTPS 分阶段诊断（只读）",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            if (!_isClosing && ReferenceEquals(_lease, owner))
+                _probeStatus.Text = "Google HTTPS 诊断执行异常，不修改系统网络。";
+        }
+        finally
+        {
+            if (ReferenceEquals(_verificationCancel, token))
+                _verificationCancel = null;
+            _httpsDiagnosing = false;
             SetButtons();
         }
     }

@@ -149,6 +149,11 @@ internal sealed class ProductionVpnCoordinator
                     !_kernel.StageOwnedRouteDnsRecovery() ||
                     !_kernel.PersistExplicitOffIntent())
                     throw new InvalidOperationException("Unsafe disconnect precondition");
+                // Re-audit immediately before the irreversible owned-filter
+                // release. This narrows the stale-evidence interval but is
+                // NOT atomic with WFP and is not a production implementation.
+                if (!_kernel.AuditExistingSystemWfp().AllVerified)
+                    throw new InvalidOperationException("WFP changed before release");
                 if (!_kernel.ReleaseOnlyOwnedWfp() ||
                     !_kernel.VerifyDirectNetworkRestored())
                     throw new InvalidOperationException("Unsafe network release");

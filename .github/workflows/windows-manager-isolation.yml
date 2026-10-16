@@ -60,6 +60,14 @@ jobs:
           $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
           & $exe --safe-control-gate-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Admin-only fixed-profile protocol regressions failed' }
+      - name: R35 native Windows WFP/BFE read-only negative-attestation test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          & $exe --wfp-readonly-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R35 native BFE query or deny-only invariant failed' }
+          Write-Host 'R35_NO_WFP_MODIFICATION_PASS: query-only native APIs, no production security attestation'
       - name: Reject rogue local STATUS pipe before SCM manager is installed
         shell: pwsh
         run: |

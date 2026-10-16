@@ -35,6 +35,13 @@ internal sealed class LabManagerService : ServiceBase
 
     protected override void OnStart(string[] args)
     {
+        // Read the native BFE state from the actual LocalSystem SCM process.
+        // Neither presence of BFE nor any reserved provider can enable a
+        // connection or authorize filter removal. This is an inspection only.
+        NativeWfpReadOnlySnapshot snapshot = NativeWfpReadOnlyAudit.Read();
+        if (!snapshot.LocalSystemSessionZero || snapshot.MayStartTunnel ||
+            snapshot.MayReleaseFilter || snapshot.FullDeviceFailClosedVerified)
+            throw new InvalidOperationException("R35 SCM identity/audit gate closed");
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
         // The OS-backed, persistent WFP filter is installed by this actual
         // LocalSystem SCM process BEFORE any pipe begins accepting requests.

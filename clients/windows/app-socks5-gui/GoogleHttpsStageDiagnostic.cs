@@ -64,7 +64,7 @@ internal static class GoogleHttpsStageDiagnostic
             {
                 step.CancelAfter(TimeSpan.FromSeconds(7));
                 await socket.ConnectAsync(IPAddress.Loopback, port, step.Token);
-                using var stream = socket.GetStream();
+                var stream = socket.GetStream();
                 await stream.WriteAsync(new byte[] { 5, 1, 0 }, step.Token);
                 var greeting = new byte[2];
                 await stream.ReadExactlyAsync(greeting, step.Token);
@@ -225,8 +225,12 @@ internal static class GoogleHttpsStageDiagnostic
                 }, cancel.Token);
                 using var ssl = new SslStream(stream, false);
                 try { await ssl.AuthenticateAsServerAsync(
-                    cert, clientCertificateRequired: false,
-                    checkCertificateRevocation: false); }
+                    new SslServerAuthenticationOptions {
+                        ServerCertificate = cert,
+                        EnabledSslProtocols = SslProtocols.None,
+                        ClientCertificateRequired = false,
+                        CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                    }, cancel.Token); }
                 catch (AuthenticationException) { }
                 catch (IOException) { }
                 return true;

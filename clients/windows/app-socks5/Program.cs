@@ -133,6 +133,56 @@ internal static class Program
         return true;
     }
 
+    // The disposable Windows runner exercises job-backed child lifetime,
+    // not just a theoretical kill-on-close flag. Only local 127.0.0.1 ping.
+    private static bool JobLifecycleSelfTest()
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        IntPtr job = IntPtr.Zero;
+        Process? child = null;
+        try
+        {
+            job = CreateKillOnCloseJob();
+            var start = new ProcessStartInfo(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "System32", "ping.exe"))
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            start.ArgumentList.Add("-n");
+            start.ArgumentList.Add("30");
+            start.ArgumentList.Add("127.0.0.1");
+            child = Process.Start(start);
+            if (child is null || child.HasExited ||
+                !AssignProcessToJobObject(job, child.Handle))
+                return false;
+            // The only test action: close own job handle and verify OS
+            // terminates a formerly running dummy child.
+            CloseHandle(job);
+            job = IntPtr.Zero;
+            bool cleaned = child.WaitForExit(4000) && child.HasExited;
+            if (cleaned)
+                Console.WriteLine("R55_WINDOWS_JOB_KILL_ON_CLOSE_PASS");
+            return cleaned;
+        }
+        catch { return false; }
+        finally
+        {
+            if (child is not null)
+            {
+                try
+                {
+                    if (!child.HasExited) child.Kill(entireProcessTree: true);
+                    child.WaitForExit(1500);
+                }
+                catch { }
+                child.Dispose();
+            }
+            if (job != IntPtr.Zero) CloseHandle(job);
+        }
+    }
+
     private static void Help()
     {
         Console.WriteLine(
@@ -303,6 +353,8 @@ internal static class Program
     {
         if (args.Length == 1 && args[0] == "--self-test")
             return SelfTest() ? 0 : 1;
+        if (args.Length == 1 && args[0] == "--job-self-test")
+            return JobLifecycleSelfTest() ? 0 : 1;
         if (args.Length == 0 || args is ["--help"])
         {
             Help();

@@ -239,9 +239,14 @@ jobs:
                   throw 'R50 SYSTEM owned policy release not proved'
                 }
                 $r50Phase = 60
-                if (@(Get-NetFirewallRule -ErrorAction Stop |
-                    Where-Object DisplayName -eq
-                      'OracleProxy-R48-CI-SYSTEM-AllApps-FixedDestinations').Count -ne 0) {
+                $ruleNameToVerify = 'OracleProxy-R48-CI-SYSTEM-AllApps-FixedDestinations'
+                $osDeadline = [DateTime]::UtcNow.AddSeconds(6)
+                do {
+                  Start-Sleep -Milliseconds 250
+                  $osRemaining = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+                    Where-Object { $_.DisplayName -eq $ruleNameToVerify })
+                } while ($osRemaining.Count -ne 0 -and [DateTime]::UtcNow -lt $osDeadline)
+                if ($osRemaining.Count -ne 0) {
                   throw 'R50 SYSTEM release left owned WFP record'
                 }
                 $r50Phase = 70
@@ -250,6 +255,10 @@ jobs:
               catch {
                 $r50Error = $_
                 Write-Host "R50_CI_RELEASE_STAGE_FAILED=$r50Phase"
+                $category = [string]$_.Exception.GetType().Name
+                if ($category -match '^[A-Za-z]{2,80}$') {
+                  Write-Host "R50_CI_RELEASE_ERROR_CATEGORY=$category"
+                }
                 $remaining = @(Get-NetFirewallRule -ErrorAction Stop |
                   Where-Object DisplayName -eq 'OracleProxy-R48-CI-SYSTEM-AllApps-FixedDestinations').Count
                 Write-Host "R50_CI_OWNED_FILTER_REMAINS=$remaining"

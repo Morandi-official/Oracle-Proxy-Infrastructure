@@ -38,6 +38,14 @@ internal sealed class LabManagerService : ServiceBase
         // Read the native BFE state from the actual LocalSystem SCM process.
         // Neither presence of BFE nor any reserved provider can enable a
         // connection or authorize filter removal. This is an inspection only.
+        // Restart never treats a disk Off/Connected intent as a license to
+        // remove guard rules or start WireGuard without independent OS proof.
+        StartupRecoveryEvidence recovery =
+            SystemStartupRecoveryBoundary.ReadConservativeBaseline();
+        if (recovery.AllowAutomaticConnect || recovery.AllowAutomaticWfpRelease ||
+            recovery.AllowUnattendedDirectNetworking)
+            throw new InvalidOperationException("R36 startup recovery invariant");
+
         NativeWfpReadOnlySnapshot snapshot = NativeWfpReadOnlyAudit.Read();
         if (!snapshot.LocalSystemSessionZero || snapshot.MayStartTunnel ||
             snapshot.MayReleaseFilter || snapshot.FullDeviceFailClosedVerified)

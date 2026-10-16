@@ -12,6 +12,29 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 
 $ruleName = 'OracleProxy-R51-Attended-TCP443-1.1.1.1'
 $taskName = 'OracleProxy-R51-SafetyAutoUndo'
+# Windows' SESSIONNAME environment variable can be absent or changed when
+# PowerShell is elevated via UAC. The kernel's *active physical console*
+# session is the security-relevant OS fact, not that environment hint.
+function Test-R52PhysicalConsole {
+    try {
+        if (-not ('R52NativeConsole' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class R52NativeConsole {
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    public static extern uint WTSGetActiveConsoleSessionId();
+}
+'@ -ErrorAction Stop
+        }
+        [uint32]$console = [R52NativeConsole]::WTSGetActiveConsoleSessionId()
+        [uint32]$current = [uint32][Diagnostics.Process]::GetCurrentProcess().SessionId
+        # FFFFFFFF is reported during session attach/detach. Never admit it.
+        return ($console -ne [uint32]::MaxValue -and
+                $current -eq $console)
+    } catch { return $false }
+}
+
 $principal = New-Object Security.Principal.WindowsPrincipal (
     [Security.Principal.WindowsIdentity]::GetCurrent())
 $admin = $principal.IsInRole(
@@ -32,11 +55,7 @@ $firewallProfilesEnabled = @(
     Get-NetFirewallProfile -ErrorAction Stop |
     Where-Object { [string]$_.Enabled -ne 'True' }
 ).Count -eq 0
-$session = [Environment]::GetEnvironmentVariable('SESSIONNAME','Process')
-# A remote PowerShell shell is not an acceptable substitute for the
-# physical keyboard. Operators must independently confirm console access.
-$consoleIndicated = [string]::Equals($session,'Console',
-    [StringComparison]::OrdinalIgnoreCase)
+$consoleIndicated = Test-R52PhysicalConsole
 # Do NOT probe third party process names, gateways, DNS server values,
 # local IP addresses or remote identities, and do not modify anything.
 $report = [ordered]@{

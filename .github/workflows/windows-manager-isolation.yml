@@ -68,6 +68,28 @@ jobs:
           & $exe --wfp-readonly-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R35 native BFE query or deny-only invariant failed' }
           Write-Host 'R35_NO_WFP_MODIFICATION_PASS: query-only native APIs, no production security attestation'
+      - name: R43 native IP Helper IPv4/IPv6 route inventory and independent OS comparison
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          $result = & $exe --native-route-inventory-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R43 native Win32 IP Helper route inventory failed' }
+          $line = @($result | Where-Object { $_ -like 'R43_NATIVE_ROUTE_INVENTORY_PASS*' })
+          if ($line.Count -ne 1) { throw 'R43 missing or ambiguous native route evidence' }
+          if ($line[0] -notmatch '^R43_NATIVE_ROUTE_INVENTORY_PASS ipv4_defaults=(\d+) ipv6_defaults=(\d+) wfp_verified=false operations_enabled=false$') {
+            throw 'R43 incorrect native read-only evidence or unexpected log'
+          }
+          $native4 = [int]$Matches[1]
+          $native6 = [int]$Matches[2]
+          $os4 = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty InterfaceIndex -Unique).Count
+          $os6 = @(Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty InterfaceIndex -Unique).Count
+          if ($native4 -ne $os4 -or $native6 -ne $os6) {
+            throw 'R43 OS NetTCPIP disagrees with native route interface inventory'
+          }
+          Write-Host 'R43_WIN32_OS_ROUTE_TABLE_CROSSCHECK_PASS: counts only, no WFP release authorization'
       - name: Reject rogue local STATUS pipe before SCM manager is installed
         shell: pwsh
         run: |

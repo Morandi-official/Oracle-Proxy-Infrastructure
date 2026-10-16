@@ -125,6 +125,12 @@ try {
         @{ Suffix='A-app6'; Local='fd42:14::1'; Remote='fd42:14::2'; Port='55162' },
         @{ Suffix='B-dns6'; Local='fd42:14::2'; Remote='fd42:14::1'; Port='53' }
     )
+    # R34 only: allow the fixed UDP echo destination for the exact probe executable.
+    # Do not expand other G14 programs or remote addresses.
+    if ($env:ORACLE_R34_NONCE_PROBE -eq 'CI_ONLY') {
+        $nonceProbe = (Resolve-Path './dist/loopback/wgnt-r34-nonce-proof.exe').Path
+        $appRules += @{ Suffix='B-nonce'; Local='10.249.129.2'; Remote='10.249.129.1'; Port='55334'; Program=$nonceProbe }
+    }
     $createdRuleNames = New-Object 'System.Collections.Generic.List[string]'
     try {
         foreach ($setting in $appRules) {
@@ -135,7 +141,7 @@ try {
             $ruleArgs = @{
                 Name=$name; DisplayName=$name; Direction='Inbound'; Action='Allow'
                 Protocol='UDP'; LocalAddress=$setting.Local; RemoteAddress=$setting.Remote
-                LocalPort=$setting.Port; Program=$appDnsProbe; Profile='Any'
+                LocalPort=$setting.Port; Program=$(if ($setting.ContainsKey('Program')) { $setting.Program } else { $appDnsProbe }); Profile='Any'
                 Enabled='True'; ErrorAction='Stop'
             }
             New-NetFirewallRule @ruleArgs | Out-Null
@@ -144,6 +150,27 @@ try {
         & $appDnsProbe $env:WG_LAB_DLL
         if ($LASTEXITCODE -ne 0) {
             throw 'Windows application UDP or synthetic DNS not delivered despite narrowly scoped CI test allow-rules'
+        }
+
+        if ($env:ORACLE_R34_NONCE_PROBE -eq 'CI_ONLY') {
+            $nonceProbe = (Resolve-Path './dist/loopback/wgnt-r34-nonce-proof.exe').Path
+            # Negative authorization gate must reject execution outside hosted CI.
+            $originalRunner = $env:RUNNER_ENVIRONMENT
+            try {
+                $env:RUNNER_ENVIRONMENT = 'forbidden'
+                & $nonceProbe $env:WG_LAB_DLL
+                if ($LASTEXITCODE -ne 4) {
+                    throw 'R34_FAIL: native probe did not reject non-CI invocation'
+                }
+            }
+            finally {
+                $env:RUNNER_ENVIRONMENT = $originalRunner
+            }
+            & $nonceProbe $env:WG_LAB_DLL
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R34_FAIL: real WireGuardNT nonce echo proof failed'
+            }
+            Write-Host 'R34_CI_NATIVE_RANDOM_CHALLENGE_VERIFIED'
         }
     }
     finally {

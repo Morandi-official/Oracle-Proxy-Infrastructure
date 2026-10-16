@@ -1,0 +1,115 @@
+name: R55 unsigned app-scoped SOCKS5-over-SSH experimental Windows build
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/app-socks5/**'
+      - 'docs/r55-ssh-socks5-limited-experiment.md'
+      - '.github/workflows/windows-r55-app-socks5-experiment.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  portable-app-only-ssh:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/r55-optin-oracle-ssh-app-socks5-preview'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build no-driver, no-admin optional TCP SOCKS5 over external SSH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/app-socks5/OracleProxy.AppSocks5.Experimental.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o ./dist/r55-ssh-socks
+          if ($LASTEXITCODE -ne 0) { throw 'R55 native Windows user-mode SSH helper build failed' }
+          $payload = @(Get-ChildItem ./dist/r55-ssh-socks -Recurse -File)
+          if (@($payload | Where-Object {
+            $_.Extension -in @('.ps1','.psm1','.bat','.cmd') -or
+            $_.Name -in @('wireguard.dll','tunnel.dll','OracleProxy.LabManager.exe','OracleProxy.WireGuardHost.exe')
+          }).Count -gt 0) {
+            throw 'R55 package unexpectedly includes scripts, privileged VPN or WFP components'
+          }
+          $ssh = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
+          if (!(Test-Path -LiteralPath $ssh -PathType Leaf)) {
+            throw 'R55 Windows OpenSSH client absent; cannot claim app SOCKS5 usable'
+          }
+          Write-Host 'R55_WINDOWS_SSH_CLIENT_PRESENT_AND_PACKAGE_NO_KERNEL_VPN_PASS'
+      - name: Negative test of arbitrary SSH option injection and local-service safety
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe = (Resolve-Path './dist/r55-ssh-socks/OracleProxy.AppSocks5.Experimental.exe').Path
+          $tests = @(
+            @('--self-test', 0),
+            @('--job-self-test', 0),
+            @('--help', 0),
+            @('--bogus', 2)
+          )
+          foreach ($test in $tests) {
+            $p = Start-Process -FilePath $exe -ArgumentList @($test[0]) -Wait -PassThru
+            if ($p.ExitCode -ne $test[1]) {
+              throw ('R55 offline negative selftest exit mismatched: ' + [string]$test[0])
+            }
+          }
+          if (@(Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort 10880 -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw 'R55 local SOCKS listener existed without explicit SSH config'
+          }
+          Write-Host 'R55_OFFLINE_NEGATIVE_ARG_INJECTION_AND_NO_AUTOSTART_PASS'
+      - name: Verify network/default route/DNS/Firewall baseline unchanged
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (@(Get-NetFirewallRule -Name 'OracleProxy-R51-Attended-TCP443-1.1.1.1' -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw 'R55 unexpectedly left a WFP test rule'
+          }
+          if (@(Get-ScheduledTask -TaskName 'OracleProxy-R51-SafetyAutoUndo' -ErrorAction SilentlyContinue).Count -ne 0) {
+            throw 'R55 unexpectedly left a scheduled recovery action'
+          }
+          Write-Host 'R55_NO_WFP_OR_SCHEDULE_MUTATION_PASS'
+      - name: Package pre-verified portable SSH-only experimental proxy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = (Resolve-Path './dist/r55-ssh-socks').Path
+          $exe = Join-Path $dir 'OracleProxy.AppSocks5.Experimental.exe'
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            'R55: Windows user-mode app-only SOCKS5 through your OWN Oracle SSH server.'
+            'Uses Windows OpenSSH. NOT the self-developed WireGuard VPN.'
+            'Requires a trusted known_hosts entry, SSH username, host, private key; no credentials bundled.'
+            'Never modifies the Windows system proxy, DNS, routes, UU or WFP.'
+            'Needs independent per-browser SOCKS5 settings: 127.0.0.1:10880; proxy DNS remotely.'
+            'Only tests local SOCKS listener; GitHub CI has NOT connected to user Oracle or verified remote browsing.'
+            'Unsigned. Do not bypass Windows SmartScreen or antivirus to run.'
+            'No registry, Windows service, VPN driver, installer or auto-start.'
+            'Run --help for local operation. Press Enter to terminate the proxy and child ssh.exe.'
+            "SHA256: $hash"
+            "Build SHA: $env:GITHUB_SHA"
+          ) | Set-Content -LiteralPath (Join-Path $dir 'READ_ME_FIRST.txt') -Encoding utf8
+          $manifest = [ordered]@{
+            version='R55-0.1.0-experimental'; channel='unsigned-app-only-ssh-socks5'
+            transport='Windows built-in OpenSSH, optional Oracle SSH target'
+            default_listening=$false; listening_ip='127.0.0.1'; port=10880
+            system_proxy_modified=$false; vpn_driver_included=$false
+            default_routes_modified=$false; wfp_rule_included=$false
+            ssh_host_key_strict=$true; credentials_included=$false
+            oracle_live_connection_tested=$false
+            full_device_protection=$false; production_ready=$false
+            signed=$false; commit=$env:GITHUB_SHA; exe_sha256=$hash
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (
+            Join-Path $dir 'build-manifest.json') -Encoding utf8
+          Write-Host 'R55_UNSIGNED_PORTABLE_SSH_SOCKS_EXPERIMENT_PACKAGED_PASS'
+      - name: Upload OPTIONAL separate app-scoped SSH SOCKS5 lab ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-proxy-r55-OPTIONAL-SSH-SOCKS5-APPONLY-UNSIGNED-win-x64
+          path: ./dist/r55-ssh-socks/**
+          if-no-files-found: error
+          retention-days: 7

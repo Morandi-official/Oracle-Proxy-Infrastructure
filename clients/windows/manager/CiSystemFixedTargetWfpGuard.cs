@@ -27,21 +27,80 @@ internal static class CiSystemFixedTargetWfpGuard
     private const string ExactTargets =
         "1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888";
 
-    private static bool CorrectAddresses(string? addresses)
+    // Windows COM often canonicalizes one IPv4 host as /255.255.255.255
+    // and one IPv6 host as a same-endpoint range. Both are EXACTLY one IP.
+    // Never accept a broader CIDR/mask, wildcard, subnet or real range.
+    private static bool TrySingleHost(string raw, out IPAddress? address)
     {
-        try
+        address = null;
+        string value = raw.Trim();
+        if (IPAddress.TryParse(value, out address))
+            return true;
+
+        string[] prefix = value.Split('/');
+        if (prefix.Length == 2 &&
+            IPAddress.TryParse(prefix[0], out IPAddress? prefixHost) &&
+            ((prefixHost.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+              (prefix[1] == "255.255.255.255" || prefix[1] == "32")) ||
+             (prefixHost.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 &&
+              prefix[1] == "128")))
         {
-            if (string.IsNullOrEmpty(addresses)) return false;
-            var expected = ExactTargets.Split(',')
-                .Select(x => IPAddress.Parse(x).ToString())
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
-            var actual = addresses.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => IPAddress.Parse(x.Trim()).ToString())
-                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
-            return actual.Length == expected.Length &&
-                actual.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase);
+            address = prefixHost;
+            return true;
         }
-        catch { return false; }
+
+        string[] range = value.Split('-');
+        if (range.Length == 2 &&
+            IPAddress.TryParse(range[0], out IPAddress? start) &&
+            IPAddress.TryParse(range[1], out IPAddress? end) &&
+            start.Equals(end))
+        {
+            address = start;
+            return true;
+        }
+        address = null;
+        return false;
+    }
+
+    internal static bool CorrectAddresses(string? addresses)
+    {
+        if (string.IsNullOrWhiteSpace(addresses)) return false;
+        string[] tokens = addresses.Split(',');
+        string[] expected = ExactTargets.Split(',')
+            .Select(value => IPAddress.Parse(value).ToString())
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (tokens.Length != expected.Length) return false;
+        var normalized = new List<string>(tokens.Length);
+        foreach (string token in tokens)
+        {
+            if (!TrySingleHost(token, out IPAddress? address) || address is null)
+                return false;
+            normalized.Add(address.ToString());
+        }
+        return normalized.OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .SequenceEqual(expected, StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal static bool ExactHostNormalizationSelfTest()
+    {
+        string validCom = "1.1.1.1/255.255.255.255,8.8.8.8/255.255.255.255," +
+            "2606:4700:4700::1111-2606:4700:4700::1111," +
+            "2001:4860:4860::8888-2001:4860:4860::8888";
+        if (!CorrectAddresses(validCom) || !CorrectAddresses(ExactTargets))
+            return false;
+        foreach (string candidate in new[] {
+            validCom.Replace("255.255.255.255", "255.255.255.0"),
+            validCom.Replace("::1111-2606:4700:4700::1111",
+                "::1111-2606:4700:4700::1112"),
+            validCom.Replace("8.8.8.8/255.255.255.255",
+                "8.8.8.8/255.255.255.254"),
+            validCom + ",9.9.9.9",
+            validCom.Replace("8.8.8.8/255.255.255.255",
+                "1.1.1.1/255.255.255.255"),
+            "Any", "*", "", "1.1.1.1/8,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888"
+        })
+            if (CorrectAddresses(candidate)) return false;
+        return true;
     }
 
     private static bool CorrectRule(dynamic candidate)

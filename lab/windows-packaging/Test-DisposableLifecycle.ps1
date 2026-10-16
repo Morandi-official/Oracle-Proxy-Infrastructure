@@ -70,6 +70,15 @@ try {
     }
     Set-Acl -LiteralPath $installRoot -AclObject $security -ErrorAction Stop
     Copy-Item -LiteralPath $manager -Destination $stagedExe -ErrorAction Stop
+    $fileAcl = [Security.AccessControl.FileSecurity]::new()
+    $fileAcl.SetOwner($administrators)
+    $fileAcl.SetAccessRuleProtection($true,$false)
+    foreach ($sid in @($administrators,$system)) {
+        $fileAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,[Security.AccessControl.FileSystemRights]::FullControl,
+            [Security.AccessControl.AccessControlType]::Allow))
+    }
+    Set-Acl -LiteralPath $stagedExe -AclObject $fileAcl -ErrorAction Stop
     # R39: verify staged executable inherits only Admin/SYSTEM access.
     # An unexpected inherited ACE, reparse point or source/stage mismatch
     # fails before any SCM registration. No ACL repair on user-owned paths.

@@ -1,4 +1,9 @@
 $ErrorActionPreference = 'Stop'
+$sealedFile = Join-Path $env:RUNNER_TEMP 'wg-r44-session.dpapi'
+if (Test-Path -LiteralPath $sealedFile -PathType Leaf) {
+    Remove-Item -LiteralPath $sealedFile -Force -ErrorAction Stop
+}
+if (Test-Path -LiteralPath $sealedFile) { throw 'R44 sealed keys remain' }
 $keyFile = Join-Path $env:RUNNER_TEMP 'wg-lab-session.bin'
 if (Test-Path $keyFile -PathType Leaf) {
     Remove-Item -LiteralPath $keyFile -Force

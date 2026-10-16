@@ -91,6 +91,10 @@ jobs:
           foreach ($case in $cases) {
             $process=Start-Process -FilePath $case.exe -ArgumentList $case.args -Wait -PassThru
             if ($process.ExitCode -ne $case.exit) {
+              $tlsStatus = Join-Path $env:RUNNER_TEMP 'r59-tls-test-status.txt'
+              if (Test-Path -LiteralPath $tlsStatus) {
+                Get-Content -LiteralPath $tlsStatus | ForEach-Object { Write-Host $_ }
+              }
               throw "R56 GUI/R55 negative or child-job lifecycle test failed: $($case.args), exit=$($process.ExitCode)"
             }
           }

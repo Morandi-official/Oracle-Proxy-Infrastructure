@@ -52,6 +52,8 @@ jobs:
           }
           $env:RUNNER_ENVIRONMENT = 'github-hosted'
           Write-Host 'R44_UNAUTHORIZED_KEY_GENERATION_REFUSED'
+          # The deliberate nonzero Python exit is a successful negative test.
+          exit 0
       - name: Create ephemeral test-only peer keys
         shell: pwsh
         run: ./clients/windows/lab/generate-keys.ps1

@@ -14,14 +14,17 @@ internal sealed class LabManagerService : ServiceBase
     private Task? _adminLabWorker;
     private readonly bool _enableAdminCiLabControl;
     private readonly bool _enableCiWfpGuard;
+    private readonly bool _enableCiSystemDpapiLease;
     private Task? _ciWfpWatch;
     private int _ciWfpCompromised;
 
     internal LabManagerService(bool enableAdminCiLabControl = false,
-                               bool enableCiWfpGuard = false)
+                               bool enableCiWfpGuard = false,
+                               bool enableCiSystemDpapiLease = false)
     {
         _enableAdminCiLabControl = enableAdminCiLabControl;
         _enableCiWfpGuard = enableCiWfpGuard;
+        _enableCiSystemDpapiLease = enableCiSystemDpapiLease;
 #else
     internal LabManagerService()
     {
@@ -58,6 +61,12 @@ internal sealed class LabManagerService : ServiceBase
             snapshot.MayReleaseFilter || snapshot.FullDeviceFailClosedVerified)
             throw new InvalidOperationException("R35 SCM identity/audit gate closed");
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
+        // Isolated SYSTEM DPAPI key-lease audit before IPC/listeners start.
+        // No service configuration, disk, adapter or network mutations.
+        if (_enableCiSystemDpapiLease &&
+            !CiSystemDpapiKeyLease.RunSystemOnly())
+            throw new InvalidOperationException("R45 SYSTEM DPAPI lease refused");
+
         // The OS-backed, persistent WFP filter is installed by this actual
         // LocalSystem SCM process BEFORE any pipe begins accepting requests.
         // Never available in the normal manager binary or service arguments.

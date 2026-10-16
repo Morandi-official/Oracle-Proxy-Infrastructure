@@ -1,0 +1,86 @@
+name: R53 atomic read-only PowerShell baseline before any physical WFP test
+
+on:
+  pull_request:
+    paths:
+      - 'lab/field-windows/R53-CopyPasteReadOnlyTcpBaseline.txt'
+      - 'docs/r53-atomic-field-baseline.md'
+      - '.github/workflows/windows-r53-atomic-baseline.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  paste-only-readonly:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/r53-atomic-readonly-baseline-before-field-test'
+    runs-on: windows-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reject malformed or potentially modifying paste content
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = './lab/field-windows/R53-CopyPasteReadOnlyTcpBaseline.txt'
+          $code = [IO.File]::ReadAllText((Resolve-Path $path))
+          if (!$code.TrimStart().StartsWith('& {') -or
+              !$code.TrimEnd().EndsWith('}') -or
+              $code -match '(?i)\b(New-NetFirewallRule|Set-NetFirewallRule|Remove-NetFirewallRule|Register-ScheduledTask|Unregister-ScheduledTask|Set-NetRoute|New-NetRoute|Set-DnsClientServerAddress|Set-ExecutionPolicy|Invoke-Expression|Start-Process)\b') {
+            throw 'R53 field paste may be non-atomic or mutating'
+          }
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseInput(
+            $code,[ref]$tokens,[ref]$errors)
+          if (@($errors).Count -gt 0 -or !$ast) {
+            throw 'R53 PowerShell 5.1 pasted text did not parse atomically'
+          }
+          Write-Host 'R53_ATOMIC_READONLY_POWERSHELL51_PARSE_PASS'
+      - name: Execute native TCP direct-socket probe and verify no R51 artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = './lab/field-windows/R53-CopyPasteReadOnlyTcpBaseline.txt'
+          $code = [IO.File]::ReadAllText((Resolve-Path $path))
+          $existingRules = @(Get-NetFirewallRule -ErrorAction Stop |
+            Select-Object -ExpandProperty Name | Sort-Object)
+          $existingTasks = @(Get-ScheduledTask -ErrorAction Stop |
+            Select-Object TaskPath,TaskName | ForEach-Object {
+              '{0}{1}' -f $_.TaskPath,$_.TaskName
+            } | Sort-Object)
+          $json = & ([scriptblock]::Create($code))
+          $report = $json | ConvertFrom-Json -ErrorAction Stop
+          $targets = @('1.1.1.1','1.0.0.1','8.8.8.8','9.9.9.9','208.67.222.222')
+          if ($report.schema_version -ne 1 -or
+              $report.mode -ne 'READ_ONLY_BASELINE' -or
+              $report.network_mutation_performed -ne $false -or
+              $report.production_vpn_authorized -ne $false -or
+              @($report.candidates).Count -ne $targets.Count -or
+              @($report.candidates | Where-Object {
+                $_.target -notin $targets -or
+                $_.port -ne 443 -or
+                $_.attempts -ne 2 -or
+                $_.successes -lt 0 -or
+                $_.successes -gt 2 -or
+                $_.twice_reachable -ne ($_.successes -eq 2)
+              }).Count -ne 0) {
+            throw 'R53 invented or unsafe field baseline evidence'
+          }
+          $expected = @($report.candidates |
+            Where-Object { $_.twice_reachable }).Count -gt 0
+          if ($report.any_usable_candidate -ne $expected) {
+            throw 'R53 baseline report misstates TCP reachability'
+          }
+          $afterRules = @(Get-NetFirewallRule -ErrorAction Stop |
+            Select-Object -ExpandProperty Name | Sort-Object)
+          $afterTasks = @(Get-ScheduledTask -ErrorAction Stop |
+            Select-Object TaskPath,TaskName | ForEach-Object {
+              '{0}{1}' -f $_.TaskPath,$_.TaskName
+            } | Sort-Object)
+          if (@(Compare-Object $existingRules $afterRules).Count -ne 0 -or
+              @(Compare-Object $existingTasks $afterTasks).Count -ne 0) {
+            throw 'R53 changed Windows Firewall or Scheduler configuration'
+          }
+          Write-Host 'R53_READONLY_LIVE_TCP_PROBE_NO_NETWORK_POLICY_MUTATION_PASS'

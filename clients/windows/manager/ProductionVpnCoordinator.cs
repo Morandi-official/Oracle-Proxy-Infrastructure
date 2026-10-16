@@ -25,7 +25,7 @@ internal interface IProductionVpnKernel
     bool VerifyPinnedSignedTunnel();
     ProtectedKeyLease OpenProtectedPeerKey();
     void StartFixedTunnel(ReadOnlySpan<byte> privateKey);
-    bool VerifyEncryptedTunnelAndRoutes();
+    AuthenticatedTunnelProof ReadAuthenticatedTunnelProof();
     void StopFixedTunnel();
     bool VerifyTunnelStopped();
     bool StageOwnedRouteDnsRecovery();
@@ -68,7 +68,7 @@ internal sealed class UnavailableProductionKernel : IProductionVpnKernel
         throw new InvalidOperationException("Protected SYSTEM key adapter unavailable");
     public void StartFixedTunnel(ReadOnlySpan<byte> privateKey) =>
         throw new InvalidOperationException("Production tunnel unavailable");
-    public bool VerifyEncryptedTunnelAndRoutes() => false;
+    public AuthenticatedTunnelProof ReadAuthenticatedTunnelProof() => default;
     public void StopFixedTunnel() { }
     public bool VerifyTunnelStopped() => false;
     public bool StageOwnedRouteDnsRecovery() => false;
@@ -113,8 +113,8 @@ internal sealed class ProductionVpnCoordinator
                 using var lease = _kernel.OpenProtectedPeerKey();
                 _state = ProductionTunnelState.ProtectedDisconnected;
                 _kernel.StartFixedTunnel(lease.Bytes);
-                if (!_kernel.VerifyEncryptedTunnelAndRoutes())
-                    throw new InvalidOperationException("Unverified live tunnel");
+                if (!_kernel.ReadAuthenticatedTunnelProof().Verified)
+                    throw new InvalidOperationException("No authenticated in-tunnel data proof");
                 if (!_kernel.AuditExistingSystemWfp().AllVerified)
                     throw new InvalidOperationException("WFP lost during startup");
                 _state = ProductionTunnelState.Connected;

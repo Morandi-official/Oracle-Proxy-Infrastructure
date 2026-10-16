@@ -19,27 +19,35 @@ internal sealed class MainForm : Form
         Text = "未连接：不会自动启动代理。"
     };
     private readonly Button _connect = new() { Text = "连接应用级代理", Width = 165, Height = 40 };
-    private readonly Button _disconnect = new() { Text = "断开代理", Width = 135, Height = 40, Enabled = false };
+    private readonly Button _disconnect = new() { Text = "断开代理", Width = 105, Height = 40, Enabled = false };
+    private readonly Button _verify = new() { Text = "验证 SOCKS5 出口", Width = 145, Height = 40, Enabled = false };
+    private readonly Label _probeStatus = new() {
+        Dock = DockStyle.Fill, ForeColor = Color.DarkSlateBlue,
+        Text = "普通 Edge 不会自动使用 SOCKS5；请通过下方验证按钮检查真实出口。"
+    };
     private readonly Button _browse = new() { Text = "选择本地私钥…", Width = 130, Height = 34 };
     private readonly CancellationTokenSource _closing = new();
     private ChildProcessLease? _lease;
     private bool _busy;
     private bool _isClosing;
     private bool _resourcesDisposed;
+    private bool _socksReady;
+    private bool _verifying;
+    private CancellationTokenSource? _verificationCancel;
 
     internal MainForm()
     {
-        Text = "Oracle Proxy R56 · Windows 应用代理实验版（非 VPN）";
+        Text = "Oracle Proxy R57 · Windows 应用代理实验版（非 VPN）";
         Width = 690;
-        Height = 510;
-        MinimumSize = new Size(620, 465);
+        Height = 548;
+        MinimumSize = new Size(640, 520);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Microsoft YaHei UI", 9.5f);
         BackColor = Color.White;
 
         var layout = new TableLayoutPanel {
             Dock = DockStyle.Fill, Padding = new Padding(18),
-            ColumnCount = 2, RowCount = 9
+            ColumnCount = 2, RowCount = 10
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 136));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -48,6 +56,7 @@ internal sealed class MainForm : Form
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 74));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
         Controls.Add(layout);
@@ -83,11 +92,14 @@ internal sealed class MainForm : Form
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill };
         buttons.Controls.Add(_connect);
         buttons.Controls.Add(_disconnect);
+        buttons.Controls.Add(_verify);
         layout.Controls.Add(buttons, 1, 5);
         _connect.Click += async (_, _) => await ConnectAsync();
         _disconnect.Click += (_, _) => Disconnect();
+        _verify.Click += async (_, _) => await VerifyExitAsync();
 
         layout.Controls.Add(_status, 1, 6);
+        layout.Controls.Add(_probeStatus, 1, 7);
 
         var notes = new Label {
             Dock = DockStyle.Fill, ForeColor = Color.DarkSlateGray,
@@ -97,14 +109,14 @@ internal sealed class MainForm : Form
                    "断开会关闭本窗口拥有的代理与 SSH 子进程，其他软件不受控制。",
             AutoSize = false
         };
-        layout.Controls.Add(notes, 0, 7);
+        layout.Controls.Add(notes, 0, 8);
         layout.SetColumnSpan(notes, 2);
         var safety = new Label {
             Dock = DockStyle.Fill, ForeColor = Color.Firebrick,
             Text = "实验性应用代理 ≠ WireGuard VPN；没有全设备 WFP 防泄漏。不要用于生产替换 WireSock。",
             TextAlign = ContentAlignment.MiddleLeft
         };
-        layout.Controls.Add(safety, 0, 8);
+        layout.Controls.Add(safety, 0, 9);
         layout.SetColumnSpan(safety, 2);
     }
 
@@ -126,6 +138,8 @@ internal sealed class MainForm : Form
         if (_isClosing || IsDisposed) return;
         _connect.Enabled = !_busy && _lease is null;
         _disconnect.Enabled = _lease is not null;
+        _verify.Enabled = !_verifying && _socksReady && !_isClosing &&
+            _lease is not null && _lease.Running;
         _host.Enabled = _user.Enabled = _port.Enabled = _key.Enabled =
             _browse.Enabled = _lease is null && !_busy;
     }
@@ -197,7 +211,10 @@ internal sealed class MainForm : Form
                 Disconnect(preserveMessage: true);
                 return;
             }
+            _socksReady = true;
+            _probeStatus.Text = "点击「验证 SOCKS5 出口」独立验证两家 HTTPS 服务（不修改 Edge 或系统网络）。";
             Display("本地 SOCKS5 已启动：127.0.0.1:10880（真实 Oracle 出口须另行测试）");
+            SetButtons();
             _ = MonitorExitAsync(starting);
         }
         catch (OperationCanceledException) when (_isClosing) { }
@@ -215,6 +232,39 @@ internal sealed class MainForm : Form
             SetButtons();
             if (starting is not null && !ReferenceEquals(_lease, starting))
                 starting.Dispose();
+        }
+    }
+
+    private async Task VerifyExitAsync()
+    {
+        if (_verifying || !_socksReady || _isClosing || _lease is null ||
+            !_lease.Running) return;
+        var owner = _lease;
+        var token = CancellationTokenSource.CreateLinkedTokenSource(_closing.Token);
+        _verificationCancel = token;
+        _verifying = true;
+        _probeStatus.Text = "只通过 127.0.0.1:10880 SOCKS5 核验两家 HTTPS 出口服务…";
+        SetButtons();
+        try
+        {
+            var result = await ExitIpProbe.VerifyAsync(
+                _host.Text.Trim(), token.Token);
+            if (!_isClosing && ReferenceEquals(_lease, owner))
+                _probeStatus.Text = result.Summary;
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            if (!_isClosing && ReferenceEquals(_lease, owner))
+                _probeStatus.Text = "验证失败：SOCKS5 或 HTTPS 请求异常；未尝试直连回退。";
+        }
+        finally
+        {
+            if (ReferenceEquals(_verificationCancel, token))
+                _verificationCancel = null;
+            token.Dispose();
+            _verifying = false;
+            SetButtons();
         }
     }
 
@@ -240,6 +290,10 @@ internal sealed class MainForm : Form
     {
         ChildProcessLease? owned = _lease;
         _lease = null;
+        _verificationCancel?.Cancel();
+        _socksReady = false;
+        if (!preserveMessage && !_isClosing)
+            _probeStatus.Text = "代理已停止；普通 Edge 仍按原有网络设置连接。";
         if (owned is not null)
         {
             try { owned.Dispose(); }

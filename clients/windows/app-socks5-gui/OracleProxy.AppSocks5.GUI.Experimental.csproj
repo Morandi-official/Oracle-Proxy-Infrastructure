@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>OracleProxy.AppSocks5.GUI.Experimental</AssemblyName>
-    <Version>0.3.0-gui-experimental</Version>
+    <Version>0.4.0-socks-exit-test</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>

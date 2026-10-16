@@ -136,7 +136,7 @@ jobs:
               $diagnostic = Join-Path $stage '.r48-stage'
               if (Test-Path -LiteralPath $diagnostic -PathType Leaf) {
                 $phase = (Get-Content -LiteralPath $diagnostic -Raw).Trim()
-                if ($phase -match '^(10|20|30|40|50|60)$') {
+                if ($phase -match '^(10|20|30|40|50|60|5[0-9]{3})$') {
                   Write-Host "R48_SYSTEM_WFP_STARTUP_PHASE=$phase"
                 }
               }

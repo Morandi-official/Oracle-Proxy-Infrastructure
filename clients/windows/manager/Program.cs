@@ -12,6 +12,19 @@ internal static class Program
         if (!OperatingSystem.IsWindows()) return 3;
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
         if (args.Length == 2 && args[0] == "--manager-service" &&
+            args[1] == "--ci-system-native-dpapi")
+        {
+            try
+            {
+                if (!CiSystemDpapiKeyLease.IsSystemServiceIdentity() ||
+                    !CiSystemNativeDpapiBridge.Preflight())
+                    return 3;
+                ServiceBase.Run(new LabManagerService(enableCiSystemNativeDpapi: true));
+                return 0;
+            }
+            catch { return 3; }
+        }
+        if (args.Length == 2 && args[0] == "--manager-service" &&
             args[1] == "--ci-system-dpapi-lease")
         {
             try

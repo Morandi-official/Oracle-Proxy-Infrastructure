@@ -109,9 +109,10 @@ internal static class NativeRouteInventory
                     return false;
                 if (row.DestinationPrefix.PrefixLength != 0)
                     continue;
-                if (row.InterfaceIndex is 0 or > int.MaxValue ||
-                    !found.Add(checked((int)row.InterfaceIndex)) && found.Count > 64)
+                if (row.InterfaceIndex is 0 or > int.MaxValue)
                     return false;
+                // Multiple default routes may share one interface.
+                found.Add(checked((int)row.InterfaceIndex));
                 if (found.Count > 64) return false;
             }
             interfaces = found.OrderBy(index => index).ToArray();

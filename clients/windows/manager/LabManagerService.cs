@@ -65,6 +65,14 @@ internal sealed class LabManagerService : ServiceBase
             filters.MayConnectTunnel || filters.MayReleaseWfp)
             throw new InvalidOperationException("R45 reserved WFP audit unavailable");
 
+        // Native WFP engine filter inventory, separate from OS route query.
+        // Only visibility is established; no ownership, coverage or release.
+        var observedWfp = NativeWfpFilterInventory.Read();
+        if (!observedWfp.IsReadOnlyOsObservation ||
+            observedWfp.AllDeviceWfpVerified ||
+            observedWfp.AuthorizesTunnelOrRuleRelease)
+            throw new InvalidOperationException("R46 native WFP inventory unavailable");
+
         NativeWfpReadOnlySnapshot snapshot = NativeWfpReadOnlyAudit.Read();
         if (!snapshot.LocalSystemSessionZero || snapshot.MayStartTunnel ||
             snapshot.MayReleaseFilter || snapshot.FullDeviceFailClosedVerified)

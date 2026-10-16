@@ -155,7 +155,16 @@ internal static class CiSystemFixedTargetWfpGuard
                     StringComparison.Ordinal)) matched |= 64;
                 object? app = live.ApplicationName;
                 if (string.IsNullOrWhiteSpace(app as string)) matched |= 128;
-                if (CorrectAddresses((string)live.RemoteAddresses)) matched |= 256;
+                string remote = (string)live.RemoteAddresses;
+                if (CorrectAddresses(remote)) matched |= 256;
+                // The only addresses set on this lab rule are fixed public test
+                // destinations; record the COM serializer's format, strictly
+                // sanitized, to diagnose a rejected (NEVER accepted) rule.
+                if (remote.Length is > 0 and <= 256 &&
+                    System.Text.RegularExpressions.Regex.IsMatch(remote,
+                      @"^[0-9a-fA-F\.:/,; \-]+$"))
+                    File.WriteAllText(Path.Combine(CiSystemNativeDpapiBridge.StageRoot,
+                        ".r48-remote-diagnostic"), remote);
             }
             catch { /* fail closed with partial metric only */ }
             Stage(5000 + matched);

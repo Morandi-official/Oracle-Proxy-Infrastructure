@@ -65,6 +65,28 @@ try {
     if (($actual -join '|') -ne ($expected -join '|')) {
         throw 'R31_FAIL: target addresses altered'
     }
+    # R37: fail-closed negative audit on a narrowly modified, CI-owned rule.
+    # Keep the synthetic destination list only; do not affect default routes.
+    if ($env:ORACLE_R37_SCOPE_TAMPER -eq 'CI_ONLY') {
+        # Change one field that would enable physical-interface bypass.
+        $ownedRule = Get-NetFirewallRule -Name $name -ErrorAction Stop
+        $ifaceBefore = $ownedRule | Get-NetFirewallInterfaceTypeFilter -ErrorAction Stop
+        if ([string]$ifaceBefore.InterfaceType -notin @('Any','All')) {
+            throw 'R37_REFUSED: initial interface scope not all'
+        }
+        Set-NetFirewallRule -Name $name -InterfaceType Wireless -ErrorAction Stop
+        $narrow = Get-NetFirewallRule -Name $name -PolicyStore ActiveStore -ErrorAction Stop |
+            Get-NetFirewallInterfaceTypeFilter -ErrorAction Stop
+        if ([string]$narrow.InterfaceType -notin @('Wireless','WLAN')) {
+            throw 'R37_FAIL: scope tamper was not applied'
+        }
+        # A narrowed physical interface is NEVER acceptable WFP coverage.
+        $verified = [string]$narrow.InterfaceType -in @('Any','All')
+        if ($verified) { throw 'R37_FAIL: narrowed WFP interface accepted' }
+        Write-Host 'R37_INTERFACE_NARROWING_REJECTED_PASS'
+        # The exact owned rule is removed in finally, not "repaired" by
+        # widening someone else's preexisting policy.
+    }
     Write-Host 'R31_OS_ALL_APPLICATION_IPV4_IPV6_WFP_RULE_ACTIVE_PASS'
     # OS metadata verifies cross-process applicability but not real remote
     # packet denial: no packet-level claim without independent witness.

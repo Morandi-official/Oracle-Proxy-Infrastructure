@@ -97,6 +97,24 @@ jobs:
           & $exe --native-wfp-reserved-filter-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R45 failed native WFP filter/sublayer queries or false GA claims' }
           Write-Host 'R45_NATIVE_WFP_NO_GUARD_PROOF_PASS'
+      - name: R46 enumerate actual native Windows WFP filters without mutation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path './dist/manager-lab/OracleProxy.LabManager.exe').Path
+          $before = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name | Sort-Object)
+          $lines = & $exe --native-wfp-filter-enum-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R46 native filter enumerate failed' }
+          $evidence = @($lines | Where-Object { $_ -like 'R46_NATIVE_WFP_FILTER_ENUM_PASS*' })
+          if ($evidence.Count -ne 1 -or
+              $evidence[0] -notmatch '^R46_NATIVE_WFP_FILTER_ENUM_PASS: readable_count=(\d+) complete_observation=true all_device_verified=false release_authorized=false$') {
+            throw 'R46 unverified or missing OS WFP evidence'
+          }
+          $after = @(Get-NetFirewallRule -ErrorAction Stop | Select-Object -ExpandProperty Name | Sort-Object)
+          if (@(Compare-Object $before $after).Count -ne 0) {
+            throw 'R46 enumerator modified Windows Firewall inventory'
+          }
+          Write-Host 'R46_WFP_READONLY_SNAPSHOT_AND_OS_BASELINE_PASS'
       - name: Reject rogue local STATUS pipe before SCM manager is installed
         shell: pwsh
         run: |

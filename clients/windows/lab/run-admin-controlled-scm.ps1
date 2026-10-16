@@ -84,6 +84,18 @@ try {
     }
     if ($env:ORACLE_R34_NONCE_PROBE -eq 'CI_ONLY') {
         $nonceProbe = (Resolve-Path './dist/loopback/wgnt-r34-nonce-proof.exe').Path
+        # Negative authorization gate must reject execution outside hosted CI.
+        $originalRunner = $env:RUNNER_ENVIRONMENT
+        try {
+            $env:RUNNER_ENVIRONMENT = 'forbidden'
+            & $nonceProbe $env:WG_LAB_DLL
+            if ($LASTEXITCODE -ne 4) {
+                throw 'R34_FAIL: native probe did not reject non-CI invocation'
+            }
+        }
+        finally {
+            $env:RUNNER_ENVIRONMENT = $originalRunner
+        }
         & $nonceProbe $env:WG_LAB_DLL
         if ($LASTEXITCODE -ne 0) {
             throw 'R34_FAIL: real WireGuardNT nonce echo proof failed'

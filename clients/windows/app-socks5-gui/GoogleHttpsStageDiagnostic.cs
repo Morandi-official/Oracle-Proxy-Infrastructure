@@ -215,9 +215,17 @@ internal static class GoogleHttpsStageDiagnostic
         var san = new SubjectAlternativeNameBuilder();
         san.AddDnsName("accounts.google.com");
         req.CertificateExtensions.Add(san.Build());
-        using X509Certificate2 cert = req.CreateSelfSigned(
+        using X509Certificate2 generated = req.CreateSelfSigned(
             DateTimeOffset.UtcNow.AddMinutes(-1),
             DateTimeOffset.UtcNow.AddMinutes(10));
+        // Windows Schannel refuses CNG keys held only in a managed
+        // ephemeral certificate. Re-import into the CI runner's temporary
+        // user key store WITHOUT PersistKeySet, then dispose on completion.
+        // This certificate is created and used exclusively in CI selftest.
+        using X509Certificate2 cert = new(
+            generated.Export(X509ContentType.Pfx),
+            (string?)null,
+            X509KeyStorageFlags.UserKeySet);
         var server = new TcpListener(IPAddress.Loopback, 0);
         server.Start();
         using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(15));

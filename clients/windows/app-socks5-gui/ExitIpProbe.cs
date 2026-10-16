@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 
@@ -126,7 +125,7 @@ internal static class ExitIpProbe
     // and verifies failed SOCKS5 cannot silently fall back to direct.
     internal static async Task<bool> SelfTestAsync()
     {
-        using var server = new TcpListener(IPAddress.Loopback, 0);
+        var server = new TcpListener(IPAddress.Loopback, 0);
         server.Start();
         int port = ((IPEndPoint)server.LocalEndpoint).Port;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(9));
@@ -163,6 +162,7 @@ internal static class ExitIpProbe
         bool observed = await accepted.WaitAsync(timeout.Token);
         if (!result.Success && observed)
             Console.WriteLine("R57_SOCKS5_EXPLICIT_PROXY_REMOTE_DNS_NO_FALLBACK_PASS");
+        server.Stop();
         return !result.Success && observed;
     }
 }

@@ -9,6 +9,8 @@ internal static class ProductionVpnCoordinatorSelfTests
         internal readonly List<string> Calls = new();
         internal string? FailAt;
         internal int FailWfpOnAuditNumber;
+        internal int FailEgressOnAuditNumber;
+        private int _egressAudits;
         internal bool ReprotectThrows;
         private int _wfpAudits;
         internal byte[]? Secret;
@@ -24,6 +26,16 @@ internal static class ProductionVpnCoordinatorSelfTests
                 (FailWfpOnAuditNumber == 0 || _wfpAudits != FailWfpOnAuditNumber);
             return new WfpCoverage(valid, valid, valid, valid, valid, valid,
                 valid, valid, valid, valid, valid, valid);
+        }
+        public EgressInterfaceCoverage AuditEgressInterfaceCoverage()
+        {
+            _egressAudits++;
+            bool valid = Check("Egress") &&
+                (FailEgressOnAuditNumber == 0 ||
+                 _egressAudits != FailEgressOnAuditNumber);
+            return new EgressInterfaceCoverage(valid, valid, valid,
+                valid, valid, new int[] { 10 }, new int[] { 10 },
+                new int[] { 10, 11 }, new int[] { 10, 11 });
         }
         public bool VerifyPinnedSignedTunnel() => Check("Trust");
         public ProtectedKeyLease OpenProtectedPeerKey()
@@ -77,14 +89,15 @@ internal static class ProductionVpnCoordinatorSelfTests
             var all = new WfpCoverage(true,true,true,true,true,true,true,true,
                 true,true,true,false);
             Check(!all.AllVerified);
-            foreach (var failedStep in new [] {"Wfp","Trust","Unseal","Start","Handshake"})
+            foreach (var failedStep in new [] {"Wfp","Egress","Trust","Unseal","Start","Handshake"})
             {
                 var fake = new FakeKernel { FailAt = failedStep };
                 var tx = new ProductionVpnCoordinator(fake);
                 string code = tx.Connect();
-                if (failedStep is "Wfp" or "Trust")
+                if (failedStep is "Wfp" or "Egress" or "Trust")
                 {
                     Check(code is "WFP_FAIL_CLOSED_NOT_IMPLEMENTED" or
+                        "EGRESS_INTERFACE_SCOPE_NOT_VERIFIED" or
                         "TUNNEL_TRUST_NOT_VERIFIED");
                     Check(!fake.Calls.Contains("Unseal"));
                     Check(!fake.Calls.Contains("Start"));
@@ -100,7 +113,7 @@ internal static class ProductionVpnCoordinatorSelfTests
                 if (fake.Secret is not null)
                     Check(fake.Secret.All(b => b == 0));
             }
-            foreach (var fail in new [] {"Stop","Stopped","Wfp","RestoreStage",
+            foreach (var fail in new [] {"Stop","Stopped","Wfp","Egress","RestoreStage",
                                        "OffDurable","Release","Direct"})
             {
                 var fake = new FakeKernel();
@@ -110,7 +123,7 @@ internal static class ProductionVpnCoordinatorSelfTests
                 fake.FailAt = fail;
                 fake.Calls.Clear();
                 Check(tx.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
-                if (fail is "Stop" or "Stopped" or "Wfp" or
+                if (fail is "Stop" or "Stopped" or "Wfp" or "Egress" or
                     "RestoreStage" or "OffDurable")
                 {
                     Check(!fake.Calls.Contains("Release"));
@@ -147,6 +160,40 @@ internal static class ProductionVpnCoordinatorSelfTests
             Check(uncertain.State == ProductionTunnelState.RecoveryRequired);
             Check(uncertain.Connect() == "RECOVERY_REQUIRED");
             Check(uncertain.ExplicitDisconnect() == "DISCONNECT_REQUIRES_RECOVERY");
+
+            // Dynamic route/adapter churn after connect but before Off
+            // must not trigger release, even when WFP itself is unchanged.
+            var movedEgress = new FakeKernel { FailEgressOnAuditNumber = 4 };
+            var guardedRoute = new ProductionVpnCoordinator(movedEgress);
+            Check(guardedRoute.Connect() == "CONNECTED_VERIFIED");
+            movedEgress.Calls.Clear();
+            Check(guardedRoute.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
+            Check(!movedEgress.Calls.Contains("Release"));
+            Check(!movedEgress.Calls.Contains("Reprotect"));
+            Check(movedEgress.Calls.Contains("OffDurable"));
+            Check(guardedRoute.State == ProductionTunnelState.RecoveryRequired);
+
+            // Synthetic NICs: exact indices, not the count (1,0,1,1),
+            // determine whether existing WFP guards cover every route.
+            var validEgress = new EgressInterfaceCoverage(true,true,true,true,true,
+                new int[] { 7 }, new int[] { 7 }, new int[] { 7 }, new int[] { 7 });
+            Check(validEgress.Verified);
+            Check(!(validEgress with {
+                Ipv4DefaultRouteInterfaceIndexes = new int[] { 7, 8 } }).Verified);
+            Check(!(validEgress with {
+                Ipv6DefaultRouteInterfaceIndexes = new int[] { 7, 9 } }).Verified);
+            Check(!(validEgress with { AllUpInterfacesEnumerated = false }).Verified);
+            Check(!(validEgress with { UnknownOrUnclassifiedEgressAbsent = false }).Verified);
+            Check(!(validEgress with { AllInterfaceDnsProtected = false }).Verified);
+            Check(!(validEgress with { CurrentSessionSnapshot = false }).Verified);
+            Check(!(validEgress with { IndependentOsSnapshot = false }).Verified);
+            Check(!(validEgress with {
+                Ipv4DefaultRouteInterfaceIndexes = new int[] { 7, 7 } }).Verified);
+            Check(!(validEgress with {
+                GuardedIpv6InterfaceIndexes = new int[] { 0, 7 } }).Verified);
+            Check(!(validEgress with {
+                Ipv6DefaultRouteInterfaceIndexes = Array.Empty<int>() }).Verified);
+            Check(!default(EgressInterfaceCoverage).Verified);
 
             var successful = new FakeKernel();
             var coordinator = new ProductionVpnCoordinator(successful);

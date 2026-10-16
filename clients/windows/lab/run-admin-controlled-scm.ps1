@@ -82,6 +82,15 @@ try {
         }
         throw
     }
+    if ($env:ORACLE_R34_NONCE_PROBE -eq 'CI_ONLY') {
+        $nonceProbe = (Resolve-Path './dist/loopback/wgnt-r34-nonce-proof.exe').Path
+        & $nonceProbe $env:WG_LAB_DLL
+        if ($LASTEXITCODE -ne 0) {
+            throw 'R34_FAIL: real WireGuardNT nonce echo proof failed'
+        }
+        Write-Host 'R34_CI_NATIVE_RANDOM_CHALLENGE_VERIFIED'
+    }
+
     if ($env:ORACLE_R21_SYSTEM_GUARD) {
         & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
         if (-not $?) { throw 'R21_FAIL: SYSTEM policy absent before tunnel activation' }

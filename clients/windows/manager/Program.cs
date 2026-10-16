@@ -74,6 +74,9 @@ internal static class Program
                 case "--safe-control-gate-self-test":
                     return SafeControlGateSelfTests.Run() ? 0 : 1;
 
+                case "--native-wfp-filter-enum-self-test":
+                    return NativeWfpFilterInventorySelfTests.Run() ? 0 : 1;
+
                 case "--wfp-readonly-self-test":
                     return NativeWfpReadOnlySelfTests.Run(expectSystem: false) ? 0 : 1;
 

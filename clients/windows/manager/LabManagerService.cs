@@ -15,16 +15,20 @@ internal sealed class LabManagerService : ServiceBase
     private readonly bool _enableAdminCiLabControl;
     private readonly bool _enableCiWfpGuard;
     private readonly bool _enableCiSystemDpapiLease;
+    private readonly bool _enableCiSystemNativeDpapi;
+    private Task? _ciSystemNativeWorker;
     private Task? _ciWfpWatch;
     private int _ciWfpCompromised;
 
     internal LabManagerService(bool enableAdminCiLabControl = false,
                                bool enableCiWfpGuard = false,
-                               bool enableCiSystemDpapiLease = false)
+                               bool enableCiSystemDpapiLease = false,
+                               bool enableCiSystemNativeDpapi = false)
     {
         _enableAdminCiLabControl = enableAdminCiLabControl;
         _enableCiWfpGuard = enableCiWfpGuard;
         _enableCiSystemDpapiLease = enableCiSystemDpapiLease;
+        _enableCiSystemNativeDpapi = enableCiSystemNativeDpapi;
 #else
     internal LabManagerService()
     {
@@ -108,6 +112,13 @@ internal sealed class LabManagerService : ServiceBase
         _safeControlWorker = Task.Run(() =>
             new SafeControlGate().ServeAsync(_stop.Token));
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
+        // No network mutation during SCM OnStart. Run only a fixed, staged
+        // and disposable SYSTEM-native test after service reaches RUNNING.
+        if (_enableCiSystemNativeDpapi)
+            _ciSystemNativeWorker = Task.Run(() =>
+                CiSystemNativeDpapiBridge.RunAsync(_stop.Token));
+#endif
+#if ENABLE_DISPOSABLE_LAB_CONTROLS
         if (_enableAdminCiLabControl && AdminLabControl.IsDisposableCiLab())
         {
             // NOT active with the normal production service arguments.
@@ -171,6 +182,7 @@ internal sealed class LabManagerService : ServiceBase
 #if ENABLE_DISPOSABLE_LAB_CONTROLS
             _adminLabWorker?.Wait(TimeSpan.FromSeconds(5));
             _ciWfpWatch?.Wait(TimeSpan.FromSeconds(5));
+            _ciSystemNativeWorker?.Wait(TimeSpan.FromSeconds(5));
 #endif
         }
         catch (AggregateException) { /* cancellation during shutdown */ }

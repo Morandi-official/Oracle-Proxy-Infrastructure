@@ -9,6 +9,29 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ruleName = 'OracleProxy-R51-Attended-TCP443-1.1.1.1'
 $taskName = 'OracleProxy-R51-SafetyAutoUndo'
+# Windows' SESSIONNAME environment variable can be absent or changed when
+# PowerShell is elevated via UAC. The kernel's *active physical console*
+# session is the security-relevant OS fact, not that environment hint.
+function Test-R52PhysicalConsole {
+    try {
+        if (-not ('R52NativeConsole' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class R52NativeConsole {
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    public static extern uint WTSGetActiveConsoleSessionId();
+}
+'@ -ErrorAction Stop
+        }
+        [uint32]$console = [R52NativeConsole]::WTSGetActiveConsoleSessionId()
+        [uint32]$current = [uint32][Diagnostics.Process]::GetCurrentProcess().SessionId
+        # FFFFFFFF is reported during session attach/detach. Never admit it.
+        return ($console -ne [uint32]::MaxValue -and
+                $current -eq $console)
+    } catch { return $false }
+}
+
 
 function Get-OwnedRule {
     @(Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)
@@ -79,9 +102,9 @@ $ci = $Mode -eq 'CiExercise' -and $env:GITHUB_ACTIONS -eq 'true' -and
     $env:RUNNER_OS -eq 'Windows' -and $env:ORACLE_R51_FIELD_CI -eq 'CI_ONLY'
 $field = $Mode -eq 'AttendedExercise' -and
     $HumanConfirmation -ceq 'SECOND_PC_LOCAL_CONSOLE_RECOVERY_READY' -and
-    $env:SESSIONNAME -eq 'Console'
+    (Test-R52PhysicalConsole)
 if (-not ($ci -or $field)) {
-    throw 'R51_REFUSED: disposable CI or explicit supervised local-console only'
+    throw 'R52_REFUSED: CI authorization or confirmed physical console session and human approval required'
 }
 foreach ($svc in @('BFE','MpsSvc','Schedule')) {
     if ((Get-Service $svc -ErrorAction Stop).Status -ne 'Running') {

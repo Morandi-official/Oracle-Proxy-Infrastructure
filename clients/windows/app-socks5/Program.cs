@@ -62,7 +62,7 @@ internal static class Program
         Regex.IsMatch(host, @"\A[a-zA-Z0-9][a-zA-Z0-9.-]*\z",
             RegexOptions.CultureInvariant) &&
         !host.Contains("..", StringComparison.Ordinal) &&
-        !host.EndsWith('.', StringComparison.Ordinal) &&
+        !host.EndsWith(".", StringComparison.Ordinal) &&
         host != "localhost";
 
     private static bool ValidUser(string name) =>

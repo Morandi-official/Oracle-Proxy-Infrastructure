@@ -52,7 +52,8 @@ internal static class GoogleHttpsStageDiagnostic
     }
 
     private static async Task<Sample> ProbeAsync(string host, string path,
-        string label, int port, CancellationToken cancellationToken)
+        string label, int port, CancellationToken cancellationToken,
+        Action<SslPolicyErrors>? ciTlsPolicyObserver = null)
     {
         long socksMs = -1, tlsMs = -1, httpMs = -1;
         var watch = Stopwatch.StartNew();
@@ -101,7 +102,17 @@ internal static class GoogleHttpsStageDiagnostic
                 socksMs = watch.ElapsedMilliseconds;
             }
 
-            using var tls = new SslStream(socket.GetStream(), leaveInnerStreamOpen: false);
+            // Production never installs a certificate callback. Only the
+            // CI-only mock observes platform chain errors and STILL rejects
+            // any non-None policy result (never bypasses TLS validation).
+            using var tls = ciTlsPolicyObserver is null
+                ? new SslStream(socket.GetStream(), leaveInnerStreamOpen: false)
+                : new SslStream(socket.GetStream(), false,
+                    (_, _, _, errors) =>
+                    {
+                        ciTlsPolicyObserver(errors);
+                        return errors == SslPolicyErrors.None;
+                    });
             // Stage 2: certificate authentication with normal strict
             // platform validation; no RemoteCertificateValidationCallback.
             using (var step = CancellationTokenSource.CreateLinkedTokenSource(
@@ -200,6 +211,9 @@ internal static class GoogleHttpsStageDiagnostic
         try
         {
             int port = ((IPEndPoint)server.LocalEndpoint).Port;
+            bool certWasObserved = false;
+            bool certWasRejected = false;
+            string serverTlsError = "none";
             Task<bool> mock = Task.Run(async () =>
             {
                 using var conn = await server.AcceptTcpClientAsync(cancel.Token);
@@ -231,15 +245,22 @@ internal static class GoogleHttpsStageDiagnostic
                         ClientCertificateRequired = false,
                         CertificateRevocationCheckMode = X509RevocationMode.NoCheck
                     }, cancel.Token); }
-                catch (AuthenticationException) { }
-                catch (IOException) { }
+                catch (AuthenticationException e) { serverTlsError = e.GetType().Name; }
+                catch (IOException e) { serverTlsError = e.GetType().Name; }
                 return true;
             }, cancel.Token);
             Sample result = await ProbeAsync("accounts.google.com", "/", "mock",
-                port, cancel.Token);
+                port, cancel.Token, errors =>
+                {
+                    certWasObserved = true;
+                    certWasRejected = errors != SslPolicyErrors.None;
+                });
             bool protocolSeen = await mock.WaitAsync(cancel.Token);
-            bool pass = protocolSeen && result.Outcome ==
-                "TLS 证书验证或握手失败" && result.SocksMs >= 0;
+            // Windows may surface a rejected TLS certificate as an IOException
+            // rather than AuthenticationException. The actual observed
+            // SslPolicyErrors are the authoritative negative-test condition.
+            bool pass = protocolSeen && certWasObserved && certWasRejected &&
+                result.SocksMs >= 0 && result.TlsMs < 0;
             // Offline CI diagnostics only. No files written in normal GUI.
             if (!pass && Environment.GetEnvironmentVariable("CI") == "true")
             {
@@ -249,7 +270,10 @@ internal static class GoogleHttpsStageDiagnostic
                     "protocolSeen=" + protocolSeen + "\n" +
                     "stage=" + result.Outcome + "\n" +
                     "socksMs=" + result.SocksMs + "\n" +
-                    "tlsMs=" + result.TlsMs + "\n");
+                    "tlsMs=" + result.TlsMs + "\n" +
+                    "certWasObserved=" + certWasObserved + "\n" +
+                    "certWasRejected=" + certWasRejected + "\n" +
+                    "serverTlsError=" + serverTlsError + "\n");
             }
             if (pass)
                 Console.WriteLine(

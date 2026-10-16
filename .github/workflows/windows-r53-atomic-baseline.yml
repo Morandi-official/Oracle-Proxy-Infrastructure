@@ -32,7 +32,7 @@ jobs:
           }
           $tokens = $null
           $errors = $null
-          $ast = [Management.Automation.Language.Parser]::ParseInput(
+          $ast = [System.Management.Automation.Language.Parser]::ParseInput(
             $code,[ref]$tokens,[ref]$errors)
           if (@($errors).Count -gt 0 -or !$ast) {
             throw 'R53 PowerShell 5.1 pasted text did not parse atomically'

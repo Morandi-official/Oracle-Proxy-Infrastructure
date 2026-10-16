@@ -14,6 +14,21 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef R44_CI_DPAPI_MEMORY
+#include <wincrypt.h>
+#include <wchar.h>
+static const BYTE R44_ENTROPY[] = "OracleProxy.R44.CI.NativeMemory.v1";
+static int r44_authorized(void) {
+    const wchar_t *ci=_wgetenv(L"GITHUB_ACTIONS");
+    const wchar_t *runner=_wgetenv(L"RUNNER_ENVIRONMENT");
+    const wchar_t *platform=_wgetenv(L"RUNNER_OS");
+    const wchar_t *mode=_wgetenv(L"ORACLE_R44_DPAPI_TEST");
+    return ci && wcscmp(ci,L"true")==0 &&
+           runner && wcscmp(runner,L"github-hosted")==0 &&
+           platform && wcscmp(platform,L"Windows")==0 &&
+           mode && wcscmp(mode,L"CI_ONLY")==0;
+}
+#endif
 #include "wireguard.h"
 
 #define LAB_PORT_A 52741
@@ -84,6 +99,10 @@ int wmain(int argc, wchar_t **argv) {
     int driver_initially_absent = 0;
     LAB_CONFIG ca = {0}, cb = {0};
     unsigned char keybytes[128] = {0};
+#ifdef R44_CI_DPAPI_MEMORY
+    BYTE sealed[4096] = {0};
+    DATA_BLOB plaintext = {0};
+#endif
 
     WIREGUARD_CREATE_ADAPTER_FUNC *create = NULL;
     WIREGUARD_CLOSE_ADAPTER_FUNC *close_adapter = NULL;
@@ -93,6 +112,12 @@ int wmain(int argc, wchar_t **argv) {
     WIREGUARD_DELETE_DRIVER_FUNC *delete_driver = NULL;
     WIREGUARD_GET_RUNNING_DRIVER_VERSION_FUNC *driver_version = NULL;
 
+#ifdef R44_CI_DPAPI_MEMORY
+    if (!r44_authorized()) {
+        fputs("R44_REFUSED: disposable Windows CI required\n", stderr);
+        return 4;
+    }
+#endif
     if (argc != 3 || wcslen(argv[1]) > 500 || wcslen(argv[2]) > 500) {
         fail("Expected absolute DLL and ephemeral secret-file paths");
         goto done;
@@ -128,12 +153,41 @@ int wmain(int argc, wchar_t **argv) {
     driver_initially_absent = 1;
 
     secrets = _wfopen(argv[2], L"rb");
+#ifdef R44_CI_DPAPI_MEMORY
+    if (!secrets || fseek(secrets, 0, SEEK_END) != 0) {
+        fail("Sealed CI bundle unavailable"); goto done;
+    }
+    long sealed_size = ftell(secrets);
+    if (sealed_size <= 128 || sealed_size > (long)sizeof(sealed) ||
+        fseek(secrets, 0, SEEK_SET) != 0 ||
+        fread(sealed, 1, (size_t)sealed_size, secrets) != (size_t)sealed_size ||
+        fgetc(secrets) != EOF) {
+        fail("Invalid sealed CI bundle"); goto done;
+    }
+    fclose(secrets); secrets = NULL;
+    DATA_BLOB input = {(DWORD)sealed_size, sealed};
+    DATA_BLOB entropy = {(DWORD)(sizeof(R44_ENTROPY)-1), (BYTE*)R44_ENTROPY};
+    if (!CryptUnprotectData(&input, NULL, &entropy, NULL, NULL,
+            CRYPTPROTECT_UI_FORBIDDEN, &plaintext) ||
+        plaintext.cbData != sizeof(keybytes) || !plaintext.pbData) {
+        fail("DPAPI unseal failure or wrong private material length");
+        goto done;
+    }
+    memcpy(keybytes, plaintext.pbData, sizeof(keybytes));
+    SecureZeroMemory(plaintext.pbData, plaintext.cbData);
+    LocalFree(plaintext.pbData);
+    plaintext.pbData = NULL;
+    plaintext.cbData = 0;
+    SecureZeroMemory(sealed, sizeof(sealed));
+    puts("R44_CI_DPAPI_TO_NATIVE_MEMORY_PASS: sealed bytes consumed, no plaintext input file");
+#else
     if (!secrets || fread(keybytes, 1, sizeof(keybytes), secrets) != sizeof(keybytes) ||
         fgetc(secrets) != EOF) {
         fail("Invalid temporary laboratory keys");
         goto done;
     }
     fclose(secrets); secrets = NULL;
+#endif
 
     /* [private A, public B, private B, public A], from ephemeral X25519 keys */
     configure(&ca, keybytes, keybytes + 32, LAB_PORT_A, LAB_PORT_B, 0x0af98102u);
@@ -175,6 +229,13 @@ int wmain(int argc, wchar_t **argv) {
     if (exit_code) fail("No two-sided WireGuard handshake within bounded deadline");
 
 done:
+#ifdef R44_CI_DPAPI_MEMORY
+    SecureZeroMemory(sealed, sizeof(sealed));
+    if (plaintext.pbData) {
+        SecureZeroMemory(plaintext.pbData, plaintext.cbData);
+        LocalFree(plaintext.pbData);
+    }
+#endif
     SecureZeroMemory(keybytes, sizeof(keybytes));
     SecureZeroMemory(&ca, sizeof(ca));
     SecureZeroMemory(&cb, sizeof(cb));

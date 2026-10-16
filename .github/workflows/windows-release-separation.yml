@@ -41,8 +41,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $source = Get-Content './clients/windows/app/SanitizedDiagnostics.cs' -Raw
-          if ($source -match 'ProcessStartInfo|ArgumentList.Add|\\.ps1|\\.psm1' -or
-              $source -match 'new Process\\s*\\(') {
+          if ($source.Contains('ProcessStartInfo') -or
+              $source.Contains('ArgumentList.Add') -or
+              $source.Contains('new Process(') -or
+              $source.Contains('powershell.exe') -or
+              $source.Contains('Collect-ReadOnly.ps1')) {
             throw 'R54 test app launches a script interpreter or subprocess'
           }
           $exe = (Resolve-Path './dist/release-preview/OracleProxy.Windows.Preview.exe').Path

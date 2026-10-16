@@ -74,7 +74,7 @@ try {
         if ([string]$ifaceBefore.InterfaceType -notin @('Any','All')) {
             throw 'R37_REFUSED: initial interface scope not all'
         }
-        $ownedRule | Set-NetFirewallInterfaceTypeFilter -InterfaceType Wireless -ErrorAction Stop
+        Set-NetFirewallRule -Name $name -InterfaceType Wireless -ErrorAction Stop
         $narrow = Get-NetFirewallRule -Name $name -PolicyStore ActiveStore -ErrorAction Stop |
             Get-NetFirewallInterfaceTypeFilter -ErrorAction Stop
         if ([string]$narrow.InterfaceType -notin @('Wireless','WLAN')) {

@@ -44,6 +44,37 @@ function Dns([string]$address) {
     } catch { return $false }
     finally { $client.Dispose() }
 }
+function Exact-Host([string]$value) {
+    $value = $value.Trim()
+    $address = $null
+    if ([Net.IPAddress]::TryParse($value, [ref]$address)) {
+        return $address.ToString()
+    }
+    $prefix = $value.Split('/')
+    if ($prefix.Count -eq 2) {
+        $address = $null
+        if ([Net.IPAddress]::TryParse($prefix[0], [ref]$address)) {
+            $exact4 = $address.AddressFamily -eq
+                [Net.Sockets.AddressFamily]::InterNetwork -and
+                $prefix[1] -in @('32','255.255.255.255')
+            $exact6 = $address.AddressFamily -eq
+                [Net.Sockets.AddressFamily]::InterNetworkV6 -and
+                $prefix[1] -eq '128'
+            if ($exact4 -or $exact6) { return $address.ToString() }
+        }
+    }
+    $range = $value.Split('-')
+    if ($range.Count -eq 2) {
+        $first = $null
+        $last = $null
+        if ([Net.IPAddress]::TryParse($range[0],[ref]$first) -and
+            [Net.IPAddress]::TryParse($range[1],[ref]$last) -and
+            $first.Equals($last)) {
+            return $first.ToString()
+        }
+    }
+    throw 'R48 remote address does not represent exactly one host'
+}
 function Assert-Rule([bool]$mustExist) {
     $found = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
         Where-Object DisplayName -eq $name)
@@ -66,11 +97,17 @@ function Assert-Rule([bool]$mustExist) {
         [string]$type.InterfaceType -notin @('Any','All')) {
         throw 'R48 all-application, all-interface, all-protocol scope narrowed'
     }
-    $actual = @($addr.RemoteAddress | ForEach-Object {
-        @([string]$_ -split '[,; ]+') | Where-Object { $_ } | ForEach-Object {
-            [Net.IPAddress]::Parse($_).ToString()
-        }
-    } | Sort-Object -Unique)
+    $rawHosts = @($addr.RemoteAddress | ForEach-Object {
+        @([string]$_ -split '[,; ]+') | Where-Object { $_ }
+    })
+    if ($rawHosts.Count -ne 4) {
+        throw 'R48 unexpected number of remote WFP destination tokens'
+    }
+    $actual = @($rawHosts | ForEach-Object { Exact-Host $_ } |
+        Sort-Object -Unique)
+    if ($actual.Count -ne 4) {
+        throw 'R48 repeated or overlapping remote WFP destination'
+    }
     $expected = @($destinations | ForEach-Object {
         [Net.IPAddress]::Parse($_).ToString()
     } | Sort-Object -Unique)

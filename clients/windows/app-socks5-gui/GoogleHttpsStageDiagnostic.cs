@@ -202,6 +202,19 @@ internal static class GoogleHttpsStageDiagnostic
         using RSA rsa = RSA.Create(2048);
         var req = new CertificateRequest("CN=accounts.google.com", rsa,
             HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        req.CertificateExtensions.Add(new X509BasicConstraintsExtension(
+            false, false, 0, critical: false));
+        req.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
+            critical: false));
+        var ekus = new OidCollection {
+            new Oid("1.3.6.1.5.5.7.3.1")
+        };
+        req.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+            ekus, critical: false));
+        var san = new SubjectAlternativeNameBuilder();
+        san.AddDnsName("accounts.google.com");
+        req.CertificateExtensions.Add(san.Build());
         using X509Certificate2 cert = req.CreateSelfSigned(
             DateTimeOffset.UtcNow.AddMinutes(-1),
             DateTimeOffset.UtcNow.AddMinutes(10));
@@ -245,7 +258,7 @@ internal static class GoogleHttpsStageDiagnostic
                         ClientCertificateRequired = false,
                         CertificateRevocationCheckMode = X509RevocationMode.NoCheck
                     }, cancel.Token); }
-                catch (AuthenticationException e) { serverTlsError = e.GetType().Name; }
+                catch (AuthenticationException e) { serverTlsError = e.GetType().Name + ": " + e.Message; }
                 catch (IOException e) { serverTlsError = e.GetType().Name; }
                 return true;
             }, cancel.Token);

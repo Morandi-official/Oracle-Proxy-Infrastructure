@@ -1,0 +1,106 @@
+name: R71 field acceptance read-only diagnostics CI package
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/r71-review/**'
+      - '.github/workflows/windows-r71-readonly-review.yml'
+      - 'docs/r71-attended-field-readiness.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-readonly-binary:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r71-attended-readonly-diagnostic-20261017'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish standalone unsigned READ ONLY review executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish ./clients/windows/r71-review/OracleProxy.R71.ReadOnlyReview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/R71-READ-ONLY-NOT-VPN
+          if ($LASTEXITCODE -ne 0) { throw 'R71 standalone preview build failed' }
+          $files = @(Get-ChildItem ./dist/R71-READ-ONLY-NOT-VPN -Recurse -File)
+          if ($files.Count -ne 1 -or $files[0].Name -ne 'OracleProxy.R71.ReadOnlyReview.exe') {
+            throw 'R71 executable bundle unexpectedly contains files beyond one review-only exe'
+          }
+          foreach ($bad in @('tunnel.dll','wireguard.dll','OracleProxy.WireGuardHost.exe','OracleProxy.LabManager.exe')) {
+            if (@($files | Where-Object Name -eq $bad).Count -ne 0) { throw 'R71 bundle accidentally includes native tunnel/manager' }
+          }
+          Write-Host 'R71_STANDALONE_NO_NATIVE_ENGINE_OR_MANAGER_PASS'
+      - name: Ensure default-deny command surface and NO Windows network changes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path ./dist/R71-READ-ONLY-NOT-VPN/OracleProxy.R71.ReadOnlyReview.exe).Path
+          function Snapshot {
+            $routes = @(Get-NetRoute -ErrorAction Stop |
+              Where-Object DestinationPrefix -in @('0.0.0.0/0','::/0') |
+              Select-Object DestinationPrefix, InterfaceIndex, NextHop, RouteMetric |
+              Sort-Object DestinationPrefix, InterfaceIndex, NextHop, RouteMetric |
+              ConvertTo-Json -Compress -Depth 5) -join ''
+            $dns = @(Get-DnsClientServerAddress -ErrorAction Stop |
+              Select-Object InterfaceIndex,AddressFamily,ServerAddresses |
+              Sort-Object InterfaceIndex,AddressFamily |
+              ConvertTo-Json -Compress -Depth 6) -join ''
+            $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction Stop |
+              Select-Object Name, ifIndex, Status |
+              Sort-Object Name,ifIndex |
+              ConvertTo-Json -Compress -Depth 4) -join ''
+            $fw = @(Get-NetFirewallRule -ErrorAction Stop).Count
+            $services = @('BFE','MpsSvc') | ForEach-Object { (Get-Service $_ -ErrorAction Stop).Status.ToString() }
+            return ($routes + '|' + $dns + '|' + $adapters + '|' + $fw + '|' + ($services -join ','))
+          }
+          $before = Snapshot
+          foreach ($command in @('--connect','--disconnect','--install','--manager-service','--ci-lab-start-a','--production-enable')) {
+            & $exe $command
+            if ($LASTEXITCODE -ne 2) { throw 'R71 accepted a forbidden command' }
+          }
+          & $exe
+          if ($LASTEXITCODE -ne 2) { throw 'R71 implicit CLI accidentally enabled' }
+          & $exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R71 denied-command self tests failed' }
+          $json = & $exe --review-only | ConvertFrom-Json -ErrorAction Stop
+          if ($LASTEXITCODE -ne 0 -or $json.schema_version -ne 1 -or
+              $json.mode -ne 'R71_READ_ONLY_REVIEW_NO_VPN' -or
+              $json.os_is_windows_x64 -ne $true -or
+              $json.network_mutation_performed -ne $false -or
+              $json.secrets_or_addresses_collected -ne $false -or
+              $json.native_wireguard_public_internet_verified -ne $false -or
+              $json.windows_wfp_all_device_verified -ne $false -or
+              $json.ipv4_ipv6_dns_packet_leak_proof_verified -ne $false -or
+              $json.uu_remote_continuity_verified -ne $false -or
+              $json.physical_out_of_band_recovery_verified -ne $false -or
+              $json.native_vpn_trial_authorized -ne $false -or
+              $json.production_replacement_approved -ne $false) {
+            throw 'R71 review CLI incorrectly claims functional VPN or authorization'
+          }
+          $env:GITHUB_ACTIONS='true'
+          $env:RUNNER_ENVIRONMENT='github-hosted'
+          & $exe --production-enable
+          if ($LASTEXITCODE -ne 2) { throw 'R71 CI environment spoofed a privileged entrypoint' }
+          $after = Snapshot
+          if ($before -cne $after) { throw 'R71 read-only binary changed route/DNS/adapter/firewall/service baseline' }
+          Write-Host 'R71_OS_SNAPSHOT_READONLY_NO_NETWORK_MUTATION_PASS'
+      - name: Print exact hash and preserve short-lived REVIEW ONLY artifact
+        shell: pwsh
+        run: |
+          $exe = './dist/R71-READ-ONLY-NOT-VPN/OracleProxy.R71.ReadOnlyReview.exe'
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+          Write-Host "R71_REVIEW_UNSIGNED_SHA256=$hash"
+          Write-Host 'R71_UNSIGNED_NOT_VPN_NOT_APPROVED_FOR_PHYSICAL_INSTALL'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: R71-READONLY-UNSIGNED-NO-VPN-REVIEW-ONLY
+          path: dist/R71-READ-ONLY-NOT-VPN/OracleProxy.R71.ReadOnlyReview.exe
+          if-no-files-found: error
+          retention-days: 3

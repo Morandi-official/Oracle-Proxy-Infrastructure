@@ -362,6 +362,125 @@ try {
         }
 
     } else {
+        if ($env:ORACLE_R73_RECOVERY -eq 'CI_ONLY') {
+            # R73: on THIS disposable CI runner alone, forcibly crash the
+            # exact owned manager and stop the live native peers from a
+            # separate child process. No OS WFP policy is modified here.
+            $managerState = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
+            if (!$managerState -or $managerState.State -ne 'Running' -or
+                $managerState.ProcessId -le 4) { throw 'R73 missing running owned manager' }
+            $managerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($managerState.ProcessId)" -ErrorAction Stop
+            if (!$managerProcess -or !$managerProcess.ExecutablePath -or
+                ![string]::Equals([IO.Path]::GetFullPath($managerProcess.ExecutablePath),
+                    [IO.Path]::GetFullPath($managerExe),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'R73 manager process executable not owned'
+            }
+            Stop-Process -Id ([int]$managerState.ProcessId) -Force -ErrorAction Stop
+            $deadline = [DateTime]::UtcNow.AddSeconds(20)
+            do {
+                Start-Sleep -Milliseconds 300
+                $managerStatus = (Get-Service -Name $managerName -ErrorAction Stop).Status
+            } while ($managerStatus -ne 'Stopped' -and [DateTime]::UtcNow -lt $deadline)
+            if ($managerStatus -ne 'Stopped') { throw 'R73 manager did not crash' }
+            foreach ($peer in @('lab-peer-a','lab-peer-b')) {
+                if ((Get-Service -Name ('WireGuardTunnel
+        Run-GuiAdminLab '--ci-lab-stop-a'
+        foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
+            $s = Get-Service -Name ('WireGuardTunnel$' + $profile)
+            $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+        if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+            foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
+                $active = Join-Path (Join-Path $root 'config') "$profile.conf"
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                while ((Test-Path $active -PathType Leaf) -and
+                       [DateTime]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 250
+                }
+                if ((Test-Path $active -PathType Leaf) -or
+                    !(Test-Path "$active.dpapi" -PathType Leaf)) {
+                    throw 'R30_FAIL: plaintext config remained after graceful stop'
+                }
+            }
+            Write-Host 'R30_GRACEFUL_SYSTEM_CONFIG_CLEANUP_PASS'
+        }
+        Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
+        }
+    }
+}
+finally {
+    # Worst-case independent cleanup does not require the IPC/GUI to work.
+    # Clean ONLY services created by this exact disposable job.
+    foreach ($svc in @('WireGuardTunnel$lab-peer-b','WireGuardTunnel$lab-peer-a', $managerName)) {
+        if ($createdServices.Contains($svc)) {
+            try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch {}
+            & sc.exe delete $svc | Out-Null
+        }
+    }
+}
+ + $peer) -ErrorAction Stop).Status -ne 'Running') {
+                    throw 'R73 expected native tunnel to outlive manager'
+                }
+            }
+            $rollback = (Resolve-Path './clients/windows/lab/Invoke-R73CiOwnedExpiryRecovery.ps1').Path
+            $futureUtc = [DateTime]::UtcNow.AddMinutes(2).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $refused = $false
+            try { & $rollback -Mode Expire -DeadlineUtc $futureUtc }
+            catch { $refused = $true }
+            if (-not $refused) { throw 'R73 did not refuse pre-expiry shutdown' }
+            foreach ($peer in @('lab-peer-a','lab-peer-b')) {
+                if ((Get-Service -Name ('WireGuardTunnel
+        Run-GuiAdminLab '--ci-lab-stop-a'
+        foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
+            $s = Get-Service -Name ('WireGuardTunnel$' + $profile)
+            $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+        if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+            foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
+                $active = Join-Path (Join-Path $root 'config') "$profile.conf"
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                while ((Test-Path $active -PathType Leaf) -and
+                       [DateTime]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 250
+                }
+                if ((Test-Path $active -PathType Leaf) -or
+                    !(Test-Path "$active.dpapi" -PathType Leaf)) {
+                    throw 'R30_FAIL: plaintext config remained after graceful stop'
+                }
+            }
+            Write-Host 'R30_GRACEFUL_SYSTEM_CONFIG_CLEANUP_PASS'
+        }
+        Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
+    }
+}
+finally {
+    # Worst-case independent cleanup does not require the IPC/GUI to work.
+    # Clean ONLY services created by this exact disposable job.
+    foreach ($svc in @('WireGuardTunnel$lab-peer-b','WireGuardTunnel$lab-peer-a', $managerName)) {
+        if ($createdServices.Contains($svc)) {
+            try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch {}
+            & sc.exe delete $svc | Out-Null
+        }
+    }
+}
+ + $peer)).Status -ne 'Running') {
+                    throw 'R73 early expiry denial mutated service'
+                }
+            }
+            # Launch independent PowerShell process; IPC/GUI and manager are
+            # already unavailable. This verifies an expiry-triggered recovery
+            # PRIMITIVE, not the reliability of Task Scheduler or a reboot.
+            $expiredUtc = [DateTime]::UtcNow.AddSeconds(-15).ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $args = @('-NoProfile','-NonInteractive','-File',('"{0}"' -f $rollback),
+                '-Mode','Expire','-DeadlineUtc',$expiredUtc)
+            $child = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList $args -Wait -PassThru
+            if ($child.ExitCode -ne 0) {
+                throw 'R73 independent expiry recovery process failed'
+            }
+            Write-Host 'R73_NATIVE_MANAGER_CRASH_TO_INDEPENDENT_OWNED_PEER_STOP_PASS'
+        }
+        else {
         Run-GuiAdminLab '--ci-lab-stop-b'
         Run-GuiAdminLab '--ci-lab-stop-a'
         foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {

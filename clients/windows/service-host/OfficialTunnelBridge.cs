@@ -38,6 +38,11 @@ internal static class OfficialTunnelBridge
         // local manifest was regenerated. The service never fixes signatures.
         NativeDriverTrust.RequireTrustedPinnedOfficialDriver(files.WireGuardDll);
 
+        // R80: this check is in the *actual privileged SCM service path*,
+        // not merely a Python preflight. No broadened AllowedIPs, DNS,
+        // extra peer or changed endpoint can reach the native DLL loader.
+        NativeLabInnerScopeGate.Require(files.Config, profile);
+
         // Explicit secure DLL search flags avoid current-working-directory
         // dependency loading. It is STILL necessary to validate signature,
         // provenance, x64 architecture and protected installation ACLs.

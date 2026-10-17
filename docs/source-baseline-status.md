@@ -48,3 +48,24 @@ and rollback are confirmed.
 
 **Release blocker stays enforced.** This document lists historical CI runs,
 not a signed validation report.
+
+## 2026-10-17 addendum — R68 official Windows client / external host
+
+An operator-confirmed **manual** experiment now demonstrates an independent
+public-network WireGuard data path from the **official Windows WireGuard
+client** to a separate pre-existing Linux server. A single tunnel-only
+inner address was pinged three times with three replies (0% lost, 288 ms
+mean). An isolated Linux test interface and its owned firewall rules were
+observed absent afterward, the test-only cloud NSG VNIC association was
+undone, and normal Windows networking and UU were reported working.
+
+This is **not** a success claim for the repository's native WireGuardNT
+client or signed release, and no independent external IPv6/WFP leak proof,
+all-device route, long-lived UU failure continuity, post-ping handshake
+counter capture, or production test-server guarantee was obtained. The
+older CI references above remain same-runner lab evidence. A transient
+cleanup timer and serial rescue account were used; removal of all auxiliary
+resources requires separate confirmation.
+
+Details and remaining checks: [R68 narrow manual evidence](r68-public-path-official-wireguard-manual-evidence.md).
+GA blocker #34 remains OPEN.

@@ -93,6 +93,17 @@ try {
     Run-GuiAdminLab '--ci-lab-start-a'
     Run-GuiAdminLab '--ci-lab-start-b'
 
+    # R70: an independently captured PRE-activation baseline must still
+    # match real Windows OS route and DNS state WHILE native SCM peers run.
+    # This is read-only, exact-branch CI-only and NOT a physical WFP leak test.
+    if ($env:ORACLE_R70_NATIVE_SCOPE) {
+        if ($env:ORACLE_R70_NATIVE_SCOPE -ne 'CI_ONLY') {
+            throw 'R70_REFUSED: invalid live native route audit request'
+        }
+        & ./clients/windows/lab/Test-R70NativeLiveRouteScope.ps1
+        if (-not $?) { throw 'R70 live OS route/DNS verification failed' }
+    }
+
     if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
         foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
             $active = Join-Path (Join-Path $root 'config') "$profile.conf"

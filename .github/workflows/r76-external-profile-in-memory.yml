@@ -1,0 +1,55 @@
+name: R76 single-public-peer native lab config in-memory scope tests
+
+on:
+  pull_request:
+    paths:
+      - 'lab/field-windows/r76_single_public_profile.py'
+      - 'lab/field-windows/test_r76_single_public_profile.py'
+      - '.github/workflows/r76-external-profile-in-memory.yml'
+      - 'docs/r76-single-public-profile-in-memory.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  in-memory-deny-only:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r76-ci-single-public-profile-render-20261017'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Ensure X25519 cryptographic library for test-only ephemeral identities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          python -m pip install cryptography==46.0.3 --disable-pip-version-check
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned X25519 test library missing' }
+      - name: Deny widened profile, wrong keys, hidden DNS and mutating CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          python -m unittest discover -s lab/field-windows -p 'test_r76_single_public_profile.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'R76 synthetic negative profile audit failure' }
+          python ./lab/field-windows/r76_single_public_profile.py --connect
+          if ($LASTEXITCODE -ne 2) { throw 'R76 output generator accepted a privileged CLI' }
+          Write-Host 'R76_MEMORY_ONLY_PROFILE_TEST_PASS'
+          exit 0
+      - name: Guarantee no installer or secret-bearing profile artifact produced
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (Test-Path ./release/ga-evidence.json) { throw 'R76 cannot open GA release' }
+          $artifacts = @(Get-ChildItem -Path ./lab/field-windows -Recurse -File |
+             Where-Object { $_.Extension -in @('.key','.conf','.dpapi','.pfx','.pem') })
+          if ($artifacts.Count -ne 0) { throw 'R76 unexpected secret or native config artifact' }
+          Write-Host 'R76_NO_PROFILE_FILE_OR_REAL_NATIVE_TUNNEL_PASS'

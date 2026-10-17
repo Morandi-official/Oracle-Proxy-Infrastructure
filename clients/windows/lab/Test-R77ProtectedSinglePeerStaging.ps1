@@ -56,6 +56,21 @@ Set-Acl -LiteralPath $root -AclObject $acl -ErrorAction Stop
 $marker=Join-Path $root '.r77-owned'
 'CI_R77_ONLY_DISPOSABLE_GITHUB_VM' |
     Set-Content -LiteralPath $marker -Encoding ascii -NoNewline -ErrorAction Stop
+# R78: give individual files explicit protected DACLs (native host refuses
+# inherited ACEs even when the parent is already Admin/SYSTEM-only).
+function Protect-OwnedSecretFile([string]$path) {
+    if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw 'R78_FAIL: owned candidate file missing before DACL protection'
+    }
+    $fileAcl=Get-Acl -LiteralPath $path -ErrorAction Stop
+    $fileAcl.SetOwner($admin)
+    $fileAcl.SetAccessRuleProtection($true,$true)
+    Set-Acl -LiteralPath $path -AclObject $fileAcl -ErrorAction Stop
+    if (!(Get-Acl -LiteralPath $path).AreAccessRulesProtected) {
+        throw 'R78_FAIL: owned candidate still inherits ACLs'
+    }
+}
+Protect-OwnedSecretFile $marker
 $aclr=Get-Acl -LiteralPath $root -ErrorAction Stop
 foreach ($path in @($root,$marker)) {
     $control=Get-Acl -LiteralPath $path -ErrorAction Stop
@@ -75,6 +90,7 @@ $file=Join-Path $root 'lab-peer-a.conf'
 if (!(Test-Path -LiteralPath $file -PathType Leaf)) {
     throw 'R77: protected config missing'
 }
+Protect-OwnedSecretFile $file
 $fileAcl=Get-Acl -LiteralPath $file -ErrorAction Stop
 $access=@($fileAcl.GetAccessRules($true,$true,
     [Security.Principal.SecurityIdentifier]))

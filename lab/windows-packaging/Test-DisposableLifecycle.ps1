@@ -139,6 +139,15 @@ try {
     }
     $guiProcess = Start-Process -FilePath $gui -ArgumentList '--manager-status-self-test' -Wait -PassThru
     if ($guiProcess.ExitCode -ne 0) { throw 'R5 GUI status pipe cannot be queried' }
+    # R66: this is the REAL default-compiled, running LocalSystem service,
+    # not a fake kernel or mere protocol parser. The GUI must independently
+    # bind its control pipe to the SCM service PID and observe *both* denials.
+    # It cannot create a VPN, WFP rule, default route, DNS change or driver.
+    $denyProcess = Start-Process -FilePath $gui -ArgumentList '--manager-control-denial-test' -Wait -PassThru
+    if ($denyProcess.ExitCode -ne 0) {
+        throw 'R66 GUI-to-real-SYSTEM authenticated connect/disconnect denial failed'
+    }
+    Write-Host 'R66_DEFAULT_GUI_TO_REAL_SYSTEM_CONTROL_DENIAL_PASS'
     Write-Host 'R5_INSTALL_SMOKE_PASS: status-only LocalSystem service deployed from protected staging dir; GUI reads authenticated IPC'
 }
 finally {

@@ -45,8 +45,7 @@ $system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18')
 $acl=[Security.AccessControl.DirectorySecurity]::new()
 $acl.SetOwner($admin)
 $acl.SetAccessRuleProtection($true,$false)
-$inherit=[Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
-         [Security.AccessControl.InheritanceFlags]::ObjectInherit
+$inherit=([Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit)
 foreach ($sid in @($admin,$system)) {
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
         $sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,

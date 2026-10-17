@@ -15,6 +15,8 @@ on:
       - 'clients/windows/lab/wgnt-service-observe.c'
       - 'clients/windows/lab/wgnt-data-plane.c'
       - 'clients/windows/lab/wgnt-app-dns.c'
+      - 'lab/independent-peer/r69_native_scope.py'
+      - 'clients/windows/lab/test_r69_native_scope.py'
 
 permissions:
   contents: read
@@ -25,7 +27,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -62,6 +64,19 @@ jobs:
       - name: Stage narrow-route lab configurations and NTFS protected DLLs
         shell: pwsh
         run: ./clients/windows/lab/stage-scm-lab.ps1
+      - name: R69 independent deny-by-default audit of actual native lab configs before SCM services
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m unittest discover -s clients/windows/lab -p 'test_r69_native_scope.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'R69 negative profile audit regression' }
+          $env:RUNNER_ENVIRONMENT='forbidden'
+          python ./lab/independent-peer/r69_native_scope.py --audit-staged
+          if ($LASTEXITCODE -ne 3) { throw 'R69 unapproved runner bypassed staging guard' }
+          $env:RUNNER_ENVIRONMENT='github-hosted'
+          python ./lab/independent-peer/r69_native_scope.py --audit-staged
+          if ($LASTEXITCODE -ne 0) { throw 'R69 real staged native profiles are unsafe' }
+          Write-Host 'R69_NATIVE_SCOPE_STAGED_BEFORE_SCM_PASS'
       - name: Verify application-level UDP receipt and DNS A/AAAA response via GUI admin IPC and SCM services
         shell: pwsh
         timeout-minutes: 4

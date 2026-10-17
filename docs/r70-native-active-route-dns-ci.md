@@ -11,7 +11,7 @@ The G14 hosted Windows test uses its independent pre-tunnel snapshots and calls 
 - Refuses execution without exact hosted CI environment, protected owned-lab marker and a prior snapshot.
 - Reads (does not alter) real Windows default IPv4/IPv6 routes; requires exact baseline equality during the active tunnel.
 - Requires two distinct named native adapters, each exposing the exact synthetic peer /32 IPv4 and /128 IPv6 route, and forbids default or widened /24 and /64 adapter prefixes.
-- Rejects any DNS server attached to the native lab adapters, and requires existing interfaces' DNS server configuration to remain equal to the pre-activation baseline.
+- Rejects actual or unknown DNS server addresses attached to native lab adapters. Some Windows native adapters report precisely three legacy IPv6 site-local placeholder addresses (fec0:0:0:ffff::1/::2/::3) despite no DNS profile entry; only these exact sentinel values can be classified as OS placeholders, with positive and negative classification tests and only a safe count logged. Separately requires existing interfaces' DNS server configuration to remain equal to the pre-activation baseline. This is **not** a DNS packet leak test.
 - Runs a negative unhosted invocation and then real WireGuardNT duplex UDP and DNS packet tests. Always-run cleanup independently rechecks services, interfaces, routes, DNS and firewall count.
 
 **No network change is initiated by the new audit.** The existing tunnel services only run on disposable GitHub Windows CI, with dedicated lab keys and fixed localhost peer endpoints. Success marker: `R70_ACTIVE_NATIVE_ROUTES_AND_DNS_NARROW_PASS`.

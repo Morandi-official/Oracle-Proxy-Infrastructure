@@ -64,9 +64,32 @@ foreach ($name in @('lab-peer-a','lab-peer-b')) {
 # The two newly created adapter records are expected to appear; no DNS server
 # may be configured on them, and EXISTING interfaces' DNS must be unaltered.
 $dnsAll = @(Get-DnsClientServerAddress -ErrorAction Stop)
+# Windows may surface the three historical RFC3879 site-local DNS sentinel
+# addresses on otherwise DNS-unconfigured newly attached IPv6 adapters.
+# They are NOT proof of a working resolver. Refuse ANY other entry; never
+# silently ignore arbitrary native DNS addresses.
+$osIpv6Placeholders = @(
+    'fec0:0:0:ffff::1','fec0:0:0:ffff::2','fec0:0:0:ffff::3'
+)
+function Is-OsPlaceholderDns([string]$address) {
+    try {
+        $parsed = [System.Net.IPAddress]::Parse($address)
+        return ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6 -and
+            $parsed.ToString().ToLowerInvariant() -in $osIpv6Placeholders)
+    } catch { return $false }
+}
+if (-not (Is-OsPlaceholderDns 'fec0:0:0:ffff::1') -or
+    (Is-OsPlaceholderDns '1.1.1.1') -or
+    (Is-OsPlaceholderDns '2001:4860:4860::8888')) {
+    throw 'R70_FAIL: DNS placeholder classifier negative test failed'
+}
+$placeholderCount = 0
 foreach ($record in @($dnsAll | Where-Object { $_.InterfaceIndex -in $indexes })) {
-    if (@($record.ServerAddresses | Where-Object { $_ }).Count -ne 0) {
-        throw 'R70_FAIL: unexpected DNS server on native test adapter'
+    foreach ($server in @($record.ServerAddresses | Where-Object { $_ })) {
+        if (-not (Is-OsPlaceholderDns ([string]$server))) {
+            throw 'R70_FAIL: native test adapter has unclassified DNS address'
+        }
+        $placeholderCount++
     }
 }
 $currentPhysicalDns = @( $dnsAll |
@@ -77,4 +100,5 @@ $currentPhysicalDns = @( $dnsAll |
 if ($currentPhysicalDns -ne [string]$baseOs.dns) {
     throw 'R70_FAIL: preexisting interface DNS changed while native tunnel active'
 }
-Write-Host 'R70_ACTIVE_NATIVE_ROUTES_AND_DNS_NARROW_PASS: independent OS route/DNS evidence, CI-only; no public path or WFP leak proof'
+Write-Host "R70_NATIVE_OS_IPV6_DNS_PLACEHOLDERS_ONLY: count=$placeholderCount (not actual DNS leak evidence)"
+Write-Host 'R70_ACTIVE_NATIVE_ROUTES_AND_DNS_NARROW_PASS: OS defaults, pinned peers and existing DNS unchanged; no public path or WFP leak proof'

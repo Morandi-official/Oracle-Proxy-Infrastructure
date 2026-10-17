@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   local-system-native-memory:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/r48-system-owned-fixed-allapp-wfp'
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feature/r48-system-owned-fixed-allapp-wfp' || github.event.pull_request.head.ref == 'test/r63-system-wgnt-wfp-current-main-20261017')
     runs-on: windows-latest
     timeout-minutes: 22
     env:

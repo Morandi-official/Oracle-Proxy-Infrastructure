@@ -362,6 +362,9 @@ try {
         }
 
     } else {
+        if ($env:ORACLE_R73_RECOVERY -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R73ManagerCrashAndRecover.ps1 -ExpectedManagerExe $managerExe
+        } else {
         Run-GuiAdminLab '--ci-lab-stop-b'
         Run-GuiAdminLab '--ci-lab-stop-a'
         foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
@@ -384,6 +387,7 @@ try {
             Write-Host 'R30_GRACEFUL_SYSTEM_CONFIG_CLEANUP_PASS'
         }
         Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
+        }
     }
 }
 finally {

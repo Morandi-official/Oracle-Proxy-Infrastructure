@@ -41,6 +41,10 @@ internal static class Program
             return FieldTrialRuntimeLease.SelfTest();
         if (args.Length == 1 && args[0] == "--ci-r81-field-readonly-review")
             return FieldTrialRuntimeLease.CiReview();
+        // R83 performs a negative test on a VALID staged lease. This command
+        // cannot start a native service, even with lab-field compiled in.
+        if (args.Length == 1 && args[0] == "--ci-r83-prove-field-native-denied")
+            return FieldTrialRuntimeLease.CiProveNativeFieldBlocked();
 #endif
 
         if (args.Length == 1 && args[0] == "--service-status")

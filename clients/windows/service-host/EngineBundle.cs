@@ -19,7 +19,11 @@ internal static class EngineBundle
     internal sealed record VerifiedFiles(string TunnelDll, string WireGuardDll, string Config);
 
     internal static bool IsAllowedLabProfile(string profile) =>
-        profile is "lab-only" or "lab-peer-a" or "lab-peer-b";
+        profile is "lab-only" or "lab-peer-a" or "lab-peer-b"
+#if ENABLE_ATTENDED_FIELD_TRIAL
+        or "lab-field"
+#endif
+        ;
 
     internal static string FixedConfigPath(string profile)
     {
@@ -46,8 +50,12 @@ internal static class EngineBundle
 
         directory = Path.GetFullPath(directory);
         configPath = Path.GetFullPath(configPath);
-        if (!new[] { FixedLabConfigFile, "lab-peer-a.conf", "lab-peer-b.conf" }
-            .Contains(Path.GetFileName(configPath), StringComparer.OrdinalIgnoreCase))
+        if (!new[] {
+            FixedLabConfigFile, "lab-peer-a.conf", "lab-peer-b.conf"
+#if ENABLE_ATTENDED_FIELD_TRIAL
+            , "lab-field.conf"
+#endif
+        }.Contains(Path.GetFileName(configPath), StringComparer.OrdinalIgnoreCase))
             throw new InvalidOperationException("Only fixed lab config name allowed");
 
         CheckRealDirectory(directory);

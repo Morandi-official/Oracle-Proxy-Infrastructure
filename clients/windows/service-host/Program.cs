@@ -27,6 +27,13 @@ internal static class Program
         if (args.Length == 1 && args[0] == "--ci-r79-native-bundle-review")
             return NativeBundleReadOnlyReview.Audit();
 
+        // R80: tests use exactly the same strict scope guard that the
+        // real LocalSystem native service now invokes before LoadLibrary.
+        if (args.Length == 1 && args[0] == "--ci-r80-scope-self-test")
+            return NativeLabInnerScopeGate.SelfTest();
+        if (args.Length == 1 && args[0] == "--ci-r80-owned-scope-review")
+            return NativeLabInnerScopeGate.TestCiOwnedFiles();
+
         if (args.Length == 1 && args[0] == "--service-status")
         {
             Console.WriteLine(LabServiceStatus.SanitizedJson());

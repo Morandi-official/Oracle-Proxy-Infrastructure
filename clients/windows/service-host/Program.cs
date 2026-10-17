@@ -34,6 +34,15 @@ internal static class Program
         if (args.Length == 1 && args[0] == "--ci-r80-owned-scope-review")
             return NativeLabInnerScopeGate.TestCiOwnedFiles();
 
+#if ENABLE_ATTENDED_FIELD_TRIAL
+        // Offline/CI test commands for the separately compiled field
+        // diagnostic build. Neither of these can start a service.
+        if (args.Length == 1 && args[0] == "--ci-r81-field-self-test")
+            return FieldTrialRuntimeLease.SelfTest();
+        if (args.Length == 1 && args[0] == "--ci-r81-field-readonly-review")
+            return FieldTrialRuntimeLease.CiReview();
+#endif
+
         if (args.Length == 1 && args[0] == "--service-status")
         {
             Console.WriteLine(LabServiceStatus.SanitizedJson());

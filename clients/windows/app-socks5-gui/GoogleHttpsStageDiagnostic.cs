@@ -142,26 +142,26 @@ internal static class GoogleHttpsStageDiagnostic
                 await tls.WriteAsync(request, step.Token);
                 var firstLine = new List<byte>(160);
                 var single = new byte[1];
-                while (firstLine.Count < 160)
+                bool lineComplete = false;
+                while (firstLine.Count < MaxHttpStatusLineBytes)
                 {
                     int read = await tls.ReadAsync(single, step.Token);
                     if (read != 1)
-                        return new(label, "TLS 成功，但未收到 HTTP 状态行",
+                        return new(label, "TLS 成功，但未收到完整 HTTP 状态行",
                             socksMs, tlsMs, watch.ElapsedMilliseconds - socksMs - tlsMs);
-                    if (single[0] == '\n') break;
+                    if (single[0] == '\n')
+                    {
+                        lineComplete = true;
+                        break;
+                    }
                     firstLine.Add(single[0]);
                 }
                 httpMs = watch.ElapsedMilliseconds - socksMs - tlsMs;
-                string responseLine = Encoding.ASCII.GetString(
-                    firstLine.ToArray()).Trim();
-                if (!responseLine.StartsWith("HTTP/1.", StringComparison.Ordinal))
-                    return new(label, "TLS 成功，但 HTTP 状态行异常",
+                if (!lineComplete)
+                    return new(label, "TLS 成功，但 HTTP 状态行超过长度上限",
                         socksMs, tlsMs, httpMs);
-                string[] parts = responseLine.Split(' ', 3,
-                    StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 2 || !int.TryParse(parts[1], out int status) ||
-                    status < 100 || status > 599)
-                    return new(label, "TLS 成功，但 HTTP 状态码异常",
+                if (!TryParseHttpStatusLine(firstLine.ToArray(), out int status))
+                    return new(label, "TLS 成功，但 HTTP 状态行无效",
                         socksMs, tlsMs, httpMs);
                 return new(label, "TLS 验证通过、HTTP " + status,
                     socksMs, tlsMs, httpMs);
@@ -194,11 +194,60 @@ internal static class GoogleHttpsStageDiagnostic
         }
     }
 
+    // Only a complete bounded HTTP/1.0 or HTTP/1.1 status line is evidence
+    // of a valid first response. Never turn a truncated or malformed line
+    // into apparent HTTPS success, even if it contains three numeric digits.
+    private const int MaxHttpStatusLineBytes = 160;
+
+    private static bool TryParseHttpStatusLine(ReadOnlySpan<byte> line,
+        out int status)
+    {
+        status = 0;
+        if (line.Length is < 13 or > MaxHttpStatusLineBytes ||
+            line[^1] != (byte)'\r')
+            return false;
+        if (!line.StartsWith("HTTP/1.0 "u8) &&
+            !line.StartsWith("HTTP/1.1 "u8))
+            return false;
+        if (line.Length > 13 && line[12] != (byte)' ')
+            return false;
+        for (int i = 9; i <= 11; ++i)
+        {
+            if (line[i] < (byte)'0' || line[i] > (byte)'9')
+                return false;
+        }
+        status = (line[9] - (byte)'0') * 100 +
+                 (line[10] - (byte)'0') * 10 +
+                 line[11] - (byte)'0';
+        return status is >= 100 and <= 599;
+    }
+
+    private static bool StatusLineSelfTest()
+    {
+        static bool Pass(string line, int expected) =>
+            TryParseHttpStatusLine(Encoding.ASCII.GetBytes(line),
+                out int status) && status == expected;
+        static bool Reject(string line) =>
+            !TryParseHttpStatusLine(Encoding.ASCII.GetBytes(line), out _);
+        return Pass("HTTP/1.1 204\r", 204) &&
+            Pass("HTTP/1.1 302 Found\r", 302) &&
+            Pass("HTTP/1.0 301 Moved Permanently\r", 301) &&
+            Reject("HTTP/1.1 200") &&
+            Reject("HTTP/1.1 200\n") &&
+            Reject("HTTP/1.X 200\r") &&
+            Reject("HTTP/1.1 20A\r") &&
+            Reject("HTTP/1.1 999\r") &&
+            Reject("HTTP/1.1 200OK\r") &&
+            Reject("HTTP/1.1 200\rgarbage") &&
+            Reject("HTTP/1.1 200 " + new string('A', 160) + "\r");
+    }
+
     // CI-only mock local SOCKS5 -> self-signed TLS endpoint.
     // A strict TLS client MUST reject this test certificate.
     // No external network, no mock Gmail response, no trust bypass.
     internal static async Task<bool> SelfTestAsync()
     {
+        if (!StatusLineSelfTest()) return false;
         using RSA rsa = RSA.Create(2048);
         var req = new CertificateRequest("CN=accounts.google.com", rsa,
             HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);

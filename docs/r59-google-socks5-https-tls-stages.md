@@ -62,3 +62,36 @@ Gmail experience works. Then disconnect and check UU connectivity.
 
 Full-device WireGuard tunnel, WFP kill switch and UU safe exemption
 remain incomplete. This package is NOT a WireSock VPN replacement.
+
+## Physical Windows field acceptance — 2026-10-17 (R59 original unsigned ZIP)
+
+The operator ran the R59 GUI with the previously verified, strict
+host-key SSH configuration and confirmed the three unauthenticated
+Google HTTPS probes via the **loopback** SOCKS5 listener:
+
+| Probe | SOCKS | strict TLS | first HTTP |
+| --- | ---: | ---: | ---: |
+| Google `/generate_204` | 256 ms | 274 ms | 204, 265 ms |
+| Google accounts entry | 521 ms | 264 ms | 302, 297 ms |
+| Gmail `/mail/` entry | 490 ms | 255 ms | 301, 1686 ms |
+
+The separate, explicitly SOCKS5-configured Edge test profile also
+**opened Gmail**; the operator observed noticeably faster, smooth
+loading than in prior R58 investigations. After GUI disconnect,
+the `127.0.0.1:10880` listener check yielded no listener and the
+operator confirmed ordinary networking and UU remote control were
+normal. The earlier two-provider Oracle exit verification remains
+the R57/R58 field result; **do not** interpret HTTP 301/302 as proof
+of a completed authenticated Gmail session.
+
+**Scope**: a successful attended session, not a soak test, cross-host
+VPN check, all-app DNS/UDP/IPv6 protection, driver trust, signed
+installer or safe WireSock replacement. Previous
+`ERR_CONNECTION_CLOSED` reports are not root-caused by this
+successful retest; neither IPv6 nor another single cause has been
+established. No live Oracle configuration, global Windows proxy,
+firewall/WFP, routes, DNS, WireSock or UU was changed for this result.
+
+Keep GA blocker #34 open. R59.1 subsequently hardened HTTP
+status-line parsing on main; its Windows CI passes, but this field
+result concerns the original R59 ZIP, not a physical R59.1 retest.

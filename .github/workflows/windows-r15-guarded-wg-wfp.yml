@@ -61,7 +61,7 @@ jobs:
       - name: Stage narrow-route lab configurations and NTFS protected DLLs
         shell: pwsh
         run: ./clients/windows/lab/stage-scm-lab.ps1
-      - name: Negative: guard cannot run outside an authorized disposable environment
+      - name: 'Negative: guard cannot run outside an authorized disposable environment'
         shell: pwsh
         run: |
           $env:RUNNER_ENVIRONMENT = 'forbidden'

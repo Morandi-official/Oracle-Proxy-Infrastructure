@@ -29,7 +29,21 @@ internal static class FieldTrialRuntimeLease
         "separate_operator_approval_required", "operator_confirmation_recorded"
     };
 
+    // R83 runtime activation is deliberately DENIED even for a valid
+    // protected field lease. Boolean operator_confirmation_recorded is
+    // self-asserted metadata, NOT witnessed authorization. R82's OFFLINE
+    // expiry task deletes only files and cannot stop a live native service.
+    // No connected native field service is allowed until a separately
+    // validated SYSTEM-owned *live service safe-Off*, signed consent and
+    // independent reboot recovery are integrated.
     internal static void Require(string configPath)
+    {
+        ReviewScopeOnly(configPath);
+        throw new InvalidOperationException(
+            "Field native activation requires an independently verified safe-Off gate");
+    }
+
+    internal static void ReviewScopeOnly(string configPath)
     {
         if (!OperatingSystem.IsWindows() ||
             !Path.GetFullPath(configPath).Equals(
@@ -197,10 +211,29 @@ internal static class FieldTrialRuntimeLease
         if (!CiContext()) return 3;
         try
         {
-            Require(EngineBundle.FixedConfigPath(Profile));
+            ReviewScopeOnly(EngineBundle.FixedConfigPath(Profile));
             Console.WriteLine("R81_PROTECTED_EXPIRING_FIELD_LEASE_SCOPE_REVIEW_PASS");
             Console.WriteLine("R81_NETWORK_ACTIVATION_APPROVED=false");
             return 0;
+        }
+        catch { return 3; }
+    }
+
+    internal static int CiProveNativeFieldBlocked()
+    {
+        if (!CiContext()) return 3;
+        try
+        {
+            // A valid lease and correct NTFS ACL still MUST NOT be a
+            // runnable VPN without genuine service safe-Off and consent.
+            ReviewScopeOnly(EngineBundle.FixedConfigPath(Profile));
+            try { Require(EngineBundle.FixedConfigPath(Profile)); }
+            catch (InvalidOperationException)
+            {
+                Console.WriteLine("R83_VALID_LEASE_STILL_REFUSES_NATIVE_FIELD_START_PASS");
+                return 0;
+            }
+            return 1;
         }
         catch { return 3; }
     }

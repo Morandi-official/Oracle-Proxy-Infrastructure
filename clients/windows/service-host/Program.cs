@@ -16,6 +16,13 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--ci-sealed-wireguard-service")
             return CiSealedConfig.InvokeFromSystemService(args[1]);
 #endif
+        // R78: CI-only, read-only candidate policy review. Never invoke
+        // WireGuardTunnelService, native DLL loading or SCM controls.
+        if (args.Length == 1 && args[0] == "--ci-r78-field-scope-self-test")
+            return FieldCandidateScopeReview.SelfTest();
+        if (args.Length == 1 && args[0] == "--ci-r78-field-scope-review")
+            return FieldCandidateScopeReview.ReviewOwnedStagedFile();
+
         if (args.Length == 1 && args[0] == "--service-status")
         {
             Console.WriteLine(LabServiceStatus.SanitizedJson());

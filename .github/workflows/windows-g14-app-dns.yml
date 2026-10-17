@@ -15,6 +15,7 @@ on:
       - 'clients/windows/lab/wgnt-service-observe.c'
       - 'clients/windows/lab/wgnt-data-plane.c'
       - 'clients/windows/lab/wgnt-app-dns.c'
+      - 'clients/windows/lab/Test-R70NativeLiveRouteScope.ps1'
       - 'lab/independent-peer/r69_native_scope.py'
       - 'clients/windows/lab/test_r69_native_scope.py'
 
@@ -27,7 +28,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017' || github.event.pull_request.head.ref == 'test/r70-live-native-route-dns-20261017')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -80,7 +81,16 @@ jobs:
       - name: Verify application-level UDP receipt and DNS A/AAAA response via GUI admin IPC and SCM services
         shell: pwsh
         timeout-minutes: 4
-        run: ./clients/windows/lab/run-admin-controlled-scm.ps1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Untrusted invocation must fail before any audit of host network state.
+          $env:ORACLE_R70_NATIVE_SCOPE = 'CI_ONLY'
+          $env:RUNNER_ENVIRONMENT = 'forbidden'
+          $rejected = $false
+          try { & ./clients/windows/lab/Test-R70NativeLiveRouteScope.ps1 } catch { $rejected = $true }
+          if (-not $rejected) { throw 'R70 host denial bypassed' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          ./clients/windows/lab/run-admin-controlled-scm.ps1
       - name: ALWAYS remove only disposable SCM services, native DLLs and secrets
         if: always()
         shell: pwsh

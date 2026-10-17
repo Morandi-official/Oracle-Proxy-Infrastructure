@@ -1,0 +1,86 @@
+name: R83 valid field lease MUST NOT start native VPN without service safe-Off
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/service-host/FieldTrialRuntimeLease.cs'
+      - 'clients/windows/service-host/Program.cs'
+      - '.github/workflows/r83-field-runtime-hard-stop.yml'
+      - 'docs/r83-field-runtime-live-safeoff-blocker.md'
+
+permissions:
+  contents: read
+
+jobs:
+  deny-field-native-without-genuine-safeoff:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r83-field-runtime-hard-stop-20261017'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      ORACLE_R81: CI_ONLY
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Default build entirely excludes field service; compile-time safety
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableAttendedFieldTrial=false -o ./dist/r83-default
+          if ($LASTEXITCODE -ne 0) { throw 'R83 default compile failed' }
+          & ./dist/r83-default/OracleProxy.WireGuardHost.exe --wireguard-service lab-field
+          if ($LASTEXITCODE -ne 2) { throw 'R83 default accepted field service profile' }
+          & ./dist/r83-default/OracleProxy.WireGuardHost.exe --ci-r83-prove-field-native-denied
+          if ($LASTEXITCODE -ne 2) { throw 'R83 default included field test command' }
+          Write-Host 'R83_RELEASE_COMPILATION_EXCLUDES_FIELD_NATIVE_PASS'
+          exit 0
+      - name: Explicit lab diagnostic build still has read-only lease validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet clean ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 -p:EnableAttendedFieldTrial=false
+          if ($LASTEXITCODE -ne 0) { throw 'R83 lab clean failed' }
+          dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableAttendedFieldTrial=true -o ./dist/r83-test
+          if ($LASTEXITCODE -ne 0) { throw 'R83 diagnostic build failed' }
+          $exe=(Resolve-Path ./dist/r83-test/OracleProxy.WireGuardHost.exe).Path
+          & $exe --ci-r81-field-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R83 broke lease scope regression' }
+          & $exe --ci-r83-prove-field-native-denied
+          if ($LASTEXITCODE -ne 3) { throw 'R83 absent lease accepted activation proof' }
+          Write-Host 'R83_EXPLICIT_BUILD_RETAINS_SCOPE_BUT_REJECTS_ABSENT_LEASE_PASS'
+          exit 0
+      - name: VALID protected lease is not permission to load native driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          ./clients/windows/lab/Test-R81FieldLeaseStaging.ps1
+          $exe=(Resolve-Path ./dist/r83-test/OracleProxy.WireGuardHost.exe).Path
+          & $exe --ci-r81-field-readonly-review
+          if ($LASTEXITCODE -ne 0) { throw 'R83 valid offline lease review refused' }
+          & $exe --ci-r83-prove-field-native-denied
+          if ($LASTEXITCODE -ne 0) { throw 'R83 valid self-asserted consent bypassed safe-Off gate' }
+          & $exe --wireguard-service lab-field
+          if ($LASTEXITCODE -ne 3) { throw 'R83 non-SYSTEM field start not denied' }
+          Write-Host 'R83_VALID_UNAUTHENTICATED_CONSENT_CANNOT_ACTIVATE_NATIVE_PASS'
+          exit 0
+      - name: ALWAYS remove exact test synthetic config
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/Invoke-R81CleanupOwnedLease.ps1
+      - name: ALWAYS prove no field native driver, service or route
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (Test-Path (Join-Path $env:ProgramData 'OracleProxyLab')) { throw 'R83 field files remain' }
+          if (Get-Service -Name 'WireGuardTunnel$lab-field' -ErrorAction SilentlyContinue) {
+            throw 'R83 unexpected field service installed'
+          }
+          if (@(Get-NetRoute -ErrorAction Stop |
+            Where-Object DestinationPrefix -in @('10.77.72.1/32','10.77.72.2/32')).Count -ne 0) {
+            throw 'R83 changed Windows routes'
+          }
+          Write-Host 'R83_NO_NATIVE_FIELD_ACTIVATION_OR_RESIDUAL_PASS'

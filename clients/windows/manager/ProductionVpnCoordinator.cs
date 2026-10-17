@@ -23,6 +23,7 @@ internal interface IProductionVpnKernel
     // use profile JSON or the process-scoped R21-R26 CI policy as evidence.
     WfpCoverage AuditExistingSystemWfp();
     EgressInterfaceCoverage AuditEgressInterfaceCoverage();
+    RemoteControlContinuityEvidence AuditRemoteControlContinuity();
     bool VerifyPinnedSignedTunnel();
     ProtectedKeyLease OpenProtectedPeerKey();
     void StartFixedTunnel(ReadOnlySpan<byte> privateKey);
@@ -68,6 +69,7 @@ internal sealed class UnavailableProductionKernel : IProductionVpnKernel
 {
     public WfpCoverage AuditExistingSystemWfp() => default;
     public EgressInterfaceCoverage AuditEgressInterfaceCoverage() => default;
+    public RemoteControlContinuityEvidence AuditRemoteControlContinuity() => default;
     public bool VerifyPinnedSignedTunnel() => false;
     public ProtectedKeyLease OpenProtectedPeerKey() =>
         throw new InvalidOperationException("Protected SYSTEM key adapter unavailable");
@@ -116,6 +118,8 @@ internal sealed class ProductionVpnCoordinator
                     return "WFP_FAIL_CLOSED_NOT_IMPLEMENTED";
                 if (!_kernel.AuditEgressInterfaceCoverage().Verified)
                     return "EGRESS_INTERFACE_SCOPE_NOT_VERIFIED";
+                if (!_kernel.AuditRemoteControlContinuity().Verified)
+                    return "REMOTE_CONTROL_CONTINUITY_NOT_VERIFIED";
                 if (!_kernel.VerifyPinnedSignedTunnel())
                     return "TUNNEL_TRUST_NOT_VERIFIED";
                 using var lease = _kernel.OpenProtectedPeerKey();
@@ -124,8 +128,9 @@ internal sealed class ProductionVpnCoordinator
                 if (!_kernel.ReadAuthenticatedTunnelProof().Verified)
                     throw new InvalidOperationException("No authenticated in-tunnel data proof");
                 if (!_kernel.AuditExistingSystemWfp().AllVerified ||
-                    !_kernel.AuditEgressInterfaceCoverage().Verified)
-                    throw new InvalidOperationException("WFP or interface scope lost during startup");
+                    !_kernel.AuditEgressInterfaceCoverage().Verified ||
+                    !_kernel.AuditRemoteControlContinuity().Verified)
+                    throw new InvalidOperationException("WFP, interface or remote continuity lost during startup");
                 _state = ProductionTunnelState.Connected;
                 return "CONNECTED_VERIFIED";
             }
@@ -157,6 +162,7 @@ internal sealed class ProductionVpnCoordinator
                 if (!_kernel.VerifyTunnelStopped() ||
                     !_kernel.AuditExistingSystemWfp().AllVerified ||
                     !_kernel.AuditEgressInterfaceCoverage().Verified ||
+                    !_kernel.AuditRemoteControlContinuity().Verified ||
                     !_kernel.StageOwnedRouteDnsRecovery() ||
                     !_kernel.PersistExplicitOffIntent())
                     throw new InvalidOperationException("Unsafe disconnect precondition");
@@ -164,8 +170,9 @@ internal sealed class ProductionVpnCoordinator
                 // release. This narrows the stale-evidence interval but is
                 // NOT atomic with WFP and is not a production implementation.
                 if (!_kernel.AuditExistingSystemWfp().AllVerified ||
-                    !_kernel.AuditEgressInterfaceCoverage().Verified)
-                    throw new InvalidOperationException("WFP/interface scope changed before release");
+                    !_kernel.AuditEgressInterfaceCoverage().Verified ||
+                    !_kernel.AuditRemoteControlContinuity().Verified)
+                    throw new InvalidOperationException("WFP/interface/remote continuity changed before release");
                 releaseAttempted = true; // even an exception/false can mean partial release
                 if (!_kernel.ReleaseOnlyOwnedWfp() ||
                     !_kernel.VerifyDirectNetworkRestored())

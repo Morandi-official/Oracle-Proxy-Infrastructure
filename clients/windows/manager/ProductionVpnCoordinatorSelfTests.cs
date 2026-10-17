@@ -10,6 +10,8 @@ internal static class ProductionVpnCoordinatorSelfTests
         internal string? FailAt;
         internal int FailWfpOnAuditNumber;
         internal int FailEgressOnAuditNumber;
+        internal int FailRemoteOnAuditNumber;
+        private int _remoteAudits;
         private int _egressAudits;
         internal bool ReprotectThrows;
         private int _wfpAudits;
@@ -36,6 +38,15 @@ internal static class ProductionVpnCoordinatorSelfTests
             return new EgressInterfaceCoverage(valid, valid, valid,
                 valid, valid, new int[] { 10 }, new int[] { 10 },
                 new int[] { 10, 11 }, new int[] { 10, 11 });
+        }
+        public RemoteControlContinuityEvidence AuditRemoteControlContinuity()
+        {
+            _remoteAudits++;
+            bool valid = Check("Remote") &&
+                (FailRemoteOnAuditNumber == 0 ||
+                 _remoteAudits != FailRemoteOnAuditNumber);
+            return new RemoteControlContinuityEvidence(valid, valid, valid,
+                valid, valid, valid, valid, valid, valid, valid);
         }
         public bool VerifyPinnedSignedTunnel() => Check("Trust");
         public ProtectedKeyLease OpenProtectedPeerKey()
@@ -89,15 +100,16 @@ internal static class ProductionVpnCoordinatorSelfTests
             var all = new WfpCoverage(true,true,true,true,true,true,true,true,
                 true,true,true,false);
             Check(!all.AllVerified);
-            foreach (var failedStep in new [] {"Wfp","Egress","Trust","Unseal","Start","Handshake"})
+            foreach (var failedStep in new [] {"Wfp","Egress","Remote","Trust","Unseal","Start","Handshake"})
             {
                 var fake = new FakeKernel { FailAt = failedStep };
                 var tx = new ProductionVpnCoordinator(fake);
                 string code = tx.Connect();
-                if (failedStep is "Wfp" or "Egress" or "Trust")
+                if (failedStep is "Wfp" or "Egress" or "Remote" or "Trust")
                 {
                     Check(code is "WFP_FAIL_CLOSED_NOT_IMPLEMENTED" or
                         "EGRESS_INTERFACE_SCOPE_NOT_VERIFIED" or
+                        "REMOTE_CONTROL_CONTINUITY_NOT_VERIFIED" or
                         "TUNNEL_TRUST_NOT_VERIFIED");
                     Check(!fake.Calls.Contains("Unseal"));
                     Check(!fake.Calls.Contains("Start"));
@@ -113,7 +125,7 @@ internal static class ProductionVpnCoordinatorSelfTests
                 if (fake.Secret is not null)
                     Check(fake.Secret.All(b => b == 0));
             }
-            foreach (var fail in new [] {"Stop","Stopped","Wfp","Egress","RestoreStage",
+            foreach (var fail in new [] {"Stop","Stopped","Wfp","Egress","Remote","RestoreStage",
                                        "OffDurable","Release","Direct"})
             {
                 var fake = new FakeKernel();
@@ -124,7 +136,7 @@ internal static class ProductionVpnCoordinatorSelfTests
                 fake.Calls.Clear();
                 Check(tx.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
                 if (fail is "Stop" or "Stopped" or "Wfp" or "Egress" or
-                    "RestoreStage" or "OffDurable")
+                    "Remote" or "RestoreStage" or "OffDurable")
                 {
                     Check(!fake.Calls.Contains("Release"));
                     Check(!fake.Calls.Contains("Reprotect"));
@@ -172,6 +184,47 @@ internal static class ProductionVpnCoordinatorSelfTests
             Check(!movedEgress.Calls.Contains("Reprotect"));
             Check(movedEgress.Calls.Contains("OffDurable"));
             Check(guardedRoute.State == ProductionTunnelState.RecoveryRequired);
+
+            // R62: remote-control identity, multi-transport and independent
+            // physical recovery are NOT proven by an executable basename or
+            // a single TCP keepalive. Every unverified dimension rejects.
+            var remote = new RemoteControlContinuityEvidence(true,true,true,
+                true,true,true,true,true,true,true);
+            Check(remote.Verified);
+            Check(!default(RemoteControlContinuityEvidence).Verified);
+            Check(!(remote with { IndependentOsSessionInventory = false }).Verified);
+            Check(!(remote with { SignedImagePathAndTokenIdentityVerified = false }).Verified);
+            Check(!(remote with { ActiveTransportAndEndpointInventoryComplete = false }).Verified);
+            Check(!(remote with { Ipv4TcpUdpDirectContinuityProven = false }).Verified);
+            Check(!(remote with { Ipv6TcpUdpDirectContinuityProven = false }).Verified);
+            Check(!(remote with { DnsAndDynamicEndpointPolicyVerified = false }).Verified);
+            Check(!(remote with { NoUnclassifiedOrUnknownRemoteFlows = false }).Verified);
+            Check(!(remote with { VpnUnderlayIsolationVerified = false }).Verified);
+            Check(!(remote with { OutOfBandRecoveryVerified = false }).Verified);
+            Check(!(remote with { LiveReconnectionUnderFailureVerified = false }).Verified);
+
+            // A dynamically discovered remote session that changes after
+            // handshake or immediately before WFP release must latch recovery.
+            var changedAfterHandshake = new FakeKernel {
+                FailRemoteOnAuditNumber = 2
+            };
+            var uncertainConnect = new ProductionVpnCoordinator(changedAfterHandshake);
+            Check(uncertainConnect.Connect() == "CONNECT_FAILED_LOCKED");
+            Check(changedAfterHandshake.Calls.Contains("Stop"));
+            Check(!changedAfterHandshake.Calls.Contains("Release"));
+            Check(uncertainConnect.Connect() == "RECOVERY_REQUIRED");
+
+            var changedBeforeRelease = new FakeKernel {
+                FailRemoteOnAuditNumber = 4
+            };
+            var uncertainOff = new ProductionVpnCoordinator(changedBeforeRelease);
+            Check(uncertainOff.Connect() == "CONNECTED_VERIFIED");
+            changedBeforeRelease.Calls.Clear();
+            Check(uncertainOff.ExplicitDisconnect() == "DISCONNECT_FAILED_LOCKED");
+            Check(changedBeforeRelease.Calls.Contains("OffDurable"));
+            Check(!changedBeforeRelease.Calls.Contains("Release"));
+            Check(uncertainOff.State == ProductionTunnelState.RecoveryRequired);
+            Check(uncertainOff.Connect() == "RECOVERY_REQUIRED");
 
             // Synthetic NICs: exact indices, not the count (1,0,1,1),
             // determine whether existing WFP guards cover every route.

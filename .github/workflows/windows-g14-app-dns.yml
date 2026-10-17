@@ -22,6 +22,7 @@ on:
       - 'clients/windows/lab/Invoke-R75SystemExpiryWorker.ps1'
       - 'clients/windows/lab/Invoke-R75RegisterCrashScheduledRecovery.ps1'
       - 'clients/windows/lab/Invoke-R75CleanupOwnedTask.ps1'
+      - 'clients/windows/lab/Test-R79NativePreactivationReadOnly.ps1'
       - 'clients/windows/lab/Test-R70NativeLiveRouteScope.ps1'
       - 'lab/independent-peer/r69_native_scope.py'
       - 'clients/windows/lab/test_r69_native_scope.py'
@@ -35,7 +36,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017' || github.event.pull_request.head.ref == 'test/r70-live-native-route-dns-20261017' || github.event.pull_request.head.ref == 'test/r73-ci-native-manager-crash-recovery-20261017' || github.event.pull_request.head.ref == 'test/r74-ci-native-timed-expiry-20261017' || github.event.pull_request.head.ref == 'test/r75-ci-system-task-expiry-20261017')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017' || github.event.pull_request.head.ref == 'test/r70-live-native-route-dns-20261017' || github.event.pull_request.head.ref == 'test/r73-ci-native-manager-crash-recovery-20261017' || github.event.pull_request.head.ref == 'test/r74-ci-native-timed-expiry-20261017' || github.event.pull_request.head.ref == 'test/r75-ci-system-task-expiry-20261017' || github.event.pull_request.head.ref == 'test/r79-native-signed-bundle-preflight-20261017')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -85,6 +86,13 @@ jobs:
           python ./lab/independent-peer/r69_native_scope.py --audit-staged
           if ($LASTEXITCODE -ne 0) { throw 'R69 real staged native profiles are unsafe' }
           Write-Host 'R69_NATIVE_SCOPE_STAGED_BEFORE_SCM_PASS'
+      - name: R79 read-only signed native bundle / ACL / tampered manifest refusal BEFORE starting SCM services
+        if: github.event.pull_request.head.ref == 'test/r79-native-signed-bundle-preflight-20261017'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:ORACLE_R79='CI_ONLY'
+          ./clients/windows/lab/Test-R79NativePreactivationReadOnly.ps1
       - name: Verify application-level UDP receipt and DNS A/AAAA response via GUI admin IPC and SCM services
         shell: pwsh
         timeout-minutes: 4

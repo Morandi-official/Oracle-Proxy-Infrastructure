@@ -23,6 +23,10 @@ internal static class Program
         if (args.Length == 1 && args[0] == "--ci-r78-field-scope-review")
             return FieldCandidateScopeReview.ReviewOwnedStagedFile();
 
+        // R79 offline trust gate: never start native service from this path.
+        if (args.Length == 1 && args[0] == "--ci-r79-native-bundle-review")
+            return NativeBundleReadOnlyReview.Audit();
+
         if (args.Length == 1 && args[0] == "--service-status")
         {
             Console.WriteLine(LabServiceStatus.SanitizedJson());

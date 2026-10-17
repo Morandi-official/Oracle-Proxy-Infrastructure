@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:

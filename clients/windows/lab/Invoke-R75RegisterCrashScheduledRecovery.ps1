@@ -44,7 +44,7 @@ foreach ($name in $peers) {
 $worker = (Resolve-Path ./clients/windows/lab/Invoke-R75SystemExpiryWorker.ps1).Path
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 $registered = $false
-$triggerAt = (Get-Date).AddSeconds(40)
+$triggerAt = (Get-Date).AddSeconds(45)
 $expires = [DateTime]::UtcNow.AddSeconds(40).ToString('yyyy-MM-ddTHH:mm:ssZ')
 $arguments = ('-NoProfile -NonInteractive -File "{0}" -ExpiryUtc {1} -JobMarker "{2}"' -f
     $worker,$expires,$jobMarker)
@@ -104,7 +104,12 @@ try {
             throw 'R75 owned native peer remains live after scheduled trigger'
         }
     }
-    $taskInfo = Get-ScheduledTaskInfo -TaskPath '\' -TaskName $taskName -ErrorAction Stop
+    $resultDeadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        $taskInfo = Get-ScheduledTaskInfo -TaskPath '\' -TaskName $taskName -ErrorAction Stop
+        if ($taskInfo.LastTaskResult -eq 0) { break }
+        Start-Sleep -Milliseconds 350
+    } while ([DateTime]::UtcNow -lt $resultDeadline)
     if ($taskInfo.LastTaskResult -ne 0) {
         throw 'R75 Task Scheduler recorded nonzero worker exit'
     }

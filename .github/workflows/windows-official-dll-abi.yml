@@ -78,6 +78,16 @@ jobs:
           $hostExe = (Resolve-Path ./dist/r16-trust/OracleProxy.WireGuardHost.exe).Path
           & $hostExe --self-test
           if ($LASTEXITCODE -ne 0) { throw 'Bundle integrity self-test failed' }
+          # R67: the distributable/default host may NEVER start an engine
+          # from a non-SYSTEM runner or accept an attacker-selected profile.
+          # No SCM service, driver adapter or tunnel is installed here.
+          & $hostExe --wireguard-service
+          if ($LASTEXITCODE -ne 3) { throw 'R67 unprivileged native service unexpectedly admitted' }
+          & $hostExe --wireguard-service '../production'
+          if ($LASTEXITCODE -ne 2) { throw 'R67 arbitrary native config profile unexpectedly admitted' }
+          & $hostExe --ci-sealed-wireguard-service 'lab-only'
+          if ($LASTEXITCODE -ne 2) { throw 'R67 default native service retained CI-only sealed entrypoint' }
+          Write-Host 'R67_DEFAULT_NATIVE_HOST_UNPRIVILEGED_CONFIG_AND_CI_ENTRYPOINT_DENIAL_PASS'
           & $hostExe --signed-driver-ci-self-test $env:WGNT_DLL_PATH
           if ($LASTEXITCODE -ne 0) { throw 'R16 native signed driver trust/refusal self-test failed' }
           Write-Host 'R16: trusted official driver accepted; unsigned and modified driver refused'

@@ -16,7 +16,7 @@ on:
       - 'clients/windows/lab/wgnt-data-plane.c'
       - 'clients/windows/lab/wgnt-app-dns.c'
       - 'lab/independent-peer/r69_native_scope.py'
-      - 'lab/independent-peer/test_r69_native_scope.py'
+      - 'clients/windows/lab/test_r69_native_scope.py'
 
 permissions:
   contents: read
@@ -68,7 +68,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m unittest discover -s lab/independent-peer -p 'test_r69_native_scope.py' -v
+          python -m unittest discover -s clients/windows/lab -p 'test_r69_native_scope.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'R69 negative profile audit regression' }
           $env:RUNNER_ENVIRONMENT='forbidden'
           python ./lab/independent-peer/r69_native_scope.py --audit-staged

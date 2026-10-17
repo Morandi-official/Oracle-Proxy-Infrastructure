@@ -1,0 +1,86 @@
+name: R78 Windows native service-host offline single-peer scope review
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/service-host/Program.cs'
+      - 'clients/windows/service-host/FieldCandidateScopeReview.cs'
+      - 'clients/windows/lab/Test-R77ProtectedSinglePeerStaging.ps1'
+      - 'lab/field-windows/r77_stage_owned_candidate.py'
+      - '.github/workflows/r78-service-host-offline-scope.yml'
+      - 'docs/r78-native-host-offline-candidate.md'
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-native-host-preflight:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r78-ci-native-offline-field-preflight-20261017'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      ORACLE_R77: CI_ONLY
+      ORACLE_R78: CI_ONLY
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Publish *only* read-only-reviewed service-host for offline checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableCiSealedConfig=false -o ./dist/r78-ci-host
+          if ($LASTEXITCODE -ne 0) { throw 'R78 C# service-host build failed' }
+          $exe=(Resolve-Path './dist/r78-ci-host/OracleProxy.WireGuardHost.exe').Path
+          $env:ORACLE_R78='untrusted'
+          & $exe --ci-r78-field-scope-review
+          if ($LASTEXITCODE -ne 3) { throw 'R78 privileged/non-CI request was admitted' }
+          $env:ORACLE_R78='CI_ONLY'
+          & $exe --ci-r78-field-scope-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R78 C# negative scope grammar tests failed' }
+          & $exe --ci-r78-field-scope-review
+          if ($LASTEXITCODE -ne 3) { throw 'R78 service host accepted absent protected config' }
+          Write-Host 'R78_NATIVE_SERVICE_HOST_SCOPE_REFUSAL_TESTS_PASS'
+      - name: Stage one synthetic protected native candidate, no tunnel, with independently verified DACLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          python -m pip install cryptography==46.0.3 --disable-pip-version-check
+          if ($LASTEXITCODE -ne 0) { throw 'R78 fixture crypto unavailable' }
+          ./clients/windows/lab/Test-R77ProtectedSinglePeerStaging.ps1
+          $exe=(Resolve-Path './dist/r78-ci-host/OracleProxy.WireGuardHost.exe').Path
+          & $exe --ci-r78-field-scope-review
+          if ($LASTEXITCODE -ne 0) { throw 'R78 real service-host offline protected candidate audit refused' }
+          $env:RUNNER_ENVIRONMENT='forbidden'
+          & $exe --ci-r78-field-scope-review
+          if ($LASTEXITCODE -ne 3) { throw 'R78 accepted false hosted runner identity' }
+          $env:RUNNER_ENVIRONMENT='github-hosted'
+          Write-Host 'R78_REAL_NATIVE_SERVICE_HOST_READONLY_CONFIG_REVIEW_PASS'
+          exit 0
+      - name: ALWAYS delete exactly owned ephemeral plaintext profile and stage
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/Invoke-R77CleanupOwnedProfile.ps1
+      - name: ALWAYS deny native services, OS changes or residual field keys
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (Test-Path (Join-Path $env:ProgramData 'OracleProxyR77Only')) {
+            throw 'R78 plaintext staging remained'
+          }
+          foreach ($name in @('WireGuardTunnel$lab-peer-a','WireGuardTunnel$lab-peer-b')) {
+            if (Get-Service -Name $name -ErrorAction SilentlyContinue) {
+              throw 'R78 created unexpected native tunnel service'
+            }
+          }
+          if (@(Get-NetRoute -ErrorAction Stop | Where-Object DestinationPrefix -eq '10.77.72.2/32').Count -ne 0) {
+            throw 'R78 created a native VPN route'
+          }
+          Write-Host 'R78_NO_NATIVE_OR_FIELD_CONFIG_RESIDUAL_PASS'

@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   local-system-native-memory:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feature/r49-ci-system-wfp-crash-quarantine'
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'feature/r49-ci-system-wfp-crash-quarantine' || github.event.pull_request.head.ref == 'test/r64-system-wfp-crash-safeoff-retest-20261017')
     runs-on: windows-latest
     timeout-minutes: 22
     env:

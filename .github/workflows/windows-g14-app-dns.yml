@@ -17,6 +17,8 @@ on:
       - 'clients/windows/lab/wgnt-app-dns.c'
       - 'clients/windows/lab/Invoke-R73CiOwnedExpiryRecovery.ps1'
       - 'clients/windows/lab/Invoke-R73ManagerCrashAndRecover.ps1'
+      - 'clients/windows/lab/Invoke-R74CiTimedExpiryWatch.ps1'
+      - 'clients/windows/lab/Invoke-R74CiCrashAndTimedRecovery.ps1'
       - 'clients/windows/lab/Test-R70NativeLiveRouteScope.ps1'
       - 'lab/independent-peer/r69_native_scope.py'
       - 'clients/windows/lab/test_r69_native_scope.py'
@@ -30,7 +32,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017' || github.event.pull_request.head.ref == 'test/r70-live-native-route-dns-20261017' || github.event.pull_request.head.ref == 'test/r73-ci-native-manager-crash-recovery-20261017')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017' || github.event.pull_request.head.ref == 'test/r70-live-native-route-dns-20261017' || github.event.pull_request.head.ref == 'test/r73-ci-native-manager-crash-recovery-20261017' || github.event.pull_request.head.ref == 'test/r74-ci-native-timed-expiry-20261017')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -89,6 +91,10 @@ jobs:
           $env:ORACLE_R70_NATIVE_SCOPE = 'CI_ONLY'
           if ('${{ github.head_ref }}' -eq 'test/r73-ci-native-manager-crash-recovery-20261017') {
             $env:ORACLE_R73_RECOVERY = 'CI_ONLY'
+          }
+          if ('${{ github.head_ref }}' -eq 'test/r74-ci-native-timed-expiry-20261017') {
+            $env:ORACLE_R73_RECOVERY = 'CI_ONLY'
+            $env:ORACLE_R74_TIMER = 'CI_ONLY'
           }
           $env:RUNNER_ENVIRONMENT = 'forbidden'
           $rejected = $false

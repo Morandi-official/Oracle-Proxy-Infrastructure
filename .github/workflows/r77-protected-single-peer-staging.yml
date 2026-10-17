@@ -1,0 +1,54 @@
+name: R77 disposable Windows protected single-peer staging no tunnel
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/lab/Test-R77ProtectedSinglePeerStaging.ps1'
+      - 'clients/windows/lab/Invoke-R77CleanupOwnedProfile.ps1'
+      - 'lab/field-windows/r77_stage_owned_candidate.py'
+      - '.github/workflows/r77-protected-single-peer-staging.yml'
+      - 'docs/r77-protected-staging-ci.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  staging-no-network:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r77-ci-protected-single-peer-staging-20261017'
+    runs-on: windows-latest
+    timeout-minutes: 9
+    env:
+      ORACLE_R77: CI_ONLY
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Load pinned test-only ephemeral X25519 cryptography implementation
+        shell: pwsh
+        run: |
+          python -m pip install cryptography==46.0.3 --disable-pip-version-check
+          if ($LASTEXITCODE -ne 0) { throw 'R77 pinned X25519 test dependency missing' }
+      - name: Stage ephemeral secret config under independent Admin/System ACL
+        shell: pwsh
+        run: ./clients/windows/lab/Test-R77ProtectedSinglePeerStaging.ps1
+      - name: ALWAYS remove exactly this CI-owned profile and temporary directory
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/Invoke-R77CleanupOwnedProfile.ps1
+      - name: Confirm no unapproved native experiment service exists
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (Get-Service -Name 'WireGuardTunnel$lab-peer-a' -ErrorAction SilentlyContinue) {
+            throw 'R77 installed a forbidden native service'
+          }
+          if (@(Get-NetRoute -ErrorAction Stop |
+                Where-Object DestinationPrefix -eq '10.77.72.2/32').Count -ne 0) {
+            throw 'R77 created a forbidden native route'
+          }
+          Write-Host 'R77_STAGING_LEFT_NO_NATIVE_SERVICE_OR_ROUTE_PASS'

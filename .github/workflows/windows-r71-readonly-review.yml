@@ -91,6 +91,8 @@ jobs:
           $after = Snapshot
           if ($before -cne $after) { throw 'R71 read-only binary changed route/DNS/adapter/firewall/service baseline' }
           Write-Host 'R71_OS_SNAPSHOT_READONLY_NO_NETWORK_MUTATION_PASS'
+          # Last native negative test deliberately exits 2; neutralize ONLY after every assertion.
+          exit 0
       - name: Print exact hash and preserve short-lived REVIEW ONLY artifact
         shell: pwsh
         run: |

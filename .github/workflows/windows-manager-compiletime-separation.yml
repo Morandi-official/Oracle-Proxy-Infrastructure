@@ -33,6 +33,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Status pipe test failed' }
           & $exe --offline-intent-planner-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Offline intent self-test failed' }
+          # Verify the actual *default-build executable* retains the production
+          # fail-closed control boundary, transaction ordering and startup lock.
+          # All three tests are offline/read-only; no service is installed.
+          & $exe --safe-control-gate-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Default build lost admin/replay/profile denial gate' }
+          & $exe --production-transition-contract-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Default build lost fail-closed connect/disconnect contract' }
+          & $exe --startup-recovery-boundary-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Default build lost no-auto-release startup recovery boundary' }
+          Write-Host 'R60_DEFAULT_MANAGER_FAIL_CLOSED_CONTROL_TRANSITION_STARTUP_PASS'
           $env:GITHUB_ACTIONS='true'
           $env:RUNNER_ENVIRONMENT='github-hosted'
           & $exe --admin-lab-self-test

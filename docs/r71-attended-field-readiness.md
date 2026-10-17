@@ -29,3 +29,9 @@ CI compiles as self-contained one-file Windows x64 executable, asserts no native
 - R68: [manual official-client public path](r68-public-path-official-wireguard-manual-evidence.md)
 - R69: [native config pre-activation CI](r69-native-route-profile-preactivation-audit.md)
 - R70: [live native route and DNS CI](r70-native-active-route-dns-ci.md)
+
+## 2026-10-17 attended second-Windows read-only execution
+
+The operator ran the **existing R71 read-only artifact** on the second physical Windows x64 computer without elevated privileges. SHA-256 matched CI: `0AD42ADC2B0A6701045B5697D082EC94908C0C89922900C31B81CB392E846B2C`. `--self-test` and `--review-only` each returned exit 0. The latter reported `session_matches_active_console=true`, one up physical Ethernet/Wi-Fi candidate, BFE and MpsSvc running, and all connection/production/WFP/UU approval claims **false**. No public IPs, local IPs, private keys or hostnames were collected.
+
+This is successful **real-hardware read-only execution**, not a native WireGuardNT handshake, packet capture, OS-enforced WFP policy, UU continuity demonstration or physical recovery exercise. The operator did not separately report post-run Internet/UU continuity in that message. Further activity is bounded by [R72 offline field plan review](r72-narrow-field-plan-preflight.md).

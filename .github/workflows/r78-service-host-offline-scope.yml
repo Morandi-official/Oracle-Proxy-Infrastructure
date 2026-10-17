@@ -47,6 +47,8 @@ jobs:
           & $exe --ci-r78-field-scope-review
           if ($LASTEXITCODE -ne 3) { throw 'R78 service host accepted absent protected config' }
           Write-Host 'R78_NATIVE_SERVICE_HOST_SCOPE_REFUSAL_TESTS_PASS'
+          # Last intentional refusal has exit 3; all assertions already passed.
+          exit 0
       - name: Stage one synthetic protected native candidate, no tunnel, with independently verified DACLs
         shell: pwsh
         run: |

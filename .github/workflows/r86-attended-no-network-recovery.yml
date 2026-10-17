@@ -1,0 +1,137 @@
+name: R86 attended Windows second-PC no-network SCM expiry rehearsal package
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/r86-field/**'
+      - '.github/workflows/r86-attended-no-network-recovery.yml'
+      - 'docs/r86-attended-second-pc-acceptance.md'
+
+permissions:
+  contents: read
+
+jobs:
+  attended-safe-package:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r86-attended-no-network-recovery-20261017'
+    runs-on: windows-latest
+    timeout-minutes: 13
+    env:
+      ORACLE_R86_CI: CI_ONLY
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile fixed non-network SCM mock; no driver source or signed-production claim
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/r86-field/OracleProxy.R86.NoNetworkMock.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/r86-bin
+          if ($LASTEXITCODE -ne 0) { throw 'R86 no-network mock compile failed' }
+          if (Test-Path ./dist/r86-bin/wireguard.dll) { throw 'Unexpected VPN DLL packaged' }
+          if (Test-Path ./dist/r86-bin/tunnel.dll) { throw 'Unexpected VPN DLL packaged' }
+          $text=[IO.File]::ReadAllText((Resolve-Path ./clients/windows/r86-field/Program.cs).Path)
+          if ($text -match '(?m)^\s*using\s+System\.Net[.;]' -or
+              $text -match '(?m)^\s*using\s+System\.Net\.Sockets;' -or
+              $text -match '(?m)^\s*\[DllImport') {
+            throw 'R86 mock source introduced direct network/native interfaces'
+          }
+          Write-Host 'R86_NO_NETWORK_ONLY_SOURCE_AND_NATIVE_DLL_ABSENCE_PASS'
+      - name: Stage exactly reviewed operator kit; no binary from outside GitHub CI
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $package=Join-Path (Get-Location) 'dist\R86-SECOND-PC-NO-NETWORK-REVIEW-ONLY'
+          New-Item -ItemType Directory -Path $package -ErrorAction Stop | Out-Null
+          $src=Join-Path (Get-Location) 'clients\windows\r86-field'
+          foreach ($file in @('R86-Common.ps1','R86-Preflight.ps1','R86-Start.ps1',
+              'R86-Verify.ps1','R86-EmergencyCleanup.ps1','README-R86.txt')) {
+            Copy-Item -LiteralPath (Join-Path $src $file) -Destination $package -ErrorAction Stop
+          }
+          Copy-Item -LiteralPath .\dist\r86-bin\OracleProxy.R86.NoNetworkMock.exe -Destination (Join-Path $package 'R86NoNetworkMock.exe') -ErrorAction Stop
+          $env:R86_PACKAGE_PATH=$package
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'r86-package-path.txt'),$package)
+          . (Join-Path $package 'R86-Common.ps1')
+          $startHash=Get-R86-NetworkDigest
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'r86-initial-network-digest.txt'),$startHash)
+          $rejected=$false
+          try { & (Join-Path $package 'R86-Preflight.ps1') } catch { $rejected=$true }
+          if (!$rejected) { throw 'R86 permitted physical mode inside hosted CI' }
+          & (Join-Path $package 'R86-Preflight.ps1') -CiHarness
+          $rejected=$false
+          try { & (Join-Path $package 'R86-Start.ps1') -Confirm 'WRONG' -CiHarness } catch { $rejected=$true }
+          if (!$rejected) { throw 'R86 accepted wrong physical confirmation' }
+          Write-Host 'R86_HOSTED_CI_PHYSICAL_MODE_AND_UNAPPROVED_START_DENIED_PASS'
+      - name: System expiry task registered before real running no-network SCM mock
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $path=[IO.File]::ReadAllText((Join-Path $env:RUNNER_TEMP 'r86-package-path.txt'))
+          & (Join-Path $path 'R86-Start.ps1') -Confirm 'R86-SECOND-PC-NO-VPN-ONLY' -CiHarness
+          & (Join-Path $path 'R86-Verify.ps1') -CiHarness
+          Write-Host 'R86_RUNNING_MOCK_BEFORE_OWNED_SYSTEM_DEADLINE_PASS'
+      - name: Later independent process observes OS auto-stop without issuing stop command
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference='Stop'
+          Start-Sleep -Seconds 199
+          $path=[IO.File]::ReadAllText((Join-Path $env:RUNNER_TEMP 'r86-package-path.txt'))
+          & (Join-Path $path 'R86-Verify.ps1') -CiHarness
+          Write-Host 'R86_OS_INDEPENDENTLY_STOPPED_REAL_RUNNING_NONNETWORK_SCM_PASS'
+      - name: ALWAYS exact-owned emergency cleanup of task, mock and files
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p=Join-Path $env:RUNNER_TEMP 'r86-package-path.txt'
+          if (Test-Path -LiteralPath $p -PathType Leaf) {
+            $path=[IO.File]::ReadAllText($p)
+            & (Join-Path $path 'R86-EmergencyCleanup.ps1') -CiHarness
+          } else {
+            if (Test-Path (Join-Path $env:ProgramData 'OracleProxyR86Attended')) {
+              throw 'R86 missing package but owned stage exists: do not delete foreign files'
+            }
+          }
+      - name: ALWAYS check network digest and zero SCM task or owned resource
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p=Join-Path $env:RUNNER_TEMP 'r86-package-path.txt'
+          if (!(Test-Path -LiteralPath $p -PathType Leaf)) { throw 'R86 package was not staged' }
+          $path=[IO.File]::ReadAllText($p)
+          . (Join-Path $path 'R86-Common.ps1')
+          if (Test-Path -LiteralPath $script:R86Root) { throw 'R86 test directory residual' }
+          if (Get-Service -Name $script:R86Service -ErrorAction SilentlyContinue) { throw 'R86 test mock service residual' }
+          if (Get-ScheduledTask -TaskPath '\' -TaskName $script:R86Task -ErrorAction SilentlyContinue) { throw 'R86 test task residual' }
+          $original=[IO.File]::ReadAllText((Join-Path $env:RUNNER_TEMP 'r86-initial-network-digest.txt'))
+          if ((Get-R86-NetworkDigest) -cne $original) {
+            throw 'R86 changed OS default routes, DNS or firewall'
+          }
+          Write-Host 'R86_CI_FULL_CLEANUP_NETWORK_BASELINE_PASS'
+      - name: Package only already-tested operator files with per-file hashes
+        if: success()
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $path=[IO.File]::ReadAllText((Join-Path $env:RUNNER_TEMP 'r86-package-path.txt'))
+          $list=@(Get-ChildItem -LiteralPath $path -File | Sort-Object Name)
+          if ($list.Count -ne 7) { throw 'R86 package file count mismatch' }
+          $lines=@()
+          foreach ($file in $list) {
+            $sha=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            $lines+=('{0}  {1}' -f $sha,$file.Name)
+            Write-Host ('R86_VERIFIED_SHA256 {0} {1}' -f $sha,$file.Name)
+          }
+          [IO.File]::WriteAllLines((Join-Path $path 'SHA256SUMS.txt'),$lines,[Text.Encoding]::ASCII)
+          Write-Host 'R86_REVIEW_ONLY_ARTIFACT_HASH_MANIFEST_READY_PASS'
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: R86-SECOND-PC-NO-NETWORK-REVIEW-ONLY
+          path: dist/R86-SECOND-PC-NO-NETWORK-REVIEW-ONLY/
+          if-no-files-found: error
+          retention-days: 7

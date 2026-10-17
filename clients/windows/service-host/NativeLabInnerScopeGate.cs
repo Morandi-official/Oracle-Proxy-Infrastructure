@@ -13,6 +13,13 @@ internal static class NativeLabInnerScopeGate
 {
     internal static void Require(string file, string profile)
     {
+#if ENABLE_ATTENDED_FIELD_TRIAL
+        if (profile == "lab-field")
+        {
+            FieldTrialRuntimeLease.Require(file);
+            return;
+        }
+#endif
         if (profile == "lab-only") return; // older single-profile ABI lab
         if (profile is not ("lab-peer-a" or "lab-peer-b"))
             throw new InvalidOperationException("Unknown native test profile");

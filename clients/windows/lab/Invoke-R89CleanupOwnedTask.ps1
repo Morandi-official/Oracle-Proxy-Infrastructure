@@ -24,7 +24,11 @@ if ($task) {
         $task.Principal.LogonType -ne 'ServiceAccount' -or
         ![string]::Equals([string]$task.Actions[0].Execute,
             (Get-Command pwsh).Source,[StringComparison]::OrdinalIgnoreCase) -or
-        !$task.Actions[0].Arguments.Contains(('"{0}"' -f $worker))) {
+        !$task.Actions[0].Arguments.StartsWith(
+            ('-NoProfile -NonInteractive -File "{0}" -ExpiryUtc ' -f $worker),
+            [StringComparison]::Ordinal) -or
+        !$task.Actions[0].Arguments.EndsWith(
+            (' -JobMarker "{0}"' -f $runMarker),[StringComparison]::Ordinal)) {
         throw 'R89_REFUSED: cannot prove exact task ownership, no deletion'
     }
     Unregister-ScheduledTask -TaskPath '\' -TaskName $taskName -Confirm:$false -ErrorAction Stop

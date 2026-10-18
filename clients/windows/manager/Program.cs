@@ -126,6 +126,9 @@ internal static class Program
                 case "--startup-recovery-boundary-self-test":
                     return SystemStartupRecoveryBoundarySelfTests.Run() ? 0 : 1;
 
+                case "--r92-reboot-evidence-self-test":
+                    return R92RebootRecoverySelfTests.Run() ? 0 : 1;
+
                 case "--native-route-inventory-self-test":
                     return NativeRouteInventorySelfTests.Run() ? 0 : 1;
 

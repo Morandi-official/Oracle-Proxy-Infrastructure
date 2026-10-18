@@ -9,6 +9,22 @@ namespace OracleProxy.WgAlpha;
 // a disposable GitHub-hosted Windows runner. It never runs on user PCs.
 internal static class CiEmbeddedServiceTrial
 {
+    private static string SafeNames(string directory)
+    {
+        try
+        {
+            if (!Directory.Exists(directory)) return "ABSENT";
+            var names = Directory.EnumerateFileSystemEntries(directory).Take(9)
+                .Select(Path.GetFileName)
+                .Where(x => x != null && x.Length <= 64 && x.Length > 0 &&
+                    x.All(c => char.IsAsciiLetterOrDigit(c) ||
+                        c is '.' or '_' or '-'))
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+            return names.Length > 8 ? "TOO_MANY" : string.Join(",", names);
+        }
+        catch { return "UNAVAILABLE"; }
+    }
+
     internal static int Run(string config)
     {
         if (!OperatingSystem.IsWindows() ||
@@ -65,6 +81,12 @@ internal static class CiEmbeddedServiceTrial
                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
                     "OracleProxyEmbeddedAlpha")),
                 program_data_staging_exists = Directory.Exists(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "OracleProxyEmbeddedAlpha")),
+                program_file_entries = SafeNames(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    "OracleProxyEmbeddedAlpha")),
+                program_data_entries = SafeNames(Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                     "OracleProxyEmbeddedAlpha"))
             };

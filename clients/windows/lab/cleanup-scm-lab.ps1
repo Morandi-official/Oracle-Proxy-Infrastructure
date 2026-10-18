@@ -20,6 +20,9 @@ if (Test-Path $marker -PathType Leaf) {
     # by disposable runner destruction. Bound retries to avoid indefinite CI.
     $r89Strict = $env:ORACLE_R89_STRICT_CLEANUP -eq 'CI_ONLY'
     $maxAttempts = if ($r89Strict) { 48 } else { 5 }
+    $lastDeleteType = 'none'
+    $lastDeleteHResult = 'none'
+    $lastDeleteErrorId = 'none'
     for ($attempt = 0; $attempt -lt $maxAttempts; $attempt++) {
         try {
             if (Test-Path $root) {
@@ -28,6 +31,15 @@ if (Test-Path $marker -PathType Leaf) {
             break
         }
         catch {
+            if ($r89Strict) {
+                $lastDeleteType = $_.Exception.GetType().Name
+                $lastDeleteHResult = ('0x{0:X8}' -f ($_.Exception.HResult -band 0xffffffffL))
+                $lastDeleteErrorId = [string]$_.FullyQualifiedErrorId
+                if ($attempt -eq 0) {
+                    Write-Host ("R89_OWNED_DELETE_DIAGNOSTIC type={0} hresult={1} errorId={2}" -f
+                        $lastDeleteType,$lastDeleteHResult,$lastDeleteErrorId)
+                }
+            }
             if ($attempt -eq ($maxAttempts - 1) -and !$r89Strict) {
                 Write-Warning 'Temporary lab files remain until GitHub discards the ephemeral VM'
             }
@@ -35,6 +47,8 @@ if (Test-Path $marker -PathType Leaf) {
         }
     }
     if ($r89Strict -and (Test-Path -LiteralPath $root)) {
+        Write-Host ("R89_OWNED_DELETE_REMAINING type={0} hresult={1} errorId={2}" -f
+            $lastDeleteType,$lastDeleteHResult,$lastDeleteErrorId)
         throw 'R89_FAIL: exact owned SCM staging directory still present after bounded retries'
     }
     Remove-Item -LiteralPath $marker -Force

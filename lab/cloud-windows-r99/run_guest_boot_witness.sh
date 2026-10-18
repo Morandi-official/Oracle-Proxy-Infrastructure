@@ -143,6 +143,64 @@ else
   echo R99_EVALUATION_BASELINE_EVENTLOG_NOT_AVAILABLE_NOT_PROOF
 fi
 rm -f -- "$work/before.raw"
+check_kvm_before_guest() {
+  # A host may revoke temporary KVM node ACLs after a QEMU exit.
+  # At most reapply the SAME single-runner-user ACL; never chmod 666,
+  # change kernel lockdown, disable host security, or use paid runners.
+  if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+    sudo -n setfacl -m "u:$(id -un):rw" /dev/kvm
+    acl=true
+  fi
+  if ! python3 - <<'PY'
+import fcntl,os
+try:
+    fd=os.open("/dev/kvm",os.O_RDWR|os.O_CLOEXEC)
+    try:
+        if fcntl.ioctl(fd,0xAE00) != 12:
+            raise OSError("unexpected KVM API")
+    finally:
+        os.close(fd)
+except OSError:
+    raise SystemExit("R97_STOP_HOSTED_KVM_API_REVOKED_NO_SECURITY_BYPASS")
+print("R97_FRESH_KVM_API_VERSION_12_VERIFIED")
+PY
+  then
+    exit 5
+  fi
+}
+launch() {
+  local slot=${1:-A}
+  check_kvm_before_guest
+  local vnc_display=2
+  if [[ "$slot" == B ]]; then vnc_display=3; fi
+  rm -f -- "$work/qmp.sock"
+  qemu-system-x86_64 -name R97-isolated-eval -machine q35,accel=kvm \
+    -cpu host -smp 2 -m 6144 \
+    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+    -drive if=pflash,format=raw,file="$work/vars.fd" \
+    -drive file="$work/overlay.qcow2",format=qcow2,if=ide \
+    -vga std -display none -vnc "127.0.0.1:$vnc_display" -nic none \
+    -qmp "unix:$work/qmp.sock,server=on,wait=off" \
+    -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
+    > "$work/qemu.log" 2>&1 &
+  qpid=$!
+  for i in $(seq 1 30); do
+    if [[ -S "$work/qmp.sock" ]] && kill -0 "$qpid" 2>/dev/null; then return; fi
+    sleep 1
+  done
+  echo R97_QEMU_LOCAL_ONLY_STARTUP_DIAGNOSTICS_BEGIN
+  if [[ -f "$work/qemu.log" ]]; then
+    # Print only QEMU errors; do not upload screenshots, disks or secrets.
+    tail -n 12 "$work/qemu.log" | sed -E 's@/home/runner/[^ ]+@<RUNNER_PATH>@g'
+  fi
+  echo R97_STOP_QEMU_FAILED_TO_LAUNCH; exit 5
+}
+stop() {
+  python3 lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" quit
+  wait "$qpid" || :
+  qpid=''
+}
+
 r99_host_start_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 launch A
 sleep 110

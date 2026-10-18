@@ -44,8 +44,8 @@ jobs:
         run: bash lab/cloud-windows-r99/test_host_loop_ntfs.sh
   isolated-real-windows-boot-evidence:
     needs: [pure-denial-matrix, host-loop-ntfs-smoke]
-    # Disabled while the alternate offline NTFS extraction is being qualified.
-    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018' && false
+    # Synthetic Linux RO NTFS loop mounting must pass before any official VHD is downloaded.
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:

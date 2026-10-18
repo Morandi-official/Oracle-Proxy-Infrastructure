@@ -68,6 +68,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'OS identity status IPC test failed' }
           & $exe --offline-intent-planner-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Offline state model failed' }
+          & $exe --r92-reboot-evidence-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R92 independent reboot evidence deny-only regression' }
+          # A same-boot process restart can never count as a real OS reboot.
+          $first=(Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+          & $exe --startup-recovery-boundary-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R36 independent startup guard failed' }
+          $second=(Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+          if ($first -ne $second) {
+            throw 'R92 hosted CI unexpectedly crossed OS boot epoch; not an authorized reboot experiment'
+          }
+          Write-Host 'R92_CURRENT_CI_SAME_BOOT_PROCESS_RESTART_NOT_REBOOT_PASS'
+          Write-Host 'R92_REAL_OS_REBOOT_AND_PRELOGIN_WFP_UNPROVEN'
           # Even spoofing environment hints cannot add an omitted compile unit.
           $env:GITHUB_ACTIONS = 'true'
           $env:RUNNER_ENVIRONMENT = 'github-hosted'

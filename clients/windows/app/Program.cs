@@ -71,6 +71,10 @@ internal static class Program
             }
             catch { return 1; }
         }
+        if (args.Length == 1 && args[0] == "--acceptance-report-self-test")
+        {
+            return AcceptanceReport.SelfTest() ? 0 : 1;
+        }
         if (args.Length == 1 && args[0] == "--diagnostics-self-test")
         {
             try

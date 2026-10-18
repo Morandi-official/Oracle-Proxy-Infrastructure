@@ -6,7 +6,7 @@ from windows_boot_evtx_witness import (
     BootRecord, judge, parse_event_xml
 )
 def at(minute=0):
-    return datetime(2026, 10, 18, 8, minute, tzinfo=timezone.utc)
+    return datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc) + timedelta(minutes=minute)
 
 def row(record_id, event_id, provider, minute):
     return BootRecord(record_id, event_id, provider, at(minute))

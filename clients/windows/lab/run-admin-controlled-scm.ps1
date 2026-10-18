@@ -362,7 +362,9 @@ try {
         }
 
     } else {
-        if ($env:ORACLE_R75_TASK -eq 'CI_ONLY') {
+        if ($env:ORACLE_R89_TASK -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R89RegisterCrashStartupRecovery.ps1 -ExpectedManagerExe $managerExe
+        } elseif ($env:ORACLE_R75_TASK -eq 'CI_ONLY') {
             & ./clients/windows/lab/Invoke-R75RegisterCrashScheduledRecovery.ps1 -ExpectedManagerExe $managerExe
         } elseif ($env:ORACLE_R74_TIMER -eq 'CI_ONLY') {
             & ./clients/windows/lab/Invoke-R74CiCrashAndTimedRecovery.ps1 -ExpectedManagerExe $managerExe

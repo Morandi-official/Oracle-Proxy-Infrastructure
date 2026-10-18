@@ -45,7 +45,9 @@ def event_systemtime_utc(raw: str) -> datetime | None:
 
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_RECORDS = 50000
-MAX_WINDOW_SECONDS = 20 * 60
+# ISO Windows first installation is slower than the R99 prepared VHD boot.
+# Restrict to the bounded host-controlled QEMU installation interval only.
+MAX_WINDOW_SECONDS = 50 * 60
 # Fixed Microsoft Windows boot/setup sources only. Never emit arbitrary
 # providers, event messages, payloads, record IDs or exact times.
 DIAGNOSTIC_PROVIDERS = (

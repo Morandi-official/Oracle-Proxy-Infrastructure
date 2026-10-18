@@ -136,16 +136,19 @@ jobs:
           Copy-Item -LiteralPath './dist/r112/native/tunnel.dll' -Destination $d
           Copy-Item -LiteralPath './dist/r112/native/wireguard.dll' -Destination $d
           Copy-Item -LiteralPath './docs/r112-integrated-wireguard-alpha.md' -Destination (Join-Path $d 'READ_ME_FIRST.md')
-          # Official prebuilt WireGuardNT binary has a DIFFERENT license than
-          # WireGuardNT GPLv2 source. Redistribution requires bundling the
-          # EXACT license that arrived with the pinned, official SDK ZIP.
-          $sdkRoot=Join-Path $env:RUNNER_TEMP 'wg-sdk'
-          $license=@(Get-ChildItem -Path $sdkRoot -Recurse -File |
-            Where-Object { $_.Name -eq 'prebuilt-binaries-license.txt' })
-          if($license.Count -ne 1) {
-            throw 'R112 WireGuardNT official prebuilt binary license missing: refuse redistribution'
+          # The upstream v1.1 SDK extraction contains only the binary/API
+          # payload here; the prebuilt-binaries-license is maintained in
+          # WireGuard/wireguard-nt official mirror as a separate tracked file.
+          # Bundle its exact reviewed text from upstream blob 5f837755,
+          # rather than silently omitting vendor terms.
+          $licenseSource='./docs/r112-wireguardnt-prebuilt-binaries-license.txt'
+          $licenseText=Get-Content -LiteralPath $licenseSource -Raw
+          if($licenseText.Length -lt 5000 -or
+             !$licenseText.Contains('Permitted API') -or
+             !$licenseText.Contains('Prebuilt Binaries License')) {
+            throw 'R112 official WireGuardNT binary license text absent or altered'
           }
-          Copy-Item -LiteralPath $license[0].FullName -Destination (Join-Path $d 'WIREGUARDNT_BINARY_LICENSE.txt')
+          Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $d 'WIREGUARDNT_BINARY_LICENSE.txt')
           Copy-Item -LiteralPath './docs/r112-wireguard-embedding-mit-license.txt' -Destination (Join-Path $d 'EMBEDDABLE_TUNNEL_MIT_LICENSE.txt')
           $notices=@(
             'Oracle Proxy R112 unofficial experimental developer package; not endorsed by WireGuard LLC.',

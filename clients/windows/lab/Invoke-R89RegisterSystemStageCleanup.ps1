@@ -48,7 +48,7 @@ try {
     }
     $started=Get-Date
     Start-ScheduledTask -TaskPath '\' -TaskName $taskName -ErrorAction Stop
-    $limit=[DateTime]::UtcNow.AddSeconds(90)
+    $limit=[DateTime]::UtcNow.AddSeconds(28)
     $success=$false
     do {
         $info=Get-ScheduledTaskInfo -TaskPath '\' -TaskName $taskName -ErrorAction Stop
@@ -59,7 +59,26 @@ try {
         }
         Start-Sleep -Milliseconds 400
     } while ([DateTime]::UtcNow -lt $limit)
-    if (!$success) { throw 'R89_FAIL: SYSTEM cleanup not proven' }
+    if (!$success) {
+        # Only bounded nonsecret OS facts and fixed lab-relative entry names.
+        $last=Get-ScheduledTaskInfo -TaskPath '\' -TaskName $taskName -ErrorAction Stop
+        $stagePresent=Test-Path -LiteralPath $root
+        $entries=@()
+        if ($stagePresent) {
+            try {
+                $entries=@(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction Stop |
+                    ForEach-Object { $_.FullName.Substring($root.Length + 1) } |
+                    Sort-Object)
+            } catch {
+                $entries=@('INVENTORY_UNAVAILABLE')
+            }
+        }
+        Write-Host ("R89_STAGE_CLEANUP_DIAGNOSTIC lastResult={0} taskState={1} rootPresent={2} entryNames={3}" -f
+            $last.LastTaskResult,
+            (Get-ScheduledTask -TaskPath '\' -TaskName $taskName).State,
+            [bool]$stagePresent,($entries -join ','))
+        throw 'R89_FAIL: SYSTEM cleanup not proven'
+    }
     Write-Host 'R89_SYSTEM_EXACT_ALLOWLISTED_STAGE_CLEANUP_PASS'
 }
 finally {

@@ -22,13 +22,14 @@ work=$(mktemp -d "${RUNNER_TEMP:?}/r104-isolated-install.XXXXXXXX")
 pid=''
 kvm_acl=false
 iso_mounted=false
+answer_created=false
 cleanup() {
   set +e
   if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; fi
   if $iso_mounted; then sudo -n umount "$work/iso" || :; fi
   if $kvm_acl; then sudo -n setfacl -x "u:$(id -un)" /dev/kvm || :; fi
   # Unique ephemeral Administrator secret exists only on this job's runner.
-  [[ -f "$RUNNER_TEMP/Autounattend.xml" ]] && rm -f -- "$RUNNER_TEMP/Autounattend.xml"
+  if $answer_created; then rm -f -- "$RUNNER_TEMP/Autounattend.xml"; fi
   [[ "$work" == "$RUNNER_TEMP"/r104-isolated-install.* ]] && rm -rf -- "$work"
   echo R104_EPHEMERAL_ISO_VM_CREDENTIALS_AND_IMAGES_CLEANED
 }
@@ -101,6 +102,11 @@ index_out=$(/usr/bin/python3 -B lab/cloud-windows-r103/choose_official_wim_editi
 image_index=$(printf '%s\n' "$index_out" | awk -F= '/^R103_WIM_EVALUATION_STANDARD_DESKTOP_IMAGE_INDEX=/ {print $2}')
 [[ "$image_index" =~ ^[1-8]$ ]] || { echo R104_BAD_WIM_INDEX; exit 5; }
 echo R104_VERIFIED_EVAL_STANDARD_DESKTOP_AMD64_INDEX
+# Never remove a preexisting shared RUNNER_TEMP file: this run owns only the
+# exact file it successfully creates with R102's O_EXCL + 0600 discipline.
+if [[ -e "$RUNNER_TEMP/Autounattend.xml" || -L "$RUNNER_TEMP/Autounattend.xml" ]]; then
+  echo R104_PREEXISTING_ANSWER_FILE_PRESERVED_DENY; exit 5
+fi
 R104_IMAGE_INDEX="$image_index" /usr/bin/python3 -B - <<'PY'
 import os,sys
 from pathlib import Path
@@ -110,6 +116,7 @@ write_one_run_answer(int(os.environ["R104_IMAGE_INDEX"]),
                      edition=ALLOWED_EDITION,
                      output=Path(os.environ["RUNNER_TEMP"])/"Autounattend.xml")
 PY
+answer_created=true
 genisoimage -quiet -J -R -V R104_ANSWER -o "$work/answer.iso" \
     -graft-points "Autounattend.xml=$RUNNER_TEMP/Autounattend.xml" >/dev/null
 qemu-img create -q -f qcow2 "$work/guest.qcow2" 64G
@@ -144,11 +151,35 @@ done
 }
 echo R104_WINDOWS_EVALUATION_ISO_SETUP_VM_RUNNING_NO_NIC
 # No guest-side scripts, execution-policy changes or remote shell.
-# Windows Setup/OOBE is allowed to run uninterrupted in isolation.
-sleep 1500
-if ! kill -0 "$pid" 2>/dev/null; then
-  echo R104_WINDOWS_ISO_VM_TERMINATED_EARLY; exit 6
-fi
+# R104's first real run reached this point, then returned no NTFS partition
+# after a blind 25-minute wait. Observe ONLY host sparse-disk allocation and
+# bounded framebuffer hashes. Neither is Windows boot/setup attestation.
+# A no-write stall at minute 12 fails early, preserving the OFF state.
+initial_blocks=$(stat -c %b -- "$work/guest.qcow2")
+[[ "$initial_blocks" =~ ^[0-9]+$ ]] || { echo R104_GUEST_DISK_METADATA_UNREADABLE_DENY; exit 6; }
+max_blocks=$initial_blocks
+for minute in $(seq 1 25); do
+  sleep 60
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo R104_WINDOWS_ISO_VM_TERMINATED_EARLY; exit 6
+  fi
+  blocks=$(stat -c %b -- "$work/guest.qcow2")
+  [[ "$blocks" =~ ^[0-9]+$ ]] || { echo R104_GUEST_DISK_METADATA_UNREADABLE_DENY; exit 6; }
+  if (( blocks > max_blocks )); then max_blocks=$blocks; fi
+  if (( minute == 1 || minute == 5 || minute == 12 || minute == 25 )); then
+    # QMP image stays on this ephemeral runner, is hashed by a host-only
+    # utility and is erased immediately. No guest display is uploaded.
+    python3 -B lab/cloud-windows-r97/qmp_inspect.py \
+      "$work/qmp.sock" screenshot "$work/stage.ppm"
+    rm -f -- "$work/stage.ppm"
+    if ! /usr/bin/python3 -B lab/cloud-windows-r104/host_only_setup_progress.py \
+        --initial-blocks "$initial_blocks" --peak-blocks "$max_blocks" \
+        --elapsed-minutes "$minute"; then
+      echo R104_NO_GUEST_DISK_ALLOCATION_PROGRESS_EARLY_DENY
+      exit 6
+    fi
+  fi
+done
 python3 -B lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" quit
 wait "$pid" || :
 pid=''

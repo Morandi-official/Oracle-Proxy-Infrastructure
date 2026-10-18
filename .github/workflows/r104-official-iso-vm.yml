@@ -33,6 +33,7 @@ jobs:
           grep -Fq -- 'R104_GA_OR_FIELD_R83_UNLOCK=false' lab/cloud-windows-r104/run_free_official_iso_install.sh
           python3 -B -m unittest discover -s lab/cloud-windows-r102 -p 'test_ephemeral_windows_answer.py' -v
           python3 -B -m unittest discover -s lab/cloud-windows-r103 -p 'test_choose_official_wim_edition.py' -v
+          python3 -B -m unittest discover -s lab/cloud-windows-r104 -p 'test_host_only_setup_progress.py' -v
           echo R104_SOURCE_ONLY_GATES_NO_OS_MUTATION_PASS
       - name: Gate actual large ISO VM on explicit reviewed sentinel file
         id: gate

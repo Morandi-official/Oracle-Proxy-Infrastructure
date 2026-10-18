@@ -146,6 +146,34 @@ def judge(
                        len(kernels), len(services))
 
 
+def summarize_safe_boot_counters(
+    before: list[BootRecord],
+    after: list[BootRecord],
+    host_start: datetime,
+    host_end: datetime,
+) -> dict[str, int]:
+    # No guest XML, timestamps, addresses, file contents, record IDs or keys
+    # leave this runner. Only numbers of recognized OS startup events.
+    prior_max = max((e.record_id for e in before), default=0)
+    lower = host_start.astimezone(timezone.utc) - timedelta(seconds=40)
+    upper = host_end.astimezone(timezone.utc) + timedelta(seconds=40)
+    kernels = [e for e in after if e.event_id == 12 and
+               e.provider == "Microsoft-Windows-Kernel-General"]
+    logs = [e for e in after if e.event_id == 6005 and e.provider == "EventLog"]
+    def inside(e: BootRecord) -> bool:
+        return e.record_id > prior_max and lower <= e.utc <= upper
+    return {
+        "r99_kernel12_any_date": len(kernels),
+        "r99_eventlog6005_any_date": len(logs),
+        "r99_kernel12_in_host_window": sum(inside(e) for e in kernels),
+        "r99_eventlog6005_in_host_window": sum(inside(e) for e in logs),
+        "r99_kernel12_older_than_host_window": sum(e.utc < lower for e in kernels),
+        "r99_eventlog6005_older_than_host_window": sum(e.utc < lower for e in logs),
+        "r99_kernel12_newer_than_host_window": sum(e.utc > upper for e in kernels),
+        "r99_eventlog6005_newer_than_host_window": sum(e.utc > upper for e in logs),
+    }
+
+
 def _utc(value: str) -> datetime:
     d = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if d.utcoffset() != timedelta(0):
@@ -166,8 +194,13 @@ def main() -> int:
             args.before.is_file() else (None, [])
         )
         after_hash, after_events = records_from_evtx(args.after)
+        start = _utc(args.start_utc)
+        end = _utc(args.end_utc)
+        if end > start and (end - start).total_seconds() <= MAX_WINDOW_SECONDS:
+            print(json.dumps(summarize_safe_boot_counters(
+                earlier_events, after_events, start, end), sort_keys=True))
         report = judge(earlier_hash, earlier_events, after_hash, after_events,
-                       _utc(args.start_utc), _utc(args.end_utc))
+                       start, end)
         print(report.to_public_report())
         return 0 if report.code == "R99_FRESH_WINDOWS_KERNEL_AND_EVENTLOG_BOOT_WITNESSED" else 2
     except Exception as exc:

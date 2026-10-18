@@ -94,33 +94,37 @@ try {
     # AtStartup trigger is independently registered but this hosted Windows
     # runner is NOT rebooted: start the OS SYSTEM task manually as a
     # bounded startup-phase rehearsal on the disposable CI VM.
+    # The OS scheduler's own RECENT successful execution is the proof.
+    # A SYSTEM-owned receipt file with a different default DACL would leave
+    # an undeletable file in the protected CI stage. Never widen that DACL.
+    $manualTriggerAt = Get-Date
     Start-ScheduledTask -TaskPath '\' -TaskName $taskName -ErrorAction Stop
     $timeLimit = [DateTime]::UtcNow.AddSeconds(105)
-    while (!(Test-Path -LiteralPath $receipt -PathType Leaf) -and
-            [DateTime]::UtcNow -lt $timeLimit) {
-        Start-Sleep -Milliseconds 500
-    }
-    # The SYSTEM-created receipt inherits a protected system-only file DACL.
-    # Never weaken that ACL just so the GitHub runner can read a string.
-    # Corroborate existence with Task Scheduler's actual final result and
-    # native SCM/route observations below.
-    if (!(Test-Path -LiteralPath $receipt -PathType Leaf)) {
-        throw 'R89 SYSTEM receipt was not created by scheduled expiry'
+    $schedulerSucceeded = $false
+    do {
+        $taskInfo = Get-ScheduledTaskInfo -TaskPath '\' -TaskName $taskName -ErrorAction Stop
+        if ($taskInfo.LastRunTime -ge $manualTriggerAt.AddSeconds(-2) -and
+            $taskInfo.LastTaskResult -eq 0) {
+            $schedulerSucceeded = $true
+            break
+        }
+        Start-Sleep -Milliseconds 400
+    } while ([DateTime]::UtcNow -lt $timeLimit)
+    if (!$schedulerSucceeded) {
+        throw 'R89_FAIL: no recent SYSTEM scheduler successful completion'
     }
     foreach ($name in $peers) {
         if ((Get-Service -Name $name -ErrorAction Stop).Status -ne 'Stopped') {
-            throw 'R89 owned native peer remains live after scheduled trigger'
+            throw 'R89_FAIL: owned native peer live after startup task'
         }
     }
-    $resultDeadline = [DateTime]::UtcNow.AddSeconds(20)
-    do {
-        $taskInfo = Get-ScheduledTaskInfo -TaskPath '\' -TaskName $taskName -ErrorAction Stop
-        if ($taskInfo.LastTaskResult -eq 0) { break }
-        Start-Sleep -Milliseconds 350
-    } while ([DateTime]::UtcNow -lt $resultDeadline)
-    if ($taskInfo.LastTaskResult -ne 0) {
-        throw 'R89 Task Scheduler recorded nonzero worker exit'
+    $prefixes = @('10.249.129.1/32','10.249.129.2/32',
+                  'fd42:14::1/128','fd42:14::2/128')
+    if (@(Get-NetRoute -ErrorAction Stop |
+            Where-Object { $_.DestinationPrefix -in $prefixes }).Count -ne 0) {
+        throw 'R89_FAIL: synthetic native peer route still present'
     }
+    Write-Host 'R89_SYSTEM_TASK_RECENT_EXIT0_AND_OS_NATIVE_STOP_VERIFIED_PASS'
     Write-Host 'R89_ATSTARTUP_SYSTEM_NATIVE_STOP_MANUALLY_TRIGGERED_PASS_NO_REBOOT'
 }
 finally {

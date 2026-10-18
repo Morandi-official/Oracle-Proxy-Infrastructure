@@ -9,4 +9,11 @@
     <PublishTrimmed>false</PublishTrimmed>
     <EnableDefaultItems>true</EnableDefaultItems>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="OfficialWireGuardBridge.cs" />
+    <Compile Include="../../clients/windows/service-host/NativeDriverTrust.cs" Link="NativeDriverTrust.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
+  </ItemGroup>
 </Project>

@@ -43,8 +43,19 @@ jobs:
           sudo -n apt-get update -qq
           sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends libguestfs-tools qemu-utils acl >/dev/null
           tmp=$(mktemp -d)
-          cleanup() { rm -rf -- "$tmp"; }
+          grant=false
+          cleanup() {
+            if $grant; then sudo -n setfacl -x "u:$(id -un)" /dev/kvm || :; fi
+            rm -rf -- "$tmp"
+          }
           trap cleanup EXIT
+          if [[ ! -e /dev/kvm ]]; then
+            echo R99_HOST_KVM_DEVICE_MISSING; exit 6
+          fi
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            sudo -n setfacl -m "u:$(id -un):rw" /dev/kvm
+            grant=true
+          fi
           truncate -s 64M "$tmp/empty.raw"
           export LIBGUESTFS_BACKEND=direct
           export LIBGUESTFS_MEMSIZE=1024

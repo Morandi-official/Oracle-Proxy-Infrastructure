@@ -150,7 +150,12 @@ jobs:
       - name: ALWAYS remove only disposable SCM services, native DLLs and secrets
         if: always()
         shell: pwsh
-        run: ./clients/windows/lab/cleanup-scm-lab.ps1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ('${{ github.head_ref }}' -eq 'test/r89-native-startup-scheduler-ci-20261018') {
+            $env:ORACLE_R89_STRICT_CLEANUP = 'CI_ONLY'
+          }
+          ./clients/windows/lab/cleanup-scm-lab.ps1
       - name: ALWAYS verify IPv4/IPv6 default routes were not changed
         if: always()
         shell: pwsh

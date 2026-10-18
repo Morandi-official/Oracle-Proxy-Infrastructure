@@ -81,7 +81,7 @@ def parse_event_xml(value: str) -> BootRecord | None:
         return None
 
 
-def records_from_evtx(path: Path) -> tuple[str, list[BootRecord]]:
+def records_from_evtx(path: Path, *, scan: dict | None = None) -> tuple[str, list[BootRecord]]:
     if not path.is_file():
         raise ValueError("guest System.evtx not extracted")
     size = path.stat().st_size
@@ -93,14 +93,36 @@ def records_from_evtx(path: Path) -> tuple[str, list[BootRecord]]:
     from Evtx.Evtx import Evtx  # version + artifact hash independently pinned in CI
     events: list[BootRecord] = []
     count = 0
+    xml_parseable = 0
+    system_events_with_identity = 0
     with Evtx(str(path)) as log:
         for item in log.records():
             count += 1
             if count > MAX_RECORDS:
                 raise ValueError("unbounded guest EVTX records")
-            parsed = parse_event_xml(item.xml())
+            # Ordinary Windows system events (not only Kernel 12 / EventLog
+            # 6005) are counted to distinguish a valid but uninitialized
+            # System.evtx from an EVTX parser that sees zero real records.
+            xml_value = item.xml()
+            try:
+                root = ET.fromstring(xml_value)
+                xml_parseable += 1
+                system = root.find(NS + "System")
+                if system is not None and system.find(NS + "EventID") is not None and (
+                        system.find(NS + "Provider") is not None):
+                    system_events_with_identity += 1
+            except ET.ParseError:
+                pass
+            parsed = parse_event_xml(xml_value)
             if parsed:
                 events.append(parsed)
+    if scan is not None:
+        scan.update({
+            "r99_evtx_total_records": count,
+            "r99_evtx_xml_parseable_records": xml_parseable,
+            "r99_evtx_system_records_with_provider_id": system_events_with_identity,
+            "r99_evtx_recognized_windows_boot_records": len(events),
+        })
     return sha256(path.read_bytes()).hexdigest(), events
 
 
@@ -193,7 +215,9 @@ def main() -> int:
             records_from_evtx(args.before) if args.before is not None and
             args.before.is_file() else (None, [])
         )
-        after_hash, after_events = records_from_evtx(args.after)
+        counters: dict[str, int] = {}
+        after_hash, after_events = records_from_evtx(args.after, scan=counters)
+        print(json.dumps(counters, sort_keys=True))
         start = _utc(args.start_utc)
         end = _utc(args.end_utc)
         if end > start and (end - start).total_seconds() <= MAX_WINDOW_SECONDS:

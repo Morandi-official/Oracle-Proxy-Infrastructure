@@ -10,10 +10,21 @@ if [[ "${GITHUB_ACTIONS:-}" != true ||
       "${GITHUB_EVENT_NAME:-}" != pull_request ]]; then
   echo R97_REFUSED_NOT_EXACT_PUBLIC_STANDARD_RUNNER; exit 4
 fi
-if ! curl -fsSL --connect-timeout 10 --max-time 35 \
-  "https://api.github.com/repos/$GITHUB_REPOSITORY" |
-  python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["visibility"]=="public" and d["private"] is False'; then
-  echo R97_STOP_REPO_NOT_PUBLIC_NO_PAID_FALLBACK; exit 4
+# Trusted GitHub runner event payload is locally supplied for this job.
+# Avoid anonymous GitHub API throttling and never use caller-controlled values.
+if ! python3 - "$GITHUB_EVENT_PATH" <<'PY'
+import json,sys
+obj=json.load(open(sys.argv[1]))
+repo=obj.get("repository",{})
+pr=obj.get("pull_request",{})
+assert repo.get("full_name") == "Morandi-official/Oracle-Proxy-Infrastructure"
+assert repo.get("private") is False
+assert repo.get("visibility") == "public"
+assert pr.get("head",{}).get("repo",{}).get("full_name") == repo["full_name"]
+assert pr.get("head",{}).get("ref") == "test/r97-free-qemu-windows-evaluation-boot-20261018"
+PY
+then
+  echo R97_STOP_TRUSTED_PUBLIC_REPOSITORY_EVENT_NOT_VERIFIED; exit 4
 fi
 echo R97_FREE_PUBLIC_STANDARD_RUNNER_CONFIRMED
 work=$(mktemp -d "$RUNNER_TEMP/r97-ephemeral.XXXXXXXX")

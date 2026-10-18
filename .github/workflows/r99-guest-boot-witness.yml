@@ -1,0 +1,52 @@
+name: R99 independently witness real Windows NT boot in isolated free QEMU guest
+
+on:
+  pull_request:
+    paths:
+      - 'lab/cloud-windows-r99/**'
+      - 'docs/r99-offline-windows-boot-evidence.md'
+      - '.github/workflows/r99-guest-boot-witness.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r99-guest-witness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pure-denial-matrix:
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Windows boot EVTX witness forged and stale record negative tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s lab/cloud-windows-r99 -p 'test_windows_boot_evtx_witness.py' -v
+          echo 'R99_BOOT_WITNESS_NEGATIVE_MATRIX_PASS'
+          echo 'R99_WINDOWS_GUEST_RUNNING_IN_THIS_TEST=false'
+  isolated-real-windows-boot-evidence:
+    needs: pure-denial-matrix
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Only standard free hosted runner, no persistent Windows image or artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'R99_NO_PAID_RUNNER_NO_NEW_CLOUD_OR_PRODUCT_KEY'
+          echo 'R99_NO_GUEST_NIC_VPN_DRIVER_WFP_OR_ORACLE'
+          echo 'R99_NO_ARTIFACT_CACHE_OR_PERSISTENT_VM_DISK'
+      - name: Boot official evaluation guest and verify offline Microsoft kernel/eventlog boot records
+        shell: bash
+        timeout-minutes: 37
+        run: bash lab/cloud-windows-r99/run_guest_boot_witness.sh

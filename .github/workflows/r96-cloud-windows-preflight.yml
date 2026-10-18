@@ -1,0 +1,41 @@
+name: R96 GitHub hosted cloud Windows VM capability preflight (READ ONLY)
+
+on:
+  pull_request:
+    paths:
+      - 'lab/cloud-windows-r96/**'
+      - 'docs/r96-cloud-windows-host-feasibility.md'
+      - '.github/workflows/r96-cloud-windows-preflight.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check-resource-feasibility-no-vm:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Pure classifier tests — refuse unsupported host, KVM, disk, memory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s lab/cloud-windows-r96 -p 'test_read_only_probe.py' -v
+          printf '%s\n' 'R96_PURE_RESOURCE_GATES_NO_GUEST_RUN_PASS'
+      - name: Read only GitHub Linux runner capabilities; NEVER launch Windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B lab/cloud-windows-r96/read_only_probe.py
+          printf '%s\n' 'R96_KVM_DISK_RAM_CPU_DISCOVERY_COMPLETE_NO_VM_OR_OS_CHANGE'
+          printf '%s\n' 'R96_ACTUAL_WINDOWS_GUEST_REBOOT_WFP_UU_TESTED=false'
+      - name: Read-only privileged KVM API capability probe, no guest created
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_OS="$RUNNER_OS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            python3 -B lab/cloud-windows-r96/privileged_readonly_kvm_api.py
+          printf '%s\n' 'R96_ONLY_KVM_GET_API_VERSION_NO_VM_CREATE_NO_NETWORK_CHANGE'

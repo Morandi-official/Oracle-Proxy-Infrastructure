@@ -30,45 +30,20 @@ jobs:
           python3 -B -m unittest discover -s lab/cloud-windows-r99 -p 'test_windows_boot_evtx_witness.py' -v
           echo 'R99_BOOT_WITNESS_NEGATIVE_MATRIX_PASS'
           echo 'R99_WINDOWS_GUEST_RUNNING_IN_THIS_TEST=false'
-  guestfish-host-readonly-smoke:
+  host-loop-ntfs-smoke:
     needs: pure-denial-matrix
     if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 6
     steps:
-      - name: Test libguestfs host appliance on a blank synthetic local disk
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify safe read-only NTFS loop from synthetic disk and exact teardown
         shell: bash
-        run: |
-          set -euo pipefail
-          sudo -n apt-get update -qq
-          sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends libguestfs-tools qemu-utils acl >/dev/null
-          tmp=$(mktemp -d)
-          grant=false
-          cleanup() {
-            if $grant; then sudo -n setfacl -x "u:$(id -un)" /dev/kvm || :; fi
-            rm -rf -- "$tmp"
-          }
-          trap cleanup EXIT
-          if [[ ! -e /dev/kvm ]]; then
-            echo R99_HOST_KVM_DEVICE_MISSING; exit 6
-          fi
-          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-            sudo -n setfacl -m "u:$(id -un):rw" /dev/kvm
-            grant=true
-          fi
-          truncate -s 64M "$tmp/empty.raw"
-          export LIBGUESTFS_BACKEND=direct
-          export LIBGUESTFS_MEMSIZE=1024
-          if ! guestfish --ro --format=raw -a "$tmp/empty.raw" run : list-filesystems >"$tmp/stdout" 2>"$tmp/stderr"; then
-            # Only program diagnostics from a blank synthetic disk, not guest data.
-            echo 'R99_HOST_GUESTFISH_APPLIANCE_SELFTEST_FAIL'
-            sed -E 's@/[^[:space:]:]+@<TEMP_PATH>@g' "$tmp/stderr" | tail -n 8
-            exit 6
-          fi
-          test ! -s "$tmp/stdout" || { echo 'R99_BLANK_DISK_UNEXPECTED_FS'; exit 6; }
-          echo 'R99_LIBGUESTFS_OFFLINE_READONLY_APPLIANCE_READY_PASS'
+        run: bash lab/cloud-windows-r99/test_host_loop_ntfs.sh
   isolated-real-windows-boot-evidence:
-    needs: [pure-denial-matrix, guestfish-host-readonly-smoke]
+    needs: [pure-denial-matrix, host-loop-ntfs-smoke]
     if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018'
     runs-on: ubuntu-24.04
     timeout-minutes: 40

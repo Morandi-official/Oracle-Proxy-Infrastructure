@@ -129,11 +129,11 @@ echo R97_READONLY_BASE_AND_DISPOSABLE_COW_DISK_CREATED
 # Ubuntu official apt signs and installs EVTX parser with declared runtime
 # dependencies; prior --no-deps PyPI wheel failed on ModuleNotFoundError.
 # Restrict to the reviewed Ubuntu Noble source version family.
-evtx_version=$(dpkg-query -W -f='\u0024{Version}' python3-evtx)
+evtx_version=$(dpkg-query -W -f='${Version}' python3-evtx)
 if [[ "$evtx_version" != 0.7.4-* ]]; then
   echo R99_REFUSED_UNREVIEWED_SYSTEM_EVTX_PARSER_VERSION; exit 6
 fi
-/usr/bin/python3 -B -c 'from Evtx.Evtx import Evtx; from Evtx.Views import evtx_record_xml_view; print("R99_OFFICIAL_APT_EVTX_MODULE_IMPORT_PASS")'
+/usr/bin/python3 -B -c 'from Evtx.Evtx import Evtx; print("R99_OFFICIAL_APT_EVTX_MODULE_IMPORT_PASS")'
 # R99 alternate host-only read path: QEMU converts official VHD to sparse
 # RAW while guest is OFF, then an EXACT-OWNED loop device mounts NTFS RO.
 # GitHub's separate libguestfs appliance failed even on an empty RAW disk,

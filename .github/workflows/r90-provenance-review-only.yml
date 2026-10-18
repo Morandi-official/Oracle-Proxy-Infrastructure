@@ -1,0 +1,89 @@
+name: R90 cryptographically verified source provenance demo (NO Windows binaries)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/r90-provenance-review-only.yml'
+      - 'docs/r90-sigstore-ci-provenance.md'
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  verify-ci-origin-not-installer-trust:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r90-provenance-attestation-review-only-20261018'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare harmless fixed text-only source provenance subject
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/r90
+          {
+            printf '%s\n' 'R90 NON-EXECUTABLE SOURCE PROVENANCE DEMONSTRATION ONLY'
+            printf '%s\n' 'NO VPN; NO INSTALLER; NO NATIVE DRIVER; NO TRUSTED PUBLISHER CERTIFICATE'
+            printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'source_commit=%s\n' "$GITHUB_SHA"
+            printf '%s\n' 'GA issue 34 remains OPEN'
+          } > dist/r90/R90-REVIEW-ONLY-PROVENANCE.txt
+          test "$(find dist/r90 -type f | wc -l)" -eq 1
+          test "$(stat -c %s dist/r90/R90-REVIEW-ONLY-PROVENANCE.txt)" -lt 1024
+          echo 'R90_NONEXECUTABLE_REVIEW_ONLY_SUBJECT_CREATED_PASS'
+      - name: Generate GitHub OIDC-backed signed SLSA provenance of exact text subject
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/r90/R90-REVIEW-ONLY-PROVENANCE.txt
+      - name: Verify cryptographic attestation identity, exact workflow and source SHA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          original=dist/r90/R90-REVIEW-ONLY-PROVENANCE.txt
+          signer="$GITHUB_REPOSITORY/.github/workflows/r90-provenance-review-only.yml"
+          ok=false
+          for attempt in {1..8}; do
+            if gh attestation verify "$original" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners >/dev/null 2>&1; then
+              ok=true
+              break
+            fi
+            sleep 3
+          done
+          if [[ "$ok" != "true" ]]; then
+            echo 'R90_FAIL: provenance was not verified against independent GitHub trust'
+            exit 1
+          fi
+          echo 'R90_SIGNED_PROVENANCE_REPO_WORKFLOW_SOURCE_AND_DIGEST_VERIFIED_PASS'
+          cp "$original" dist/r90-tampered.txt
+          printf '%s\n' 'ATTACKER_CHANGED_BYTES' >> dist/r90-tampered.txt
+          if gh attestation verify dist/r90-tampered.txt --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'R90_FAIL: altered content accepted'
+            exit 1
+          fi
+          if gh attestation verify "$original" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/not-the-R90-signer.yml" >/dev/null 2>&1; then
+            echo 'R90_FAIL: wrong signer workflow accepted'
+            exit 1
+          fi
+          rm -f dist/r90-tampered.txt
+          echo 'R90_TAMPERED_ARTIFACT_AND_WRONG_WORKFLOW_DENIED_PASS'
+          echo 'R90_AUTHENTICODE_INSTALLER_SIGNED=false'
+          echo 'R90_PHYSICAL_DEPLOYMENT_AUTHORIZED=false'
+      - name: Upload ONLY attested inert text — not a software release
+        uses: actions/upload-artifact@v4
+        with:
+          name: R90-NONEXECUTABLE-ATTESTATION-DEMO-REVIEW-ONLY
+          path: dist/r90/R90-REVIEW-ONLY-PROVENANCE.txt
+          if-no-files-found: error
+          retention-days: 3

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Security.Principal;
 
 namespace OracleProxy.WgAlpha;
@@ -26,11 +27,17 @@ internal static class CiEmbeddedServiceTrial
             EmbeddedWireGuardBridge.ReadServiceState() != "Absent")
             return 3;
 
+        // Only categorical status values are written; never config or key.
+        string witness = Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP")!,
+            "r113-categorical-service-witness.json");
+        if (File.Exists(witness) || File.Exists(witness + ".tmp")) return 3;
         bool startVerified = false;
         bool cleanupVerified = false;
+        string started = "NOT_TESTED";
+        string removed = "NOT_TESTED";
         try
         {
-            string started = EmbeddedWireGuardBridge.Install(config);
+            started = EmbeddedWireGuardBridge.Install(config);
             startVerified = started == "OFFICIAL_WIREGUARD_COMMAND_OK" &&
                 EmbeddedWireGuardBridge.ReadServiceState() == "Running";
             if (startVerified)
@@ -44,12 +51,27 @@ internal static class CiEmbeddedServiceTrial
         finally
         {
             // Always attempt exact-owned removal, even after a failed start.
-            string removed = EmbeddedWireGuardBridge.Uninstall();
+            removed = EmbeddedWireGuardBridge.Uninstall();
             cleanupVerified = removed == "OFFICIAL_WIREGUARD_COMMAND_OK" &&
                 EmbeddedWireGuardBridge.ReadServiceState() == "Absent";
             Console.WriteLine(cleanupVerified
                 ? "R113_OWNED_NATIVE_SERVICE_STOP_AND_EXACT_CLEANUP_PASS"
                 : "R113_OWNED_NATIVE_SERVICE_CLEANUP_UNVERIFIED_DENY");
+            var publicClasses = new {
+                start_result = started,
+                stop_result = removed,
+                service_state = EmbeddedWireGuardBridge.ReadServiceState(),
+                program_files_staging_exists = Directory.Exists(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    "OracleProxyEmbeddedAlpha")),
+                program_data_staging_exists = Directory.Exists(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "OracleProxyEmbeddedAlpha"))
+            };
+            // This is written only to runner-owned temporary storage and is
+            // never uploaded as a CI artifact or shared with a real user.
+            File.WriteAllText(witness, JsonSerializer.Serialize(publicClasses));
+
         }
         return startVerified && cleanupVerified ? 0 : 8;
     }

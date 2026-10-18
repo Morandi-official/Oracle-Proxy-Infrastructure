@@ -289,11 +289,13 @@ internal static class EmbeddedWireGuardBridge
                     var binaries=Directory.GetFiles(InstallRoot)
                         .Select(Path.GetFileName).OrderBy(x=>x).ToArray();
                     var expected=new[]{Executable,TunnelDll,DriverDll}.OrderBy(x=>x).ToArray();
-                    if(!binaries.SequenceEqual(expected,StringComparer.OrdinalIgnoreCase) ||
-                       Directory.GetFiles(ConfigRoot).Length!=1 ||
-                       Directory.GetDirectories(InstallRoot).Length!=0 ||
+                    if(!binaries.SequenceEqual(expected,StringComparer.OrdinalIgnoreCase))
+                        return "SCM_REMOVED_PROGRAM_FILES_NOT_EXACT_DENY";
+                    if(Directory.GetFiles(ConfigRoot).Length!=1)
+                        return "SCM_REMOVED_CONFIG_FILE_COUNT_NOT_EXACT_DENY";
+                    if(Directory.GetDirectories(InstallRoot).Length!=0 ||
                        Directory.GetDirectories(ConfigRoot).Length!=0)
-                        return "SCM_REMOVED_BUT_STAGING_NOT_EXACT";
+                        return "SCM_REMOVED_UNEXPECTED_STAGING_SUBDIRECTORY_DENY";
                     foreach(string name in expected)
                         File.Delete(Path.Combine(InstallRoot,name));
                     File.Delete(StagedConfig);

@@ -34,7 +34,10 @@ jobs:
           $exe=Join-Path $dir 'OracleProxy.Windows.Preview.exe'
           if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'R91 exact preview EXE missing' }
           $unexpected=@(Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object Name -notin @('OracleProxy.Windows.Preview.exe','OracleProxy.Windows.Preview.pdb'))
-          if ($unexpected.Count -ne 0) { throw 'R91 forbidden non-preview files bundled' }
+          if ($unexpected.Count -ne 0) {
+            Write-Host ("R91_UNEXPECTED_PUBLIC_BUILD_FILENAMES=" + (($unexpected | ForEach-Object Name | Sort-Object) -join ','))
+            throw 'R91 forbidden non-preview files bundled'
+          }
           $signature=Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
           if ($signature.Status -ne 'NotSigned') { throw 'R91 unexpected Authenticode status; require new human review' }
           Write-Host 'R91_UNSIGNED_WINDOWS_READONLY_EXE_BUILD_ONLY_PASS'

@@ -8,7 +8,7 @@ import sys
 import types
 
 from windows_boot_evtx_witness import (
-    BootRecord, judge, parse_event_xml, summarize_safe_boot_counters, records_from_evtx, event_systemtime_utc
+    BootRecord, judge, parse_event_xml, summarize_safe_boot_counters, records_from_evtx, event_systemtime_utc, classify_clock_offset
 )
 def at(minute=0):
     return datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc) + timedelta(minutes=minute)
@@ -37,6 +37,20 @@ class R99HostBootWitnessTests(unittest.TestCase):
             new_digest,self.new if after is None else after,
             at(0) if start is None else start,
             at(4) if end is None else end)
+    def test_future_guest_clock_is_diagnostic_never_approval(self):
+        for minutes, code in ((4,"within"),(8,"after_40s_5m"),
+                              (50,"after_5m_1h"),
+                              (9*60,"after_1h_day"),
+                              (60*48,"after_gt_day")):
+            self.assertEqual(classify_clock_offset(at(minutes),at(0),at(4)),code)
+        future = [row(11,12,"Microsoft-Windows-Kernel-General",9*60),
+                  row(12,6005,"EventLog",9*60+2)]
+        denied=self.judge(after=future)
+        self.assertIn("DENY",denied.code)
+        self.assertFalse('"genuine_windows_kernel_boot_verified": true'
+                         in denied.to_public_report())
+        self.assertEqual(classify_clock_offset(None,at(0),at(4)),"unreadable")
+
     def test_windows_python_evtx_naive_systemtime_is_utc_not_local_time(self):
         # Debian/Ubuntu python-evtx calls datetime.isoformat(' '), and
         # Windows SystemTime is UTC without an explicit zone in that output.

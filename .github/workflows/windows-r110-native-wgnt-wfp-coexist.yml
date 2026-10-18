@@ -44,6 +44,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Validate real PowerShell parser before any toolchain/network download
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $path=(Resolve-Path './clients/windows/lab/run-admin-controlled-scm.ps1').Path
+          $tokens=$null
+          $errors=$null
+          $ast=[System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if ($null -eq $ast -or @($errors).Count -ne 0) {
+            throw 'R110 privileged lab orchestration script is not valid PowerShell'
+          }
+          Write-Host 'R110_POWERSHELL_PARSE_DENIAL_GATE_PASS'
       - uses: actions/checkout@v4
         with:
           repository: WireGuard/wireguard-windows

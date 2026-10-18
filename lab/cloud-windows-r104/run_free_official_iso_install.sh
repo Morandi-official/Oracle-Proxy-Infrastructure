@@ -150,6 +150,15 @@ done
   echo R104_WINDOWS_EVAL_INSTALL_VM_START_FAILED; exit 6;
 }
 echo R104_WINDOWS_EVALUATION_ISO_SETUP_VM_RUNNING_NO_NIC
+# Some stock Microsoft UEFI optical install paths display "Press any key to
+# boot from CD or DVD". The earlier headless no-NIC setup provided no keyboard
+# input, so it may have timed out and skipped the only bootable ISO. Perform
+# ONLY fixed, short, host-owned QMP Return presses during initial boot.
+# This is NOT a guest OS command or Windows boot proof. Any QMP refusal = deny.
+if ! /usr/bin/python3 -B lab/cloud-windows-r104/qmp_bounded_iso_boot_key.py --owned-root "$work"; then
+  echo R104_UEFI_OPTICAL_BOOT_INPUT_UNVERIFIED_DENY
+  exit 6
+fi
 # No guest-side scripts, execution-policy changes or remote shell.
 # R104's first real run reached this point, then returned no NTFS partition
 # after a blind 25-minute wait. Observe ONLY host sparse-disk allocation and

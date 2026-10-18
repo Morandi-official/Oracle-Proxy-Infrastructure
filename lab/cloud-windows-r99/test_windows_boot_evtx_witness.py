@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 import unittest
 
 from windows_boot_evtx_witness import (
-    BootRecord, judge, parse_event_xml
+    BootRecord, judge, parse_event_xml, summarize_safe_boot_counters
 )
 def at(minute=0):
     return datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc) + timedelta(minutes=minute)
@@ -72,6 +72,19 @@ class R99HostBootWitnessTests(unittest.TestCase):
            xml("Microsoft-Windows-Kernel-General",12,tm="not-a-time")
         ):
             self.assertIsNone(parse_event_xml(text))
+    def test_diagnostics_distinguish_stale_from_live_events_without_records(self):
+        old = [row(1, 12, "Microsoft-Windows-Kernel-General", -20),
+               row(2, 6005, "EventLog", -19)]
+        counters = summarize_safe_boot_counters(self.before, old, at(0), at(4))
+        self.assertEqual(counters["r99_kernel12_any_date"], 1)
+        self.assertEqual(counters["r99_eventlog6005_any_date"], 1)
+        self.assertEqual(counters["r99_kernel12_in_host_window"], 0)
+        self.assertEqual(counters["r99_eventlog6005_in_host_window"], 0)
+        self.assertEqual(counters["r99_kernel12_older_than_host_window"], 1)
+        self.assertEqual(counters["r99_eventlog6005_older_than_host_window"], 1)
+        self.assertFalse(any("record_id" in key or "host_start" in key
+                             for key in counters.keys()))
+
     def test_reboot_is_not_inferred_from_single_kernel_start(self):
         v=self.judge()
         self.assertFalse("reboot_verified\": true" in v.to_public_report())

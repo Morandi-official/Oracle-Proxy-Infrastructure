@@ -110,8 +110,34 @@ test -r /usr/share/OVMF/OVMF_VARS_4M.fd
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "$work/vars.fd"
 qemu-img create -q -f qcow2 -F "$fmt" -b "$base" "$work/overlay.qcow2"
 echo R97_READONLY_BASE_AND_DISPOSABLE_COW_DISK_CREATED
+check_kvm_before_guest() {
+  # A host may revoke temporary KVM node ACLs after a QEMU exit.
+  # At most reapply the SAME single-runner-user ACL; never chmod 666,
+  # change kernel lockdown, disable host security, or use paid runners.
+  if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+    sudo -n setfacl -m "u:$(id -un):rw" /dev/kvm
+    acl=true
+  fi
+  if ! python3 - <<'PY'
+import fcntl,os
+try:
+    fd=os.open("/dev/kvm",os.O_RDWR|os.O_CLOEXEC)
+    try:
+        if fcntl.ioctl(fd,0xAE00) != 12:
+            raise OSError("unexpected KVM API")
+    finally:
+        os.close(fd)
+except OSError:
+    raise SystemExit("R97_STOP_HOSTED_KVM_API_REVOKED_NO_SECURITY_BYPASS")
+print("R97_FRESH_KVM_API_VERSION_12_VERIFIED")
+PY
+  then
+    exit 5
+  fi
+}
 launch() {
   local slot=${1:-A}
+  check_kvm_before_guest
   local vnc_display=2
   if [[ "$slot" == B ]]; then vnc_display=3; fi
   rm -f -- "$work/qmp.sock"

@@ -53,7 +53,11 @@ echo R100_LINUX_NETNS_NO_EXTERNAL_IPV4_IPV6_UPLINK_PASS
 sudo -n ip netns exec "$ns" timeout 7 tcpdump -i tap0 -n -c 1 -w "$pcap" arp >/dev/null 2>&1 &
 cap_pid=$!
 sleep 1
-sudo -n ip netns exec "$ns" ping -c 1 -W 1 198.18.100.2 >/dev/null 2>&1 || :
+# A host-only ping to an unattached TAP need not produce guest-facing
+# Ethernet frames. Attach a bounded synthetic guest-side TAP FD and write
+# an internal ARP request; this is precisely the future guest packet boundary.
+sudo -n ip netns exec "$ns" runuser -u "$(id -un)" -- env R100_SYNTHETIC_TAP=CI_ONLY \
+  python3 -B lab/cloud-windows-r100/emit_synthetic_guest_arp.py
 wait "$cap_pid" || { echo R100_FAIL_NO_INDEPENDENT_TAP_CAPTURE; exit 5; }
 if [[ ! -s "$pcap" ]] || (( $(stat -c %s "$pcap") < 40 )); then
   echo R100_FAIL_EMPTY_CAPTURE; exit 5

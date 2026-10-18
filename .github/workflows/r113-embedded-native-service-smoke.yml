@@ -172,6 +172,15 @@ jobs:
           $config=(Join-Path $env:RUNNER_TEMP 'OracleProxyAlphaTest.conf')
           $arglist='--ci-r113-native-service-trial "' + $config + '"'
           $trial=Start-Process -FilePath $exe -ArgumentList $arglist -Wait -PassThru
+          $witness=Join-Path $env:RUNNER_TEMP 'r113-categorical-service-witness.json'
+          if(Test-Path -LiteralPath $witness -PathType Leaf) {
+            $safe=Get-Content -LiteralPath $witness -Raw | ConvertFrom-Json -ErrorAction Stop
+            Write-Host "R113_NATIVE_START_CLASS=$($safe.start_result)"
+            Write-Host "R113_NATIVE_STOP_CLASS=$($safe.stop_result)"
+            Write-Host "R113_NATIVE_SERVICE_CLASS=$($safe.service_state)"
+            Write-Host "R113_NATIVE_STAGE_PATHS_EXIST=$($safe.program_files_staging_exists)/$($safe.program_data_staging_exists)"
+            Remove-Item -LiteralPath $witness -Force
+          } else { Write-Host 'R113_NO_SAFE_WITNESS_DUE_TO_EARLY_REFUSAL' }
           if ($trial.ExitCode -ne 0) {
             throw "R113 real native SCM lifecycle failed with nonzero $($trial.ExitCode)"
           }

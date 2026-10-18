@@ -48,7 +48,7 @@ foreach ($svc in @('OracleProxyLabManager','WireGuardTunnel$lab-peer-a',
 # BEFORE any destructive action. No foreign files, folders or reparse links.
 $allowedFiles = @(
     '.ci-control-approved', '.r89-expiry-receipt',
-    'config\lab-peer-a.conf', 'config\lab-peer-b.conf',
+    'config\lab-peer-a.conf', 'config\lab-peer-b.conf', 'config\log.bin',
     'lab-peer-a\OracleProxy.WireGuardHost.exe',
     'lab-peer-a\tunnel.dll','lab-peer-a\wireguard.dll',
     'lab-peer-a\engine-pins.json',
@@ -62,7 +62,9 @@ foreach ($item in $entries) {
     $relative = $item.FullName.Substring($root.Length + 1)
     if ($item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
         ($item.PSIsContainer -and $relative -notin $allowedDirs) -or
-        (!$item.PSIsContainer -and $relative -notin $allowedFiles)) {
+        (!$item.PSIsContainer -and $relative -notin $allowedFiles) -or
+        (!$item.PSIsContainer -and $relative -eq 'config\log.bin' -and
+            $item.Length -gt 20MB)) {
         throw 'R89_REFUSED: unexpected or reparse stage entry, no deletion'
     }
 }

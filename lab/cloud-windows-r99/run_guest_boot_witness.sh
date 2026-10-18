@@ -47,7 +47,7 @@ if [[ ! -e /dev/kvm ]] ||
 fi
 sudo -n apt-get update -qq
 sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -qq -y \
-  --no-install-recommends qemu-system-x86 qemu-utils ovmf acl unzip file libguestfs-tools python3-venv >/dev/null
+  --no-install-recommends qemu-system-x86 qemu-utils ovmf acl unzip file util-linux ntfs-3g kmod python3-venv >/dev/null
 if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
   sudo -n setfacl -m "u:$(id -un):rw" /dev/kvm
   acl=true
@@ -116,73 +116,20 @@ echo R97_READONLY_BASE_AND_DISPOSABLE_COW_DISK_CREATED
 echo 'python-evtx==0.8.1 --hash=sha256:46336b854dbe0a1e75873ae30db5f583c9d2262ff1d21bdb6b1e624ecfa18ddb' > "$work/evtx-requirements.txt"
 python3 -m venv "$work/venv"
 "$work/venv/bin/python" -m pip install -q --no-deps --require-hashes -r "$work/evtx-requirements.txt"
-export LIBGUESTFS_BACKEND=direct
-export LIBGUESTFS_MEMSIZE=1024
-if "$work/venv/bin/python" lab/cloud-windows-r99/guestfs_readonly_system_evtx.py \
-    --image "$base" --format "$fmt" --output "$work/system-before.evtx"; then
+# R99 alternate host-only read path: QEMU converts official VHD to sparse
+# RAW while guest is OFF, then an EXACT-OWNED loop device mounts NTFS RO.
+# GitHub's separate libguestfs appliance failed even on an empty RAW disk,
+# so we do not rely on it or weaken any OS policy.
+mkdir -p "$work/mnt"
+qemu-img convert -q -O raw -S 4k "$base" "$work/before.raw"
+if "$work/venv/bin/python" lab/cloud-windows-r99/loop_readonly_system_evtx.py \
+    --raw "$work/before.raw" --output "$work/system-before.evtx" --mount "$work/mnt"; then
   echo R99_BASELINE_GUEST_WINDOWS_EVENTLOG_EXTRACTED_READ_ONLY
 else
   rm -f -- "$work/system-before.evtx"
   echo R99_EVALUATION_BASELINE_EVENTLOG_NOT_AVAILABLE_NOT_PROOF
 fi
-
-check_kvm_before_guest() {
-  # A host may revoke temporary KVM node ACLs after a QEMU exit.
-  # At most reapply the SAME single-runner-user ACL; never chmod 666,
-  # change kernel lockdown, disable host security, or use paid runners.
-  if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-    sudo -n setfacl -m "u:$(id -un):rw" /dev/kvm
-    acl=true
-  fi
-  if ! python3 - <<'PY'
-import fcntl,os
-try:
-    fd=os.open("/dev/kvm",os.O_RDWR|os.O_CLOEXEC)
-    try:
-        if fcntl.ioctl(fd,0xAE00) != 12:
-            raise OSError("unexpected KVM API")
-    finally:
-        os.close(fd)
-except OSError:
-    raise SystemExit("R97_STOP_HOSTED_KVM_API_REVOKED_NO_SECURITY_BYPASS")
-print("R97_FRESH_KVM_API_VERSION_12_VERIFIED")
-PY
-  then
-    exit 5
-  fi
-}
-launch() {
-  local slot=${1:-A}
-  check_kvm_before_guest
-  local vnc_display=2
-  if [[ "$slot" == B ]]; then vnc_display=3; fi
-  rm -f -- "$work/qmp.sock"
-  qemu-system-x86_64 -name R97-isolated-eval -machine q35,accel=kvm \
-    -cpu host -smp 2 -m 6144 \
-    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-    -drive if=pflash,format=raw,file="$work/vars.fd" \
-    -drive file="$work/overlay.qcow2",format=qcow2,if=ide \
-    -vga std -display none -vnc "127.0.0.1:$vnc_display" -nic none \
-    -qmp "unix:$work/qmp.sock,server=on,wait=off" \
-    -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
-    > "$work/qemu.log" 2>&1 &
-  qpid=$!
-  for i in $(seq 1 30); do
-    if [[ -S "$work/qmp.sock" ]] && kill -0 "$qpid" 2>/dev/null; then return; fi
-    sleep 1
-  done
-  echo R97_QEMU_LOCAL_ONLY_STARTUP_DIAGNOSTICS_BEGIN
-  if [[ -f "$work/qemu.log" ]]; then
-    # Print only QEMU errors; do not upload screenshots, disks or secrets.
-    tail -n 12 "$work/qemu.log" | sed -E 's@/home/runner/[^ ]+@<RUNNER_PATH>@g'
-  fi
-  echo R97_STOP_QEMU_FAILED_TO_LAUNCH; exit 5
-}
-stop() {
-  python3 lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" quit
-  wait "$qpid" || :
-  qpid=''
-}
+rm -f -- "$work/before.raw"
 r99_host_start_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 launch A
 sleep 110
@@ -195,11 +142,15 @@ stop
 r99_host_end_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 # Never mistake QMP running/framebuffer for the OS kernel.
 # Inspect powered-off guest disk strictly from its separate Linux host.
-if ! "$work/venv/bin/python" lab/cloud-windows-r99/guestfs_readonly_system_evtx.py \
-    --image "$work/overlay.qcow2" --format qcow2 --output "$work/system-after.evtx"; then
+# Linux host is independent of guest: QEMU has QUIT already.
+# Convert only the stopped, disposable overlay to a sparse raw clone.
+qemu-img convert -q -O raw -S 4k "$work/overlay.qcow2" "$work/after.raw"
+if ! "$work/venv/bin/python" lab/cloud-windows-r99/loop_readonly_system_evtx.py \
+    --raw "$work/after.raw" --output "$work/system-after.evtx" --mount "$work/mnt"; then
   echo R99_GUEST_SYSTEM_EVENTLOG_NOT_ACCESSIBLE_NO_BOOT_CLAIM
   exit 6
 fi
+rm -f -- "$work/after.raw"
 args=(--after "$work/system-after.evtx" --start-utc "$r99_host_start_utc" --end-utc "$r99_host_end_utc")
 if [[ -f "$work/system-before.evtx" ]]; then
   args+=(--before "$work/system-before.evtx")

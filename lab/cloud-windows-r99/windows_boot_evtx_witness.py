@@ -18,6 +18,18 @@ NS = "{http://schemas.microsoft.com/win/2004/08/events/event}"
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_RECORDS = 50000
 MAX_WINDOW_SECONDS = 20 * 60
+# Fixed Microsoft Windows boot/setup sources only. Never emit arbitrary
+# providers, event messages, payloads, record IDs or exact times.
+DIAGNOSTIC_PROVIDERS = (
+    "Microsoft-Windows-Setup",
+    "Microsoft-Windows-Kernel-Boot",
+    "Microsoft-Windows-Kernel-General",
+    "Microsoft-Windows-Kernel-PnP",
+    "Microsoft-Windows-Winlogon",
+    "Microsoft-Windows-Eventlog",
+    "EventLog",
+)
+
 
 
 @dataclass(frozen=True)
@@ -81,7 +93,7 @@ def parse_event_xml(value: str) -> BootRecord | None:
         return None
 
 
-def records_from_evtx(path: Path, *, scan: dict | None = None) -> tuple[str, list[BootRecord]]:
+def records_from_evtx(path: Path, *, scan: dict | None = None, host_start: datetime | None = None, host_end: datetime | None = None) -> tuple[str, list[BootRecord]]:
     if not path.is_file():
         raise ValueError("guest System.evtx not extracted")
     size = path.stat().st_size
@@ -95,6 +107,8 @@ def records_from_evtx(path: Path, *, scan: dict | None = None) -> tuple[str, lis
     count = 0
     xml_parseable = 0
     system_events_with_identity = 0
+    provider_counts = {name: 0 for name in DIAGNOSTIC_PROVIDERS}
+    event_timing = {"before": 0, "within": 0, "after": 0, "unreadable": 0}
     with Evtx(str(path)) as log:
         for item in log.records():
             count += 1
@@ -111,6 +125,26 @@ def records_from_evtx(path: Path, *, scan: dict | None = None) -> tuple[str, lis
                 if system is not None and system.find(NS + "EventID") is not None and (
                         system.find(NS + "Provider") is not None):
                     system_events_with_identity += 1
+                    provider_name = system.find(NS + "Provider").get("Name", "")
+                    if provider_name in provider_counts:
+                        provider_counts[provider_name] += 1
+                    # Only categorical time-window counters; do not expose
+                    # raw XML, exact timestamps, source IPs, event payloads.
+                    if host_start is not None and host_end is not None:
+                        created = system.find(NS + "TimeCreated")
+                        raw_time = created.get("SystemTime") if created is not None else ""
+                        try:
+                            stamp = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                            if stamp.tzinfo is None:
+                                event_timing["unreadable"] += 1
+                            elif stamp < host_start - timedelta(seconds=40):
+                                event_timing["before"] += 1
+                            elif stamp > host_end + timedelta(seconds=40):
+                                event_timing["after"] += 1
+                            else:
+                                event_timing["within"] += 1
+                        except (ValueError, OverflowError, TypeError):
+                            event_timing["unreadable"] += 1
             except ET.ParseError:
                 pass
             parsed = parse_event_xml(xml_value)
@@ -122,7 +156,13 @@ def records_from_evtx(path: Path, *, scan: dict | None = None) -> tuple[str, lis
             "r99_evtx_xml_parseable_records": xml_parseable,
             "r99_evtx_system_records_with_provider_id": system_events_with_identity,
             "r99_evtx_recognized_windows_boot_records": len(events),
+            "r99_system_events_before_host_window": event_timing["before"],
+            "r99_system_events_within_host_window": event_timing["within"],
+            "r99_system_events_after_host_window": event_timing["after"],
+            "r99_system_events_with_unreadable_clock": event_timing["unreadable"],
         })
+        for i, name in enumerate(DIAGNOSTIC_PROVIDERS):
+            scan["r99_allowlisted_microsoft_boot_source_" + str(i) + "_count"] = provider_counts[name]
     return sha256(path.read_bytes()).hexdigest(), events
 
 
@@ -216,10 +256,11 @@ def main() -> int:
             args.before.is_file() else (None, [])
         )
         counters: dict[str, int] = {}
-        after_hash, after_events = records_from_evtx(args.after, scan=counters)
-        print(json.dumps(counters, sort_keys=True))
         start = _utc(args.start_utc)
         end = _utc(args.end_utc)
+        after_hash, after_events = records_from_evtx(
+            args.after, scan=counters, host_start=start, host_end=end)
+        print(json.dumps(counters, sort_keys=True))
         if end > start and (end - start).total_seconds() <= MAX_WINDOW_SECONDS:
             print(json.dumps(summarize_safe_boot_counters(
                 earlier_events, after_events, start, end), sort_keys=True))

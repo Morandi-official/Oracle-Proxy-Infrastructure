@@ -44,7 +44,7 @@ foreach ($name in $peers) {
 $worker = (Resolve-Path ./clients/windows/lab/Invoke-R89SystemExpiryWorker.ps1).Path
 $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 $registered = $false
-$triggerAt = (Get-Date).AddSeconds(45)
+# AtStartup task is intentionally started manually, not by actual OS reboot.
 $expires = [DateTime]::UtcNow.AddSeconds(-12).ToString('yyyy-MM-ddTHH:mm:ssZ')
 $arguments = ('-NoProfile -NonInteractive -File "{0}" -ExpiryUtc {1} -JobMarker "{2}"' -f
     $worker,$expires,$jobMarker)
@@ -82,7 +82,7 @@ try {
         $scheduled.Actions[0].Arguments -cne $arguments) {
         throw 'R89 task action or SYSTEM identity differs after registration'
     }
-    Write-Host 'R89_OWNED_SYSTEM_SCHEDULED_EXPIRY_REGISTERED_PASS'
+    Write-Host 'R89_SYSTEM_ATSTARTUP_TASK_REGISTERED_BEFORE_NATIVE_STOP_PASS'
     Stop-Process -Id ([int]$m.ProcessId) -Force -ErrorAction Stop
     (Get-Service -Name $managerName).WaitForStatus(
         'Stopped',[TimeSpan]::FromSeconds(20))

@@ -52,8 +52,11 @@ if (@($task).Count -ne 1 -or
     throw 'R89_REFUSED: task principal/action not exact'
 }
 $expectedExecutable = (Get-Command pwsh -ErrorAction Stop).Source
+$expectedArguments = ('-NoProfile -NonInteractive -File "{0}" -ExpiryUtc {1} -JobMarker "{2}"' -f
+    $PSCommandPath,$ExpiryUtc,$JobMarker)
 if (-not [string]::Equals([string]$task.Actions[0].Execute,
-        [string]$expectedExecutable,[StringComparison]::OrdinalIgnoreCase)) {
+        [string]$expectedExecutable,[StringComparison]::OrdinalIgnoreCase) -or
+    $task.Actions[0].Arguments -cne $expectedArguments) {
     throw 'R89_REFUSED: unexpected task binary'
 }
 # Environment values below are injected ONLY after independently checking

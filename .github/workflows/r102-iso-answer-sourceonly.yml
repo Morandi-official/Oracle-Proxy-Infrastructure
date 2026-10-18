@@ -1,0 +1,29 @@
+name: R102 Windows evaluation ISO ephemeral answer file policy tests
+
+on:
+  pull_request:
+    paths:
+      - 'lab/cloud-windows-r102/**'
+      - 'docs/r102-iso-installation-contract.md'
+      - '.github/workflows/r102-iso-answer-sourceonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  no-guest-no-credential-persistence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Synthetic UEFI unattended evaluation XML and credential scope checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s lab/cloud-windows-r102 -p 'test_ephemeral_windows_answer.py' -v
+          echo R102_EPHEMERAL_WINDOWS_GUEST_SETUP_SOURCE_REVIEW_ONLY_PASS
+          echo R102_WINDOWS_GUEST_INSTALL_STARTED=false
+          echo R102_SIGNED_WIREGUARDNT_WFP_TESTED=false
+          echo R102_R83_PRODUCTION_UNLOCK=false

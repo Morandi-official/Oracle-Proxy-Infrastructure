@@ -9,7 +9,11 @@ from r94_pcap_triage import CaptureRefused, analyze_classic_ethernet_pcap
 def packet(src="198.18.0.2", dst="198.18.0.6", port=51872,
            protocol=17, vlan=False):
     src_addr, dst_addr = ipaddress.ip_address(src), ipaddress.ip_address(dst)
-    l4 = struct.pack("!HHHH", 40000, port, 8, 0)
+    if protocol == 6:
+        l4 = struct.pack("!HHIIHHHH", 40000, port, 0, 0, 5 << 12, 0, 0, 0)
+    else:
+        l4 = struct.pack("!HHHH", 40000, port, 8,
+                         1 if src_addr.version == 6 else 0)
     if src_addr.version == 4:
         ip = (b"\x45\x00" + struct.pack("!H", 20 + len(l4)) +
               b"\x00\x01\x00\x00\x40" + bytes([protocol]) + b"\x00\x00" +
@@ -92,6 +96,40 @@ class R94PcapReviewTests(unittest.TestCase):
     def test_fragmented_ipv4_fails_closed(self):
         bad = bytearray(packet())
         bad[14 + 6:14 + 8] = b"\x20\x00"
+        with self.assertRaises(CaptureRefused):
+            self.check(pcap(bytes(bad)))
+
+    def test_4_byte_fake_udp_port_cannot_be_allowlisted(self):
+        full = packet()
+        # Same outer destination port as pinned WireGuard, but no full
+        # UDP header: reject before treating it as a valid outer datagram.
+        fake = bytearray(full[:14 + 20 + 4])
+        fake[14 + 2:14 + 4] = struct.pack("!H", 24)
+        with self.assertRaises(CaptureRefused):
+            self.check(pcap(bytes(fake)))
+
+    def test_inconsistent_udp_declared_length_cannot_be_allowlisted(self):
+        for claimed in (0, 7, 9, 200):
+            fake = bytearray(packet())
+            fake[14 + 20 + 4:14 + 20 + 6] = struct.pack("!H", claimed)
+            with self.assertRaises(CaptureRefused):
+                self.check(pcap(bytes(fake)))
+
+    def test_ipv6_zero_udp_checksum_rejected(self):
+        fake = bytearray(packet(src="2001:db8::2", dst="2001:db8::6"))
+        fake[14 + 40 + 6:14 + 40 + 8] = b"\x00\x00"
+        with self.assertRaises(CaptureRefused):
+            self.check(pcap(bytes(fake)), source=frozenset({"2001:db8::2"}),
+                       peer="2001:db8::6")
+
+    def test_incomplete_tcp_and_invalid_header_length_rejected(self):
+        frame = bytearray(packet(protocol=6))
+        short = bytearray(frame[:14 + 20 + 8])
+        short[14 + 2:14 + 4] = struct.pack("!H", 28)
+        with self.assertRaises(CaptureRefused):
+            self.check(pcap(bytes(short)))
+        bad = bytearray(frame)
+        bad[14 + 20 + 12] = 0x40
         with self.assertRaises(CaptureRefused):
             self.check(pcap(bytes(bad)))
 

@@ -202,10 +202,66 @@ if ! /usr/bin/python3 -B lab/cloud-windows-r104/loop_readonly_system_evtx.py \
     --output "$work/System.evtx"; then
   echo R104_WINDOWS_SETUP_DID_NOT_PROVE_NATIVE_OS_BOOT_DENY; exit 6
 fi
-if ! /usr/bin/python3 -B lab/cloud-windows-r104/windows_boot_evtx_witness.py \
-    --after "$work/System.evtx" --start-utc "$r104_start" --end-utc "$r104_end"; then
-  echo R104_FRESH_WINDOWS_KERNEL_AND_EVENTLOG_BOOT_NOT_CORROBORATED_DENY; exit 6
+# The FIRST install pass may contain Windows Setup-created EVTX records with
+# guest RTC timestamps outside the independent Linux-host window. Do not
+# extend/slacken that window, and do not claim an initial start from them.
+# Instead make a SECOND genuine native boot from the just-created guest
+# disk, without any Microsoft ISO/CD-ROM and without any guest NIC. Keep
+# the first powered-off System.evtx as a read-only baseline.
+echo R109_FIRST_WINDOWS_SETUP_SYSTEM_EVTX_BASELINE_CAPTURED_NOT_BOOT_PROOF
+r104_reboot_start=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+qemu-system-x86_64 -name R109-Free-Isolated-Windows-DiskOnly-Reboot \
+    -machine q35,accel=kvm -cpu host -smp 2 -m 6144 \
+    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+    -drive if=pflash,format=raw,file="$work/vars.fd" \
+    -device ich9-ahci,id=r109sata \
+    -drive if=none,id=r109guest,file="$work/guest.qcow2",format=qcow2 \
+    -device ide-hd,drive=r109guest,bus=r109sata.0,bootindex=1 \
+    -vga std -display none -vnc 127.0.0.1:3 -nic none \
+    -qmp "unix:$work/qmp2.sock,server=on,wait=off" \
+    -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
+    >"$work/qemu-second.log" 2>&1 &
+pid=$!
+for i in $(seq 1 30); do
+  if [[ -S "$work/qmp2.sock" ]] && kill -0 "$pid" 2>/dev/null; then break; fi
+  sleep 1
+done
+[[ -S "$work/qmp2.sock" ]] || {
+  echo R109_DISK_ONLY_WINDOWS_REBOOT_VM_START_DENY; exit 6;
+}
+echo R109_WINDOWS_DISK_ONLY_SECOND_BOOT_QEMU_RUNNING_NO_NIC
+for minute in $(seq 1 8); do
+  sleep 60
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo R109_DISK_ONLY_SECOND_BOOT_TERMINATED_EARLY_DENY; exit 6
+  fi
+  if (( minute == 1 || minute == 5 || minute == 8 )); then
+    /usr/bin/python3 -B lab/cloud-windows-r97/qmp_inspect.py \
+      "$work/qmp2.sock" screenshot "$work/stage-second.ppm"
+    rm -f -- "$work/stage-second.ppm"
+  fi
+done
+/usr/bin/python3 -B lab/cloud-windows-r97/qmp_inspect.py "$work/qmp2.sock" quit
+wait "$pid" || :
+pid=''
+r104_reboot_end=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+# Power-off is mandatory before inspecting another owned raw clone.
+qemu-img convert -q -O raw -S 4k "$work/guest.qcow2" "$work/offline-second.raw"
+if ! /usr/bin/python3 -B lab/cloud-windows-r104/loop_readonly_system_evtx.py \
+    --raw "$work/offline-second.raw" --mount "$work/mnt" \
+    --output "$work/System-second.evtx"; then
+  echo R109_DISK_ONLY_SECOND_BOOT_SYSTEM_LOG_UNAVAILABLE_DENY; exit 6
 fi
+# The witness MUST find a NEW kernel 12 and EventLog 6005 in the host
+# time interval for this independent second boot and with record IDs
+# later than those in the first offline EVTX. No skew compensation or
+# weakening of the genuine Windows startup criteria is authorized.
+if ! /usr/bin/python3 -B lab/cloud-windows-r104/windows_boot_evtx_witness.py \
+    --before "$work/System.evtx" --after "$work/System-second.evtx" \
+    --start-utc "$r104_reboot_start" --end-utc "$r104_reboot_end"; then
+  echo R109_FRESH_DISK_ONLY_WINDOWS_KERNEL_AND_EVENTLOG_BOOT_NOT_CORROBORATED_DENY; exit 6
+fi
+echo R109_REAL_FRESH_DISK_ONLY_WINDOWS_KERNEL_AND_EVENTLOG_BOOT_WITNESSED
 echo R104_REAL_OFFICIAL_ISO_WINDOWS_KERNEL_BOOT_WITNESSED
 echo R104_NATIVE_WIREGUARDNT_AND_WFP_NOT_TESTED
 echo R104_GUEST_PUBLIC_NETWORK_ACCESS=false

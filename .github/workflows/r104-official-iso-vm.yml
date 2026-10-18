@@ -18,6 +18,8 @@ jobs:
   static-denial-checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 4
+    outputs:
+      real_iso_authorized: ${{ steps.gate.outputs.authorized }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,9 +34,22 @@ jobs:
           python3 -B -m unittest discover -s lab/cloud-windows-r102 -p 'test_ephemeral_windows_answer.py' -v
           python3 -B -m unittest discover -s lab/cloud-windows-r103 -p 'test_choose_official_wim_edition.py' -v
           echo R104_SOURCE_ONLY_GATES_NO_OS_MUTATION_PASS
+      - name: Gate actual large ISO VM on explicit reviewed sentinel file
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f lab/cloud-windows-r104/ENABLE_FRESH_ISO_GUEST.txt ]] &&
+              grep -Fqx 'R104_SINGLE_FREE_ISO_GUEST_AFTER_R99_CLOSED_DENY' lab/cloud-windows-r104/ENABLE_FRESH_ISO_GUEST.txt; then
+            echo 'authorized=true' >> "$GITHUB_OUTPUT"
+            echo R104_EXPLICIT_LAB_ONLY_ISO_VM_ENABLE_PRESENT
+          else
+            echo 'authorized=false' >> "$GITHUB_OUTPUT"
+            echo R104_REAL_ISO_VM_NOT_LAUNCHED_SOURCE_ONLY
+          fi
   install-only-in-ephemeral-cloud:
     needs: static-denial-checks
-    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r104-official-iso-first-windows-install-20261018'
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r104-official-iso-first-windows-install-20261018' && needs.static-denial-checks.outputs.real_iso_authorized == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 66
     steps:

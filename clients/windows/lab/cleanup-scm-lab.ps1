@@ -16,40 +16,32 @@ if (Test-Path $marker -PathType Leaf) {
             & sc.exe delete $svc | Out-Null
         }
     }
-    # R89 requires POSITIVE zero-file residual proof, not a warning followed
-    # by disposable runner destruction. Bound retries to avoid indefinite CI.
+    # The native CI stage uses protected per-file NTFS ACLs, some of which
+    # correctly deny removal by the GitHub runner administrator. Do not relax
+    # ACLs or attempt recursive admin deletion of that strict R89 stage.
+    # Instead verify one exact SYSTEM-owned task, allowlist every staged
+    # entry, and require OS-confirmed file/directory removal.
     $r89Strict = $env:ORACLE_R89_STRICT_CLEANUP -eq 'CI_ONLY'
-    $maxAttempts = if ($r89Strict) { 48 } else { 5 }
-    $lastDeleteType = 'none'
-    $lastDeleteHResult = 'none'
-    $lastDeleteErrorId = 'none'
-    for ($attempt = 0; $attempt -lt $maxAttempts; $attempt++) {
-        try {
-            if (Test-Path $root) {
-                Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
-            }
-            break
+    if ($r89Strict) {
+        & ./clients/windows/lab/Invoke-R89RegisterSystemStageCleanup.ps1
+        if (Test-Path -LiteralPath $root) {
+            throw 'R89_FAIL: protected native stage survived SYSTEM cleanup'
         }
-        catch {
-            if ($r89Strict) {
-                $lastDeleteType = $_.Exception.GetType().Name
-                $lastDeleteHResult = ('0x{0:X8}' -f ($_.Exception.HResult -band 0xffffffffL))
-                $lastDeleteErrorId = [string]$_.FullyQualifiedErrorId
-                if ($attempt -eq 0) {
-                    Write-Host ("R89_OWNED_DELETE_DIAGNOSTIC type={0} hresult={1} errorId={2}" -f
-                        $lastDeleteType,$lastDeleteHResult,$lastDeleteErrorId)
+    } else {
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            try {
+                if (Test-Path $root) {
+                    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
                 }
+                break
             }
-            if ($attempt -eq ($maxAttempts - 1) -and !$r89Strict) {
-                Write-Warning 'Temporary lab files remain until GitHub discards the ephemeral VM'
+            catch {
+                if ($attempt -eq 4) {
+                    Write-Warning 'Temporary lab files remain until GitHub discards the ephemeral VM'
+                }
+                Start-Sleep -Milliseconds 500
             }
-            Start-Sleep -Milliseconds 500
         }
-    }
-    if ($r89Strict -and (Test-Path -LiteralPath $root)) {
-        Write-Host ("R89_OWNED_DELETE_REMAINING type={0} hresult={1} errorId={2}" -f
-            $lastDeleteType,$lastDeleteHResult,$lastDeleteErrorId)
-        throw 'R89_FAIL: exact owned SCM staging directory still present after bounded retries'
     }
     Remove-Item -LiteralPath $marker -Force
 }

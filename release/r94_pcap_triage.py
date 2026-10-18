@@ -134,9 +134,29 @@ def analyze_classic_ethernet_pcap(
             continue
         local += 1
         destport = None
-        if proto in (6, 17):
-            if transport_end < transport_offset + 4:
-                raise CaptureRefused("missing TCP/UDP port header")
+        transport_size = transport_end - transport_offset
+        if proto == 17:
+            # An apparent UDP destination port inside a *partial* datagram
+            # must not count as an approved WireGuard outer packet. Check
+            # the complete UDP header and datagram length first.
+            if transport_size < 8:
+                raise CaptureRefused("truncated UDP datagram header")
+            declared_udp_length = struct.unpack_from("!H", frame, transport_offset + 4)[0]
+            if declared_udp_length < 8 or declared_udp_length != transport_size:
+                raise CaptureRefused("inconsistent UDP datagram length")
+            udp_checksum = struct.unpack_from("!H", frame, transport_offset + 6)[0]
+            if source.version == 6 and udp_checksum == 0:
+                # A zero UDP checksum is not valid for this ordinary IPv6
+                # WireGuard-underlay review scope (no zero-checksum tunnel
+                # exceptions are authorized).
+                raise CaptureRefused("zero IPv6 UDP checksum refused")
+            destport = struct.unpack_from("!H", frame, transport_offset + 2)[0]
+        elif proto == 6:
+            if transport_size < 20:
+                raise CaptureRefused("truncated TCP header")
+            tcp_header_size = (frame[transport_offset + 12] >> 4) * 4
+            if tcp_header_size < 20 or tcp_header_size > transport_size:
+                raise CaptureRefused("invalid TCP header length")
             destport = struct.unpack_from("!H", frame, transport_offset + 2)[0]
         # Only the exact UDP peer shape is eligible. All other outgoing IP
         # includes DNS/53, DoT/853, TCP, IPv6 bypass, ICMP or unknown protocol.

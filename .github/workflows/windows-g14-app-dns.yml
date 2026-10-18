@@ -25,6 +25,8 @@ on:
       - 'clients/windows/lab/Invoke-R89SystemExpiryWorker.ps1'
       - 'clients/windows/lab/Invoke-R89RegisterCrashStartupRecovery.ps1'
       - 'clients/windows/lab/Invoke-R89CleanupOwnedTask.ps1'
+      - 'clients/windows/lab/Invoke-R89SystemStageCleanup.ps1'
+      - 'clients/windows/lab/Invoke-R89RegisterSystemStageCleanup.ps1'
       - 'clients/windows/lab/Test-R79NativePreactivationReadOnly.ps1'
       - 'clients/windows/lab/Test-R80NativeRuntimeRouteGate.ps1'
       - 'clients/windows/lab/Test-R70NativeLiveRouteScope.ps1'

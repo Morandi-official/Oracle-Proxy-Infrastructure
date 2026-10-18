@@ -10,7 +10,9 @@ internal static class Program
     private static int Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "--offline-self-test")
-            return AlphaPreflight.SelfTest() && OfficialWireGuardBridge.SelfTest() ? 0 : 1;
+            return AlphaPreflight.SelfTest() && EmbeddedWireGuardBridge.SelfTest() ? 0 : 1;
+        if (args.Length == 1 && args[0] == "--service")
+            return EmbeddedWireGuardBridge.RunWindowsService();
         if (args.Length > 0) return 2; // No headless privileged entrypoint.
         if (!OperatingSystem.IsWindows()) return 2;
         ApplicationConfiguration.Initialize();
@@ -54,8 +56,8 @@ internal sealed class AlphaForm : Form
             Dock=DockStyle.Fill, ForeColor=Color.Firebrick,
             Text="仅供可在本机键盘恢复的备用 Windows 测试电脑。\n"+
                  "不验证系统级断线防泄漏、UU 远控连续性或断电恢复。\n"+
-                 "必须单独安装官方 WireGuard Windows，并由用户以管理员身份启动。\n"+
-                 "本 Alpha 不捆绑密钥/驱动，不启用额外 WFP。配置中的路由/DNS 仍会影响整机网络。"
+                 "不需要另外安装 WireGuard；需本地管理员启动并确认风险。\n"+
+                 "本 Alpha 随包携带官方已验证 WireGuardNT DLL 和自编译隧道服务；不包含密钥或额外 WFP。路由/DNS 仍会影响整机网络。"
         },0,1);
         var row=new FlowLayoutPanel { Dock=DockStyle.Fill, AutoScroll=true };
         row.Controls.Add(_connect); row.Controls.Add(_disconnect); row.Controls.Add(_report);
@@ -67,7 +69,7 @@ internal sealed class AlphaForm : Form
         _report.Click += (_,_)=> ExportReport();
         FormClosing += (_,e)=> {
             if (_busy) { e.Cancel=true; return; }
-            if (_ownedThisSession && OfficialWireGuardBridge.ReadServiceState()=="Running") {
+            if (_ownedThisSession && EmbeddedWireGuardBridge.ReadServiceState()=="Running") {
                 var result=MessageBox.Show(this,
                     "本次启动的实验隧道还在运行。建议先点「断开」。\n"+
                     "现在退出不会自动删除服务，可能需要本地管理员手动恢复。仍要退出吗？",
@@ -105,29 +107,29 @@ internal sealed class AlphaForm : Form
             _status.Text="配置拒绝："+check;
             return;
         }
-        if(OfficialWireGuardBridge.ReadServiceState()!="Absent") {
+        if(EmbeddedWireGuardBridge.ReadServiceState()!="Absent") {
             _lastResult="PREEXISTING_SERVICE_REFUSED";
             _status.Text="专用测试服务已存在或状态不明；拒绝覆盖其他会话/安装。";
             return;
         }
         if(MessageBox.Show(this,
-            "将通过已安装的官方 WireGuard 创建专用 Windows 隧道服务。\n"+
+            "将通过已安装的内置 WireGuard 引擎 创建专用 Windows 隧道服务。\n"+
             "连接后可能改变整机路由、DNS 和防火墙；即便 Alpha 本身不添加 WFP，"+
             "官方组件也可能管理自己的系统策略。\n"+
             "此版本没有自动断线保护或可靠恢复，不适合依赖 UU 的远控电脑。\n"+
             "确认自己在本地、具备管理员恢复权限，且这是非关键测试电脑？",
             "确认有断网风险",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)
             return;
-        _busy=true;RefreshUi();_status.Text="正在请求官方 WireGuard 创建专用隧道…";
+        _busy=true;RefreshUi();_status.Text="正在请求内置 WireGuard 引擎 创建专用隧道…";
         try {
             // Mark attempt owned before starting; an ambiguous timeout may
             // leave the exact service and must be explicitly handled.
             _ownedThisSession=true;
-            var result=await Task.Run(()=>OfficialWireGuardBridge.Install(pick.FileName));
+            var result=await Task.Run(()=>EmbeddedWireGuardBridge.Install(pick.FileName));
             _lastResult=result;
-            _observed=OfficialWireGuardBridge.ReadServiceState();
+            _observed=EmbeddedWireGuardBridge.ReadServiceState();
             _status.Text=result=="OFFICIAL_WIREGUARD_COMMAND_OK" && _observed=="Running"
-                ? "官方 WireGuard 服务已运行；真实跨网络握手/出口防泄漏尚未验证。"
+                ? "内置 WireGuard 引擎 服务已运行；真实跨网络握手/出口防泄漏尚未验证。"
                 : "安装结果未能证明连接成功："+result+" / "+_observed+
                     "。可尝试断开本次创建的实验服务。";
         }
@@ -147,21 +149,21 @@ internal sealed class AlphaForm : Form
         if(MessageBox.Show(this,"仅卸载本窗口会话创建的固定名 WireGuard 隧道服务。确认断开？",
             "实验断开",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)
             return;
-        _busy=true;RefreshUi();_status.Text="正在请求官方 WireGuard 停止专用服务…";
+        _busy=true;RefreshUi();_status.Text="正在请求内置 WireGuard 引擎 停止专用服务…";
         try {
-            string result=await Task.Run(OfficialWireGuardBridge.Uninstall);
+            string result=await Task.Run(EmbeddedWireGuardBridge.Uninstall);
             _lastResult=result;
-            _observed=OfficialWireGuardBridge.ReadServiceState();
+            _observed=EmbeddedWireGuardBridge.ReadServiceState();
             if(result=="OFFICIAL_WIREGUARD_COMMAND_OK" && _observed=="Absent") {
                 _ownedThisSession=false;
                 _status.Text="专用服务已停止并移除（未验证 DNS/路由或其他软件全部恢复）。";
             }
             else _status.Text="断开结果存在不确定性："+result+" / "+_observed+
-                "；请在本机使用官方 WireGuard 管理工具检查。";
+                "；请在本机使用内置 WireGuard 引擎 管理工具检查。";
         }
         catch {
             _lastResult="STOP_EXCEPTION_REQUIRES_LOCAL_RECOVERY";
-            _status.Text="无法确认安全断开；请在本机使用官方 WireGuard 管理工具恢复。";
+            _status.Text="无法确认安全断开；请在本机使用内置 WireGuard 引擎 管理工具恢复。";
         }
         finally { _busy=false;RefreshUi(); }
     }
@@ -175,8 +177,8 @@ internal sealed class AlphaForm : Form
             schema_version=1, report_kind="R111_FUNCTIONAL_WG_ALPHA_UNVERIFIED",
             observed_utc=DateTimeOffset.UtcNow.ToString("O"),
             admin_token_present=AlphaPreflight.Administrator(),
-            official_wireguard_binary_trust=OfficialWireGuardBridge.TrustStatus(),
-            dedicated_test_service_status=OfficialWireGuardBridge.ReadServiceState(),
+            official_wireguard_binary_trust=EmbeddedWireGuardBridge.TrustStatus(),
+            dedicated_test_service_status=EmbeddedWireGuardBridge.ReadServiceState(),
             local_gui_started_this_service=_ownedThisSession,
             last_operation_result=_lastResult,
             two_host_wireguard_handshake="NOT_TESTED",

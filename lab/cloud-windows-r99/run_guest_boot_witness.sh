@@ -208,11 +208,13 @@ stop() {
 
 r99_host_start_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 launch A
-sleep 110
+# First Windows Server evaluation VHD boot can require a long unattended
+# initialization, so allow five minutes before the independent host reset.
+sleep 300
 python3 lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" screenshot "$work/first.ppm"
 echo R97_GUEST_GFX_RESPONDS_NO_WINDOWS_LOGIN_PROOF
 python3 lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" reset
-sleep 50
+sleep 150
 python3 lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" screenshot "$work/reset.ppm"
 stop
 r99_host_end_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')

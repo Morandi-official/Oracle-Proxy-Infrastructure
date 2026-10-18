@@ -28,6 +28,17 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B -m unittest discover -s lab/cloud-windows-r99 -p 'test_windows_boot_evtx_witness.py' -v
+          # Catch accidental deletion of the genuine QEMU host-control
+          # functions before any costly official VHD download.
+          bash -n lab/cloud-windows-r99/run_guest_boot_witness.sh
+          for fn in 'check_kvm_before_guest' 'launch' 'stop'; do
+            grep -Fqx "$fn() {" lab/cloud-windows-r99/run_guest_boot_witness.sh || {
+              echo "R99_MISSING_HOST_CONTROL_FUNCTION=$fn"
+              exit 6
+            }
+          done
+          grep -Fq -- '-nic none' lab/cloud-windows-r99/run_guest_boot_witness.sh
+          echo 'R99_QEMU_CONTROL_AND_NO_GUEST_NIC_STATIC_PRECHECK_PASS'
           echo 'R99_BOOT_WITNESS_NEGATIVE_MATRIX_PASS'
           echo 'R99_WINDOWS_GUEST_RUNNING_IN_THIS_TEST=false'
   host-loop-ntfs-smoke:

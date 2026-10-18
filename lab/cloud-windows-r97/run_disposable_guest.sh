@@ -111,13 +111,16 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "$work/vars.fd"
 qemu-img create -q -f qcow2 -F "$fmt" -b "$base" "$work/overlay.qcow2"
 echo R97_READONLY_BASE_AND_DISPOSABLE_COW_DISK_CREATED
 launch() {
+  local slot=${1:-A}
+  local vnc_display=2
+  if [[ "$slot" == B ]]; then vnc_display=3; fi
   rm -f -- "$work/qmp.sock"
   qemu-system-x86_64 -name R97-isolated-eval -machine q35,accel=kvm \
     -cpu host -smp 2 -m 6144 \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file="$work/vars.fd" \
     -drive file="$work/overlay.qcow2",format=qcow2,if=ide \
-    -vga std -display none -vnc 127.0.0.1:2 -nic none \
+    -vga std -display none -vnc "127.0.0.1:$vnc_display" -nic none \
     -qmp "unix:$work/qmp.sock,server=on,wait=off" \
     -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
     > "$work/qemu.log" 2>&1 &
@@ -126,6 +129,11 @@ launch() {
     if [[ -S "$work/qmp.sock" ]] && kill -0 "$qpid" 2>/dev/null; then return; fi
     sleep 1
   done
+  echo R97_QEMU_LOCAL_ONLY_STARTUP_DIAGNOSTICS_BEGIN
+  if [[ -f "$work/qemu.log" ]]; then
+    # Print only QEMU errors; do not upload screenshots, disks or secrets.
+    tail -n 12 "$work/qemu.log" | sed -E 's@/home/runner/[^ ]+@<RUNNER_PATH>@g'
+  fi
   echo R97_STOP_QEMU_FAILED_TO_LAUNCH; exit 5
 }
 stop() {
@@ -133,7 +141,7 @@ stop() {
   wait "$qpid" || :
   qpid=''
 }
-launch
+launch A
 sleep 110
 python3 lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" screenshot "$work/first.ppm"
 echo R97_GUEST_GFX_RESPONDS_NO_WINDOWS_LOGIN_PROOF
@@ -145,7 +153,8 @@ rm -f -- "$work/overlay.qcow2"
 qemu-img create -q -f qcow2 -F "$fmt" -b "$base" "$work/overlay.qcow2"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "$work/vars.fd"
 echo R97_EXTERNAL_HOST_DISK_ROLLBACK_PASS
-launch
+sleep 3
+launch B
 sleep 50
 python3 lab/cloud-windows-r97/qmp_inspect.py "$work/qmp.sock" screenshot "$work/restored.ppm"
 stop

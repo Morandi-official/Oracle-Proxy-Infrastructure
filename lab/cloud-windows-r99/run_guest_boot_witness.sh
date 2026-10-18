@@ -118,9 +118,8 @@ python3 -m venv "$work/venv"
 "$work/venv/bin/python" -m pip install -q --no-deps --require-hashes -r "$work/evtx-requirements.txt"
 export LIBGUESTFS_BACKEND=direct
 export LIBGUESTFS_MEMSIZE=1024
-if guestfish --ro --format="$fmt" -a "$base" -i \
-    download /Windows/System32/winevt/Logs/System.evtx "$work/system-before.evtx" \
-    > "$work/baseline-read.stdout" 2> "$work/baseline-read.stderr"; then
+if "$work/venv/bin/python" lab/cloud-windows-r99/guestfs_readonly_system_evtx.py \
+    --image "$base" --format "$fmt" --output "$work/system-before.evtx"; then
   echo R99_BASELINE_GUEST_WINDOWS_EVENTLOG_EXTRACTED_READ_ONLY
 else
   rm -f -- "$work/system-before.evtx"
@@ -196,9 +195,8 @@ stop
 r99_host_end_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 # Never mistake QMP running/framebuffer for the OS kernel.
 # Inspect powered-off guest disk strictly from its separate Linux host.
-if ! guestfish --ro --format=qcow2 -a "$work/overlay.qcow2" -i \
-    download /Windows/System32/winevt/Logs/System.evtx "$work/system-after.evtx" \
-    > "$work/after-read.stdout" 2> "$work/after-read.stderr"; then
+if ! "$work/venv/bin/python" lab/cloud-windows-r99/guestfs_readonly_system_evtx.py \
+    --image "$work/overlay.qcow2" --format qcow2 --output "$work/system-after.evtx"; then
   echo R99_GUEST_SYSTEM_EVENTLOG_NOT_ACCESSIBLE_NO_BOOT_CLAIM
   exit 6
 fi

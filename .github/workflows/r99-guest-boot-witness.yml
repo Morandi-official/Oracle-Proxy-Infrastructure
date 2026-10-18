@@ -45,8 +45,7 @@ jobs:
   isolated-real-windows-boot-evidence:
     needs: [pure-denial-matrix, host-loop-ntfs-smoke]
     # Disabled while the alternate offline NTFS extraction is being qualified.
-    if: false
-    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018'
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018' && false
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:

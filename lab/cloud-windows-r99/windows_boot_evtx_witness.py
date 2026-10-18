@@ -58,6 +58,35 @@ DIAGNOSTIC_PROVIDERS = (
     "EventLog",
 )
 
+# Coarse bins only: event times, exact offsets, host clock details and
+# record payloads must NEVER appear in GitHub logs. A bin is for diagnosis,
+# not authorization. All non-host-window records STILL FAIL the boot gate.
+CLOCK_BINS = ("before_gt_day", "before_1h_day", "before_5m_1h",
+              "before_40s_5m", "within", "after_40s_5m",
+              "after_5m_1h", "after_1h_day", "after_gt_day")
+
+
+def classify_clock_offset(stamp: datetime | None, start: datetime,
+                          end: datetime) -> str:
+    if stamp is None or stamp.tzinfo is None or start.tzinfo is None or end.tzinfo is None:
+        return "unreadable"
+    lower = start - timedelta(seconds=40)
+    upper = end + timedelta(seconds=40)
+    if lower <= stamp <= upper:
+        return "within"
+    if stamp < lower:
+        delay = (start - stamp).total_seconds()
+        if delay > 86400: return "before_gt_day"
+        if delay > 3600: return "before_1h_day"
+        if delay > 300: return "before_5m_1h"
+        return "before_40s_5m"
+    delay = (stamp - end).total_seconds()
+    if delay > 86400: return "after_gt_day"
+    if delay > 3600: return "after_1h_day"
+    if delay > 300: return "after_5m_1h"
+    return "after_40s_5m"
+
+
 
 
 @dataclass(frozen=True)
@@ -136,6 +165,10 @@ def records_from_evtx(path: Path, *, scan: dict | None = None, host_start: datet
     system_events_with_identity = 0
     provider_counts = {name: 0 for name in DIAGNOSTIC_PROVIDERS}
     event_timing = {"before": 0, "within": 0, "after": 0, "unreadable": 0}
+    kernel_clock_bins = {key: 0 for key in CLOCK_BINS}
+    header_clock_bins = {key: 0 for key in CLOCK_BINS}
+    header_unavailable = 0
+    event_header_disagreement_over_5m = 0
     with Evtx(str(path)) as log:
         for item in log.records():
             count += 1
@@ -155,12 +188,49 @@ def records_from_evtx(path: Path, *, scan: dict | None = None, host_start: datet
                     provider_name = system.find(NS + "Provider").get("Name", "")
                     if provider_name in provider_counts:
                         provider_counts[provider_name] += 1
+                    # This is an independent binary EVTX record-header
+                    # FILETIME decoded by python-evtx. If the API returns an
+                    # ambiguous/untyped time do not trust it as evidence.
+                    if host_start is not None and host_end is not None:
+                        header = None
+                        header_fn = getattr(item, "timestamp", None)
+                        if callable(header_fn):
+                            try:
+                                value = header_fn()
+                                if isinstance(value, datetime) and value.tzinfo is not None:
+                                    if value.utcoffset() == timedelta(0):
+                                        header = value.astimezone(timezone.utc)
+                            except (TypeError, ValueError, OverflowError):
+                                pass
+                        if header is None:
+                            header_unavailable += 1
+                        else:
+                            hbin = classify_clock_offset(header, host_start, host_end)
+                            if hbin in header_clock_bins:
+                                header_clock_bins[hbin] += 1
                     # Only categorical time-window counters; do not expose
                     # raw XML, exact timestamps, source IPs, event payloads.
                     if host_start is not None and host_end is not None:
                         created = system.find(NS + "TimeCreated")
                         raw_time = created.get("SystemTime") if created is not None else ""
                         stamp = event_systemtime_utc(raw_time)
+                        # Count ONLY Kernel-General event 12 / EventLog 6005
+                        # in these coarse guest clock bins.
+                        id_node = system.find(NS + "EventID")
+                        try:
+                            candidate_id = int(id_node.text or "-1")
+                        except ValueError:
+                            candidate_id = -1
+                        if (provider_name, candidate_id) in (
+                            ("Microsoft-Windows-Kernel-General", 12),
+                            ("EventLog", 6005),
+                        ):
+                            bin_name = classify_clock_offset(stamp, host_start, host_end)
+                            if bin_name in kernel_clock_bins:
+                                kernel_clock_bins[bin_name] += 1
+                            if stamp is not None and header is not None and (
+                                    abs((stamp - header).total_seconds()) > 300):
+                                event_header_disagreement_over_5m += 1
                         if stamp is None:
                             event_timing["unreadable"] += 1
                         elif stamp < host_start - timedelta(seconds=40):
@@ -184,7 +254,12 @@ def records_from_evtx(path: Path, *, scan: dict | None = None, host_start: datet
             "r99_system_events_within_host_window": event_timing["within"],
             "r99_system_events_after_host_window": event_timing["after"],
             "r99_system_events_with_unreadable_clock": event_timing["unreadable"],
+            "r99_raw_evtx_record_header_utc_unavailable": header_unavailable,
+            "r99_boot_event_header_disagreements_gt5min": event_header_disagreement_over_5m,
         })
+        for k in CLOCK_BINS:
+            scan["r99_boot_event_clock_bin_" + k] = kernel_clock_bins[k]
+            scan["r99_binary_evtx_header_clock_bin_" + k] = header_clock_bins[k]
         for i, name in enumerate(DIAGNOSTIC_PROVIDERS):
             scan["r99_allowlisted_microsoft_boot_source_" + str(i) + "_count"] = provider_counts[name]
     return sha256(path.read_bytes()).hexdigest(), events

@@ -75,8 +75,20 @@ jobs:
           /usr/bin/python3 -B -c 'from Evtx.Evtx import Evtx; print("R99_EVTX_PARSER_DEPENDENCIES_COMPLETE_PASS")'
           /usr/bin/python3 -B -m unittest discover -s lab/cloud-windows-r99 -p 'test_windows_boot_evtx_witness.py' -v
           echo 'R99_SYSTEM_PARSER_IMPORT_BEFORE_VHD_DOWNLOAD_PASS'
+  synthetic-efi-inventory-smoke:
+    needs: pure-denial-matrix
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate EFI FAT partition inventory and zero-owned-loop residual
+        shell: bash
+        run: bash lab/cloud-windows-r99/test_synthetic_efi_paths.sh
   isolated-real-windows-boot-evidence:
-    needs: [pure-denial-matrix, host-loop-ntfs-smoke, evtx-runtime-dependency-smoke]
+    needs: [pure-denial-matrix, host-loop-ntfs-smoke, evtx-runtime-dependency-smoke, synthetic-efi-inventory-smoke]
     # Synthetic Linux RO NTFS loop mounting must pass before any official VHD is downloaded.
     if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018'
     runs-on: ubuntu-24.04

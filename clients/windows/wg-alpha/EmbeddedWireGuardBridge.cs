@@ -277,8 +277,33 @@ internal static class EmbeddedWireGuardBridge
             } finally {CloseServiceHandle(service);}
         }finally {CloseServiceHandle(scm);}
         for(int i=0;i<30;i++){
-            if(ReadServiceState()=="Absent")
+            if(ReadServiceState()=="Absent") {
+                // Delete only this session's exactly staged, pinned files,
+                // provided no foreign files or untrusted ACLs were added.
+                try {
+                    if(!HasProtectedAcl(InstallRoot,true) ||
+                       !HasProtectedAcl(ConfigRoot,true) ||
+                       !TrustedBundle(InstallRoot) ||
+                       !HasProtectedAcl(StagedConfig,false))
+                        return "SCM_REMOVED_BUT_STAGING_TRUST_UNKNOWN";
+                    var binaries=Directory.GetFiles(InstallRoot)
+                        .Select(Path.GetFileName).OrderBy(x=>x).ToArray();
+                    var expected=new[]{Executable,TunnelDll,DriverDll}.OrderBy(x=>x).ToArray();
+                    if(!binaries.SequenceEqual(expected,StringComparer.OrdinalIgnoreCase) ||
+                       Directory.GetFiles(ConfigRoot).Length!=1 ||
+                       Directory.GetDirectories(InstallRoot).Length!=0 ||
+                       Directory.GetDirectories(ConfigRoot).Length!=0)
+                        return "SCM_REMOVED_BUT_STAGING_NOT_EXACT";
+                    foreach(string name in expected)
+                        File.Delete(Path.Combine(InstallRoot,name));
+                    File.Delete(StagedConfig);
+                    Directory.Delete(InstallRoot,false);
+                    Directory.Delete(ConfigRoot,false);
+                } catch {
+                    return "SCM_REMOVED_BUT_STAGING_REQUIRES_MANUAL_CLEANUP";
+                }
                 return "OFFICIAL_WIREGUARD_COMMAND_OK";
+            }
             Thread.Sleep(500);
         }
         return "SCM_DELETE_PENDING_REQUIRES_LOCAL_INSPECTION";

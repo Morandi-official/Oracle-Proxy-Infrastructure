@@ -68,11 +68,23 @@ internal static class AlphaPreflight
                 if (section != "peer" || allowed) return "UNSUPPORTED_CONFIG";
                 allowed = true;
                 foreach (string item in value.Split(',')) {
+                    // Accept only exact CIDR tokens; reject comments, hidden
+                    // alternate spellings, extra values and every /0. The
+                    // official tunnel must never acquire a /0 kill-switch by
+                    // exploiting differences in the preflight parser.
                     string ip = item.Trim();
-                    if (ip == "0.0.0.0/0" || ip == "::/0")
-                        return "DEFAULT_ROUTE_KILLSWITCH_RISK_DENY";
-                    if (ip == "0.0.0.0/1") halfA = true;
-                    if (ip == "128.0.0.0/1") halfB = true;
+                    string[] cidr = ip.Split('/');
+                    if (cidr.Length != 2 ||
+                        !System.Net.IPAddress.TryParse(cidr[0], out var address) ||
+                        !int.TryParse(cidr[1], out int prefix) ||
+                        prefix < 0 ||
+                        prefix > (address.AddressFamily ==
+                            System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128))
+                        return "UNSUPPORTED_ALLOWED_IPS_FORMAT";
+                    if (prefix == 0) return "DEFAULT_ROUTE_KILLSWITCH_RISK_DENY";
+                    string normalized = address + "/" + prefix;
+                    if (normalized == "0.0.0.0/1") halfA = true;
+                    if (normalized == "128.0.0.0/1") halfB = true;
                 }
             }
         }

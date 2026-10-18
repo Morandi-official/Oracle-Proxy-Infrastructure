@@ -55,6 +55,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Main manager build failure' }
           dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=false -o ./dist/main-readonly-gui
           if ($LASTEXITCODE -ne 0) { throw 'Main GUI build failure' }
+          # R93: no currently unapproved signed installer or publisher identity.
+          # Real Windows OS Authenticode inspection: R91 GitHub provenance does
+          # not make a binary signed or authorize deployment.
+          foreach ($target in @(
+              './dist/main-readonly-manager/OracleProxy.LabManager.exe',
+              './dist/main-readonly-gui/OracleProxy.Windows.Preview.exe')) {
+            $auth=Get-AuthenticodeSignature -LiteralPath $target -ErrorAction Stop
+            if ($auth.Status -ne 'NotSigned') {
+              throw 'R93 unexpected publisher signing change; requires independent release review'
+            }
+          }
+          if (@(Get-ChildItem ./dist/main-readonly-manager,./dist/main-readonly-gui -Recurse -File |
+              Where-Object Extension -in @('.msi','.msix','.msixbundle','.pfx','.p12')).Count -ne 0) {
+            throw 'R93 signed installer or private key unexpectedly packaged in read-only build'
+          }
+          Write-Host 'R93_WINDOWS_UNSIGNED_READONLY_NOT_A_SIGNED_INSTALLER_PASS'
           foreach ($fname in @('tunnel.dll','wireguard.dll','OracleProxy.WireGuardHost.exe')) {
             if (@(Get-ChildItem ./dist/main-readonly-manager,./dist/main-readonly-gui -File -Recurse | Where-Object Name -eq $fname).Count -gt 0) {
               throw 'Unexpected native engine in read-only build'

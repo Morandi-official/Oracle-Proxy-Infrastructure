@@ -254,6 +254,357 @@ try {
         Write-Host 'R15_LIVE_TUNNEL_WFP_DENY_PASS: encrypted peers and synthetic app/DNS worked while narrow external TCP blocked'
     }
 
+    # R110: actual all-application dual-stack fixed-DESTINATION WFP blocks
+    # execute WHILE two real authenticated native WireGuardNT SCM peers
+    # are running. This is independent of R15's narrow per-process guard.
+    # It does NOT claim all Internet/default-route leak prevention.
+    if ($env:ORACLE_R110_INTEGRATED_WFP) {
+        if ($env:ORACLE_R110_INTEGRATED_WFP -ne 'CI_ONLY' -or
+            $env:GITHUB_ACTIONS -ne 'true' -or
+            $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
+            $env:GITHUB_HEAD_REF -ne 'test/r110-native-wgnt-wfp-coexist-20261018' -or
+            -not $env:ORACLE_R15_GUARD_NAME -or
+            -not $createdServices.Contains($managerName) -or
+            -not $createdServices.Contains('WireGuardTunnel$lab-peer-a') -or
+            -not $createdServices.Contains('WireGuardTunnel$lab-peer-b')) {
+            throw 'R110_REFUSED: missing fixed disposable peer and WFP authorization'
+        }
+        foreach ($peer in @('lab-peer-a','lab-peer-b')) {
+            if ((Get-Service -Name ('WireGuardTunnel
+        # R19: kill ONLY the manager service this disposable job just created,
+        # never any user/system service. The two native tunnel peers continue
+        # until separate CI-owned recovery removes them in finally.
+        if ($env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY' -or
+            $env:GITHUB_ACTIONS -ne 'true' -or
+            $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
+            -not $createdServices.Contains($managerName) -or
+            -not ($env:ORACLE_R18_GUARD_NAME -or $env:ORACLE_R21_SYSTEM_GUARD)) {
+            throw 'R19_REFUSED: no exact owned manager and WFP guard'
+        }
+        $serviceRecord = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
+        if (-not $serviceRecord -or $serviceRecord.State -ne 'Running' -or
+            $serviceRecord.ProcessId -le 4) {
+            throw 'R19_REFUSED: expected dedicated running SCM manager absent'
+        }
+        $managerPid = [int]$serviceRecord.ProcessId
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$managerPid" -ErrorAction Stop
+        if (-not $process -or -not $process.ExecutablePath -or
+            -not [string]::Equals(
+                [System.IO.Path]::GetFullPath($process.ExecutablePath),
+                [System.IO.Path]::GetFullPath($managerExe),
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'R19_REFUSED: SCM PID does not point at this CI manager binary'
+        }
+        Stop-Process -Id $managerPid -Force -ErrorAction Stop
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 350
+            $status = (Get-Service -Name $managerName -ErrorAction Stop).Status
+        } while ($status -ne 'Stopped' -and [DateTime]::UtcNow -lt $deadline)
+        if ($status -ne 'Stopped') { throw 'R19_FAIL: manager process was not stopped' }
+        foreach ($profile in @('lab-peer-a','lab-peer-b')) {
+            if ((Get-Service -Name ('WireGuardTunnel$' + $profile) -ErrorAction Stop).Status -ne 'Running') {
+                throw 'R19_FAIL: native WireGuard tunnel did not outlive crashed manager'
+            }
+        }
+        # OS-stored persistent WFP rule MUST survive the controller crash
+        # and continue denying physical TCP and direct UDP DNS on test app.
+        if ($env:ORACLE_R21_SYSTEM_GUARD) {
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R21_FAIL: SYSTEM-owned WFP lost on hard manager crash' }
+            Write-Host 'R21_SYSTEM_OWNED_WFP_SURVIVED_MANAGER_CRASH_PASS'
+        } else {
+            & ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R19_FAIL: WFP leaked after manager crash' }
+        }
+        Write-Host 'R19_MANAGER_KILLED_WG_STILL_UP_WFP_PERSISTENT_PASS'
+        if ($env:ORACLE_R25_RESTART_TEST) {
+            if ($env:ORACLE_R25_RESTART_TEST -ne 'CI_ONLY' -or
+                $env:ORACLE_R21_SYSTEM_GUARD -ne 'CI_FIXED_SYSTEM_POLICY' -or
+                $env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY') {
+                throw 'R25_REFUSED: not a fixed disposable protected restart'
+            }
+            $rule = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+                Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+            if ($rule.Count -ne 1) { throw 'R25_FAIL: guard absent/duplicate before restart' }
+            & sc.exe start $managerName | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R25_FAIL: SYSTEM manager refused valid preserved guard'
+            }
+            (Get-Service -Name $managerName).WaitForStatus('Running',
+                [TimeSpan]::FromSeconds(25))
+            $restarted = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
+            if ($restarted.State -ne 'Running' -or $restarted.ProcessId -le 4 -or
+                $restarted.ProcessId -eq $managerPid) {
+                throw 'R25_FAIL: did not start a new manager process'
+            }
+            $newProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($restarted.ProcessId)" -ErrorAction Stop
+            if (-not $newProcess -or -not [string]::Equals(
+                [IO.Path]::GetFullPath($newProcess.ExecutablePath),
+                [IO.Path]::GetFullPath($managerExe),
+                [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'R25_FAIL: newly running manager has wrong executable'
+            }
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R25_FAIL: rebooted manager reused unverified WFP' }
+            $rulesAfter = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+                Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+            if ($rulesAfter.Count -ne 1) {
+                throw 'R25_FAIL: WFP guard duplicated at SCM restart'
+            }
+            Write-Host 'R25_CRASH_RESTART_STRICT_WFP_ADOPTION_PASS'
+
+            # Authenticated native GUI -> restarted SCM manager can still
+            # safely control the fixed lab peers; exact persistent rule stays.
+            Run-GuiAdminLab '--ci-lab-stop-a'
+            (Get-Service -Name 'WireGuardTunnel$lab-peer-a').WaitForStatus(
+                'Stopped',[TimeSpan]::FromSeconds(20))
+            Run-GuiAdminLab '--ci-lab-start-a'
+            (Get-Service -Name 'WireGuardTunnel$lab-peer-a').WaitForStatus(
+                'Running',[TimeSpan]::FromSeconds(20))
+            & $observer $env:WG_LAB_DLL
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R25_FAIL: real native WG handshake lost after manager restart'
+            }
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R25_FAIL: WFP lost after reconnect' }
+            Run-GuiAdminLab '--ci-lab-stop-b'
+            Run-GuiAdminLab '--ci-lab-stop-a'
+            foreach ($profile in @('lab-peer-b','lab-peer-a')) {
+                (Get-Service -Name ('WireGuardTunnel$' + $profile)).WaitForStatus(
+                    'Stopped',[TimeSpan]::FromSeconds(20))
+            }
+            Write-Host 'R25_AUTHENTICATED_GUI_RECONNECT_AND_SAFE_STOP_PASS'
+        }
+
+    } else {
+        if ($env:ORACLE_R89_TASK -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R89RegisterCrashStartupRecovery.ps1 -ExpectedManagerExe $managerExe
+        } elseif ($env:ORACLE_R75_TASK -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R75RegisterCrashScheduledRecovery.ps1 -ExpectedManagerExe $managerExe
+        } elseif ($env:ORACLE_R74_TIMER -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R74CiCrashAndTimedRecovery.ps1 -ExpectedManagerExe $managerExe
+        } elseif ($env:ORACLE_R73_RECOVERY -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R73ManagerCrashAndRecover.ps1 -ExpectedManagerExe $managerExe
+        } else {
+        Run-GuiAdminLab '--ci-lab-stop-b'
+        Run-GuiAdminLab '--ci-lab-stop-a'
+        foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
+            $s = Get-Service -Name ('WireGuardTunnel$' + $profile)
+            $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+        if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+            foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
+                $active = Join-Path (Join-Path $root 'config') "$profile.conf"
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                while ((Test-Path $active -PathType Leaf) -and
+                       [DateTime]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 250
+                }
+                if ((Test-Path $active -PathType Leaf) -or
+                    !(Test-Path "$active.dpapi" -PathType Leaf)) {
+                    throw 'R30_FAIL: plaintext config remained after graceful stop'
+                }
+            }
+            Write-Host 'R30_GRACEFUL_SYSTEM_CONFIG_CLEANUP_PASS'
+        }
+        Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
+        }
+    }
+}
+finally {
+    # Worst-case independent cleanup does not require the IPC/GUI to work.
+    # Clean ONLY services created by this exact disposable job.
+    foreach ($svc in @('WireGuardTunnel$lab-peer-b','WireGuardTunnel$lab-peer-a', $managerName)) {
+        if ($createdServices.Contains($svc)) {
+            try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch {}
+            & sc.exe delete $svc | Out-Null
+        }
+    }
+}
+ + $peer) -ErrorAction Stop).Status -ne 'Running') {
+                throw 'R110_REFUSED: native peer not active before all-app guard'
+            }
+        }
+        if (@(Get-NetFirewallRule -ErrorAction Stop |
+            Where-Object Name -eq 'OracleProxy-R31-CI-AllApps-FixedDestination').Count -ne 0) {
+            throw 'R110_REFUSED: foreign or stale all-app guard'
+        }
+        $env:ORACLE_R31_NARROW_OS_WFP='CI_ONLY'
+        $env:ORACLE_R46_PACKET_PROBE='CI_ONLY'
+        try {
+            & ./lab/wfp-scoped/Test-R31-AllProcessDualStack.ps1
+            if (-not $?) { throw 'R110_FAIL: native all-app WFP packet path did not pass' }
+        }
+        finally {
+            Remove-Item Env:ORACLE_R31_NARROW_OS_WFP -ErrorAction SilentlyContinue
+            Remove-Item Env:ORACLE_R46_PACKET_PROBE -ErrorAction SilentlyContinue
+        }
+        # Both native peer services must remain running after OS-level
+        # all-app destination scoped deny, release and direct recovery.
+        foreach ($peer in @('lab-peer-a','lab-peer-b')) {
+            if ((Get-Service -Name ('WireGuardTunnel
+        # R19: kill ONLY the manager service this disposable job just created,
+        # never any user/system service. The two native tunnel peers continue
+        # until separate CI-owned recovery removes them in finally.
+        if ($env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY' -or
+            $env:GITHUB_ACTIONS -ne 'true' -or
+            $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
+            -not $createdServices.Contains($managerName) -or
+            -not ($env:ORACLE_R18_GUARD_NAME -or $env:ORACLE_R21_SYSTEM_GUARD)) {
+            throw 'R19_REFUSED: no exact owned manager and WFP guard'
+        }
+        $serviceRecord = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
+        if (-not $serviceRecord -or $serviceRecord.State -ne 'Running' -or
+            $serviceRecord.ProcessId -le 4) {
+            throw 'R19_REFUSED: expected dedicated running SCM manager absent'
+        }
+        $managerPid = [int]$serviceRecord.ProcessId
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$managerPid" -ErrorAction Stop
+        if (-not $process -or -not $process.ExecutablePath -or
+            -not [string]::Equals(
+                [System.IO.Path]::GetFullPath($process.ExecutablePath),
+                [System.IO.Path]::GetFullPath($managerExe),
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'R19_REFUSED: SCM PID does not point at this CI manager binary'
+        }
+        Stop-Process -Id $managerPid -Force -ErrorAction Stop
+        $deadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 350
+            $status = (Get-Service -Name $managerName -ErrorAction Stop).Status
+        } while ($status -ne 'Stopped' -and [DateTime]::UtcNow -lt $deadline)
+        if ($status -ne 'Stopped') { throw 'R19_FAIL: manager process was not stopped' }
+        foreach ($profile in @('lab-peer-a','lab-peer-b')) {
+            if ((Get-Service -Name ('WireGuardTunnel$' + $profile) -ErrorAction Stop).Status -ne 'Running') {
+                throw 'R19_FAIL: native WireGuard tunnel did not outlive crashed manager'
+            }
+        }
+        # OS-stored persistent WFP rule MUST survive the controller crash
+        # and continue denying physical TCP and direct UDP DNS on test app.
+        if ($env:ORACLE_R21_SYSTEM_GUARD) {
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R21_FAIL: SYSTEM-owned WFP lost on hard manager crash' }
+            Write-Host 'R21_SYSTEM_OWNED_WFP_SURVIVED_MANAGER_CRASH_PASS'
+        } else {
+            & ./lab/wfp-scoped/Test-R18-MultiProtocolGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R19_FAIL: WFP leaked after manager crash' }
+        }
+        Write-Host 'R19_MANAGER_KILLED_WG_STILL_UP_WFP_PERSISTENT_PASS'
+        if ($env:ORACLE_R25_RESTART_TEST) {
+            if ($env:ORACLE_R25_RESTART_TEST -ne 'CI_ONLY' -or
+                $env:ORACLE_R21_SYSTEM_GUARD -ne 'CI_FIXED_SYSTEM_POLICY' -or
+                $env:ORACLE_R19_CRASH_TEST -ne 'CI_OWNED_MANAGER_ONLY') {
+                throw 'R25_REFUSED: not a fixed disposable protected restart'
+            }
+            $rule = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+                Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+            if ($rule.Count -ne 1) { throw 'R25_FAIL: guard absent/duplicate before restart' }
+            & sc.exe start $managerName | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R25_FAIL: SYSTEM manager refused valid preserved guard'
+            }
+            (Get-Service -Name $managerName).WaitForStatus('Running',
+                [TimeSpan]::FromSeconds(25))
+            $restarted = Get-CimInstance Win32_Service -Filter "Name='$managerName'" -ErrorAction Stop
+            if ($restarted.State -ne 'Running' -or $restarted.ProcessId -le 4 -or
+                $restarted.ProcessId -eq $managerPid) {
+                throw 'R25_FAIL: did not start a new manager process'
+            }
+            $newProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($restarted.ProcessId)" -ErrorAction Stop
+            if (-not $newProcess -or -not [string]::Equals(
+                [IO.Path]::GetFullPath($newProcess.ExecutablePath),
+                [IO.Path]::GetFullPath($managerExe),
+                [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'R25_FAIL: newly running manager has wrong executable'
+            }
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R25_FAIL: rebooted manager reused unverified WFP' }
+            $rulesAfter = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop |
+                Where-Object DisplayName -eq 'OracleProxy-R21-CI-SYSTEM-OnlyGuard')
+            if ($rulesAfter.Count -ne 1) {
+                throw 'R25_FAIL: WFP guard duplicated at SCM restart'
+            }
+            Write-Host 'R25_CRASH_RESTART_STRICT_WFP_ADOPTION_PASS'
+
+            # Authenticated native GUI -> restarted SCM manager can still
+            # safely control the fixed lab peers; exact persistent rule stays.
+            Run-GuiAdminLab '--ci-lab-stop-a'
+            (Get-Service -Name 'WireGuardTunnel$lab-peer-a').WaitForStatus(
+                'Stopped',[TimeSpan]::FromSeconds(20))
+            Run-GuiAdminLab '--ci-lab-start-a'
+            (Get-Service -Name 'WireGuardTunnel$lab-peer-a').WaitForStatus(
+                'Running',[TimeSpan]::FromSeconds(20))
+            & $observer $env:WG_LAB_DLL
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R25_FAIL: real native WG handshake lost after manager restart'
+            }
+            & ./lab/wfp-scoped/Test-R21-SystemOwnedGuard.ps1 -LiveCheck
+            if (-not $?) { throw 'R25_FAIL: WFP lost after reconnect' }
+            Run-GuiAdminLab '--ci-lab-stop-b'
+            Run-GuiAdminLab '--ci-lab-stop-a'
+            foreach ($profile in @('lab-peer-b','lab-peer-a')) {
+                (Get-Service -Name ('WireGuardTunnel$' + $profile)).WaitForStatus(
+                    'Stopped',[TimeSpan]::FromSeconds(20))
+            }
+            Write-Host 'R25_AUTHENTICATED_GUI_RECONNECT_AND_SAFE_STOP_PASS'
+        }
+
+    } else {
+        if ($env:ORACLE_R89_TASK -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R89RegisterCrashStartupRecovery.ps1 -ExpectedManagerExe $managerExe
+        } elseif ($env:ORACLE_R75_TASK -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R75RegisterCrashScheduledRecovery.ps1 -ExpectedManagerExe $managerExe
+        } elseif ($env:ORACLE_R74_TIMER -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R74CiCrashAndTimedRecovery.ps1 -ExpectedManagerExe $managerExe
+        } elseif ($env:ORACLE_R73_RECOVERY -eq 'CI_ONLY') {
+            & ./clients/windows/lab/Invoke-R73ManagerCrashAndRecover.ps1 -ExpectedManagerExe $managerExe
+        } else {
+        Run-GuiAdminLab '--ci-lab-stop-b'
+        Run-GuiAdminLab '--ci-lab-stop-a'
+        foreach ($profile in @('lab-peer-b', 'lab-peer-a')) {
+            $s = Get-Service -Name ('WireGuardTunnel$' + $profile)
+            $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
+        }
+        if ($env:ORACLE_R30_DPAPI_TEST -eq 'CI_ONLY') {
+            foreach ($profile in @('lab-peer-a', 'lab-peer-b')) {
+                $active = Join-Path (Join-Path $root 'config') "$profile.conf"
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                while ((Test-Path $active -PathType Leaf) -and
+                       [DateTime]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 250
+                }
+                if ((Test-Path $active -PathType Leaf) -or
+                    !(Test-Path "$active.dpapi" -PathType Leaf)) {
+                    throw 'R30_FAIL: plaintext config remained after graceful stop'
+                }
+            }
+            Write-Host 'R30_GRACEFUL_SYSTEM_CONFIG_CLEANUP_PASS'
+        }
+        Write-Host 'ADMIN_LAB_PASS: genuine native GUI -> OS admin-token IPC -> LocalSystem manager -> SCM tunnel start/stop -> real two-sided handshake'
+        }
+    }
+}
+finally {
+    # Worst-case independent cleanup does not require the IPC/GUI to work.
+    # Clean ONLY services created by this exact disposable job.
+    foreach ($svc in @('WireGuardTunnel$lab-peer-b','WireGuardTunnel$lab-peer-a', $managerName)) {
+        if ($createdServices.Contains($svc)) {
+            try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue } catch {}
+            & sc.exe delete $svc | Out-Null
+        }
+    }
+}
+ + $peer) -ErrorAction Stop).Status -ne 'Running') {
+                throw 'R110_FAIL: OS all-app guard disrupted native peer lifecycle'
+            }
+        }
+        & $observer $env:WG_LAB_DLL
+        if ($LASTEXITCODE -ne 0) { throw 'R110_FAIL: real peer handshake lost after R31 WFP rollback' }
+        Write-Host 'R110_REAL_TWO_PEERS_AND_ALLAPP_OS_WFP_FIXED_DESTINATION_PASS'
+        Write-Host 'R110_FULL_DEVICE_DEFAULT_EGRESS_FAILCLOSE_AND_UU_NOT_TESTED'
+    }
+
     if ($env:ORACLE_R19_CRASH_TEST) {
         # R19: kill ONLY the manager service this disposable job just created,
         # never any user/system service. The two native tunnel peers continue

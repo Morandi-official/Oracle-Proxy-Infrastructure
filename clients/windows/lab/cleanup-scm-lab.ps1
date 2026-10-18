@@ -16,7 +16,11 @@ if (Test-Path $marker -PathType Leaf) {
             & sc.exe delete $svc | Out-Null
         }
     }
-    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+    # R89 requires POSITIVE zero-file residual proof, not a warning followed
+    # by disposable runner destruction. Bound retries to avoid indefinite CI.
+    $r89Strict = $env:ORACLE_R89_STRICT_CLEANUP -eq 'CI_ONLY'
+    $maxAttempts = if ($r89Strict) { 48 } else { 5 }
+    for ($attempt = 0; $attempt -lt $maxAttempts; $attempt++) {
         try {
             if (Test-Path $root) {
                 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
@@ -24,17 +28,29 @@ if (Test-Path $marker -PathType Leaf) {
             break
         }
         catch {
-            if ($attempt -eq 4) {
+            if ($attempt -eq ($maxAttempts - 1) -and !$r89Strict) {
                 Write-Warning 'Temporary lab files remain until GitHub discards the ephemeral VM'
             }
             Start-Sleep -Milliseconds 500
         }
+    }
+    if ($r89Strict -and (Test-Path -LiteralPath $root)) {
+        throw 'R89_FAIL: exact owned SCM staging directory still present after bounded retries'
     }
     Remove-Item -LiteralPath $marker -Force
 }
 # Delete ephemeral private key file even if staging failed.
 $key = Join-Path $env:RUNNER_TEMP 'wg-lab-session.bin'
 if (Test-Path $key) { Remove-Item -LiteralPath $key -Force }
+if ($env:ORACLE_R89_STRICT_CLEANUP -eq 'CI_ONLY') {
+    if ((Test-Path -LiteralPath $root) -or
+        (Test-Path -LiteralPath $marker) -or
+        (Test-Path -LiteralPath $key) -or
+        (Get-Service -Name 'OracleProxyLabManager' -ErrorAction SilentlyContinue)) {
+        throw 'R89_FAIL: exact staged directory, key, marker or manager SCM residual'
+    }
+    Write-Host 'R89_EXACT_NATIVE_STAGE_KEYS_AND_MANAGER_RESIDUAL_ZERO_PASS'
+}
 # Confirm the only route prefixes this lab can add are absent once stopped.
 # Network adapter removal may lag SCM Stop/Delete. Wait briefly for the
 # actual IPv4/IPv6 kernel routes to disappear, not just the service state.

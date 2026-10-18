@@ -1,0 +1,111 @@
+name: R107 opt-in Windows application SOCKS5 portable alpha (NOT VPN)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/r107-app-socks5-portable.yml'
+      - 'docs/r107-app-socks5-portable-alpha.md'
+      - 'docs/r107-reusable-engine-licensing.md'
+      - 'clients/windows/app-socks5/**'
+      - 'clients/windows/app-socks5-gui/**'
+permissions:
+  contents: read
+
+concurrency:
+  group: r107-single-nonprivileged-portable
+  cancel-in-progress: true
+
+jobs:
+  portable-windows-x64:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r107-portable-functional-ssh-socks5-20261018' && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build exact owned GUI and helper, never a privileged service
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force -Path './dist/r107/portable' | Out-Null
+          dotnet publish ./clients/windows/app-socks5/OracleProxy.AppSocks5.Experimental.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o ./dist/r107/helper
+          if ($LASTEXITCODE -ne 0) { throw 'R107 helper publish failed' }
+          dotnet publish ./clients/windows/app-socks5-gui/OracleProxy.AppSocks5.GUI.Experimental.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o ./dist/r107/gui
+          if ($LASTEXITCODE -ne 0) { throw 'R107 GUI publish failed' }
+          $allow=@('OracleProxy.AppSocks5.Experimental.exe','OracleProxy.AppSocks5.GUI.Experimental.exe')
+          $found=@(Get-ChildItem -Path './dist/r107/helper','./dist/r107/gui' -File -Recurse)
+          if ($found.Count -ne 2 -or @($found|Where-Object { $_.Name -notin $allow }).Count -ne 0) { throw 'R107 unexpected publish payload' }
+          foreach($file in $found) {
+            if ((Get-AuthenticodeSignature -LiteralPath $file.FullName).Status -ne 'NotSigned') { throw 'Unexpected publisher sign state' }
+            Copy-Item -LiteralPath $file.FullName -Destination './dist/r107/portable/' -ErrorAction Stop
+          }
+          Write-Host 'R107_UNSIGNED_NONPRIVILEGED_TWO_EXE_PAYLOAD_ONLY'
+      - name: Test native Windows EXEs with local synthetic and job-owned tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $d=(Resolve-Path './dist/r107/portable').Path
+          $gui=Join-Path $d 'OracleProxy.AppSocks5.GUI.Experimental.exe'
+          $helper=Join-Path $d 'OracleProxy.AppSocks5.Experimental.exe'
+          $matrix=@(
+            @($helper,'--self-test'),
+            @($helper,'--job-self-test'),
+            @($gui,'--offline-self-test'),
+            @($gui,'--job-self-test'),
+            @($gui,'--proxy-path-self-test'),
+            @($gui,'--address-family-probe-self-test'),
+            @($gui,'--https-tls-self-test'),
+            @($gui,'--form-self-test')
+          )
+          foreach($case in $matrix) {
+            $p=Start-Process -FilePath $case[0] -ArgumentList $case[1] -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "R107 Windows test failed for $([IO.Path]::GetFileName($case[0])) $($case[1])" }
+          }
+          $bad=Start-Process -FilePath $helper -ArgumentList @('--host','example.com','--user','ubuntu','--identity','relative.key') -Wait -PassThru
+          if ($bad.ExitCode -eq 0) { throw 'R107 invalid private key accepted' }
+          Write-Host 'R107_WINDOWS_GUI_HELPER_NATIVE_OFFLINE_SELFTEST_PASS'
+          Write-Host 'R107_REAL_ORACLE_SSH_AND_UU_NOT_TESTED'
+      - name: Create README-first ZIP and verify allowlist and SHA-256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $d=(Resolve-Path './dist/r107/portable').Path
+          Copy-Item -LiteralPath './docs/r107-app-socks5-portable-alpha.md' -Destination (Join-Path $d 'READ_ME_FIRST.md')
+          Copy-Item -LiteralPath './docs/r107-reusable-engine-licensing.md' -Destination (Join-Path $d 'UPSTREAM_ENGINE_LICENSE_REVIEW.md')
+          $names=@('OracleProxy.AppSocks5.Experimental.exe','OracleProxy.AppSocks5.GUI.Experimental.exe','READ_ME_FIRST.md','UPSTREAM_ENGINE_LICENSE_REVIEW.md')
+          $items=@(Get-ChildItem -LiteralPath $d -File)
+          if ($items.Count -ne 4 -or @($items | Where-Object { $_.Name -notin $names }).Count -ne 0) { throw 'R107 payload allowlist mismatch' }
+          $forbidden=@($items | Where-Object {
+            $_.Extension -in @('.ps1','.bat','.cmd','.key','.conf','.dll','.sys','.msi','.pfx') -or
+            $_.Name -match '(?i)wireguard|wiresock|oracleproxy\.labmanager|tunnel'
+          })
+          if ($forbidden.Count -ne 0) { throw 'R107 privileged or key payload forbidden' }
+          $lines=@('SHA-256 file manifest; not a publisher signature')
+          foreach($name in $names) {
+            $hash=(Get-FileHash -LiteralPath (Join-Path $d $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            $lines+=($hash + '  ' + $name)
+          }
+          $lines | Set-Content -LiteralPath (Join-Path $d 'SHA256SUMS.txt') -Encoding utf8
+          $zip=Join-Path (Resolve-Path './dist/r107').Path 'OracleProxy-R107-Windows-App-SOCKS5-UNSIGNED-NOT-VPN.zip'
+          Compress-Archive -Path (Join-Path $d '*') -DestinationPath $zip -CompressionLevel Optimal -Force
+          $verify=Join-Path $env:RUNNER_TEMP 'r107-zip-reverification'
+          Expand-Archive -LiteralPath $zip -DestinationPath $verify -Force
+          if (@(Get-ChildItem -LiteralPath $verify -File).Count -ne 5) { throw 'R107 ZIP file count mismatch' }
+          foreach ($name in $names) {
+            if ((Get-FileHash -LiteralPath (Join-Path $d $name) -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $verify $name) -Algorithm SHA256).Hash) {
+              throw 'R107 ZIP content hash mismatch'
+            }
+          }
+          Write-Host 'R107_README_FIRST_ZIP_HASH_AND_PAYLOAD_PASS'
+          Write-Host 'R107_NO_DRIVER_NO_WFP_NO_INSTALLER_NO_GA_AUTHORIZATION'
+      - name: Upload opt-in unsigned non-VPN test ZIP only
+        uses: actions/upload-artifact@v4
+        with:
+          name: OracleProxy-R107-UNSIGNED-App-SOCKS5-NOT-WireSock-Replacement
+          path: ./dist/r107/OracleProxy-R107-Windows-App-SOCKS5-UNSIGNED-NOT-VPN.zip
+          if-no-files-found: error
+          retention-days: 7

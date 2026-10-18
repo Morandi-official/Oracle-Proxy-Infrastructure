@@ -136,6 +136,17 @@ jobs:
           Copy-Item -LiteralPath './dist/r112/native/tunnel.dll' -Destination $d
           Copy-Item -LiteralPath './dist/r112/native/wireguard.dll' -Destination $d
           Copy-Item -LiteralPath './docs/r112-integrated-wireguard-alpha.md' -Destination (Join-Path $d 'READ_ME_FIRST.md')
+          # Official prebuilt WireGuardNT binary has a DIFFERENT license than
+          # WireGuardNT GPLv2 source. Redistribution requires bundling the
+          # EXACT license that arrived with the pinned, official SDK ZIP.
+          $sdkRoot=Join-Path $env:RUNNER_TEMP 'wg-sdk'
+          $license=@(Get-ChildItem -Path $sdkRoot -Recurse -File |
+            Where-Object { $_.Name -eq 'prebuilt-binaries-license.txt' })
+          if($license.Count -ne 1) {
+            throw 'R112 WireGuardNT official prebuilt binary license missing: refuse redistribution'
+          }
+          Copy-Item -LiteralPath $license[0].FullName -Destination (Join-Path $d 'WIREGUARDNT_BINARY_LICENSE.txt')
+          Copy-Item -LiteralPath './docs/r112-wireguard-embedding-mit-license.txt' -Destination (Join-Path $d 'EMBEDDABLE_TUNNEL_MIT_LICENSE.txt')
           $notices=@(
             'Oracle Proxy R112 unofficial experimental developer package; not endorsed by WireGuard LLC.',
             'tunnel.dll: compiled by this CI from pinned WireGuard/wireguard-windows MIT-licensed embeddable-dll-service source.',
@@ -146,7 +157,7 @@ jobs:
             'This test package has never demonstrated a real public-server handshake, safe off, WFP fail-close or UU compatibility.'
           )
           $notices | Set-Content -LiteralPath (Join-Path $d 'UPSTREAM_NOTICES.md') -Encoding utf8
-          $names=@('OracleProxy.WgAlpha.exe','tunnel.dll','wireguard.dll','READ_ME_FIRST.md','UPSTREAM_NOTICES.md')
+          $names=@('OracleProxy.WgAlpha.exe','tunnel.dll','wireguard.dll','READ_ME_FIRST.md','UPSTREAM_NOTICES.md','WIREGUARDNT_BINARY_LICENSE.txt','EMBEDDABLE_TUNNEL_MIT_LICENSE.txt')
           $items=@(Get-ChildItem -LiteralPath $d -File)
           if($items.Count -ne $names.Count -or @($items|Where-Object { $_.Name -notin $names }).Count -ne 0){
             throw 'R112 unexpected native artifact payload'
@@ -162,7 +173,7 @@ jobs:
           $check=Join-Path $env:RUNNER_TEMP 'r112-artifact-verify'
           Expand-Archive -LiteralPath $zip -DestinationPath $check
           $actual=@(Get-ChildItem -LiteralPath $check -File)
-          if($actual.Count -ne 6){throw 'R112 archive file allowlist changed'}
+          if($actual.Count -ne 8){throw 'R112 archive file allowlist changed'}
           foreach($name in $names) {
             if((Get-FileHash -LiteralPath (Join-Path $d $name) -Algorithm SHA256).Hash -ne
                (Get-FileHash -LiteralPath (Join-Path $check $name) -Algorithm SHA256).Hash) {

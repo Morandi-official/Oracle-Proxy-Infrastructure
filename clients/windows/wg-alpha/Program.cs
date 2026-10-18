@@ -9,6 +9,12 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+#if ENABLE_R113_CI_TRIAL
+        // This is a separate CI-only compilation and must NEVER be present
+        // in any downloadable R112/R113 GUI or real field build.
+        if (args.Length == 2 && args[0] == "--ci-r113-native-service-trial")
+            return CiEmbeddedServiceTrial.Run(args[1]);
+#endif
         if (args.Length == 1 && args[0] == "--offline-self-test")
             return AlphaPreflight.SelfTest() && EmbeddedWireGuardBridge.SelfTest() ? 0 : 1;
         if (args.Length == 1 && args[0] == "--service")

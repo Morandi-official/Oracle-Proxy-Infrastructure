@@ -122,6 +122,14 @@ test -r /usr/share/OVMF/OVMF_CODE_4M.fd
 test -r /usr/share/OVMF/OVMF_VARS_4M.fd
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "$work/vars.fd"
 qemu-img create -q -f qcow2 -F "$fmt" -b "$base" "$work/overlay.qcow2"
+# Windows Server 2025 has native NVMe storage support; test a different
+# UEFI-visible PCIe disk path. Earlier Q35/IDE run provided 458 valid System
+# events but zero corroborating Kernel-General 12 or EventLog 6005 events.
+# Never install a third-party boot driver or disable Windows Secure Boot.
+qemu-system-x86_64 -device help | grep -Eq '^[[:space:]]*name "nvme"' || {
+  echo R99_STOP_DISPOSABLE_QEMU_NVME_MODEL_UNAVAILABLE; exit 6;
+}
+echo R99_NATIVE_NVME_BOOT_DEVICE_MODEL_AVAILABLE
 echo R97_READONLY_BASE_AND_DISPOSABLE_COW_DISK_CREATED
 # No guest agent is present: never inject a serial responder, executables
 # or script policy changes merely to fabricate a boot acknowledgement.
@@ -190,7 +198,8 @@ launch() {
     -cpu host -smp 2 -m 6144 \
     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
     -drive if=pflash,format=raw,file="$work/vars.fd" \
-    -drive file="$work/overlay.qcow2",format=qcow2,if=ide \
+    -drive if=none,id=r99nvme0,file="$work/overlay.qcow2",format=qcow2 \
+    -device nvme,drive=r99nvme0,serial=R99-EVAL-EPHEMERAL-BOOT \
     -vga std -display none -vnc "127.0.0.1:$vnc_display" -nic none \
     -qmp "unix:$work/qmp.sock,server=on,wait=off" \
     -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \

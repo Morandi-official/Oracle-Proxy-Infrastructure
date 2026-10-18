@@ -70,5 +70,8 @@ $env:RUNNER_TEMP = (Split-Path -Parent $JobMarker)
 $recovery = Join-Path $PSScriptRoot 'Invoke-R73CiOwnedExpiryRecovery.ps1'
 & $recovery -Mode Expire -DeadlineUtc $ExpiryUtc
 if (-not $?) { throw 'R89_FAIL: exact owned peer stop failed' }
-'R89_SYSTEM_STARTUP_PHASE_OWNED_NATIVE_PEERS_STOPPED_NO_REBOOT' |
-    Set-Content -LiteralPath $receipt -Encoding ascii -NoNewline -ErrorAction Stop
+# Do NOT write a SYSTEM-only receipt inside the protected native stage.
+# Such an OS-private file cannot be deleted by the CI admin without weakening
+# its DACL. The coordinator instead independently checks recent Task Scheduler
+# LastRunTime/LastTaskResult plus real SCM peer state and OS routes.
+Write-Output 'R89_SYSTEM_NATIVE_STOP_COMPLETED_TASK_RESULT_IS_OS_RECEIPT'

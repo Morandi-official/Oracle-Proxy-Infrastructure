@@ -147,6 +147,13 @@ else
   rm -f -- "$work/system-before.evtx"
   echo R99_EVALUATION_BASELINE_EVENTLOG_NOT_AVAILABLE_NOT_PROOF
 fi
+# Before another full trial, inspect only the official VHD EFI file paths.
+# No guest modification, no EFI variable changes, no script policy bypass.
+if ! /usr/bin/python3 -B lab/cloud-windows-r99/inspect_windows_vhd_efi_ro.py \
+    --raw "$work/before.raw" --mount "$work/mnt"; then
+  echo R99_OFFICIAL_VHD_MICROSOFT_UEFI_BOOT_CHAIN_UNVERIFIED_DENY
+  exit 6
+fi
 rm -f -- "$work/before.raw"
 check_kvm_before_guest() {
   # A host may revoke temporary KVM node ACLs after a QEMU exit.

@@ -53,8 +53,30 @@ jobs:
       - name: Verify safe read-only NTFS loop from synthetic disk and exact teardown
         shell: bash
         run: bash lab/cloud-windows-r99/test_host_loop_ntfs.sh
+  evtx-runtime-dependency-smoke:
+    needs: pure-denial-matrix
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Signed Ubuntu EVTX parser runtime dependency and source inspection
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update -qq
+          sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends python3-evtx >/dev/null
+          version=$(dpkg-query -W -f='${Version}' python3-evtx)
+          [[ "$version" == 0.7.4-* ]] || {
+            echo R99_REFUSED_UNREVIEWED_EVTX_PARSER_VERSION; exit 6;
+          }
+          /usr/bin/python3 -B -c 'from Evtx.Evtx import Evtx; print("R99_EVTX_PARSER_DEPENDENCIES_COMPLETE_PASS")'
+          /usr/bin/python3 -B -m unittest discover -s lab/cloud-windows-r99 -p 'test_windows_boot_evtx_witness.py' -v
+          echo 'R99_SYSTEM_PARSER_IMPORT_BEFORE_VHD_DOWNLOAD_PASS'
   isolated-real-windows-boot-evidence:
-    needs: [pure-denial-matrix, host-loop-ntfs-smoke]
+    needs: [pure-denial-matrix, host-loop-ntfs-smoke, evtx-runtime-dependency-smoke]
     # Synthetic Linux RO NTFS loop mounting must pass before any official VHD is downloaded.
     if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r99-cloud-windows-serial-boot-witness-20261018'
     runs-on: ubuntu-24.04

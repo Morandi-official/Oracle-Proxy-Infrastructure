@@ -1,9 +1,14 @@
 """R99 independent Windows boot evidence adjudicator — deterministic negative tests."""
 from datetime import datetime, timezone, timedelta
 import unittest
+from unittest.mock import patch
+from tempfile import TemporaryDirectory
+from pathlib import Path
+import sys
+import types
 
 from windows_boot_evtx_witness import (
-    BootRecord, judge, parse_event_xml, summarize_safe_boot_counters
+    BootRecord, judge, parse_event_xml, summarize_safe_boot_counters, records_from_evtx
 )
 def at(minute=0):
     return datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc) + timedelta(minutes=minute)
@@ -84,6 +89,43 @@ class R99HostBootWitnessTests(unittest.TestCase):
         self.assertEqual(counters["r99_eventlog6005_older_than_host_window"], 1)
         self.assertFalse(any("record_id" in key or "host_start" in key
                              for key in counters.keys()))
+
+    def test_synthetic_non_boot_windows_events_only_report_bounded_counters(self):
+        # Fake EVTX parser yields only controlled XML data: no real Windows
+        # guest log, no PII and no external resource touched in this test.
+        sample = [
+            xml("Microsoft-Windows-Setup", 1, 1, "2026-10-18T07:00:00.0000000Z"),
+            xml("Microsoft-Windows-Kernel-PnP", 2, 2, "2026-10-18T08:01:00.0000000Z"),
+            xml("EventLog", 3, 3, "2026-10-18T08:20:00.0000000Z"),
+        ]
+        class Record:
+            def __init__(self, body): self.body = body
+            def xml(self): return self.body
+        class FakeEvtx:
+            def __init__(self, _): pass
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def records(self):
+                return iter(Record(data) for data in sample)
+        package = types.ModuleType("Evtx")
+        submodule = types.ModuleType("Evtx.Evtx")
+        submodule.Evtx = FakeEvtx
+        with TemporaryDirectory() as td:
+            filename = Path(td) / "synthetic.evtx"
+            filename.write_bytes(b"ElfFile\x00" + b"\x00" * 4096)
+            with patch.dict(sys.modules, {"Evtx": package, "Evtx.Evtx": submodule}):
+                counters = {}
+                _, matched = records_from_evtx(
+                    filename, scan=counters, host_start=at(0), host_end=at(4))
+            self.assertEqual(len(matched), 0)
+            self.assertEqual(counters["r99_evtx_total_records"], 3)
+            self.assertEqual(counters["r99_system_events_before_host_window"], 1)
+            self.assertEqual(counters["r99_system_events_within_host_window"], 1)
+            self.assertEqual(counters["r99_system_events_after_host_window"], 1)
+            self.assertEqual(counters["r99_allowlisted_microsoft_boot_source_0_count"], 1)
+            self.assertEqual(counters["r99_allowlisted_microsoft_boot_source_3_count"], 1)
+            self.assertFalse(any("provider_name" in k or "record_id" in k
+                                 for k in counters))
 
     def test_reboot_is_not_inferred_from_single_kernel_start(self):
         v=self.judge()

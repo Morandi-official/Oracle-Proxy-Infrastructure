@@ -57,3 +57,10 @@ service/driver start-stop, IPv6 route manipulation, reboot, VPN disconnect,
 or disabling UU remote control before a separate explicit approval and
 verified on-site recovery. Existing Oracle/UDP443 and UU remote connection
 must stay unchanged.
+
+
+## R95 single physical disk alternative: inventory only, not WFP eligibility
+
+The second Windows PC has one present system disk (~799 GB free), with UU remote control and no VM software. See `docs/r95-single-disk-baremetal-recovery-readonly-preflight.md` for optional **interactive read-only** Windows/WinRE/BitLocker/disk checks and a minimum-cost external backup/recovery plan. Free space, a separate partition or dual boot on the same disk cannot count as an independent backup. A USB recovery drive is not a backup of personal files or the current OS configuration; any future creation erases the selected USB.
+
+This does **not change the G10 requirement for a separately controlled recovery console and externally validated restoration** before real persistent WFP/driver tests. Avoid testing fail-close on a UU-dependent single-disk daily installation. Any additional native field activity remains blocked by R83/GA issue #34; PowerShell execution-policy refusal is a required STOP condition, not a reason to bypass Windows security.

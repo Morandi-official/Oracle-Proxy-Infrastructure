@@ -28,7 +28,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
-          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=false -o ./dist/r91-internal
+          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=false -p:IncludeNativeLibrariesForSelfExtract=true -o ./dist/r91-internal
           if ($LASTEXITCODE -ne 0) { throw 'R91 preview compile failed' }
           $dir=(Resolve-Path ./dist/r91-internal).Path
           $exe=Join-Path $dir 'OracleProxy.Windows.Preview.exe'

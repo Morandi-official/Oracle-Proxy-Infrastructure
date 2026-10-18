@@ -1,0 +1,76 @@
+name: R91 verify unsigned Windows preview provenance without distribution
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/r91-windows-preview-attestation.yml'
+      - 'docs/r91-windows-preview-provenance-ci.md'
+      - 'clients/windows/app/**'
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  unsigned-preview-trust-boundary:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r91-unsigned-windows-preview-provenance-20261018'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build strictly read-only end-user preview, never a privileged manager
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/app/OracleProxy.Windows.Preview.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableDisposableLabControls=false -o ./dist/r91-internal
+          if ($LASTEXITCODE -ne 0) { throw 'R91 preview compile failed' }
+          $dir=(Resolve-Path ./dist/r91-internal).Path
+          $exe=Join-Path $dir 'OracleProxy.Windows.Preview.exe'
+          if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'R91 exact preview EXE missing' }
+          $unexpected=@(Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object Name -notin @('OracleProxy.Windows.Preview.exe','OracleProxy.Windows.Preview.pdb'))
+          if ($unexpected.Count -ne 0) { throw 'R91 forbidden non-preview files bundled' }
+          $signature=Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+          if ($signature.Status -ne 'NotSigned') { throw 'R91 unexpected Authenticode status; require new human review' }
+          Write-Host 'R91_UNSIGNED_WINDOWS_READONLY_EXE_BUILD_ONLY_PASS'
+          Write-Host 'R91_AUTHENTICODE_SIGNED=false'
+          Write-Host 'R91_PRIVILEGED_MANAGER_OR_NATIVE_DRIVER_PACKAGED=false'
+      - name: Cryptographically attest EXACT preview EXE built in current workflow
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/r91-internal/OracleProxy.Windows.Preview.exe
+      - name: Verify OIDC source identity and reject tampered EXE and false signer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe=(Resolve-Path ./dist/r91-internal/OracleProxy.Windows.Preview.exe).Path
+          $signer="$env:GITHUB_REPOSITORY/.github/workflows/r91-windows-preview-attestation.yml"
+          $verified=$false
+          for ($i=0; $i -lt 8; $i++) {
+            & gh attestation verify $exe --repo $env:GITHUB_REPOSITORY --signer-workflow $signer --source-digest $env:GITHUB_SHA --deny-self-hosted-runners *> $null
+            if ($LASTEXITCODE -eq 0) { $verified=$true; break }
+            Start-Sleep -Seconds 3
+          }
+          if (!$verified) { throw 'R91 trusted GitHub provenance verification failed' }
+          Write-Host 'R91_WINDOWS_PREVIEW_SOURCE_WORKFLOW_AND_DIGEST_PROVENANCE_PASS'
+          $tampered=Join-Path $env:RUNNER_TEMP 'R91-TAMPERED-NOT-RELEASED.exe'
+          Copy-Item -LiteralPath $exe -Destination $tampered -ErrorAction Stop
+          [IO.File]::AppendAllText($tampered,'TAMPERED')
+          & gh attestation verify $tampered --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'R91 tampered Windows EXE accepted' }
+          & gh attestation verify $exe --repo $env:GITHUB_REPOSITORY --signer-workflow "$env:GITHUB_REPOSITORY/.github/workflows/unrelated.yml" *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'R91 unrelated signer workflow accepted' }
+          Remove-Item -LiteralPath $tampered -Force -ErrorAction Stop
+          if ((Get-AuthenticodeSignature -LiteralPath $exe).Status -ne 'NotSigned') { throw 'R91 Authenticode state inconsistent' }
+          Write-Host 'R91_TAMPERED_EXE_AND_FALSE_WORKFLOW_REFUSED_PASS'
+          Write-Host 'R91_PROVENANCE_ATTESTED_NOT_AUTHENTICODE_SIGNED=true'
+          Write-Host 'R91_END_USER_ARTIFACT_UPLOADED=false'
+          Write-Host 'R91_WINDOWS_INSTALLER_CREATED=false'
+          Write-Host 'R91_GA_OR_FIELD_EXECUTION_AUTHORIZED=false'

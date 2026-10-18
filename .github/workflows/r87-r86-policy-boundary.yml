@@ -1,0 +1,74 @@
+name: R87 R86 physical PowerShell policy refusal guard
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/r86-field/**'
+      - 'docs/r86-attended-second-pc-acceptance.md'
+      - 'docs/r87-r86-execution-policy-blocker.md'
+      - '.github/workflows/r87-r86-policy-boundary.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit-only-no-physical-execution:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Assert unsigned R86 scripts and prohibit execution-policy circumvention
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'clients/windows/r86-field'
+          $scripts = @(
+            'R86-Common.ps1',
+            'R86-Preflight.ps1',
+            'R86-Start.ps1',
+            'R86-Verify.ps1',
+            'R86-EmergencyCleanup.ps1'
+          )
+          $prohibited = '(?i)(\bSet-ExecutionPolicy\b|\bUnblock-File\b|-ExecutionPolicy\s+(Bypass|Unrestricted)\b|\bSet-MpPreference\b|\bAdd-MpPreference\b)'
+          foreach ($name in $scripts) {
+            $path = Join-Path $root $name
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "R87_REFUSED: missing reviewed script $name"
+            }
+            $source = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path).Path)
+            if ($source -match $prohibited) {
+              throw "R87_REFUSED: bypass in R86 script $name"
+            }
+            $sig = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
+            if ($sig.Status -ne 'NotSigned') {
+              throw "R87_REFUSED: unexpected script signing state $name; new deployment requires review"
+            }
+          }
+          Write-Host 'R87_NO_POLICY_BYPASS_IN_R86_SCRIPTS_PASS'
+          Write-Host 'R87_R86_SCRIPTS_UNSIGNED_NOT_A_SIGNED_FIELD_DELIVERY_PASS'
+      - name: Require explicit physical stop and preserve non-acceptance evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $readme = Get-Content 'clients/windows/r86-field/README-R86.txt' -Raw
+          $acceptance = Get-Content 'docs/r86-attended-second-pc-acceptance.md' -Raw
+          $field = Get-Content 'docs/r87-r86-execution-policy-blocker.md' -Raw
+          if ($readme -notmatch 'ExecutionPolicy' -or $readme -notmatch 'STOP and report') {
+            throw 'R87_REFUSED: reviewed operator README lost policy-stop rule'
+          }
+          if ($acceptance -notmatch 'No bypasses' -or $acceptance -notmatch 'execution policy') {
+            throw 'R87_REFUSED: acceptance policy-stop rule missing'
+          }
+          foreach ($evidence in @('PSSecurityException','R86_ALL_7_HASHES_MATCH_CI',
+              'R86_PHYSICAL_SYSTEM_AUTOSTOP','GA issue')) {
+            if (!$field.Contains($evidence)) {
+              throw "R87_REFUSED: blocked field evidence missing $evidence"
+            }
+          }
+          if ($field -notmatch 'remain \*\*unproven\*\*') {
+            throw 'R87_REFUSED: field gate incorrectly marked accepted'
+          }
+          Write-Host 'R87_PHYSICAL_BLOCK_RECORDED_NO_FIELD_SUCCESS_CLAIM_PASS'
+          Write-Host 'R87_CI_READ_ONLY_NO_ARTIFACT_NO_NATIVE_DRIVER_PASS'

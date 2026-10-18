@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Text;
 using System.Windows.Forms;
 
 namespace OracleProxy.Windows.Preview;
@@ -27,7 +28,7 @@ internal sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 105));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 125));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
         Controls.Add(root);
 
@@ -53,7 +54,7 @@ internal sealed class MainForm : Form
         };
         root.Controls.Add(_details, 0, 2);
 
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, WrapContents = true };
         _refresh = new Button { Text = "刷新只读诊断", Width = 165, Height = 38 };
         var policyButton = new Button {
             Text = "查看安全策略模拟", Width = 195, Height = 38
@@ -79,6 +80,12 @@ internal sealed class MainForm : Form
             await CheckSafeControlAsync("RequestExplicitDisconnect");
         buttons.Controls.Add(connectCheck);
         buttons.Controls.Add(disconnectCheck);
+        var acceptanceReportButton = new Button {
+            Text = "一键检查并导出报告", Width = 215, Height = 38
+        };
+        acceptanceReportButton.Click += async (_, _) =>
+            await ExportAcceptanceReportAsync(acceptanceReportButton);
+        buttons.Controls.Add(acceptanceReportButton);
 #if ORACLE_DISPOSABLE_LAB
         if (LabAdminControlClient.OnDisposableRunner())
         {
@@ -95,6 +102,7 @@ internal sealed class MainForm : Form
         root.Controls.Add(new Label {
             Dock = DockStyle.Fill, ForeColor = Color.Firebrick,
             Text = "v0.2 只读测试版：不能连接 Oracle VPN，不能代理上网，没有断线防泄漏。\n" +
+                   "一键报告只读；实际全设备 WireGuard/WFP 及防泄漏尚未实测，不能替代 WireSock。\\n" +
                    "无须管理员权限；不启动 PowerShell，不改 UU、WireSock、路由或防火墙。",
             TextAlign = ContentAlignment.MiddleLeft
         }, 0, 4);
@@ -137,6 +145,57 @@ internal sealed class MainForm : Form
         {
             if (!_shutdown.IsCancellationRequested && !IsDisposed)
                 _refresh.Enabled = true;
+        }
+    }
+
+    private async Task ExportAcceptanceReportAsync(Button button)
+    {
+        if (_shutdown.IsCancellationRequested || !button.Enabled) return;
+        button.Enabled = false;
+        _status.Text = "正在进行只读本机检查（不会启用 VPN、WFP 或发送测试流量）…";
+        try
+        {
+            string report = await AcceptanceReport.CollectAsync(_shutdown.Token);
+            if (_shutdown.IsCancellationRequested || IsDisposed) return;
+            // Save is user-initiated. No automatic upload to GitHub or Oracle.
+            using var dialog = new SaveFileDialog {
+                Title = "保存脱敏的 Windows VPN 验收预检查报告",
+                Filter = "JSON 报告 (*.json)|*.json",
+                AddExtension = true,
+                DefaultExt = "json",
+                CheckPathExists = true,
+                OverwritePrompt = true,
+                FileName = "OracleProxy-R108-readonly-precheck-" +
+                    DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss") + ".json"
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                _status.Text = "已取消保存；未更改 VPN 或网络设置。";
+                return;
+            }
+            await File.WriteAllTextAsync(dialog.FileName, report,
+                new UTF8Encoding(false), _shutdown.Token);
+            if (_shutdown.IsCancellationRequested || IsDisposed) return;
+            _status.Text = "报告已保存在你选择的位置（不会自动上传）。";
+            MessageBox.Show(this,
+                "只读报告已保存。\\n\\n" +
+                "它记录网卡/默认路由/服务的脱敏观察结果，" +
+                "以及必须独立完成的真实 WireGuard/WFP/断网恢复/UU 验收项目。\\n" +
+                "未测试项目会显示 NOT_TESTED，而不会假报通过。\\n\\n" +
+                "报告不含 IP、DNS 地址、密钥或帐号，但分享前仍请自行检查文件。",
+                "R108 测试报告已生成",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        catch
+        {
+            if (!_shutdown.IsCancellationRequested && !IsDisposed)
+                _status.Text = "报告采集或保存失败，未修改任何 VPN/网络设置。";
+        }
+        finally
+        {
+            if (!_shutdown.IsCancellationRequested && !IsDisposed)
+                button.Enabled = true;
         }
     }
 

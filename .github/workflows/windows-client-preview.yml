@@ -72,6 +72,15 @@ jobs:
           Write-Host "Native protocol self-test exit code: $($test.ExitCode)"
           if ($test.ExitCode -ne 0) { throw 'W4 mock protocol test failed' }
           Write-Host 'PASS: untrusted, oversized, malformed, replayed and unauthorized mock requests denied'
+      - name: R108 verify evidence-honest acceptance report and reject private data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe = (Resolve-Path './dist/windows-win-x64/OracleProxy.Windows.Preview.exe').Path
+          $test = Start-Process -FilePath $exe -ArgumentList '--acceptance-report-self-test' -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw 'R108 sanitized acceptance report offline safety test failed' }
+          Write-Host 'R108_REPORT_NOT_TESTED_STAYS_NOT_TESTED_AND_PRIVATE_FIELDS_REJECTED_PASS'
+          Write-Host 'R108_NO_REAL_WFP_VPN_INTERNET_TESTS_OR_PRODUCT_RELEASE'
       - name: Verify integrated sanitized diagnostics entrypoint
         shell: pwsh
         run: |

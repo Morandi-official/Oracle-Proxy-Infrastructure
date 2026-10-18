@@ -84,6 +84,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'OS identity status IPC test failed' }
           & $exe --offline-intent-planner-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Offline state model failed' }
+          # GUI report intentionally never grants production tunnel/WFP permission.
+          $reportGui='./dist/main-readonly-gui/OracleProxy.Windows.Preview.exe'
+          & $reportGui --acceptance-report-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R108 read-only report negative matrix failed' }
+          Write-Host 'R108_SOURCE_GUI_SAFELY_REPORTS_UNVERIFIED_WFP_AND_WIREGUARD_PASS'
           & $exe --r92-reboot-evidence-self-test
           if ($LASTEXITCODE -ne 0) { throw 'R92 independent reboot evidence deny-only regression' }
           # A same-boot process restart can never count as a real OS reboot.

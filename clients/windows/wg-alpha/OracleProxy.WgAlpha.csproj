@@ -9,6 +9,17 @@
     <PublishTrimmed>false</PublishTrimmed>
     <EnableDefaultItems>true</EnableDefaultItems>
   </PropertyGroup>
+  <!-- CI-only live-service entrypoints are ABSENT from public Alpha builds. -->
+  <PropertyGroup>
+    <EnableR113CiTrial Condition="'$(EnableR113CiTrial)' == ''">false</EnableR113CiTrial>
+    <DefineConstants Condition="'$(EnableR113CiTrial)' == 'true'">$(DefineConstants);ENABLE_R113_CI_TRIAL</DefineConstants>
+  </PropertyGroup>
+  <Target Name="ValidateR113CiTrialSwitch" BeforeTargets="CoreCompile">
+    <Error Condition="'$(EnableR113CiTrial)' != 'false' and '$(EnableR113CiTrial)' != 'true'" Text="Unrecognized R113 CI compilation flag" />
+  </Target>
+  <ItemGroup Condition="'$(EnableR113CiTrial)' != 'true'">
+    <Compile Remove="CiEmbeddedServiceTrial.cs" />
+  </ItemGroup>
   <ItemGroup>
     <Compile Remove="OfficialWireGuardBridge.cs" />
     <Compile Include="../service-host/NativeDriverTrust.cs" Link="NativeDriverTrust.cs" />

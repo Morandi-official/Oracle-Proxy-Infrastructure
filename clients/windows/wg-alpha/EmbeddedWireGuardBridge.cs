@@ -251,6 +251,38 @@ internal static class EmbeddedWireGuardBridge
         }catch{return false;}
     }
 
+    // The official embeddable tunnel creates exactly log.bin in its owned
+    // protected ProgramData config directory. It is NOT part of the input
+    // payload and cannot be hash-pinned. Only this fixed-name, regular,
+    // reasonable-size, Admin/SYSTEM-owned log may be removed after service
+    // stop; arbitrary files, symlinks or permissive ACLs still refuse cleanup.
+    private static bool IsOwnedNativeLog(string path)
+    {
+        try
+        {
+            var file=new FileInfo(path);
+            if(!file.Exists || file.Length>20_000_000 ||
+               file.Attributes.HasFlag(FileAttributes.ReparsePoint) ||
+               file.Attributes.HasFlag(FileAttributes.Directory))
+                return false;
+            var acl=file.GetAccessControl(AccessControlSections.Owner|
+                AccessControlSections.Access);
+            string? owner=(acl.GetOwner(typeof(SecurityIdentifier)) as
+                SecurityIdentifier)?.Value;
+            if(owner is not ("S-1-5-18" or "S-1-5-32-544")) return false;
+            foreach(FileSystemAccessRule rule in acl.GetAccessRules(
+                true,true,typeof(SecurityIdentifier)))
+            {
+                if(rule.AccessControlType==AccessControlType.Allow &&
+                   rule.IdentityReference.Value is not
+                        ("S-1-5-18" or "S-1-5-32-544"))
+                    return false;
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
     internal static string Uninstall()
     {
         if(!AlphaPreflight.Administrator() || !ExactOwnedServiceImage())
@@ -289,14 +321,30 @@ internal static class EmbeddedWireGuardBridge
                     var binaries=Directory.GetFiles(InstallRoot)
                         .Select(Path.GetFileName).OrderBy(x=>x).ToArray();
                     var expected=new[]{Executable,TunnelDll,DriverDll}.OrderBy(x=>x).ToArray();
-                    if(!binaries.SequenceEqual(expected,StringComparer.OrdinalIgnoreCase) ||
-                       Directory.GetFiles(ConfigRoot).Length!=1 ||
-                       Directory.GetDirectories(InstallRoot).Length!=0 ||
+                    if(!binaries.SequenceEqual(expected,StringComparer.OrdinalIgnoreCase))
+                        return "SCM_REMOVED_PROGRAM_FILES_NOT_EXACT_DENY";
+                    // Native tunnel creates log.bin beside the exact
+                    // protected config. Neither name nor location is a
+                    // caller input. Reject all other unexpected files.
+                    string runtimeLog=Path.Combine(ConfigRoot,"log.bin");
+                    var configFiles=Directory.GetFiles(ConfigRoot)
+                        .Select(Path.GetFileName).OrderBy(x=>x).ToArray();
+                    var exactNames=(File.Exists(runtimeLog)
+                        ? new[]{AlphaPreflight.FixedName+".conf","log.bin"}
+                        : new[]{AlphaPreflight.FixedName+".conf"})
+                        .OrderBy(x=>x).ToArray();
+                    if(!configFiles.SequenceEqual(exactNames,
+                        StringComparer.OrdinalIgnoreCase))
+                        return "SCM_REMOVED_CONFIG_FILE_COUNT_NOT_EXACT_DENY";
+                    if(Directory.GetDirectories(InstallRoot).Length!=0 ||
                        Directory.GetDirectories(ConfigRoot).Length!=0)
-                        return "SCM_REMOVED_BUT_STAGING_NOT_EXACT";
+                        return "SCM_REMOVED_UNEXPECTED_STAGING_SUBDIRECTORY_DENY";
+                    if(File.Exists(runtimeLog) && !IsOwnedNativeLog(runtimeLog))
+                        return "SCM_REMOVED_NATIVE_LOG_TRUST_NOT_VERIFIED_DENY";
                     foreach(string name in expected)
                         File.Delete(Path.Combine(InstallRoot,name));
                     File.Delete(StagedConfig);
+                    if(File.Exists(runtimeLog)) File.Delete(runtimeLog);
                     Directory.Delete(InstallRoot,false);
                     Directory.Delete(ConfigRoot,false);
                 } catch {

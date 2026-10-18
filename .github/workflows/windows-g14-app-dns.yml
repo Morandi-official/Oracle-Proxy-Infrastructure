@@ -22,6 +22,11 @@ on:
       - 'clients/windows/lab/Invoke-R75SystemExpiryWorker.ps1'
       - 'clients/windows/lab/Invoke-R75RegisterCrashScheduledRecovery.ps1'
       - 'clients/windows/lab/Invoke-R75CleanupOwnedTask.ps1'
+      - 'clients/windows/lab/Invoke-R89SystemExpiryWorker.ps1'
+      - 'clients/windows/lab/Invoke-R89RegisterCrashStartupRecovery.ps1'
+      - 'clients/windows/lab/Invoke-R89CleanupOwnedTask.ps1'
+      - 'clients/windows/lab/Invoke-R89SystemStageCleanup.ps1'
+      - 'clients/windows/lab/Invoke-R89RegisterSystemStageCleanup.ps1'
       - 'clients/windows/lab/Test-R79NativePreactivationReadOnly.ps1'
       - 'clients/windows/lab/Test-R80NativeRuntimeRouteGate.ps1'
       - 'clients/windows/lab/Test-R70NativeLiveRouteScope.ps1'
@@ -37,7 +42,7 @@ concurrency:
 
 jobs:
   scm-controlled-by-gui:
-    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017' || github.event.pull_request.head.ref == 'test/r70-live-native-route-dns-20261017' || github.event.pull_request.head.ref == 'test/r73-ci-native-manager-crash-recovery-20261017' || github.event.pull_request.head.ref == 'test/r74-ci-native-timed-expiry-20261017' || github.event.pull_request.head.ref == 'test/r75-ci-system-task-expiry-20261017' || github.event.pull_request.head.ref == 'test/r79-native-signed-bundle-preflight-20261017' || github.event.pull_request.head.ref == 'test/r80-native-enforced-inner-scope-20261017')
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'test/r65-g14-authenticated-scm-wgnt-20261017' || github.event.pull_request.head.ref == 'test/r69-native-narrow-route-audit-20261017' || github.event.pull_request.head.ref == 'test/r70-live-native-route-dns-20261017' || github.event.pull_request.head.ref == 'test/r73-ci-native-manager-crash-recovery-20261017' || github.event.pull_request.head.ref == 'test/r74-ci-native-timed-expiry-20261017' || github.event.pull_request.head.ref == 'test/r75-ci-system-task-expiry-20261017' || github.event.pull_request.head.ref == 'test/r79-native-signed-bundle-preflight-20261017' || github.event.pull_request.head.ref == 'test/r80-native-enforced-inner-scope-20261017' || github.event.pull_request.head.ref == 'test/r89-native-startup-scheduler-ci-20261018')
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -120,12 +125,23 @@ jobs:
             $env:ORACLE_R73_RECOVERY = 'CI_ONLY'
             $env:ORACLE_R75_TASK = 'CI_ONLY'
           }
+          if ('${{ github.head_ref }}' -eq 'test/r89-native-startup-scheduler-ci-20261018') {
+            $env:ORACLE_R73_RECOVERY = 'CI_ONLY'
+            $env:ORACLE_R89_TASK = 'CI_ONLY'
+          }
           $env:RUNNER_ENVIRONMENT = 'forbidden'
           $rejected = $false
           try { & ./clients/windows/lab/Test-R70NativeLiveRouteScope.ps1 } catch { $rejected = $true }
           if (-not $rejected) { throw 'R70 host denial bypassed' }
           $env:RUNNER_ENVIRONMENT = 'github-hosted'
           ./clients/windows/lab/run-admin-controlled-scm.ps1
+      - name: ALWAYS remove only the exact R89 owned startup SYSTEM task
+        if: always() && github.event.pull_request.head.ref == 'test/r89-native-startup-scheduler-ci-20261018'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:ORACLE_R89_TASK = 'CI_ONLY'
+          ./clients/windows/lab/Invoke-R89CleanupOwnedTask.ps1
       - name: ALWAYS remove only the exact R75 owned SYSTEM scheduled task
         if: always() && github.event.pull_request.head.ref == 'test/r75-ci-system-task-expiry-20261017'
         shell: pwsh
@@ -136,7 +152,12 @@ jobs:
       - name: ALWAYS remove only disposable SCM services, native DLLs and secrets
         if: always()
         shell: pwsh
-        run: ./clients/windows/lab/cleanup-scm-lab.ps1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ('${{ github.head_ref }}' -eq 'test/r89-native-startup-scheduler-ci-20261018') {
+            $env:ORACLE_R89_STRICT_CLEANUP = 'CI_ONLY'
+          }
+          ./clients/windows/lab/cleanup-scm-lab.ps1
       - name: ALWAYS verify IPv4/IPv6 default routes were not changed
         if: always()
         shell: pwsh

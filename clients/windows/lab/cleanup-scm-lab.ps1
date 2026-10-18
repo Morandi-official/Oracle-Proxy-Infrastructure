@@ -16,18 +16,31 @@ if (Test-Path $marker -PathType Leaf) {
             & sc.exe delete $svc | Out-Null
         }
     }
-    for ($attempt = 0; $attempt -lt 5; $attempt++) {
-        try {
-            if (Test-Path $root) {
-                Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
-            }
-            break
+    # The native CI stage uses protected per-file NTFS ACLs, some of which
+    # correctly deny removal by the GitHub runner administrator. Do not relax
+    # ACLs or attempt recursive admin deletion of that strict R89 stage.
+    # Instead verify one exact SYSTEM-owned task, allowlist every staged
+    # entry, and require OS-confirmed file/directory removal.
+    $r89Strict = $env:ORACLE_R89_STRICT_CLEANUP -eq 'CI_ONLY'
+    if ($r89Strict) {
+        & ./clients/windows/lab/Invoke-R89RegisterSystemStageCleanup.ps1
+        if (Test-Path -LiteralPath $root) {
+            throw 'R89_FAIL: protected native stage survived SYSTEM cleanup'
         }
-        catch {
-            if ($attempt -eq 4) {
-                Write-Warning 'Temporary lab files remain until GitHub discards the ephemeral VM'
+    } else {
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            try {
+                if (Test-Path $root) {
+                    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+                }
+                break
             }
-            Start-Sleep -Milliseconds 500
+            catch {
+                if ($attempt -eq 4) {
+                    Write-Warning 'Temporary lab files remain until GitHub discards the ephemeral VM'
+                }
+                Start-Sleep -Milliseconds 500
+            }
         }
     }
     Remove-Item -LiteralPath $marker -Force
@@ -35,6 +48,15 @@ if (Test-Path $marker -PathType Leaf) {
 # Delete ephemeral private key file even if staging failed.
 $key = Join-Path $env:RUNNER_TEMP 'wg-lab-session.bin'
 if (Test-Path $key) { Remove-Item -LiteralPath $key -Force }
+if ($env:ORACLE_R89_STRICT_CLEANUP -eq 'CI_ONLY') {
+    if ((Test-Path -LiteralPath $root) -or
+        (Test-Path -LiteralPath $marker) -or
+        (Test-Path -LiteralPath $key) -or
+        (Get-Service -Name 'OracleProxyLabManager' -ErrorAction SilentlyContinue)) {
+        throw 'R89_FAIL: exact staged directory, key, marker or manager SCM residual'
+    }
+    Write-Host 'R89_EXACT_NATIVE_STAGE_KEYS_AND_MANAGER_RESIDUAL_ZERO_PASS'
+}
 # Confirm the only route prefixes this lab can add are absent once stopped.
 # Network adapter removal may lag SCM Stop/Delete. Wait briefly for the
 # actual IPv4/IPv6 kernel routes to disappear, not just the service state.

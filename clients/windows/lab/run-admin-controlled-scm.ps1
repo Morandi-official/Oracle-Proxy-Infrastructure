@@ -254,6 +254,48 @@ try {
         Write-Host 'R15_LIVE_TUNNEL_WFP_DENY_PASS: encrypted peers and synthetic app/DNS worked while narrow external TCP blocked'
     }
 
+    # R110 actual all-application, fixed-target OS WFP verification while
+    # both official native WireGuardNT SCM peers remain online in disposable CI.
+    if ($env:ORACLE_R110_INTEGRATED_WFP) {
+        if ($env:ORACLE_R110_INTEGRATED_WFP -ne 'CI_ONLY' -or
+            $env:GITHUB_ACTIONS -ne 'true' -or
+            $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
+            $env:GITHUB_HEAD_REF -ne 'test/r110-native-wgnt-wfp-coexist-20261018' -or
+            -not $env:ORACLE_R15_GUARD_NAME -or
+            -not $createdServices.Contains($managerName) -or
+            -not $createdServices.Contains('WireGuardTunnel$lab-peer-a') -or
+            -not $createdServices.Contains('WireGuardTunnel$lab-peer-b')) {
+            throw 'R110_REFUSED: missing CI-authorized manager, guarded tunnel services or scope'
+        }
+        foreach ($peer in @('lab-peer-a','lab-peer-b')) {
+            if ((Get-Service -Name ('WireGuardTunnel$' + $peer) -ErrorAction Stop).Status -ne 'Running') {
+                throw 'R110_REFUSED: native peer not running before all-app guard'
+            }
+        }
+        if (Get-NetFirewallRule -Name 'OracleProxy-R31-CI-AllApps-FixedDestination' -ErrorAction SilentlyContinue) {
+            throw 'R110_REFUSED: preexisting all-app guard not owned by this job'
+        }
+        $env:ORACLE_R31_NARROW_OS_WFP='CI_ONLY'
+        $env:ORACLE_R46_PACKET_PROBE='CI_ONLY'
+        try {
+            & ./lab/wfp-scoped/Test-R31-AllProcessDualStack.ps1
+            if (-not $?) { throw 'R110_FAIL: real OS all-app WFP and packet witness did not pass' }
+        }
+        finally {
+            Remove-Item Env:ORACLE_R31_NARROW_OS_WFP -ErrorAction SilentlyContinue
+            Remove-Item Env:ORACLE_R46_PACKET_PROBE -ErrorAction SilentlyContinue
+        }
+        foreach ($peer in @('lab-peer-a','lab-peer-b')) {
+            if ((Get-Service -Name ('WireGuardTunnel$' + $peer) -ErrorAction Stop).Status -ne 'Running') {
+                throw 'R110_FAIL: real native peer lifecycle did not survive scoped WFP test'
+            }
+        }
+        & $observer $env:WG_LAB_DLL
+        if ($LASTEXITCODE -ne 0) { throw 'R110_FAIL: signed WireGuardNT peer handshake lost after guard release' }
+        Write-Host 'R110_REAL_TWO_PEERS_AND_ALLAPP_OS_WFP_FIXED_DESTINATION_PASS'
+        Write-Host 'R110_FULL_DEVICE_DEFAULT_EGRESS_FAILCLOSE_AND_UU_NOT_TESTED'
+    }
+
     if ($env:ORACLE_R19_CRASH_TEST) {
         # R19: kill ONLY the manager service this disposable job just created,
         # never any user/system service. The two native tunnel peers continue

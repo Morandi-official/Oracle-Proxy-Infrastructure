@@ -26,41 +26,31 @@ internal static class CiEmbeddedServiceTrial
             EmbeddedWireGuardBridge.ReadServiceState() != "Absent")
             return 3;
 
-        bool attempted = false;
-        string started = "NOT_TESTED";
-        string removed = "NOT_TESTED";
+        bool startVerified = false;
+        bool cleanupVerified = false;
         try
         {
-            attempted = true;
-            started = EmbeddedWireGuardBridge.Install(config);
-            if (started != "OFFICIAL_WIREGUARD_COMMAND_OK" ||
-                EmbeddedWireGuardBridge.ReadServiceState() != "Running")
+            string started = EmbeddedWireGuardBridge.Install(config);
+            startVerified = started == "OFFICIAL_WIREGUARD_COMMAND_OK" &&
+                EmbeddedWireGuardBridge.ReadServiceState() == "Running";
+            if (startVerified)
             {
-                Console.WriteLine("R113_NATIVE_OWNED_SERVICE_START_NOT_VERIFIED_DENY");
-                return 6;
+                Console.WriteLine("R113_REAL_LOCAL_WINDOWS_NATIVE_SCM_TUNNEL_RUNNING");
+                // A running service proves neither peer handshake nor WAN.
+                Thread.Sleep(3000);
             }
-            // Both signed kernel-driver and live SCM lifecycle observed here;
-            // this is NOT a peer handshake, packet safety or Internet proof.
-            Console.WriteLine("R113_REAL_LOCAL_WINDOWS_NATIVE_SCM_TUNNEL_RUNNING");
-            Thread.Sleep(3000);
-            return 0;
+            else Console.WriteLine("R113_NATIVE_OWNED_SERVICE_START_NOT_VERIFIED_DENY");
         }
         finally
         {
-            if (attempted)
-            {
-                removed = EmbeddedWireGuardBridge.Uninstall();
-                if (removed == "OFFICIAL_WIREGUARD_COMMAND_OK" &&
-                    EmbeddedWireGuardBridge.ReadServiceState() == "Absent")
-                    Console.WriteLine("R113_OWNED_NATIVE_SERVICE_STOP_AND_EXACT_CLEANUP_PASS");
-                else
-                {
-                    Console.WriteLine("R113_OWNED_NATIVE_SERVICE_CLEANUP_UNVERIFIED_DENY");
-                    // If the Windows SCM ever fails to stop, the surrounding
-                    // disposable CI runner MUST refuse success and be discarded.
-                    Environment.ExitCode = 8;
-                }
-            }
+            // Always attempt exact-owned removal, even after a failed start.
+            string removed = EmbeddedWireGuardBridge.Uninstall();
+            cleanupVerified = removed == "OFFICIAL_WIREGUARD_COMMAND_OK" &&
+                EmbeddedWireGuardBridge.ReadServiceState() == "Absent";
+            Console.WriteLine(cleanupVerified
+                ? "R113_OWNED_NATIVE_SERVICE_STOP_AND_EXACT_CLEANUP_PASS"
+                : "R113_OWNED_NATIVE_SERVICE_CLEANUP_UNVERIFIED_DENY");
         }
+        return startVerified && cleanupVerified ? 0 : 8;
     }
 }

@@ -8,7 +8,7 @@ import sys
 import types
 
 from windows_boot_evtx_witness import (
-    BootRecord, judge, parse_event_xml, summarize_safe_boot_counters, records_from_evtx
+    BootRecord, judge, parse_event_xml, summarize_safe_boot_counters, records_from_evtx, event_systemtime_utc
 )
 def at(minute=0):
     return datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc) + timedelta(minutes=minute)
@@ -37,6 +37,24 @@ class R99HostBootWitnessTests(unittest.TestCase):
             new_digest,self.new if after is None else after,
             at(0) if start is None else start,
             at(4) if end is None else end)
+    def test_windows_python_evtx_naive_systemtime_is_utc_not_local_time(self):
+        # Debian/Ubuntu python-evtx calls datetime.isoformat(' '), and
+        # Windows SystemTime is UTC without an explicit zone in that output.
+        raw = "2026-10-18 08:01:00.000000"
+        stamp = event_systemtime_utc(raw)
+        self.assertEqual(stamp, at(1))
+        self.assertEqual(parse_event_xml(xml(
+            "Microsoft-Windows-Kernel-General", 12, tm=raw)).utc, at(1))
+        self.assertEqual(parse_event_xml(xml(
+            "EventLog", 6005, tm="2026-10-18 08:02:00")).utc, at(2))
+        self.assertEqual(event_systemtime_utc(
+            "2026-10-18T08:01:00.0000000Z"), at(1))
+        self.assertIsNone(event_systemtime_utc(
+            "2026-10-18T08:01:00+09:00"))
+        self.assertIsNone(event_systemtime_utc(
+            "10/18/2026 08:01:00"))
+        self.assertIsNone(event_systemtime_utc(""))
+
     def test_real_fresh_both_sources_is_only_kernel_boot_witness(self):
         v=self.judge()
         self.assertEqual(v.code,"R99_FRESH_WINDOWS_KERNEL_AND_EVENTLOG_BOOT_WITNESSED")
@@ -72,7 +90,8 @@ class R99HostBootWitnessTests(unittest.TestCase):
     def test_malformed_xml_timezone_and_identifier_refused(self):
         for text in (
            "<Event>", xml("Microsoft-Windows-Kernel-General",12,record_id=0),
-           xml("Microsoft-Windows-Kernel-General",12,tm="2026-10-18T08:01:00"),
+           xml("Microsoft-Windows-Kernel-General",12,tm="10/18/2026 08:01:00"),
+           xml("Microsoft-Windows-Kernel-General",12,tm="2026-10-18T08:01:00+09:00"),
            xml("Microsoft-Windows-Kernel-General",11),
            xml("Microsoft-Windows-Kernel-General",12,tm="not-a-time")
         ):

@@ -27,3 +27,7 @@ The source tests reject wrong operation order, wildcard or foreign third-party r
 This work neither replaces production WireSock nor proves signed software installation, actual reboot, WFP pre-login leak prevention, cross-host public WireGuard, real UU continuity, or cert revocation infrastructure. Actual acquisition of a real Windows code-signing identity, creating a recoverable noncritical test VM, configuring a separate external peer, touching Oracle, or running on the second PC each requires prior independent authorization where applicable.
 
 GA Issue #34 remains OPEN; do not bypass Windows execution policies or ship R86 unsigned scripts as a trusted installer.
+
+## R92 signed-independent reboot boundary already merged
+
+R92 PR #122 was merged to main as `67f1cb70170a7f7de85c5d090dfded0ed2a924ea`; its Windows CI validated 86 deny-only negative checks and confirmed no actual GitHub-hosted Windows reboot. R93 deliberately consumes none of those self-reported checks as production release authority. A signer and independent boot/WFP/UU evidence must still be genuinely obtained and reviewed before any signed installer can be released.

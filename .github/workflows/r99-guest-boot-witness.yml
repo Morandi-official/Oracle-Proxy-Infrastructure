@@ -38,6 +38,12 @@ jobs:
             }
           done
           grep -Fq -- '-nic none' lab/cloud-windows-r99/run_guest_boot_witness.sh
+          grep -Fq -- '-device nvme,drive=r99nvme0' lab/cloud-windows-r99/run_guest_boot_witness.sh
+          if grep -Fq -- 'if=ide' lab/cloud-windows-r99/run_guest_boot_witness.sh; then
+            echo 'R99_REFUSED_FALLBACK_TO_PREVIOUS_Q35_IDE_CONFIGURATION'
+            exit 6
+          fi
+          echo 'R99_NATIVE_NVME_GUEST_BOOT_PATH_CONFIG_STATIC_PASS'
           echo 'R99_QEMU_CONTROL_AND_NO_GUEST_NIC_STATIC_PRECHECK_PASS'
           echo 'R99_BOOT_WITNESS_NEGATIVE_MATRIX_PASS'
           echo 'R99_WINDOWS_GUEST_RUNNING_IN_THIS_TEST=false'

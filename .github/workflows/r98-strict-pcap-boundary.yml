@@ -1,0 +1,28 @@
+name: R98 strict passive PCAP parser negative regression
+
+on:
+  pull_request:
+    paths:
+      - 'release/r94_pcap_triage.py'
+      - 'release/test_r94_pcap_triage.py'
+      - 'docs/r98-strict-packet-shape-checks.md'
+      - '.github/workflows/r98-strict-pcap-boundary.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  no-io-udp-and-ipv6-negative-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reject malformed UDP/TCP datagrams and falsely permitted underlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B -m unittest discover -s release -p 'test_r94_pcap_triage.py' -v
+          echo 'R98_MALFORMED_UDP_NOT_WIREGUARD_SHAPE_PASS'
+          echo 'R98_NO_WFP_OR_NETWORK_ACTIONS'

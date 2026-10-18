@@ -77,3 +77,6 @@ jobs:
           Write-Host 'R91_END_USER_ARTIFACT_UPLOADED=false'
           Write-Host 'R91_WINDOWS_INSTALLER_CREATED=false'
           Write-Host 'R91_GA_OR_FIELD_EXECUTION_AUTHORIZED=false'
+          # Negative gh verify assertions intentionally return a nonzero native
+          # exit code. Explicitly neutralize only AFTER all denial checks pass.
+          exit 0

@@ -215,6 +215,8 @@ stop() {
 
 r99_host_start_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 launch A
+/usr/bin/python3 -B lab/cloud-windows-r99/qmp_attached_disk_ro.py \
+    --qmp "$work/qmp.sock" --expected-overlay "$work/overlay.qcow2"
 # First Windows Server evaluation VHD boot can require a long unattended
 # initialization, so allow five minutes before the independent host reset.
 sleep 300

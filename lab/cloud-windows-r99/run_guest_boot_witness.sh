@@ -60,7 +60,7 @@ if [[ ! -e /dev/kvm ]] ||
 fi
 sudo -n apt-get update -qq
 sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -qq -y \
-  --no-install-recommends qemu-system-x86 qemu-utils ovmf acl unzip file util-linux ntfs-3g kmod python3-venv >/dev/null
+  --no-install-recommends qemu-system-x86 qemu-utils ovmf acl unzip file util-linux ntfs-3g kmod python3-evtx >/dev/null
 if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
   sudo -n setfacl -m "u:$(id -un):rw" /dev/kvm
   acl=true
@@ -126,16 +126,21 @@ echo R97_READONLY_BASE_AND_DISPOSABLE_COW_DISK_CREATED
 # No guest agent is present: never inject a serial responder, executables
 # or script policy changes merely to fabricate a boot acknowledgement.
 # The Windows kernel and EventLog service log their boot events natively.
-echo 'python-evtx==0.8.1 --hash=sha256:46336b854dbe0a1e75873ae30db5f583c9d2262ff1d21bdb6b1e624ecfa18ddb' > "$work/evtx-requirements.txt"
-python3 -m venv "$work/venv"
-"$work/venv/bin/python" -m pip install -q --no-deps --require-hashes -r "$work/evtx-requirements.txt"
+# Ubuntu official apt signs and installs EVTX parser with declared runtime
+# dependencies; prior --no-deps PyPI wheel failed on ModuleNotFoundError.
+# Restrict to the reviewed Ubuntu Noble source version family.
+evtx_version=$(dpkg-query -W -f='\u0024{Version}' python3-evtx)
+if [[ "$evtx_version" != 0.7.4-* ]]; then
+  echo R99_REFUSED_UNREVIEWED_SYSTEM_EVTX_PARSER_VERSION; exit 6
+fi
+/usr/bin/python3 -B -c 'from Evtx.Evtx import Evtx; from Evtx.Views import evtx_record_xml_view; print("R99_OFFICIAL_APT_EVTX_MODULE_IMPORT_PASS")'
 # R99 alternate host-only read path: QEMU converts official VHD to sparse
 # RAW while guest is OFF, then an EXACT-OWNED loop device mounts NTFS RO.
 # GitHub's separate libguestfs appliance failed even on an empty RAW disk,
 # so we do not rely on it or weaken any OS policy.
 mkdir -p "$work/mnt"
 qemu-img convert -q -O raw -S 4k "$base" "$work/before.raw"
-if "$work/venv/bin/python" lab/cloud-windows-r99/loop_readonly_system_evtx.py \
+if /usr/bin/python3 -B lab/cloud-windows-r99/loop_readonly_system_evtx.py \
     --raw "$work/before.raw" --output "$work/system-before.evtx" --mount "$work/mnt"; then
   echo R99_BASELINE_GUEST_WINDOWS_EVENTLOG_EXTRACTED_READ_ONLY
 else
@@ -216,7 +221,7 @@ r99_host_end_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 # Linux host is independent of guest: QEMU has QUIT already.
 # Convert only the stopped, disposable overlay to a sparse raw clone.
 qemu-img convert -q -O raw -S 4k "$work/overlay.qcow2" "$work/after.raw"
-if ! "$work/venv/bin/python" lab/cloud-windows-r99/loop_readonly_system_evtx.py \
+if ! /usr/bin/python3 -B lab/cloud-windows-r99/loop_readonly_system_evtx.py \
     --raw "$work/after.raw" --output "$work/system-after.evtx" --mount "$work/mnt"; then
   echo R99_GUEST_SYSTEM_EVENTLOG_NOT_ACCESSIBLE_NO_BOOT_CLAIM
   exit 6
@@ -226,7 +231,7 @@ args=(--after "$work/system-after.evtx" --start-utc "$r99_host_start_utc" --end-
 if [[ -f "$work/system-before.evtx" ]]; then
   args+=(--before "$work/system-before.evtx")
 fi
-if ! "$work/venv/bin/python" lab/cloud-windows-r99/windows_boot_evtx_witness.py "${args[@]}"; then
+if ! /usr/bin/python3 -B lab/cloud-windows-r99/windows_boot_evtx_witness.py "${args[@]}"; then
   echo R99_CANNOT_AUTHENTICATE_REAL_WINDOWS_NT_BOOT_NO_DRIVER_STAGE
   exit 6
 fi

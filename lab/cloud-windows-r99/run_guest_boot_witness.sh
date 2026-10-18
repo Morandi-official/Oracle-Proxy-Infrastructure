@@ -34,6 +34,19 @@ acl=false
 cleanup() {
   set +e
   if [[ -n "$qpid" ]]; then kill "$qpid" 2>/dev/null; wait "$qpid" 2>/dev/null; fi
+  # Only release read-only Linux loop devices whose backing file equals
+  # a fixed R99 RAW clone inside this exact job-owned temporary directory.
+  for raw in "$work/before.raw" "$work/after.raw"; do
+    if [[ -f "$raw" ]]; then
+      while IFS= read -r ldev; do
+        if [[ "$ldev" =~ ^/dev/loop[0-9]+$ ]] &&
+           [[ "$(sudo -n losetup -l -n -O BACK-FILE "$ldev" 2>/dev/null)" == "$raw" ]]; then
+          sudo -n umount "$work/mnt" >/dev/null 2>&1 || :
+          sudo -n losetup -d "$ldev" >/dev/null 2>&1 || :
+        fi
+      done < <(sudo -n losetup -j "$raw" -n -O NAME 2>/dev/null)
+    fi
+  done
   if $acl; then sudo -n setfacl -x "u:$(id -un)" /dev/kvm >/dev/null 2>&1 || :; fi
   if [[ -d "$work" && "$work" == "$RUNNER_TEMP"/r97-ephemeral.* ]]; then rm -rf -- "$work"; fi
   echo R97_NO_PERSISTED_IMAGE_ARTIFACT_OR_CACHE

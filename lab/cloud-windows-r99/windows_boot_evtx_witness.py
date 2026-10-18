@@ -12,9 +12,37 @@ from hashlib import sha256
 from pathlib import Path
 import argparse
 import json
+import re
 import xml.etree.ElementTree as ET
 
 NS = "{http://schemas.microsoft.com/win/2004/08/events/event}"
+# python-evtx 0.7.4 renders the binary SYSTEMTIME with datetime.isoformat(' '),
+# which yields an offset-naive string such as "2026-10-18 09:10:11.123456".
+# Windows TimeCreated.SystemTime is defined as system event UTC time. Interpret
+# ONLY this exact binary-SYSTEMTIME serialization as UTC. Never infer the
+# host's local timezone or accept ambiguous locale timestamps.
+NAIVE_EVTX_UTC = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?$"
+)
+
+
+def event_systemtime_utc(raw: str) -> datetime | None:
+    if not isinstance(raw, str) or not 19 <= len(raw) <= 40:
+        return None
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            if not NAIVE_EVTX_UTC.fullmatch(raw):
+                return None
+            value = value.replace(tzinfo=timezone.utc)
+        # Windows event SystemTime is always UTC, including when python-evtx
+        # serializes its raw binary SYSTEMTIME without a timezone suffix.
+        if value.utcoffset() != timedelta(0):
+            return None
+        return value.astimezone(timezone.utc)
+    except (ValueError, OverflowError, TypeError):
+        return None
+
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_RECORDS = 50000
 MAX_WINDOW_SECONDS = 20 * 60
@@ -81,14 +109,13 @@ def parse_event_xml(value: str) -> BootRecord | None:
         record_id = int(seq.text or "0")
         if record_id <= 0:
             return None
-        timestamp = tc.attrib.get("SystemTime", "")
-        if not timestamp.endswith("Z"):
+        # SystemTime's UTC meaning survives the python-evtx output style:
+        # it may have Z, an explicit +00:00 or the library's naive space-ISO
+        # representation. No host-local offset inference is permitted.
+        utc = event_systemtime_utc(tc.attrib.get("SystemTime", ""))
+        if utc is None:
             return None
-        # Windows timestamp may carry 7 decimal places. datetime supports 6.
-        utc = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if utc.tzinfo is None:
-            return None
-        return BootRecord(record_id, event_id, provider, utc.astimezone(timezone.utc))
+        return BootRecord(record_id, event_id, provider, utc)
     except (ValueError, TypeError, ET.ParseError, OverflowError):
         return None
 
@@ -133,18 +160,15 @@ def records_from_evtx(path: Path, *, scan: dict | None = None, host_start: datet
                     if host_start is not None and host_end is not None:
                         created = system.find(NS + "TimeCreated")
                         raw_time = created.get("SystemTime") if created is not None else ""
-                        try:
-                            stamp = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
-                            if stamp.tzinfo is None:
-                                event_timing["unreadable"] += 1
-                            elif stamp < host_start - timedelta(seconds=40):
-                                event_timing["before"] += 1
-                            elif stamp > host_end + timedelta(seconds=40):
-                                event_timing["after"] += 1
-                            else:
-                                event_timing["within"] += 1
-                        except (ValueError, OverflowError, TypeError):
+                        stamp = event_systemtime_utc(raw_time)
+                        if stamp is None:
                             event_timing["unreadable"] += 1
+                        elif stamp < host_start - timedelta(seconds=40):
+                            event_timing["before"] += 1
+                        elif stamp > host_end + timedelta(seconds=40):
+                            event_timing["after"] += 1
+                        else:
+                            event_timing["within"] += 1
             except ET.ParseError:
                 pass
             parsed = parse_event_xml(xml_value)

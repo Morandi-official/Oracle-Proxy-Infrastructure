@@ -205,7 +205,7 @@ jobs:
             throw 'R112 official WireGuardNT binary license text absent or altered'
           }
           Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $d 'WIREGUARDNT_BINARY_LICENSE.txt')
-          Copy-Item -LiteralPath './docs/r112-wireguard-embedding-mit-license.txt' -Destination (Join-Path $d 'EMBEDDABLE_TUNNEL_MIT_LICENSE.txt','BOUNCYCASTLE_MIT_LICENSE.md')
+          Copy-Item -LiteralPath './docs/r112-wireguard-embedding-mit-license.txt' -Destination (Join-Path $d 'EMBEDDABLE_TUNNEL_MIT_LICENSE.txt')
           Copy-Item -LiteralPath './docs/r114-bouncycastle-license.md' -Destination (Join-Path $d 'BOUNCYCASTLE_MIT_LICENSE.md')
           $notices=@(
             'Oracle Proxy R112 unofficial experimental developer package; not endorsed by WireGuard LLC.',
@@ -218,7 +218,7 @@ jobs:
             'This test package has never demonstrated a real public-server handshake, safe off, WFP fail-close or UU compatibility.'
           )
           $notices | Set-Content -LiteralPath (Join-Path $d 'UPSTREAM_NOTICES.md') -Encoding utf8
-          $names=@('OracleProxy.WgAlpha.exe','tunnel.dll','wireguard.dll','READ_ME_FIRST.md','UPSTREAM_NOTICES.md','WIREGUARDNT_BINARY_LICENSE.txt','EMBEDDABLE_TUNNEL_MIT_LICENSE.txt')
+          $names=@('OracleProxy.WgAlpha.exe','tunnel.dll','wireguard.dll','READ_ME_FIRST.md','UPSTREAM_NOTICES.md','WIREGUARDNT_BINARY_LICENSE.txt','EMBEDDABLE_TUNNEL_MIT_LICENSE.txt','BOUNCYCASTLE_MIT_LICENSE.md')
           $items=@(Get-ChildItem -LiteralPath $d -File)
           if($items.Count -ne $names.Count -or @($items|Where-Object { $_.Name -notin $names }).Count -ne 0){
             throw 'R112 unexpected native artifact payload'

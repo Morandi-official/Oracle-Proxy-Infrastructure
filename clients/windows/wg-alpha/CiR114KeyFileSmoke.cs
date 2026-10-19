@@ -12,8 +12,9 @@ internal static class CiR114KeyFileSmoke
            Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" ||
            Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" ||
            Environment.GetEnvironmentVariable("RUNNER_OS")!="Windows" ||
-           Environment.GetEnvironmentVariable("GITHUB_HEAD_REF")!=
-                "test/r114-integrated-offline-wireguard-keygen-20261019" ||
+           Environment.GetEnvironmentVariable("GITHUB_HEAD_REF") is not (
+                "test/r114-integrated-offline-wireguard-keygen-20261019" or
+                "test/r114-single-layer-artifact-20261019") ||
            Environment.GetEnvironmentVariable("ORACLE_R114_EXPLICIT_CI")!="CI_ONLY")
             return 3;
         string? temp=Environment.GetEnvironmentVariable("RUNNER_TEMP");

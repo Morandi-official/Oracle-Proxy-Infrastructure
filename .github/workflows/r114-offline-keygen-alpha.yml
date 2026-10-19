@@ -1,4 +1,4 @@
-name: R114 standalone WireGuard offline local X25519 key generation and Windows Alpha
+name: R114 one-extraction Artifact packaging, offline WireGuard keys Windows Alpha
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   native-bundled-alpha:
-    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r114-integrated-offline-wireguard-keygen-20261019'
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r114-single-layer-artifact-20261019'
     runs-on: windows-latest
     timeout-minutes: 28
     steps:
@@ -243,10 +243,14 @@ jobs:
           }
           Write-Host 'R112_BUNDLED_WINDOWS_APP_WITH_OFFICIAL_PINNED_NATIVE_ENGINE_PACKAGE_PASS'
           Write-Host 'R112_UNSIGNED_NOT_A_WIRESOCK_REPLACEMENT_AND_NO_REAL_TUNNEL_TEST'
-      - name: Upload only experimental no-external-installer embedded Alpha
+      # GitHub Actions wraps uploaded files in an Artifact ZIP automatically.
+      # Upload vetted payload FILES directly: only ONE unzip by the user.
+      # The inner ZIP above is created exclusively for CI checksum/roundtrip
+      # verification and is NOT uploaded.
+      - name: Upload direct portable files, exactly one extraction
         uses: actions/upload-artifact@v4
         with:
-          name: OracleProxy-R114-Offline-Keys-Standalone-Windows-Alpha-UNSIGNED
-          path: ./dist/r114/OracleProxy-R114-Standalone-WireGuard-OfflineKeys-UNSIGNED-Alpha.zip
+          name: OracleProxy-R114-Offline-Keys-Single-Extraction-UNSIGNED
+          path: ./dist/r114/portable/*
           retention-days: 7
           if-no-files-found: error

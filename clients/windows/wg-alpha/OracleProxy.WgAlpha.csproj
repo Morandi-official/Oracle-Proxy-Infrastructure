@@ -20,11 +20,19 @@
   <ItemGroup Condition="'$(EnableR113CiTrial)' != 'true'">
     <Compile Remove="CiEmbeddedServiceTrial.cs" />
   </ItemGroup>
+  <PropertyGroup>
+    <EnableR114KeyCiTrial Condition="'$(EnableR114KeyCiTrial)' == ''">false</EnableR114KeyCiTrial>
+    <DefineConstants Condition="'$(EnableR114KeyCiTrial)' == 'true'">$(DefineConstants);ENABLE_R114_KEY_CI_TRIAL</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(EnableR114KeyCiTrial)' != 'true'">
+    <Compile Remove="CiR114KeyFileSmoke.cs" />
+  </ItemGroup>
   <ItemGroup>
     <Compile Remove="OfficialWireGuardBridge.cs" />
     <Compile Include="../service-host/NativeDriverTrust.cs" Link="NativeDriverTrust.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
   </ItemGroup>
 </Project>

@@ -4,6 +4,15 @@
 released VPN product.** Do not use these development binaries to replace
 WireSock or for important UU remote sessions.
 
+Latest product assessment and next delivery milestones (2026-10-20):
+[Windows + Oracle + Cloudflare product status](docs/product-delivery-status-20261020.md).
+The R114 experimental portable build contains the embedded native engine and
+offline key generation; it is separate from the default read-only preview below.
+A new [Cloudflare administrator console](server/admin-cloudflare/README.md)
+implements authenticated read-only diagnostics and audit, with deployment and
+restricted Oracle status-forwarding workflows. It is not yet a deployed service
+or a Peer/configuration management implementation.
+
 This repository now hosts the working source baseline consolidated from the
 previous stacked engineering branches. The default Windows GUI build is
 read-only for network effects, not a production connect/disconnect client.

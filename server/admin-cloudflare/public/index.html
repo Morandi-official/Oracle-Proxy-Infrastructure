@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Oracle Proxy · 管理控制台</title><link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside>
+    <div class="brand"><span class="logo">O</span><div>ORACLE PROXY<small>基础设施控制台</small></div></div>
+    <nav aria-label="控制台导航">
+      <a href="#overview" class="active">◈ 服务概览</a><a href="#devices">▤ 设备与 Peer</a>
+      <a href="#audit">≡ 操作审计</a><a href="#configuration">⚙ 服务器配置</a>
+    </nav>
+    <div class="sidebar-foot"><span class="dot"></span> 管理平面 / HTTPS<small>访问由 Cloudflare Access 验证</small></div>
+  </aside>
+  <main>
+    <header><span>基础设施 <b>/</b> Oracle 主节点</span><span id="identity">正在验证管理员身份…</span></header>
+    <section id="overview">
+      <div class="heading"><div><p class="eyebrow">NETWORK OVERVIEW</p><h1>让连接状态清晰可见。</h1><p class="muted">查看 Oracle 出口服务与最近的诊断记录。</p></div><button id="refresh" type="button">↻ 刷新状态</button></div>
+      <div id="notice" class="notice" role="status" aria-live="polite">正在读取服务器状态…</div>
+      <div class="metrics">
+        <article><span>WireGuard 服务</span><strong id="service">未知</strong><small>Oracle · wg-quick@wg0</small></article>
+        <article><span>隧道接口</span><strong id="interface">未知</strong><small>服务器接口存在性</small></article>
+        <article><span>UDP 51820</span><strong id="listener">未知</strong><small>监听状态 ≠ 已握手</small></article>
+        <article><span>最近采集</span><strong id="freshness">尚无数据</strong><small id="observed">等待受信采集器</small></article>
+      </div>
+      <div class="columns">
+        <article class="panel"><div class="panel-heading"><h2>连接路径</h2><span class="tag">架构目标</span></div>
+          <div class="path"><div><span>01</span><b>Windows 客户端</b><small>普通用户图形界面</small></div><i>↓ WireGuard 加密隧道</i><div><span>02</span><b>Oracle 云出口</b><small>TCP / UDP · IPv4 / IPv6 / DNS</small></div><i>↓</i><div><span>03</span><b>互联网</b><small>实际出口需要独立验收</small></div></div>
+        </article>
+        <article class="panel"><div class="panel-heading"><h2>交付状态</h2><span class="tag amber">研发中</span></div>
+          <ul class="checklist"><li><b>独立 Windows 便携 Alpha</b><span>已有实验构建</span></li><li><b>Oracle 只读诊断</b><span>已验证部署</span></li><li><b>系统级防泄漏与开机恢复</b><span>待实机验收</span></li><li><b>UU 远程控制连续性</b><span>待实机验收</span></li><li><b>签名安装与安全升级</b><span>尚未交付</span></li></ul>
+          <p class="muted">服务运行状态不能替代 Windows 端到端 VPN、防泄漏和远控兼容性验证。</p>
+        </article>
+      </div>
+    </section>
+    <section id="devices" class="panel"><div class="panel-heading"><h2>设备与 Peer</h2><span class="tag">未接入采集</span></div><p class="muted">当前 Oracle 诊断权限不包含 Peer 信息。设备数量、握手时间与流量用量尚无数据。</p><div class="empty">接入经审核的受限 Agent 后，这里将显示真实设备。</div><button disabled>添加设备 · 等待服务端权限接口</button></section>
+    <section id="audit" class="panel"><div class="panel-heading"><h2>操作审计</h2><span class="tag">最近 100 条 · 保留 30 天</span></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>身份</th><th>操作</th><th>对象</th></tr></thead><tbody id="audit-rows"><tr><td colspan="4">正在读取…</td></tr></tbody></table></div></section>
+    <section id="configuration" class="panel"><div class="panel-heading"><h2>服务器配置</h2><span class="tag amber">当前只读</span></div><p class="muted">端口与 Peer 变更需要独立的最小权限执行器、配置校验、连通性验证和自动回滚。当前后台尚未开放修改。</p><div class="configuration"><label>WireGuard UDP 端口<input value="51820（当前诊断目标）" disabled></label><button disabled>提交变更 · 尚未开放</button></div></section>
+    <footer>Oracle Proxy · 管理员控制台 <span>Windows 日常连接请使用客户端</span></footer>
+  </main>
+</body>
+</html>

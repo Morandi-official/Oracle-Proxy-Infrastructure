@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "oracle-proxy-admin",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
+  "routes": [{ "pattern": "vpn-admin.morandi.dpdns.org", "custom_domain": true }],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://vpn-admin.morandi.dpdns.org",
+    "ACCESS_ISSUER": "https://YOUR-TEAM.cloudflareaccess.com",
+    "ACCESS_AUD": "REPLACE_WITH_ACCESS_APPLICATION_AUD",
+    "ADMIN_EMAILS": "morandi@nuaa.edu.cn",
+    "NODE_ID": "oracle-primary"
+  },
+  "d1_databases": [{
+    "binding": "DB", "database_name": "oracle-proxy-admin",
+    "database_id": "REPLACE_WITH_D1_DATABASE_ID", "migrations_dir": "migrations"
+  }],
+  "triggers": { "crons": ["17 3 * * *"] }
+}

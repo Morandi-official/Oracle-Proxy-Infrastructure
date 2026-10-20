@@ -49,6 +49,10 @@ def worker(path):
      diagnostic=subprocess.run(args,capture_output=True,text=True,check=False)
      print('SYNTHETIC_NAMESPACE_DIAGNOSTIC='+args[0]+' '+diagnostic.stdout+diagnostic.stderr,file=sys.stderr,flush=True)
    assert (result.returncode==0)==expected,'Synthetic forwarded IPv4/IPv6 packet disposition mismatch'
+  for address in ('10.200.0.2','fd42:200::2'):
+   code='import socket,sys\ns=socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(1)\ns.sendto(bytes.fromhex("123401000001000000000000076578616d706c6504746573740000010001"),(sys.argv[1],53))\ntry:\n r=s.recv(512);sys.exit(0 if r[:4]==bytes.fromhex("12348183") else 2)\nexcept OSError:sys.exit(1)\n'
+   result=subprocess.run(['ip','netns','exec','opx-client',sys.executable,'-c',code,address],capture_output=True)
+   assert (result.returncode==0)==expected,'Synthetic UDP DNS/53 disposition mismatch'
  def user(**kwargs):
   data={'id':None,'name':'CI synthetic user','quota_bytes':1000000,'expires_at':None,'enabled':True};data.update(kwargs)
   return request('user.put',data)['users'][0]
@@ -89,7 +93,7 @@ def worker(path):
  engine=agent.Engine(Path(path).parent/'ledger.sqlite3',driver,lambda:clock[0]);engine.tick()
  after=engine.used('user',u['id']);assert after['rx']>=before['rx'] and after['tx']>=before['tx']
  engine.db.close()
- print('DISPOSABLE_REAL_WIREGUARD_DUALSTACK_FORWARD_USER_DISABLE_EXPIRY_QUOTA_ESTABLISHED_TCP_KERNEL_LEASE_GLOBAL_BUDGET_LEDGER=PASS')
+ print('DISPOSABLE_REAL_WIREGUARD_DUALSTACK_UDP_DNS_USER_DISABLE_EXPIRY_QUOTA_ESTABLISHED_TCP_KERNEL_LEASE_GLOBAL_BUDGET_LEDGER=PASS')
 
 
 def main():
@@ -118,6 +122,7 @@ except ConnectionResetError:pass
  run(['systemctl','stop','oracle-proxy-control.service'])
  print('DISPOSABLE_REAL_ROOT_CONTROL_UNIT_WEB_UID_ONLY_SOCKET_AND_ROOT_LEDGER_ACL=PASS')
  namespaces=('opx-router','opx-client','opx-exit')
+ dns_server=None
  if any(name in run(['ip','netns','list']).stdout for name in namespaces):raise SystemExit('Namespace already exists')
  try:
   for name in namespaces:run(['ip','netns','add',name]);run(['ip','-n',name,'link','set','lo','up'])
@@ -151,10 +156,14 @@ except ConnectionResetError:pass
    run(['ip','-n','opx-exit','-6','route','add','fd42:250::/64','via','fd42:200::1'])
    run(['ip','netns','exec','opx-router','sysctl','-w','net.ipv4.ip_forward=1'])
    run(['ip','netns','exec','opx-router','sysctl','-w','net.ipv6.conf.all.forwarding=1'])
+   dns_code='import socket,select\nsockets=[]\nfor family,address in ((socket.AF_INET,"10.200.0.2"),(socket.AF_INET6,"fd42:200::2")):\n s=socket.socket(family,socket.SOCK_DGRAM)\n if family==socket.AF_INET6:s.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,1)\n s.bind((address,53));sockets.append(s)\nwhile True:\n ready,_,_=select.select(sockets,[],[])\n for s in ready:\n  q,a=s.recvfrom(512);s.sendto(q[:2]+bytes.fromhex("8183")+q[4:6]+b"\\0"*6+q[12:],a)\n'
+   dns_server=subprocess.Popen(['ip','netns','exec','opx-exit',sys.executable,'-u','-c',dns_code],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+   time.sleep(.2)
    fixture=root/'fixture.json';fixture.write_text(json.dumps({'client_public':public['client'],'server_public':public['server']}))
    result=run(['ip','netns','exec','opx-router',sys.executable,Path(__file__).resolve(),'worker',fixture])
    print(result.stdout.strip())
  finally:
+  if dns_server:dns_server.kill();dns_server.wait()
   for name in namespaces:subprocess.run(['ip','netns','del',name],capture_output=True,check=False)
 
 

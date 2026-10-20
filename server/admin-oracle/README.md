@@ -66,7 +66,7 @@ GitHub 可以预检环境、安装后台依赖、写入 OAuth 配置、部署/�
 - Homepage URL：`https://vpn-admin.morandi.dpdns.org`
 - Authorization callback URL：`https://vpn-admin.morandi.dpdns.org/accounts/github/login/callback/`
 
-记录 Client ID，并生成 Client Secret。**Client Secret 只填写到 Oracle 的 root-only 配置，
+记录 Client ID，并生成 Client Secret。**Client Secret 只填写到 Oracle 的 root-only 配置或指定 GitHub Environment Secret，
 不发送到聊天、GitHub 源码、Actions 日志或工单。** OAuth App 和域名要保持上述精确匹配。
 不需要 Cloudflare Account ID、D1 UUID 或 Zero Trust 团队域名。
 

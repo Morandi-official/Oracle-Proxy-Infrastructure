@@ -32,6 +32,7 @@ def main():
                 assert response.headers.get('Strict-Transport-Security')
                 assert response.headers.get('X-Frame-Options') == 'DENY'
                 assert response.headers.get('X-Content-Type-Options') == 'nosniff'
+                assert response.headers.get('Referrer-Policy') == 'same-origin'
                 assert "form-action 'self' https://github.com" in response.headers.get('Content-Security-Policy', '')
             if path in ('/login/', '/accounts/login/'):
                 body = response.read(65536)
@@ -41,7 +42,8 @@ def main():
         print(f'PUBLIC_CHECK={path} HTTP_{expected}_PASS')
     request = urllib.request.Request(BASE + '/accounts/github/login/',
         data=urllib.parse.urlencode({'csrfmiddlewaretoken': csrf}).encode(),
-        headers={'Origin': BASE, 'Referer': BASE + '/login/'})
+        # Exercise Django's HTTPS Referer fallback rather than always supplying Origin.
+        headers={'Referer': BASE + '/login/'})
     try: response = opener.open(request, timeout=10)
     except urllib.error.HTTPError as error: response = error
     with response:

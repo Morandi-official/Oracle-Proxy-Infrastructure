@@ -20,7 +20,9 @@ class SecurityHeadersMiddleware:
     def __call__(self, request):
         response = self.get_response(request)
         response['Cache-Control'] = 'no-store'
-        response['Referrer-Policy'] = 'no-referrer'
+        # HTTPS CSRF fallback needs Referer when the browser omits Origin.
+        # Keep same-origin form submissions verifiable without leaking OAuth URLs externally.
+        response['Referrer-Policy'] = 'same-origin'
         response['X-Content-Type-Options'] = 'nosniff'
         response['X-Frame-Options'] = 'DENY'
         response['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'

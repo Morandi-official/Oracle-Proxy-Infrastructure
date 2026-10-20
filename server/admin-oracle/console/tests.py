@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from datetime import timedelta
 from unittest.mock import Mock, patch
@@ -66,6 +67,20 @@ class AdminTests(TestCase):
         self.assertEqual(secure_client.post('/accounts/github/login/', secure=True).status_code, 403)
         page = self.get('/accounts/github/login/')
         self.assertEqual(page.status_code, 200)  # confirmation, never OAuth side effect on GET
+
+    def test_browser_referrer_policy_allows_valid_same_origin_form_without_origin_header(self):
+        client = Client(HTTP_HOST=HOST, enforce_csrf_checks=True)
+        page = client.get('/login/', secure=True)
+        token = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', page.content).group(1).decode()
+        # Emulate a browser that omits Origin and applies the page's Referrer-Policy.
+        headers = {} if page['Referrer-Policy'] == 'no-referrer' else {'HTTP_REFERER': f'https://{HOST}/login/'}
+        response = client.post('/accounts/github/login/', {'csrfmiddlewaretoken': token}, secure=True, **headers)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(urlsplit(response['Location']).netloc, 'github.com')
+        self.assertEqual(client.post('/accounts/github/login/', {'csrfmiddlewaretoken': token},
+                         secure=True, HTTP_REFERER='https://untrusted.invalid/').status_code, 403)
+        self.assertEqual(client.post('/accounts/github/login/', secure=True,
+                         HTTP_REFERER=f'https://{HOST}/login/').status_code, 403)
 
     def test_wrong_github_numeric_id_is_rejected_even_with_matching_email(self):
         adapter = GitHubAllowlistAdapter()

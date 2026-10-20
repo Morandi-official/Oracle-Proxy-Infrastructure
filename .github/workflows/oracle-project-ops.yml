@@ -92,3 +92,13 @@ jobs:
               --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
             python3 ops/oracle-project/verify_public.py
           fi
+      - name: Real Chromium and Firefox anonymous login form acceptance
+        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser_venv="$RUNNER_TEMP/oracle-admin-browser-venv"
+          python3 -m venv "$browser_venv"
+          "$browser_venv/bin/pip" install --disable-pip-version-check playwright==1.56.0
+          "$browser_venv/bin/python" -m playwright install --with-deps chromium firefox
+          "$browser_venv/bin/python" ops/oracle-project/browser_acceptance.py

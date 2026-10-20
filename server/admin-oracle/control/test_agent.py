@@ -116,6 +116,15 @@ class PolicyTests(unittest.TestCase):
   del self.driver.value['peers'][KEY3];self.engine.tick();self.engine.tick()
   self.assertIn(KEY3,self.driver.value['peers'])
   self.assertFalse(self.engine.snapshot()['peers'][0]['public_key'].startswith('PRIVATE'))
+ def test_failed_kernel_peer_creation_retains_durable_owned_policy_for_safe_retry(self):
+  user=self.user()
+  with patch.object(self.driver,'add_peer',side_effect=RuntimeError('SYNTHETIC_KERNEL_FAILURE')):
+   with self.assertRaises(RuntimeError):self.request('peer.create',{'public_key':KEY3,'user_id':user['id'],'name':'Pending PC'})
+  row=self.engine.db.execute('SELECT * FROM devices WHERE key=?',(KEY3,)).fetchone()
+  self.assertEqual(row['user_id'],user['id']);self.assertEqual(row['owned'],1)
+  self.assertIn('10.250.0.4',self.driver.managed);self.assertNotIn('10.250.0.4',self.driver.allowed)
+  self.engine.tick();self.engine.tick()
+  self.assertIn(KEY3,self.driver.value['peers']);self.assertIn('10.250.0.4',self.driver.allowed)
  def test_reject_network_peer_and_arbitrary_operation_paths_commands_and_invalid_keys(self):
   user=self.user();self.driver.value['peers'][KEY1]['allowed_ips']=['10.250.0.0/24']
   with self.assertRaises(ValueError): self.bind(KEY1,user)

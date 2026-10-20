@@ -134,6 +134,7 @@ class AdminTests(TestCase):
         self.assertEqual(response['Cache-Control'], 'no-store')
         self.assertEqual(response['X-Frame-Options'], 'DENY')
         self.assertIn("frame-ancestors 'none'", response['Content-Security-Policy'])
+        self.assertIn("form-action 'self' https://github.com", response['Content-Security-Policy'])
         csrf = response.cookies[settings.CSRF_COOKIE_NAME]
         self.assertTrue(csrf['secure']); self.assertTrue(csrf['httponly'])
         self.assertEqual(self.client.get('/login/').status_code, 301)

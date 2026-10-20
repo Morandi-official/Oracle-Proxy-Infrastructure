@@ -27,5 +27,6 @@ class SecurityHeadersMiddleware:
         response['Content-Security-Policy'] = (
             "default-src 'none'; script-src 'self'; style-src 'self'; "
             "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
-            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+            # Chromium also checks the redirect following the local OAuth POST.
+            "base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://github.com")
         return response

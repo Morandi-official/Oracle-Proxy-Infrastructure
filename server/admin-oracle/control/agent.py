@@ -367,6 +367,10 @@ class Engine:
                 if not selected: raise ValueError('NO_FREE_IPV4_TUNNEL_ADDRESS')
                 addresses = [selected]
                 self.driver.leases(set(host_ips(addresses)),set(),not self.budget_state()['guard_blocked'])
+                # Durable ownership precedes the kernel mutation. If interrupted or the
+                # netlink reply is lost, reconciliation retries only this owned peer.
+                self.db.execute('INSERT INTO devices VALUES (?,?,?,?,1)',
+                                (key,user_id,data['name'].strip(),json.dumps(addresses)))
                 self.driver.add_peer(key, addresses)
             else:
                 if not peer: raise ValueError('PEER_NOT_FOUND')

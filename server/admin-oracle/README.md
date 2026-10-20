@@ -59,7 +59,7 @@ python3 deploy/host.py preflight
 ```
 
 该操作只输出 Python/架构/必需工具与端口占用概况，不读取私钥或变更系统。
-主机需要 Python 3.10+、venv、systemd、runuser 和 Caddy。
+主机需要 Python 3.11+、venv、systemd、runuser 和 Caddy。
 Ubuntu/Debian 主机可通过系统包安装 `python3-venv` 和 `caddy`；
 如现有主机已有 Web 服务，先根据预检结果决定如何集成，不能直接覆盖它的配置。
 
@@ -120,7 +120,7 @@ python3 -m venv .venv
 ```
 
 测试配置只用于单独的测试进程；生产 WSGI 默认加载强制环境配置的 `config.settings`。
-CI 同时测试 Python 3.10/3.12，并在一次性的 GitHub-hosted Linux VM 上实际注册普通用户 systemd 服务，
+CI 同时测试 Python 3.11/3.12，并在一次性的 GitHub-hosted Linux VM 上实际注册普通用户 systemd 服务，
 验证启动、升级、故意破坏新版 WSGI 后自动恢复上一版、显式回滚和代码目录权限。
 该 root 测试入口 `ci_smoke.py` 不进入发布源码包，且拒绝在非授权 disposable runner 上执行。
 

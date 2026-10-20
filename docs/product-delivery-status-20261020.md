@@ -100,7 +100,7 @@ TOTP 秘密用独立 Fernet 密钥加密；主机配置仅 root 可读，应用�
 
 部署指南和免费的 GitHub OAuth App 设置见
 [Oracle 管理后台 README](../server/admin-oracle/README.md)。
-新 CI 覆盖 Python 3.10/3.12，以及一次性 Linux 主机上真实 systemd 的启动、升级、失败恢复、回滚。
+新 CI 覆盖 Python 3.11/3.12，以及一次性 Linux 主机上真实 systemd 的启动、升级、失败恢复、回滚。
 它不修改或停止现有 Oracle 的生产 VPN。
 
 现有 `oracle-ci` forced-command 密钥不能注册 Web 服务，不扩权成任意 root shell。
@@ -132,7 +132,7 @@ Oracle 自托管版的 16 项 Django 集成/身份测试、4 项部署边界测�
 Django 部署安全检查与静态资源构建通过。云端检查以 PR #146 最新提交的 Actions 为准，
 不把旧版 Cloudflare 检查结果算作 Oracle 部署证明。
 
-当前环境没有 Oracle 管理员凭据；已有 CI 仅提供受限诊断，不能注册新服务或调整安全列表。
+当前环境没有 Oracle 管理员凭据；已有 CI 提供受限诊断和固定项目服务操作，不能注册新后台或调整安全列表。
 需要账号所有者做 DNS A 记录、创建免费 GitHub OAuth App，并在一次管理员会话中填写主机配置。
 Client Secret、MFA 加密密钥与 SSH 私钥不应发送到聊天、代码仓库或 CI 日志。
 后台上线后仍需继续 Windows 产品整合、防泄漏与 UU 验收，不把只读后台或 R114 实验包标为最终成品。

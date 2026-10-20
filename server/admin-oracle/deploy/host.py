@@ -123,7 +123,8 @@ def as_user(user, args, *, cwd, env=None):
             'HOME': '/nonexistent', 'PIP_NO_CACHE_DIR': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
     if env:
         safe.update(env)
-    return command(['runuser', '-u', user, '--', *map(str, args)], cwd=cwd, env=safe)
+    runuser = shutil.which('runuser') or '/usr/sbin/runuser'
+    return command([runuser, '-u', user, '--', *map(str, args)], cwd=cwd, env=safe)
 
 
 def seal_tree(path):
@@ -162,6 +163,8 @@ def healthy():
 def install(revision):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('A full source commit SHA is required')
+    if sys.version_info < (3, 11):
+        raise ValueError('Python 3.11 or newer is required')
     manifest = SOURCE / 'SOURCE_REVISION'
     if manifest.exists():
         regular(manifest)
@@ -196,7 +199,7 @@ def install(revision):
         os.chown(directory, build.pw_uid, build.pw_gid)
         for name in filenames:
             os.chown(Path(directory) / name, build.pw_uid, build.pw_gid)
-    as_user(BUILD_USER, ['python3', '-m', 'venv', release / '.venv'], cwd=release)
+    as_user(BUILD_USER, [sys.executable, '-m', 'venv', release / '.venv'], cwd=release)
     as_user(BUILD_USER, [release / '.venv/bin/pip', 'install', '--disable-pip-version-check',
                         '-r', release / 'requirements.txt'], cwd=release)
     # Static compilation receives synthetic build-only settings, not host secrets.

@@ -1,6 +1,6 @@
 # Oracle Proxy 产品进展与交付约定
 
-核查日期：2026-10-20（Asia/Shanghai）。核查基线：`255123f9ae5bc6adbc1bbdb635a28638061e59da`。
+核查日期：2026-10-20（Asia/Shanghai）。Windows 源码核查基线：`255123f9ae5bc6adbc1bbdb635a28638061e59da`。
 
 ## 结论
 
@@ -13,7 +13,9 @@ GitHub 没有正式 Release。当前可下载的 Windows R114 是未签名实验
 也不要求绑定银行卡。采用 GitHub OAuth/PKCE + 验证器 TOTP、SQLite、普通用户 systemd 服务和 Caddy HTTPS。
 域名继续使用 `vpn-admin.morandi.dpdns.org`，Cloudflare 仅承担已有的 DNS 托管。
 PR #146 已合并，后台已实际安装到 Oracle，并通过公网 HTTPS 登录页与未登录接口隔离检查。
-用户本人的 GitHub 授权、首次绑定验证器与完整登录验收仍待执行；不能以自动化测试代替本人登录。
+用户已确认可以正常登录并看到界面。最终交付必须同时包含独立 Windows 便携客户端安装包，
+以及能够管理用户、设备、配额、有效期和出站用量的服务器网页后台。
+PR #147 已增加并部署实际监管服务；仅登录成功不作为管理产品的完成条件。
 
 ## 用户已确认
 
@@ -22,6 +24,7 @@ PR #146 已合并，后台已实际安装到 Oracle，并通过公网 HTTPS 登�
 - 优先在云端做完所有可自动化测试，实机只做无法由云端证明的最终验收。
 - Cloudflare 已托管 `morandi.dpdns.org`，账号使用 GitHub 登录。
 - 拟用后台域名 `vpn-admin.morandi.dpdns.org`，管理员邮箱 `morandi@nuaa.edu.cn`。
+- Oracle 未升级为按量付费，只有这一台实例；本月历史用量和实际账期仍须核对。
 
 Cloudflare 账号登录与产品后台登录相互独立；后台改用 GitHub OAuth，默认允许 GitHub 数字账号 ID `204281968`（Morandi-official），
 并要求验证器动态码。邮箱不作为授权依据。
@@ -35,8 +38,8 @@ Cloudflare 账号登录与产品后台登录相互独立；后台改用 GitHub O
 | 系统服务 | `manager` 有身份验证、固定动词、LocalSystem 与多个 CI 安全实验 | 默认生产内核仍是 `UnavailableProductionKernel`，不能用开关绕过 |
 | 防泄漏 | WFP IPv4/IPv6、TCP/UDP/DNS、崩溃与恢复的多项隔离实验 | 持久/开机保护、多网卡、真实重启、独立抓包及完整状态机整体验收 |
 | UU | 有连续性证据门禁 | 网易 UU 在两种 Windows 上的真实长连接、重连和例外策略验收 |
-| Oracle | 已部署受限只读 Agent；日志确认 wg0 ACTIVE、接口 PRESENT、UDP51820 LISTENING | 握手、Peer 清单、用量与受限配置执行器，IPv6 公网出口能力核实 |
-| 网页后台 | 已部署 Oracle 自托管版本：HTTPS、GitHub OAuth/PKCE、TOTP MFA、SQLite 审计、本机诊断、systemd 注册与回滚 | 本人完整 OAuth/MFA 登录验收；Peer/用量与配置接口 |
+| Oracle | 已部署只读诊断和独立限权控制器，真实 Peer/握手与持久用量账本；用户限额/到期/禁用和可选全局出站保护 | OCI 官方账单对账、IPv6 公网出口能力核实 |
+| 网页后台 | HTTPS、GitHub/TOTP、用户/设备编辑、Peer 新建/绑定、共享月配额/有效期、预算配置与审计；本人已确认登录成功 | 官方用量同步、设备单独撤销与端口配置、最终 Windows 注册/状态联动 |
 | 安装和升级 | 部分生命周期与回滚实验、来源校验 | 发布者签名、受保护服务安装、升级事务、卸载/重启恢复与密钥迁移 |
 
 Oracle 部署实证：[Actions 39415011683](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39415011683)。
@@ -92,7 +95,16 @@ Windows 的 WireGuard Endpoint 直达 Oracle；管理后台 HTTPS 和 VPN UDP �
 目录 `server/admin-oracle/` 是可以构建和注册为系统服务的 Django 应用，含真实接口和中文界面。
 SQLite 替代 D1；本机每分钟定时采集替代 GitHub→Cloudflare 公网 HMAC 上报。
 默认不展示模拟在线设备或流量；无报告显示未知，报告超过 180 秒显示过期。
-浏览器只读；Peer、逐设备用量和配置修改仍明确未接入。
+管理员现在可以创建/编辑用户、设置共享月配额和到期时间、禁用/恢复用户、绑定已有 Peer，
+或提交客户端公钥新建 Peer。独立控制服务的 root-only SQLite 保留按用户/设备的月度账本、
+物理 VNIC 出站增量和策略审计；网页通过固定 Unix socket RPC 操作，不获得任意 root 命令能力。
+配额/到期/禁用同时作用于该用户的纳管设备；内核短租约覆盖 IPv4/IPv6 和已建立连接。
+
+Oracle 公开每月首 10 TB 出站免费，但官方数据可能延迟，且本机计数不等于账单。
+未知的账期历史不会被置零；首次采集时余额显示未知。管理员核对截至当前的用量基线后，
+后台用基线加实时 VNIC TX 增量估算剩余，并扣除可配置安全余量作为 VPN 可用预算。
+总量保护默认关闭，明确启用后，未知/缺口/到阈值即阻断所有 VPN Peer；HTTPS/公网 SSH 保留。
+仍需接入 OCI 官方用量 API，不能承诺零超额。详细边界与操作见 [CONTROL.md](../server/admin-oracle/CONTROL.md)。
 
 身份验证使用成熟的 django-allauth：GitHub OAuth 状态校验及 PKCE、数字 UID 白名单、
 强制 TOTP，校验完整登录会话中的 GitHub 与 MFA 记录。绑定验证器不等同完成 MFA 登录。
@@ -115,7 +127,7 @@ HTTPS 安装保留原有 Caddy host，增加专用配置与带标记的 TCP 80/4
 通过专用 systemd oneshot 服务开机恢复；未改动 SSH、WireGuard Peer 或路由。
 真实状态检查确认后台本机健康、Caddy active、原 wg-quick@wg0 active。
 
-Peer/端口写入仍需要后续 Oracle 固定权限执行器，建议事务：
+端口变更与未来更广的配置写入仍需事务执行器，建议事务：
 创建带版本的请求 → 预检与白名单校验 → 生成只属于本产品的配置 → 保存已知正常版本 →
 应用 → 独立连通性检查 → 超时回滚 → 审计结果。
 
@@ -134,17 +146,25 @@ Peer/端口写入仍需要后续 Oracle 固定权限执行器，建议事务：
 
 ## 当前验证与阻塞
 
-Oracle 自托管版的 16 项 Django 集成/身份测试、4 项部署边界测试在本地通过，
+Oracle 自托管版的 20 项 Django 集成/身份测试、5 项部署边界测试，
+以及项目 SSH 边界与控制账本测试已通过，
 包含模拟 GitHub API 的完整 OAuth → 首次绑定 → 重新登录 → 动态码验证流程；
 拒绝错误账户、伪造 state、仅链接账户、绕过 MFA、错误/重复动态码、本地密码和过期会话。
-Django 部署安全检查与静态资源构建通过。云端检查以 PR #146 最新提交的 Actions 为准，
+Django 部署安全检查与静态资源构建通过。云端检查见 PR #147、#148 的最新 Actions，
 不把旧版 Cloudflare 检查结果算作 Oracle 部署证明。
 
 用户已完成 DNS、GitHub OAuth App、GitHub Environment Secret/Variable 和一次性 root 通道授权。
 真实 SSH 运维和后台部署已执行，DNS 正确指向 Oracle，公网证书可信。
 未登录的状态/审计接口返回 401，公网健康路由返回 404；本地密码设置、重置及注册关闭。
 最终部署与公网检查日志见 [Actions 39435712224](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39435712224)。
-仍需用户本人完成首次 GitHub 授权与验证器绑定，核实完整浏览器登录。
+用户已确认本人登录成功。监管首版生产验收见
+[Actions 39445358328](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39445358328)：
+控制服务真实观测 ready，现有 Peer 数 2，初始化未创建用户、未纳管既有 Peer、未开启全局保护，
+余额因历史未知保持未知。真实服务端限制在隔离云端网络中验证，不在生产上制造限额/断网测试。
+PR #148 补充了先持久保存设备归属再写入内核的顺序，以及失败后安全重试的故障测试。
+最终生产部署与汇总观测：[Actions 39446327964](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39446327964)。
+隔离测试覆盖真实加密 WireGuard IPv4/IPv6、UDP/53、已建立 TCP、配额/到期/禁用、
+控制进程不续租时的内核阻断、总预算阻断与账本重启；Chromium/Firefox 验证实际管理表单。
 
 ### 登录 CSRF 兼容修复
 
@@ -156,4 +176,5 @@ Origin 时的 Referer 校验冲突；旧 HTTP 验收手工补齐两个头，未�
 浏览器检查拦截外部授权导航，不登录用户账号、不导出 Cookie、OAuth state、截图或服务器应用日志。
 部署与浏览器验收：[Actions 39436843847](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39436843847)。
 Client Secret、MFA 加密密钥与 SSH 私钥不应发送到聊天、代码仓库或 CI 日志。
-后台上线后仍需继续 Windows 产品整合、防泄漏与 UU 验收，不把只读后台或 R114 实验包标为最终成品。
+仍需继续 Windows 产品整合、设备安全注册、防泄漏、UU 与发布生命周期验收；
+本次服务端监管交付不能替代 Windows 正式便携客户端。

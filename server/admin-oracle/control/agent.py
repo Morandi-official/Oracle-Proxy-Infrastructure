@@ -58,6 +58,12 @@ def host_ips(values):
 
 
 class Driver:
+    def revoke(self):
+        # Best effort across all families even if one set is unavailable. Never renew on errors.
+        for name in ('OPXOK4','OPXOK6','OPXALL4','OPXALL6'):
+            try: self.command(['ipset','flush',name])
+            except Exception: pass
+
     def command(self, args, *, input=None, accepted=(0,)):
         result = subprocess.run(args, input=input, capture_output=True, text=True, timeout=8, check=False)
         if result.returncode not in accepted or len(result.stdout) > 1024 * 1024:
@@ -167,6 +173,7 @@ class Engine:
         self.last_sample = None; self.last_enforced = None
         self.set_default('started_at', int(now())); self.set_default('nic_total', 0)
         self.set_default('accounting_gaps', 0)
+        self.set_default('user_states', {})
         self.set_default('budget', {'limit_bytes': 10_000_000_000_000, 'reserve_bytes': 1_000_000_000_000,
             'guard_enabled': False, 'period': period(now()), 'prior_usage_bytes': None, 'anchor_total': 0,
             'baseline_at': None, 'baseline_gaps': 0})
@@ -261,6 +268,7 @@ class Engine:
             self.enforce(); self.error = None
         except Exception as error:
             # Do not renew kernel leases on incomplete observation or accounting failure.
+            self.driver.revoke()
             message=str(error)
             self.error = message if re.fullmatch(r'[A-Z_]{1,80}',message) else 'OBSERVATION_OR_ENFORCEMENT_FAILED'
             raise
@@ -278,7 +286,14 @@ class Engine:
                 if self.reason(user) == 'active':
                     timeout = LEASE if user['expires'] is None else min(LEASE,max(1,int(user['expires']-self.now())))
                     allowed.update({address:timeout for address in addresses})
-        self.driver.leases(managed, allowed, not self.budget_state()['guard_blocked'])
+        try: self.driver.leases(managed, allowed, not self.budget_state()['guard_blocked'])
+        except Exception:
+            self.error='ENFORCEMENT_FAILED';self.driver.revoke();raise
+        states={user_id:self.reason(user) for user_id,user in users.items()}
+        previous=self.get('user_states')
+        for user_id,state in states.items():
+            if previous.get(user_id)!=state:self.audit('system:policy','access.'+state,user_id)
+        if states!=previous:self.set('user_states',states)
         self.last_enforced = int(self.now())
 
     def audit(self, actor, action, resource):

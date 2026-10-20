@@ -2,6 +2,7 @@ import copy
 import importlib.util
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 spec=importlib.util.spec_from_file_location('policy_agent',Path(__file__).with_name('agent.py'))
@@ -16,6 +17,7 @@ class FakeDriver:
   self.value={'peers':{KEY1:{'allowed_ips':['10.250.0.2/32'],'rx':100,'tx':100,'handshake':0},KEY2:{'allowed_ips':['10.250.0.3/32'],'rx':200,'tx':300,'handshake':0}},'nics':{'eth0':{'rx':1000,'tx':2000}},'boot':'first','networks':['10.250.0.1/24'],'server_public_key':'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=','listen_port':51820}
   self.allowed=set();self.managed=set();self.global_allowed=False;self.fail=False
  def initialize(self,guarded): self.guarded=guarded
+ def revoke(self): self.allowed=set();self.global_allowed=False
  def leases(self,managed,allowed,global_allowed): self.managed.update(managed);self.allowed=set(allowed);self.global_allowed=global_allowed
  def observe(self):
   if self.fail: raise OSError('synthetic')
@@ -93,6 +95,21 @@ class PolicyTests(unittest.TestCase):
   user=self.user();self.bind(KEY1,user);before=self.engine.last_enforced;self.clock[0]+=1;self.driver.fail=True
   with self.assertRaises(OSError):self.engine.tick()
   self.assertEqual(self.engine.last_enforced,before);self.assertIsNotNone(self.engine.snapshot()['error'])
+  self.assertEqual(self.driver.allowed,set())
+ def test_partial_enforcement_failure_revokes_allowances_and_exposes_error(self):
+  user=self.user();self.bind(KEY1,user)
+  def partial(*args):
+   self.driver.allowed={'10.250.0.2'}
+   raise RuntimeError('SYNTHETIC_FIREWALL_FAILURE')
+  with patch.object(self.driver,'leases',side_effect=partial):
+   with self.assertRaises(RuntimeError):self.engine.enforce()
+  self.assertEqual(self.driver.allowed,set());self.assertEqual(self.engine.snapshot()['error'],'ENFORCEMENT_FAILED')
+ def test_automatic_access_transitions_are_audited_without_sensitive_payloads(self):
+  user=self.user(expires_at=self.clock[0]+2);self.bind(KEY1,user)
+  self.clock[0]+=3;self.engine.tick()
+  entries=self.engine.snapshot()['audit']
+  self.assertTrue(any(e['action']=='access.expired' and e['resource']==user['id'] for e in entries))
+  self.assertNotIn(KEY1,str(entries))
  def test_peer_creation_allocates_free_address_and_restores_only_owned_peers(self):
   user=self.user();self.request('peer.create',{'public_key':KEY3,'user_id':user['id'],'name':'New Windows PC'})
   self.assertEqual(self.driver.value['peers'][KEY3]['allowed_ips'],['10.250.0.4/32'])

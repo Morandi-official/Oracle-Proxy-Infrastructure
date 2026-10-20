@@ -259,9 +259,10 @@ class Engine:
                 self.db.execute('ROLLBACK'); raise
             self.observation = observation; self.last_sample = now
             self.enforce(); self.error = None
-        except Exception:
+        except Exception as error:
             # Do not renew kernel leases on incomplete observation or accounting failure.
-            self.error = 'OBSERVATION_OR_ENFORCEMENT_FAILED'
+            message=str(error)
+            self.error = message if re.fullmatch(r'[A-Z_]{1,80}',message) else 'OBSERVATION_OR_ENFORCEMENT_FAILED'
             raise
 
     def enforce(self):

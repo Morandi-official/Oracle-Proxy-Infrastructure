@@ -186,8 +186,16 @@ class AdminTests(TestCase):
         self.assertEqual(self.get('/login/', HTTP_HOST='attacker.example.com').status_code, 400)
 
     def test_health_has_no_data_and_is_loopback_only(self):
-        self.assertEqual(self.get('/api/health').json(), {'ready': True})
-        self.assertEqual(self.get('/api/health', REMOTE_ADDR='192.0.2.1').status_code, 404)
+        with patch('console.views.control.call',side_effect=OSError()):
+            self.assertEqual(self.get('/api/health').json(), {'ready': True,'control':{'ready':False}})
+        with patch('console.views.control.call',return_value={'observed_at':123,'error':None,'users':[{'name':'sensitive-name'}],
+                   'peers':[{'managed':True,'public_key':'sensitive-peer'}],'budget':{'guard_enabled':False,'remaining_bytes':None}}) as rpc:
+            value=self.get('/api/health').json()
+            self.assertTrue(value['control']['ready']);self.assertEqual(value['control']['peer_count'],1)
+            self.assertNotIn('sensitive',json.dumps(value))
+            rpc.reset_mock()
+            self.assertEqual(self.get('/api/health', REMOTE_ADDR='192.0.2.1').status_code,404)
+            rpc.assert_not_called()
 
     def oauth_login(self, uid=204281968):
         response = self.post('/accounts/github/login/')

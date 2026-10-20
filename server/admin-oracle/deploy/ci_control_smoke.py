@@ -129,6 +129,11 @@ except ConnectionResetError:pass
     run(['ip','-n',ns,'addr','add',address,'dev',name]);run(['ip','-n',ns,'link','set',name,'up'])
   run(['ip','-n','opx-router','addr','add','fd42:200::1/64','dev','egress0','nodad'])
   run(['ip','-n','opx-exit','addr','add','fd42:200::2/64','dev','egress1','nodad'])
+  # Deterministic neighbours avoid first-packet NDP/DAD timing in the private fixture.
+  router_mac=json.loads(run(['ip','-j','-n','opx-router','link','show','dev','egress0']).stdout)[0]['address']
+  exit_mac=json.loads(run(['ip','-j','-n','opx-exit','link','show','dev','egress1']).stdout)[0]['address']
+  run(['ip','-n','opx-router','-6','neigh','replace','fd42:200::2','lladdr',exit_mac,'dev','egress0','nud','permanent'])
+  run(['ip','-n','opx-exit','-6','neigh','replace','fd42:200::1','lladdr',router_mac,'dev','egress1','nud','permanent'])
   with tempfile.TemporaryDirectory(prefix='oracle-policy-disposable-') as temporary:
    root=Path(temporary);public={}
    for role,ns,address in (('server','opx-router','10.250.0.1/24'),('client','opx-client','10.250.0.2/32')):

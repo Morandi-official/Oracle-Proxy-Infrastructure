@@ -151,10 +151,27 @@ def deploy(revision):
         run(['systemctl', 'restart', host.UNIT_NAMES[0]])
         if not host.healthy(): raise ValueError('APPLICATION_UNHEALTHY')
         install_control()
+        verify_control()
         print('PROJECT_DEPLOYMENT=ALREADY_CURRENT_HEALTHY'); return
     python = runtime_python()
     run([python, '-I', str(SERVER / 'deploy/host.py'), 'install', '--revision', revision])
     install_control()
+    verify_control()
+
+
+def verify_control():
+    import urllib.request
+    import time
+    for _ in range(15):
+        request=urllib.request.Request('http://127.0.0.1:8787/api/health',headers={'Host':host.HOST,'X-Forwarded-Proto':'https'})
+        try:
+            with urllib.request.urlopen(request,timeout=4) as response:
+                summary=json.load(response)['control']
+            if summary['ready']:
+                print('PROJECT_POLICY_CONTROL_HEALTH='+json.dumps(summary,sort_keys=True));return
+        except (OSError,ValueError,KeyError):pass
+        time.sleep(1)
+    raise ValueError('POLICY_CONTROL_OBSERVATION_NOT_READY')
 
 
 def install_control():

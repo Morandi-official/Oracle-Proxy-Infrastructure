@@ -131,4 +131,14 @@ def health(request):
     if request.META.get('REMOTE_ADDR') not in ('127.0.0.1', '::1'):
         return JsonResponse({'error': 'NOT_FOUND'}, status=404)
     Snapshot.objects.exists()  # Include database/migration readiness.
-    return JsonResponse({'ready': True})
+    summary = {'ready':False}
+    try:
+        data=control.call('state',f'github:{next(iter(settings.ADMIN_GITHUB_IDS))}',{})
+        summary={'ready':bool(data.get('observed_at') and not data.get('error')),
+                 'observed_at':data.get('observed_at'),'error':data.get('error'),
+                 'user_count':len(data['users']),'peer_count':len(data['peers']),
+                 'managed_peer_count':sum(p['managed'] for p in data['peers']),
+                 'guard_enabled':data['budget']['guard_enabled'],
+                 'balance_known':data['budget']['remaining_bytes'] is not None}
+    except (OSError,ValueError,TimeoutError,KeyError): pass
+    return JsonResponse({'ready': True,'control':summary})

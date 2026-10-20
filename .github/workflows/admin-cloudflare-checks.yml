@@ -36,9 +36,17 @@ jobs:
       - run: npm run test:runtime
       - uses: actions/upload-artifact@v4
         with:
-          name: OracleProxy-Admin-Worker-Build
+          name: OracleProxy-Admin-0.1.0-Source-and-Worker
           path: |
             server/admin-cloudflare/dist/
             server/admin-cloudflare/public/
             server/admin-cloudflare/migrations/
+            server/admin-cloudflare/src/
+            server/admin-cloudflare/test/
+            server/admin-cloudflare/package.json
+            server/admin-cloudflare/package-lock.json
+            server/admin-cloudflare/wrangler.example.jsonc
+            server/admin-cloudflare/collect.py
+            server/admin-cloudflare/configure.py
+            server/admin-cloudflare/README.md
           retention-days: 14

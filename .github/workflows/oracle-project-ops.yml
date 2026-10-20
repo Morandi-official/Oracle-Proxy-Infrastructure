@@ -82,14 +82,13 @@ jobs:
             if [[ -n "$CLIENT_SECRET" ]]; then configure; fi
             "${SSH[@]}" "deploy $REVISION"
             "${SSH[@]}" "enable-https $REVISION"
-            curl --fail --silent --show-error --max-time 15 --retry 5 --retry-delay 5 \
-              --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
           elif [[ "$OPERATION" == configure ]]; then
             configure
           else
             "${SSH[@]}" "$OPERATION $REVISION"
           fi
-          if [[ "$OPERATION" == enable-https ]]; then
-            curl --fail --silent --show-error --connect-timeout 8 --max-time 10 --retry 3 --retry-delay 5 \
+          if [[ "$OPERATION" == deploy || "$OPERATION" == enable-https ]]; then
+            curl --fail --silent --show-error --connect-timeout 8 --max-time 10 --retry 12 --retry-delay 5 --retry-all-errors \
               --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
+            python3 ops/oracle-project/verify_public.py
           fi

@@ -145,5 +145,15 @@ Django 部署安全检查与静态资源构建通过。云端检查以 PR #146 �
 未登录的状态/审计接口返回 401，公网健康路由返回 404；本地密码设置、重置及注册关闭。
 最终部署与公网检查日志见 [Actions 39435712224](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39435712224)。
 仍需用户本人完成首次 GitHub 授权与验证器绑定，核实完整浏览器登录。
+
+### 登录 CSRF 兼容修复
+
+首次人工点击报告 CSRF 403。原 `Referrer-Policy: no-referrer` 与 Django HTTPS 表单在缺少
+Origin 时的 Referer 校验冲突；旧 HTTP 验收手工补齐两个头，未覆盖实际浏览器提交。
+已改为 `same-origin`，保留跨站 Referer 屏蔽、CSRF 令牌、HTTPS 和安全 Cookie 要求。
+新增复现测试确认旧策略失败、修复后合法提交成功，跨站及缺少令牌的提交仍拒绝。
+公网验收现覆盖无 Origin 的同源提交；Chromium、Firefox 实际点击登录均通过。
+浏览器检查拦截外部授权导航，不登录用户账号、不导出 Cookie、OAuth state、截图或服务器应用日志。
+部署与浏览器验收：[Actions 39436843847](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39436843847)。
 Client Secret、MFA 加密密钥与 SSH 私钥不应发送到聊天、代码仓库或 CI 日志。
 后台上线后仍需继续 Windows 产品整合、防泄漏与 UU 验收，不把只读后台或 R114 实验包标为最终成品。

@@ -50,6 +50,7 @@ def preflight():
 
 
 def install_runtime():
+    runtime.seal_permissions()
     try:
         python = runtime_python()
         if shutil.which('caddy') and subprocess.run([python, '-c', 'import venv,ensurepip'],

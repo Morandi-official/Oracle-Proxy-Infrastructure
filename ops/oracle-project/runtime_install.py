@@ -23,6 +23,21 @@ ASSETS = {
 }
 
 
+def seal_permissions(root=PYTHON_ROOT):
+    if not root.exists(): return
+    if root.is_symlink(): raise ValueError('RUNTIME_ROOT_LINK_REJECTED')
+    for directory, directories, files in os.walk(root, followlinks=False):
+        for path in [Path(directory)] + [Path(directory) / name for name in directories + files]:
+            info = path.lstat()
+            if info.st_uid != os.geteuid(): raise ValueError('RUNTIME_OWNER_REJECTED')
+            if path.is_symlink():
+                if not path.resolve().is_relative_to(root.resolve()):
+                    raise ValueError('RUNTIME_LINK_REJECTED')
+            elif path.is_dir(): path.chmod(0o755)
+            elif path.is_file(): path.chmod(0o755 if info.st_mode & 0o111 else 0o644)
+            else: raise ValueError('RUNTIME_FILE_TYPE_REJECTED')
+
+
 def fetch_verified(url, checksum, destination):
     request = urllib.request.Request(url, headers={'User-Agent': 'Oracle-Project-Runtime'})
     digest = hashlib.sha256(); size = 0
@@ -74,6 +89,7 @@ def extract_python(archive_path, destination):
                 target = destination / item.name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.symlink_to(item.linkname)
+    seal_permissions(destination)
 
 
 def install():

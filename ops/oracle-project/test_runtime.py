@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import io
+import os
 import tarfile
 import tempfile
 import unittest
@@ -12,6 +13,18 @@ runtime = importlib.util.module_from_spec(spec); spec.loader.exec_module(runtime
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_implicit_archive_directories_remain_accessible_with_root_private_umask(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); archive_path = root / 'archive.tgz'; stage = root / 'stage'; stage.mkdir()
+            with tarfile.open(archive_path, 'w:gz') as archive:
+                item = tarfile.TarInfo('python/bin/python3.12'); item.mode = 0o755
+                archive.addfile(item)
+            old = os.umask(0o077)
+            try: runtime.extract_python(archive_path, stage)
+            finally: os.umask(old)
+            self.assertEqual((stage / 'python/bin').stat().st_mode & 0o777, 0o755)
+            self.assertEqual((stage / 'python').stat().st_mode & 0o777, 0o755)
+
     def test_checksum_failure_never_leaves_installable_artifact(self):
         class Response(io.BytesIO): url = 'https://release-assets.githubusercontent.com/synthetic'
         with tempfile.TemporaryDirectory() as directory:

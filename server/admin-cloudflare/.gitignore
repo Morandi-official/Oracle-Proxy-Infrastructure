@@ -1,6 +1,0 @@
-node_modules/
-.wrangler/
-.dev.vars
-dist/
-wrangler.jsonc
-__pycache__/

@@ -9,9 +9,10 @@
 GitHub 没有正式 Release。当前可下载的 Windows R114 是未签名实验便携包，
 不能以既有云端实验替代生产防泄漏、开机恢复、UU 连续性或端到端公网出口验收。
 
-本次新增 Cloudflare 管理后台首版、D1 审计和 GitHub→Oracle 只读状态转发链路；
-没有接管现有 Windows 连接，也没有修改 Oracle 的 wg0、生产 Peer、路由或防火墙。
-后台部署所需的 Cloudflare 身份与账号授权尚未配置。
+按用户最新要求，管理后台已改为 Oracle 自托管，不再使用 Cloudflare Zero Trust、D1 或 Workers，
+也不要求绑定银行卡。采用 GitHub OAuth/PKCE + 验证器 TOTP、SQLite、普通用户 systemd 服务和 Caddy HTTPS。
+域名继续使用 `vpn-admin.morandi.dpdns.org`，Cloudflare 仅承担已有的 DNS 托管。
+源码与主机注册/回滚流程正在 PR #146 中验证；尚未安装到生产 Oracle。
 
 ## 用户已确认
 
@@ -21,8 +22,8 @@ GitHub 没有正式 Release。当前可下载的 Windows R114 是未签名实验
 - Cloudflare 已托管 `morandi.dpdns.org`，账号使用 GitHub 登录。
 - 拟用后台域名 `vpn-admin.morandi.dpdns.org`，管理员邮箱 `morandi@nuaa.edu.cn`。
 
-Cloudflare 账号登录与产品后台登录相互独立；后台使用 Access 验证的 IdP 身份和邮箱白名单。
-若要求后台直接用 GitHub OAuth，还需确认 IdP 集成方案，本版没有假装实现 GitHub OAuth。
+Cloudflare 账号登录与产品后台登录相互独立；后台改用 GitHub OAuth，默认允许 GitHub 数字账号 ID `204281968`（Morandi-official），
+并要求验证器动态码。邮箱不作为授权依据。
 
 ## 从源码与日志得到的实际进展
 
@@ -34,7 +35,7 @@ Cloudflare 账号登录与产品后台登录相互独立；后台使用 Access �
 | 防泄漏 | WFP IPv4/IPv6、TCP/UDP/DNS、崩溃与恢复的多项隔离实验 | 持久/开机保护、多网卡、真实重启、独立抓包及完整状态机整体验收 |
 | UU | 有连续性证据门禁 | 网易 UU 在两种 Windows 上的真实长连接、重连和例外策略验收 |
 | Oracle | 已部署受限只读 Agent；日志确认 wg0 ACTIVE、接口 PRESENT、UDP51820 LISTENING | 握手、Peer 清单、用量与受限配置执行器，IPv6 公网出口能力核实 |
-| 网页后台 | 本次新增 Access 身份验证、服务状态、过期提示、D1 审计、HMAC 上报、CI/部署流程 | 真实账号部署、Peer 管理、用量采集与配置回滚接口 |
+| 网页后台 | Oracle 自托管版本：GitHub OAuth/PKCE、TOTP MFA、SQLite 审计、本机诊断、systemd 注册与回滚 | 真实主机部署、OAuth App、HTTPS、Peer/用量与配置接口 |
 | 安装和升级 | 部分生命周期与回滚实验、来源校验 | 发布者签名、受保护服务安装、升级事务、卸载/重启恢复与密钥迁移 |
 
 Oracle 部署实证：[Actions 39415011683](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39415011683)。
@@ -59,15 +60,16 @@ flowchart LR
   S --> K[受保护 WireGuard 引擎与密钥]
   S --> F[持久 WFP 与 UU 专用例外]
   K -->|加密 UDP 隧道| O[Oracle WireGuard 出口]
-  A[管理员浏览器] -->|HTTPS + Access + MFA| W[Cloudflare 管理后台]
-  W --> D[D1 设备元数据与审计]
-  G[GitHub Environment 受限凭据] -->|forced-command 诊断| O
-  G -->|HMAC 签名观测| W
+  A[管理员浏览器] -->|Caddy HTTPS + GitHub OAuth + TOTP| W[Oracle 非 root 管理后台]
+  W --> D[本机 SQLite 状态与审计]
+  T[普通用户本机定时采集器] -->|固定只读诊断| O
+  T --> D
+  G[GitHub CI] -->|构建与云端服务生命周期验证| W
 ```
 
 Windows GUI 只发送固定动作与配置标识；服务从受保护存储读取配置和密钥，
 不接收 GUI 提供的任意命令、脚本、服务名或文件路径。服务端管理面不承载 VPN 数据。
-Cloudflare 普通 HTTP/CDN 不能转发该 WireGuard UDP 出口流量，Windows 的 WireGuard Endpoint 直达 Oracle。
+Windows 的 WireGuard Endpoint 直达 Oracle；管理后台 HTTPS 和 VPN UDP 为独立入口。
 
 ### 流量与保护约定
 
@@ -86,20 +88,28 @@ Cloudflare 普通 HTTP/CDN 不能转发该 WireGuard UDP 出口流量，Windows 
 
 ## 后台当前交付范围
 
-目录 `server/admin-cloudflare/` 是可以构建和部署的 Worker/D1 应用，含真实接口和中文界面。
-默认没有演示在线设备或模拟流量；无报告显示未知，报告超过 180 秒显示过期。
-报告入口签名时效 300 秒，限制字段和大小，唯一 ID 防重放，原子写入状态与审计。
-浏览器只能查询；Peer、流量和配置修改显示未接入。
+目录 `server/admin-oracle/` 是可以构建和注册为系统服务的 Django 应用，含真实接口和中文界面。
+SQLite 替代 D1；本机每分钟定时采集替代 GitHub→Cloudflare 公网 HMAC 上报。
+默认不展示模拟在线设备或流量；无报告显示未知，报告超过 180 秒显示过期。
+浏览器只读；Peer、逐设备用量和配置修改仍明确未接入。
 
-部署指南和精确 GitHub Environment 配置见
-[管理后台 README](../server/admin-cloudflare/README.md)。
-三个新工作流分别负责云端验证、Cloudflare 部署、只读 Oracle 状态转发。
-生产部署/转发使用 main 分支和独立 Environment；本版不默认开启周期任务。
+身份验证使用成熟的 django-allauth：GitHub OAuth 状态校验及 PKCE、数字 UID 白名单、
+强制 TOTP，校验完整登录会话中的 GitHub 与 MFA 记录。绑定验证器不等同完成 MFA 登录。
+拒绝本地密码认证、注册和密码重置。动态码防重放/限速缓存保存在共享数据库，
+TOTP 秘密用独立 Fernet 密钥加密；主机配置仅 root 可读，应用通过 systemd 获取必要环境变量。
 
-Peer/端口写入需要后续 Oracle 固定权限执行器，建议事务：
-创建带版本的变更请求 → 校验白名单/端口/地址冲突 → 生成只属于本产品的配置 →
-保存已知正常版本 → 应用 → 独立连通性探测 → 超时自动回滚 → 审计结果。
-不能把现有受限 CI SSH 密钥扩大成后台任意 root shell。
+部署指南和免费的 GitHub OAuth App 设置见
+[Oracle 管理后台 README](../server/admin-oracle/README.md)。
+新 CI 覆盖 Python 3.10/3.12，以及一次性 Linux 主机上真实 systemd 的启动、升级、失败恢复、回滚。
+它不修改或停止现有 Oracle 的生产 VPN。
+
+现有 `oracle-ci` forced-command 密钥不能注册 Web 服务，不扩权成任意 root shell。
+首次注册需要一次服务器管理员会话；代码包、预检、安装器和回滚工具会先完成验证。
+安装器保留现有 Web 配置，由管理员在预检后整合专用 Caddy host block。
+
+Peer/端口写入仍需要后续 Oracle 固定权限执行器，建议事务：
+创建带版本的请求 → 预检与白名单校验 → 生成只属于本产品的配置 → 保存已知正常版本 →
+应用 → 独立连通性检查 → 超时回滚 → 审计结果。
 
 ## 云端优先的验收顺序
 
@@ -108,29 +118,21 @@ Peer/端口写入需要后续 Oracle 固定权限执行器，建议事务：
 | 1 | Windows 编译、离线密钥向量与 ACL、IPC 越权、固定命令边界、包内凭据扫描 | 发布者代码签名身份 |
 | 2 | 隔离 Windows 的真实 WireGuard/WFP、UDP/TCP/DNS、服务崩溃恢复与精确清理 | 启动前防护与真实系统重启，不能用进程重启替代 |
 | 3 | Oracle 受限诊断、独立 Peer 的跨公网握手和出口探测、管理后台身份/审计/回滚 | 授权的测试 Peer 与可回滚服务器配置；先核实 IPv6 能力 |
-| 4 | Cloudflare Worker/D1 集成、JWT 错误矩阵、HMAC 重放和过期检查 | 实际 Cloudflare Access/IdP/MFA 与域名部署 |
+| 4 | Oracle 后台 OAuth/MFA 错误矩阵、SQLite、真实 Linux systemd 生命周期/回滚 | 实际 OAuth App、Oracle 安装、DNS 与 HTTPS 登录验收 |
 | 5 | 已有实验不能证明真实用户侧的 ISP/NAT/UU 行为 | Win11/Win10 本地可恢复电脑上的网易 UU、长连接、断网/重启验收 |
 
 完整上线前还需验证签名安装/升级/卸载中断、密钥迁移失败、配置错误和版本回滚。
 最终 Windows 构建应生成自己的版本号、校验和、依赖许可证、构建来源和可供复核的测试报告。
 
-## 本次完成的验证
+## 当前验证与阻塞
 
-- Node 安全和状态测试：12 项通过。
-- Python 采集器和部署配置测试：4 项通过。
-- workerd/Miniflare：实际打包 Worker + 本地 D1 的上报、重放回滚及未认证拒绝集成测试通过。
-- Wrangler Worker 和三份静态资源 dry-run 构建通过；不代表账号已部署。
-- 仓库既有 release 门禁测试：50 项通过。
-- 新增工作流 YAML 解析通过；依赖审计在本次查询时无已报告漏洞。
-- 当前工具没有浏览器控制能力，未声称完成视觉截图或真实浏览器登录验收。
+Oracle 自托管版的 16 项 Django 集成/身份测试、4 项部署边界测试在本地通过，
+包含模拟 GitHub API 的完整 OAuth → 首次绑定 → 重新登录 → 动态码验证流程；
+拒绝错误账户、伪造 state、仅链接账户、绕过 MFA、错误/重复动态码、本地密码和过期会话。
+Django 部署安全检查与静态资源构建通过。云端检查以 PR #146 最新提交的 Actions 为准，
+不把旧版 Cloudflare 检查结果算作 Oracle 部署证明。
 
-## 当前阻塞与下一步
-
-当前环境没有 Cloudflare 账号凭据、Access 应用参数或 D1 ID；工具目录搜索没有返回 Cloudflare 插件。
-因此不能声称管理域名已经上线。
-GitHub 连接器可以读写该仓库，但本地 gh 的现有令牌不可用；不读取或导出仓库 Secrets。
-已有 Oracle SSH Secrets 应继续留在 GitHub Environment，由 Actions 使用。
-
-需要账号所有者完成的是一次性 Cloudflare/IdP 配置和 GitHub Secret 绑定，而不是日常手动 SSH。
-收到这些配置后，继续运行部署/转发验收，再实现经审核的 Peer 与配置事务执行器，
-并把 Windows 实验模块收敛为可安装、可恢复的单一产品。当前不应把只读后台或 R114 包标为最终成品。
+当前环境没有 Oracle 管理员凭据；已有 CI 仅提供受限诊断，不能注册新服务或调整安全列表。
+需要账号所有者做 DNS A 记录、创建免费 GitHub OAuth App，并在一次管理员会话中填写主机配置。
+Client Secret、MFA 加密密钥与 SSH 私钥不应发送到聊天、代码仓库或 CI 日志。
+后台上线后仍需继续 Windows 产品整合、防泄漏与 UU 验收，不把只读后台或 R114 实验包标为最终成品。

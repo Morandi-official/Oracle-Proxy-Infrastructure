@@ -72,8 +72,10 @@ OAuth Secret 直接填入 GitHub 的 Secret 输入框，不发送聊天，不写
 
 ## 服务器行为与限制
 
-- 初版自动安装器适配 apt 系发行版；当前 Python 太旧时尝试发行版的 Python 3.11 包。
-  对其他发行版，预检会报告信息，随后可在可信 main 中扩展固定安装实现。
+- 自动安装器适配 apt 系 ARM64/x64。旧系统使用独立的 CPython 3.12.15
+  （Astral python-build-standalone 20261013），缺少 Caddy 时安装官方 2.11.7 deb。
+  两者均固定上游 URL 与 SHA256，不替换系统 Python、不添加第三方 apt 源。
+  Python 安装于 `/opt/oracle-proxy-python-3.12.15`，与应用版本回滚独立。
 - GitHub API 和 codeload 需要服务器可访问；API 限流或验证失败时停止，不退回未验证来源。
 - 配置通过 SSH stdin 传输，只允许 OAuth 的 Client ID/Secret，不接受其他环境变量。
   原有 Django/MFA 密钥保留；root-only 日志导出时对已知密钥脱敏。

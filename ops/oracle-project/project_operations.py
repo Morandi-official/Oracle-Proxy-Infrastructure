@@ -17,6 +17,9 @@ WEB_BACKUPS = Path('/var/backups/oracle-project-ops')
 spec = importlib.util.spec_from_file_location('oracle_admin_host', SERVER / 'deploy/host.py')
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
+runtime_spec = importlib.util.spec_from_file_location('oracle_runtime_install', Path(__file__).with_name('runtime_install.py'))
+runtime = importlib.util.module_from_spec(runtime_spec)
+runtime_spec.loader.exec_module(runtime)
 
 
 def run(arguments, **kwargs):
@@ -24,7 +27,7 @@ def run(arguments, **kwargs):
 
 
 def runtime_python():
-    for name in ('python3.13', 'python3.12', 'python3.11', 'python3'):
+    for name in (str(runtime.PYTHON), 'python3.13', 'python3.12', 'python3.11', 'python3'):
         binary = shutil.which(name)
         if binary and subprocess.run([binary, '-c', 'import sys;sys.exit(sys.version_info<(3,11))'],
                                      check=False, stdout=subprocess.DEVNULL).returncode == 0:
@@ -59,13 +62,7 @@ def install_runtime():
     if not shutil.which('apt-get'):
         raise ValueError('RUNTIME_AUTOMATION_CURRENTLY_REQUIRES_APT_DISTRO')
     run(['apt-get', 'update'], env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-    run(['apt-get', 'install', '-y', '--no-install-recommends', 'python3-venv', 'caddy'],
-        env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
-    try:
-        runtime_python()
-    except ValueError:
-        run(['apt-get', 'install', '-y', '--no-install-recommends', 'python3.11', 'python3.11-venv'],
-            env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
+    runtime.install()
     runtime_python()
     print('PROJECT_RUNTIME=READY')
 

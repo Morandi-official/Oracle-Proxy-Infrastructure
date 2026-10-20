@@ -128,12 +128,30 @@ def as_user(user, args, *, cwd, env=None):
 
 
 def seal_tree(path):
-    for directory, subdirs, filenames in os.walk(path, followlinks=False):
-        for item in [Path(directory)] + [Path(directory) / name for name in subdirs + filenames]:
-            info = item.lstat()
-            os.chown(item, 0, 0, follow_symlinks=False)
-            if not stat.S_ISLNK(info.st_mode):
-                item.chmod(0o755 if item.is_dir() or info.st_mode & 0o111 else 0o644)
+    # Anchor every traversal to a locked-down directory descriptor. A build
+    # process must not redirect root chmod/chown through a swapped symlink.
+    def seal(directory_fd):
+        os.fchown(directory_fd, 0, 0); os.fchmod(directory_fd, 0o755)
+        for name in os.listdir(directory_fd):
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                os.chown(name, 0, 0, dir_fd=directory_fd, follow_symlinks=False)
+                continue
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            if stat.S_ISDIR(info.st_mode): flags |= os.O_DIRECTORY
+            elif not stat.S_ISREG(info.st_mode): raise ValueError('Special build files are not accepted')
+            child = os.open(name, flags, dir_fd=directory_fd)
+            try:
+                current = os.fstat(child)
+                if stat.S_ISDIR(current.st_mode): seal(child)
+                elif stat.S_ISREG(current.st_mode):
+                    os.fchown(child, 0, 0)
+                    os.fchmod(child, 0o755 if current.st_mode & 0o111 else 0o644)
+                else: raise ValueError('Build file type changed unexpectedly')
+            finally: os.close(child)
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try: seal(descriptor)
+    finally: os.close(descriptor)
 
 
 def switch(release):
@@ -208,6 +226,8 @@ def install(revision):
                  'ADMIN_GITHUB_CLIENT_ID': 'build-only', 'ADMIN_GITHUB_CLIENT_SECRET': 'build-only'}
     as_user(BUILD_USER, [release / '.venv/bin/python', 'manage.py', 'collectstatic', '--noinput'],
             cwd=release, env=build_env)
+    # Terminate only this product's dedicated builder before sealing its output.
+    subprocess.run(['/usr/bin/pkill', '-KILL', '-u', str(build.pw_uid)], check=False)
     (release / 'revision.env').write_text(f'ADMIN_SOURCE_REVISION={revision}\n')
     seal_tree(release)
     environment['ADMIN_SOURCE_REVISION'] = revision

@@ -31,6 +31,18 @@ def main():
     host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
     if host.ROOT.exists() or host.CONFIG.exists():
         raise SystemExit('Refuse a preexisting application')
+    with tempfile.TemporaryDirectory(prefix='oracle-admin-seal-', dir='/tmp') as temporary:
+        directory = Path(temporary); outside = directory/'outside'; outside.write_text('synthetic')
+        outside.chmod(0o600)
+        tree = directory/'tree'; tree.mkdir(); (tree/'link').symlink_to(outside)
+        host.seal_tree(tree)
+        assert outside.stat().st_mode & 0o777 == 0o600
+        os.mkfifo(tree/'pipe')
+        try:
+            host.seal_tree(tree)
+            raise AssertionError('Special build file was accepted')
+        except ValueError:
+            pass
     try:
         host.prepare_configuration()
     except ValueError:

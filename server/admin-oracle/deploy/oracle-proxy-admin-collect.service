@@ -1,0 +1,27 @@
+[Unit]
+Description=Read-only local Oracle WireGuard diagnostics
+After=network-online.target oracle-proxy-admin.service
+
+[Service]
+Type=oneshot
+User=oracle-proxy-admin
+Group=oracle-proxy-admin
+WorkingDirectory=/opt/oracle-proxy-admin/current
+EnvironmentFile=/etc/oracle-proxy-admin/admin.env
+EnvironmentFile=/opt/oracle-proxy-admin/current/revision.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/oracle-proxy-admin/current/.venv/bin/python manage.py collect_status
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths=/var/lib/oracle-proxy-admin
+TimeoutStartSec=20
+MemoryMax=192M

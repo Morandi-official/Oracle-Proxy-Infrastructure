@@ -4,6 +4,17 @@
 released VPN product.** Do not use these development binaries to replace
 WireSock or for important UU remote sessions.
 
+Latest product assessment and next delivery milestones (2026-10-20):
+[Windows + Oracle + Cloudflare product status](docs/product-delivery-status-20261020.md).
+The R114 experimental portable build contains the embedded native engine and
+offline key generation; it is separate from the default read-only preview below.
+The [Oracle self-hosted administrator console](server/admin-oracle/README.md)
+uses GitHub OAuth plus TOTP MFA, local SQLite, a non-root systemd service,
+and Caddy HTTPS. A [one-time project CI authorization](ops/oracle-project/README.md)
+enables trusted-main administrator deployment and maintenance while keeping the web process unprivileged. Cloudflare is used only for existing DNS hosting; no Zero
+Trust, D1, Workers or card binding is required. The console is not yet deployed
+on the production Oracle host, and Peer/configuration mutations are unavailable.
+
 This repository now hosts the working source baseline consolidated from the
 previous stacked engineering branches. The default Windows GUI build is
 read-only for network effects, not a production connect/disconnect client.

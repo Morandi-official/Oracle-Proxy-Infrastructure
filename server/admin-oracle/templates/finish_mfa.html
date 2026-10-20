@@ -1,0 +1,2 @@
+{% load static %}
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>完成身份验证 · Oracle Proxy</title><link rel="stylesheet" href="{% static 'console/style.css' %}"></head><body><main class="auth-page"><section class="panel"><h1>需要重新验证登录</h1><p>若刚绑定验证器，请退出后重新使用 GitHub 登录，并输入动态码。</p><form method="post" action="{% url 'account_logout' %}">{% csrf_token %}<button type="submit">退出并重新登录</button></form></section></main></body></html>

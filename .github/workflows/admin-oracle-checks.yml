@@ -37,6 +37,7 @@ jobs:
       - run: python manage.py test console --settings config.test_settings --verbosity 2
       - run: python -m unittest discover -s deploy -p 'test_*.py' -v
       - run: python -m unittest discover -s ../../ops/oracle-project -p 'test_*.py' -v
+      - run: python -m unittest discover -s control -p 'test_*.py' -v
       - run: node --check static/console/app.js
       - name: Package source without test-only privileged entrypoints or credentials
         if: matrix.python == '3.12'
@@ -57,7 +58,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install dependencies on disposable runner only
-        run: sudo apt-get update && sudo apt-get install -y caddy python3-venv openssh-server
+        run: sudo apt-get update && sudo apt-get install -y caddy python3-venv openssh-server wireguard-tools ipset iproute2 iptables
       - name: Validate HTTPS reverse proxy configuration
         run: caddy validate --config server/admin-oracle/deploy/Caddyfile --adapter caddyfile
       - name: Real non-root systemd lifecycle, failed startup recovery, and rollback
@@ -72,3 +73,8 @@ jobs:
           sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" ORACLE_ADMIN_DISPOSABLE_CI=1 \
             python3 ops/oracle-project/ci_ssh_smoke.py
+      - name: Real policy service, authenticated local socket, and isolated dual-stack WireGuard restrictions
+        run: |
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" ORACLE_ADMIN_DISPOSABLE_CI=1 \
+            python3 server/admin-oracle/deploy/ci_control_smoke.py

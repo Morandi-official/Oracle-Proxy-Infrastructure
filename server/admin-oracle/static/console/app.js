@@ -1,53 +1,50 @@
+'use strict';
 const el = id => document.getElementById(id);
-const labels = { ACTIVE: '运行中', INACTIVE: '未运行', PRESENT: '接口存在', ABSENT: '接口缺失', LISTENING: '监听中', NOT_LISTENING: '未监听' };
-const actions = { 'snapshot.received': '收到只读诊断', 'snapshot.failed': '诊断采集失败', 'authentication.login': '账号登录', 'authentication.logout': '账号退出', 'authentication.factor_added': '绑定验证器', 'status.read': '查看服务状态' };
-const time = value => new Date(value * 1000).toLocaleString('zh-CN', { timeZoneName: 'short' });
-async function api(path) {
-  const response = await fetch(path, { credentials: 'same-origin', redirect: 'error', cache: 'no-store' });
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 403) throw new Error('登录已失效或需要动态码验证。请打开 /login/ 重新登录。');
-    throw new Error('暂时无法读取管理服务，请稍后重试。');
-  }
-  return response.json();
+const time = v => v ? new Date(v * 1000).toLocaleString('zh-CN', {timeZoneName:'short'}) : '—';
+const size = v => {if (v === null || v === undefined) return '未知'; let n=Number(v), i=0; const u=['B','KiB','MiB','GiB','TiB']; while(n>=1024 && i<4){n/=1024;i++;} return `${n.toFixed(i ? 2 : 0)} ${u[i]}`;};
+const states={active:'可用',disabled:'已禁用',expired:'已到期',quota:'配额耗尽'};
+const errors={CONTROL_SERVICE_UNAVAILABLE:'控制服务不可用，当前数据不能作为实时状态。',BASELINE_CONFIRMATION_REQUIRED:'请核对账期用量并勾选确认。',HOST_ADDRESS_REQUIRED:'该 Peer 包含网段路由，暂不能纳管；只支持独立 /32 或 /128 设备地址。',NO_FREE_IPV4_TUNNEL_ADDRESS:'当前接口没有可分配的私有 IPv4 地址。',INVALID_PUBLIC_KEY:'请输入本机生成的 WireGuard 公钥，不是私钥。',PEER_ALREADY_EXISTS:'此 Peer 已存在，请使用“绑定 / 调整已有 Peer”。',PEER_NOT_FOUND:'未找到该 Peer，请刷新后选择已有设备。',INVALID_BUDGET:'额度必须大于零，安全余量必须小于额度。',CONTROL_UNAVAILABLE:'控制服务暂时不可用；已纳管流量仍受内核规则保护。'};
+let current=null, busy=false, budgetInitialized=false, lastBasic=0, baseAudit=[];
+function feedback(text, error=false){el('feedback').hidden=false;el('feedback').textContent=text;el('feedback').classList.toggle('error',error);}
+async function api(path, value){
+ const options={credentials:'same-origin',redirect:'error',cache:'no-store'};
+ if(value){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRFToken':document.querySelector('[name=csrfmiddlewaretoken]').value};options.body=JSON.stringify(value);}
+ const response=await fetch(path,options); const data=await response.json().catch(()=>({error:'INVALID_RESPONSE'}));
+ if(!response.ok){if(response.status===401)throw new Error('登录已失效，请重新登录。');if(response.status===403)throw new Error('需要动态码验证，或页面已过期，请重新打开登录页。');throw new Error(errors[data.error] || `操作未完成（${data.error || response.status}）。`);}
+ return data;
 }
-let busy = false;
-async function refresh() {
-  if (busy) return;
-  busy = true; el('refresh').disabled = true;
-  try {
-    const data = await api('/api/status');
-    el('identity').textContent = data.actor;
-    const snapshot = data.snapshot;
-    el('service').textContent = labels[snapshot?.wg_service] || '未知';
-    el('interface').textContent = labels[snapshot?.wg_interface] || '未知';
-    el('listener').textContent = labels[snapshot?.udp_listener] || '未知';
-    el('freshness').textContent = data.age_seconds === null ? '尚无数据' : data.age_seconds < 60 ? `${data.age_seconds} 秒前` : `${Math.floor(data.age_seconds / 60)} 分钟前`;
-    el('observed').textContent = snapshot ? time(snapshot.observed_at) : '等待受信采集器';
-    el('notice').classList.toggle('error', data.freshness !== 'fresh');
-    el('notice').textContent = data.freshness === 'fresh' ? '已收到近期诊断。服务状态不代表客户端已建立握手或可以上网。' : snapshot ? '诊断数据已过期，以上为历史状态，不能据此判断服务器当前在线。' : '尚未收到服务器诊断。请先配置受信采集链路。';
-    const audit = await api('/api/audit');
-    const rows = audit.entries.map(entry => {
-      const row = document.createElement('tr');
-      for (const value of [time(entry.occurred_at), entry.actor, actions[entry.action] || entry.action, entry.resource]) {
-        const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
-      }
-      return row;
-    });
-    if (!rows.length) {
-      const row = document.createElement('tr'); const cell = document.createElement('td');
-      cell.colSpan = 4; cell.textContent = '暂无审计记录'; row.append(cell); rows.push(row);
-    }
-    el('audit-rows').replaceChildren(...rows);
-  } catch (error) {
-    el('notice').classList.add('error');
-    el('notice').textContent = `${error.message} 上次显示的数据可能已过期。`;
-    el('freshness').textContent = '读取失败';
-    el('audit-rows').textContent = '';
-  } finally { busy = false; el('refresh').disabled = false; }
+function cell(row,value){const td=document.createElement('td');td.textContent=value;row.append(td);return td;}
+function button(parent,label,action){const b=document.createElement('button');b.type='button';b.textContent=label;b.addEventListener('click',action);parent.append(b);}
+function render(data){
+ current=data;const b=data.budget;const age=data.observed_at ? Math.max(0,Date.now()/1000-data.observed_at) : null;
+ el('remaining').textContent=size(b.remaining_bytes);el('outbound').textContent=size(b.measured_outbound_bytes);el('available').textContent=size(b.vpn_available_bytes);
+ el('balance-basis').textContent=b.history_complete ? '手工核对基线 + 本机增量估算' : '历史未核对 / 采集有缺口';
+ el('egress-interface').textContent=`VNIC ${data.nics.join(', ') || '未知'} · 仅出站 TX`;
+ el('enforcement').textContent=data.error ? '采集 / 执行异常' : b.guard_blocked ? '总量保护已阻断' : b.guard_enabled ? '总量保护已启用' : '用户策略运行中';
+ el('freshness').textContent=age===null?'暂无数据':`采样 ${Math.floor(age)} 秒前 · 租约 ${data.lease_seconds} 秒`;
+ el('notice').classList.toggle('error',Boolean(data.error || age===null || age>20 || b.guard_blocked));
+ el('notice').textContent=data.error ? '采集或执行异常，放行租约不再续期。请检查控制服务，不能把历史数据当成实时余额。' : b.guard_blocked ? 'VPN 总量保护正在阻断：预算已到安全阈值，或当前账期历史未知。HTTPS 与公网 SSH 保留。' : `监管采样约 ${data.sample_interval_seconds} 秒一次；未纳管 Peer ${data.peers.filter(p=>!p.managed).length} 个。`;
+ el('usage-explanation').textContent=`用户配额统计 WireGuard 上传+下载；Oracle 出站保护统计物理 VNIC 发送字节，二者口径不同。当前采集始于 ${time(b.started_at)}。Oracle 官方 API 尚未接入，余额为本机估算。`;
+ const users=new Map(data.users.map(u=>[u.id,u])); const selected=el('peer-user').value;
+ el('peer-user').replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='选择用户';el('peer-user').append(empty);
+ for(const u of data.users){const option=document.createElement('option');option.value=u.id;option.textContent=u.name;el('peer-user').append(option);}el('peer-user').value=selected;
+ const rows=data.users.map(u=>{const row=document.createElement('tr');cell(row,`${u.name} · ${states[u.status]}`);cell(row,size(u.usage.rx+u.usage.tx));cell(row,u.quota===null?'不限':size(u.remaining_bytes));cell(row,u.expires===null?'长期':time(u.expires));const actions=cell(row,'');button(actions,'编辑',()=>editUser(u));button(actions,u.enabled?'禁用':'启用',()=>mutate('user.put',{id:u.id,name:u.name,quota_bytes:u.quota,expires_at:u.expires,enabled:!u.enabled}));return row;});
+ el('user-rows').replaceChildren(...rows);if(!rows.length)emptyRow('user-rows',5,'尚无用户，请先创建用户策略。');
+ const peerRows=data.peers.map(p=>{const row=document.createElement('tr');cell(row,`${p.name || '未命名设备'} · ${p.fingerprint}${p.present?'':' · 接口中缺失'}`);cell(row,users.get(p.user_id)?.name || '未纳管（不执行用户配额）');cell(row,p.allowed_ips.join(', '));cell(row,p.handshake?time(p.handshake):'尚未握手');cell(row,size(p.usage.rx+p.usage.tx));const actions=cell(row,'');button(actions,'绑定',()=>{const f=el('peer-form');f.elements.public_key.value=p.public_key;f.elements.name.value=p.name || p.fingerprint;f.elements.user_id.value=p.user_id || '';f.scrollIntoView({behavior:'smooth'});});button(actions,'接入信息',()=>showProfile(p,data));return row;});
+ el('peer-rows').replaceChildren(...peerRows);if(!peerRows.length)emptyRow('peer-rows',6,'尚无 Peer；可以填写客户端公钥创建设备。');
+ if(!budgetInitialized){const f=el('budget-form');f.elements.limit.value=b.limit_bytes/1e12;f.elements.reserve.value=b.reserve_bytes/1e9;f.elements.guard.checked=b.guard_enabled;budgetInitialized=true;}
+ el('budget-detail').textContent=`UTC 账期 ${b.current_period}；安全余量 ${size(b.reserve_bytes)}；历史基线 ${b.baseline_at ? time(b.baseline_at) : '未核对'}；发现计数缺口 ${b.accounting_gaps} 次。保存额度/余量不会重置已用量；填写新基线则从当前时刻重新校准。`;
+ const entries=[...baseAudit,...data.audit.map(a=>({occurred_at:a.at,actor:a.actor,action:a.action,resource:a.resource}))].sort((a,b)=>b.occurred_at-a.occurred_at).slice(0,100);
+ el('audit-rows').replaceChildren(...entries.map(a=>{const r=document.createElement('tr');for(const v of [time(a.occurred_at),a.actor,a.action,a.resource])cell(r,v);return r;}));
 }
-el('refresh').addEventListener('click', refresh);
-for (const link of document.querySelectorAll('nav a')) link.addEventListener('click', () => {
-  for (const other of document.querySelectorAll('nav a')) other.classList.toggle('active', link === other);
-});
-refresh();
-setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+function emptyRow(id,cols,text){const r=document.createElement('tr');const c=cell(r,text);c.colSpan=cols;el(id).append(r);}
+function editUser(u){const f=el('user-form');f.elements.id.value=u.id;f.elements.name.value=u.name;f.elements.quota.value=u.quota===null?'':u.quota/2**30;f.elements.enabled.checked=u.enabled;if(u.expires){const d=new Date(u.expires*1000);f.elements.expires.value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}else f.elements.expires.value='';f.scrollIntoView({behavior:'smooth'});}
+function showProfile(p,data){el('device-profile').hidden=false;el('device-profile').textContent='客户端接入信息（不含私钥；Windows 最终导入流程仍在整合）\n'+JSON.stringify({schema:'oracle-proxy-device-v1',endpoint:`152.67.156.100:${data.listen_port}`,server_public_key:data.server_public_key,client_public_key:p.public_key,addresses:p.allowed_ips,allowed_ips:['0.0.0.0/0'],ipv6_policy:'block-until-validated',dns:['1.1.1.1']},null,2);}
+async function refresh(){if(busy)return;busy=true;el('refresh').disabled=true;try{if(Date.now()-lastBasic>30000){const [status,audit]=await Promise.all([api('/api/status'),api('/api/audit')]);lastBasic=Date.now();baseAudit=audit.entries;el('identity').textContent=status.actor;const labels={ACTIVE:'运行中',INACTIVE:'未运行',PRESENT:'存在',ABSENT:'缺失',LISTENING:'监听中',NOT_LISTENING:'未监听'};for(const [id,k] of [['service','wg_service'],['interface','wg_interface'],['listener','udp_listener']])el(id).textContent=labels[status.snapshot?.[k]] || '未知';el('observed').textContent=status.snapshot?time(status.snapshot.observed_at):'尚无诊断';}render(await api('/api/control'));}catch(error){el('notice').classList.add('error');el('notice').textContent=`${error.message} 上次显示数据可能已过期。`;el('freshness').textContent='读取失败';}finally{busy=false;el('refresh').disabled=false;}}
+async function mutate(operation,data){try{render(await api('/api/control',{operation,data}));feedback('策略已保存并执行。');return true;}catch(error){feedback(error.message,true);return false;}}
+el('user-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;const ok=await mutate('user.put',{id:f.elements.id.value || null,name:f.elements.name.value,quota_bytes:f.elements.quota.value===''?null:Math.round(Number(f.elements.quota.value)*2**30),expires_at:f.elements.expires.value?Math.floor(new Date(f.elements.expires.value).getTime()/1000):null,enabled:f.elements.enabled.checked});if(ok && !f.elements.id.value)f.reset();});
+el('user-reset').addEventListener('click',()=>{el('user-form').reset();el('user-form').elements.id.value='';});
+async function peerAction(operation){const f=el('peer-form');if(!f.reportValidity())return;await mutate(operation,{public_key:f.elements.public_key.value.trim(),name:f.elements.name.value,user_id:f.elements.user_id.value});}
+el('peer-form').addEventListener('submit',event=>{event.preventDefault();peerAction('peer.create');});el('assign-peer').addEventListener('click',()=>peerAction('peer.assign'));
+el('budget-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;if(f.elements.guard.checked && current?.budget.remaining_bytes===null && f.elements.prior.value==='' && !window.confirm('历史基线未知。启用后将阻断全部 VPN 流量，直到核对本期基线。继续？'))return;const ok=await mutate('budget.set',{limit_bytes:Math.round(Number(f.elements.limit.value)*1e12),reserve_bytes:Math.round(Number(f.elements.reserve.value)*1e9),guard_enabled:f.elements.guard.checked,prior_usage_bytes:f.elements.prior.value===''?null:Math.round(Number(f.elements.prior.value)*1e9),confirm_current_period:f.elements.confirm.checked});if(ok){f.elements.prior.value='';f.elements.confirm.checked=false;}});
+el('refresh').addEventListener('click',refresh);refresh();setInterval(()=>{if(!document.hidden)refresh();},5000);

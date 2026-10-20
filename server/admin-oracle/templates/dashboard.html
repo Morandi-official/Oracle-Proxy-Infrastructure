@@ -1,44 +1,17 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Oracle Proxy · 管理控制台</title><link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script>
-</head>
-<body>
-  <aside>
-    <div class="brand"><span class="logo">O</span><div>ORACLE PROXY<small>基础设施控制台</small></div></div>
-    <nav aria-label="控制台导航">
-      <a href="#overview" class="active">◈ 服务概览</a><a href="#devices">▤ 设备与 Peer</a>
-      <a href="#audit">≡ 操作审计</a><a href="#configuration">⚙ 服务器配置</a>
-    </nav>
-    <div class="sidebar-foot"><span class="dot"></span> 管理平面 / HTTPS<small>GitHub 身份验证 + 验证器动态码</small></div>
-  </aside>
-  <main>
-    <header><span>基础设施 <b>/</b> Oracle 主节点</span><span id="identity">正在验证管理员身份…</span></header>
-    <section id="overview">
-      <div class="heading"><div><p class="eyebrow">NETWORK OVERVIEW</p><h1>让连接状态清晰可见。</h1><p class="muted">查看 Oracle 出口服务与最近的诊断记录。</p></div><button id="refresh" type="button">↻ 刷新状态</button></div>
-      <div id="notice" class="notice" role="status" aria-live="polite">正在读取服务器状态…</div>
-      <div class="metrics">
-        <article><span>WireGuard 服务</span><strong id="service">未知</strong><small>Oracle · wg-quick@wg0</small></article>
-        <article><span>隧道接口</span><strong id="interface">未知</strong><small>服务器接口存在性</small></article>
-        <article><span>UDP 51820</span><strong id="listener">未知</strong><small>监听状态 ≠ 已握手</small></article>
-        <article><span>最近采集</span><strong id="freshness">尚无数据</strong><small id="observed">等待受信采集器</small></article>
-      </div>
-      <div class="columns">
-        <article class="panel"><div class="panel-heading"><h2>连接路径</h2><span class="tag">架构目标</span></div>
-          <div class="path"><div><span>01</span><b>Windows 客户端</b><small>普通用户图形界面</small></div><i>↓ WireGuard 加密隧道</i><div><span>02</span><b>Oracle 云出口</b><small>TCP / UDP · IPv4 / IPv6 / DNS</small></div><i>↓</i><div><span>03</span><b>互联网</b><small>实际出口需要独立验收</small></div></div>
-        </article>
-        <article class="panel"><div class="panel-heading"><h2>交付状态</h2><span class="tag amber">研发中</span></div>
-          <ul class="checklist"><li><b>独立 Windows 便携 Alpha</b><span>已有实验构建</span></li><li><b>Oracle 只读诊断</b><span>已验证部署</span></li><li><b>系统级防泄漏与开机恢复</b><span>待实机验收</span></li><li><b>UU 远程控制连续性</b><span>待实机验收</span></li><li><b>签名安装与安全升级</b><span>尚未交付</span></li></ul>
-          <p class="muted">服务运行状态不能替代 Windows 端到端 VPN、防泄漏和远控兼容性验证。</p>
-        </article>
-      </div>
-    </section>
-    <section id="devices" class="panel"><div class="panel-heading"><h2>设备与 Peer</h2><span class="tag">未接入采集</span></div><p class="muted">当前 Oracle 诊断权限不包含 Peer 信息。设备数量、握手时间与流量用量尚无数据。</p><div class="empty">接入经审核的受限 Agent 后，这里将显示真实设备。</div><button disabled>添加设备 · 等待服务端权限接口</button></section>
-    <section id="audit" class="panel"><div class="panel-heading"><h2>操作审计</h2><span class="tag">最近 100 条 · 保留 30 天</span></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>身份</th><th>操作</th><th>对象</th></tr></thead><tbody id="audit-rows"><tr><td colspan="4">正在读取…</td></tr></tbody></table></div></section>
-    <section id="configuration" class="panel"><div class="panel-heading"><h2>服务器配置</h2><span class="tag amber">当前只读</span></div><p class="muted">端口与 Peer 变更需要独立的最小权限执行器、配置校验、连通性验证和自动回滚。当前后台尚未开放修改。</p><div class="configuration"><label>WireGuard UDP 端口<input value="51820（当前诊断目标）" disabled></label><button disabled>提交变更 · 尚未开放</button></div></section>
-    <footer>Oracle Proxy · 管理员控制台 · <a href="/accounts/2fa/">双重验证设置</a> <span>Windows 日常连接请使用客户端</span></footer>
-  </main>
-</body>
-</html>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Oracle Proxy · 管理控制台</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body>
+<aside><div class="brand"><span class="logo">O</span><div>ORACLE PROXY<small>用量与访问控制</small></div></div><nav aria-label="控制台导航"><a href="#overview" class="active">◈ 流量总览</a><a href="#users">◉ 用户与配额</a><a href="#devices">▤ 设备与 Peer</a><a href="#budget">⚙ 月度出站保护</a><a href="#audit">≡ 操作审计</a></nav><div class="sidebar-foot">管理平面 / HTTPS<small>GitHub + 动态码 · 仅管理员</small></div></aside>
+<main><header><span>基础设施 / Oracle 主节点</span><span id="identity">正在验证身份…</span></header>
+<section id="overview"><div class="heading"><div><p class="eyebrow">USAGE & ACCESS CONTROL</p><h1>用量有数，访问有界。</h1><p class="muted">用户月配额、设备有效期与服务器出站监管。</p></div><button id="refresh" type="button">↻ 刷新</button></div><div id="notice" class="notice" role="status" aria-live="polite">正在读取…</div>
+<div class="metrics"><article><span>本账期估算剩余出站</span><strong id="remaining">未知</strong><small id="balance-basis">等待历史基线核对</small></article><article><span>持续采集的本月出站</span><strong id="outbound">未知</strong><small id="egress-interface">物理 VNIC TX · 含 VPN 外流量</small></article><article><span>VPN 可用预算</span><strong id="available">未知</strong><small>剩余出站 − 安全余量</small></article><article><span>限制执行状态</span><strong id="enforcement">未知</strong><small id="freshness">等待控制服务</small></article></div>
+<div class="panel service-line"><span>WireGuard：<b id="service">未知</b></span><span>接口：<b id="interface">未知</b></span><span>UDP：<b id="listener">未知</b></span><span id="observed">尚无诊断</span></div><p class="muted" id="usage-explanation">Oracle 官方用量未接入。实时本机计数不能替代账单；历史未知时不会显示满额余额。</p></section>
+<section id="users" class="panel"><div class="panel-heading"><h2>用户与共享月配额</h2><span class="tag">UTC 自然月 · 上传 + 下载</span></div><p class="muted">一个用户可绑定多个设备。禁用、到期或超额后阻断其已纳管设备；月配额在下月自动重新计算，修改策略不会清除本月已用量。</p>
+<form id="user-form" class="form-grid">{% csrf_token %}<input type="hidden" name="id"><label>用户名称<input name="name" required maxlength="80" placeholder="例如：家用电脑"></label><label>月配额 / GiB（空白为不限）<input name="quota" type="number" min="0" max="9000000" step="0.01" placeholder="100"></label><label>有效期（本地时间，空白为长期）<input name="expires" type="datetime-local"></label><label class="checkbox"><input name="enabled" type="checkbox" checked>启用用户</label><div class="form-actions"><button type="submit">保存用户策略</button><button id="user-reset" type="button">新建用户</button></div></form>
+<div class="table-wrap"><table><thead><tr><th>用户 / 状态</th><th>本月已用</th><th>剩余配额</th><th>有效期</th><th>操作</th></tr></thead><tbody id="user-rows"></tbody></table></div></section>
+<section id="devices" class="panel"><div class="panel-heading"><h2>设备与 WireGuard Peer</h2><span class="tag">私钥仅留在客户端</span></div><p class="muted">已有 Peer 先显示为未纳管；绑定用户后才执行该用户的限制。新设备填入 Windows 本机生成的公钥，系统自动分配隧道 IPv4 地址并保存服务器侧 Peer。</p>
+<form id="peer-form" class="form-grid"><label>设备名称<input name="name" required maxlength="80" placeholder="Win11 主控电脑"></label><label>所属用户<select name="user_id" required id="peer-user"></select></label><label class="wide">客户端公钥（不是私钥）<input name="public_key" required minlength="44" maxlength="44" autocomplete="off"></label><div class="form-actions"><button type="submit">新增 Peer</button><button id="assign-peer" type="button">绑定 / 调整已有 Peer</button></div></form>
+<div class="table-wrap"><table><thead><tr><th>设备 / 指纹</th><th>用户</th><th>隧道地址</th><th>最近握手</th><th>采集后用量</th><th>操作</th></tr></thead><tbody id="peer-rows"></tbody></table></div><p class="muted">未握手不等于离线。当前新建设备仅分配已验证接口上的 IPv4 地址；Windows 最终客户端仍需完成 IPv6 防泄漏与 UU 兼容验收。</p><pre id="device-profile" class="profile" hidden></pre></section>
+<section id="budget" class="panel"><div class="panel-heading"><h2>服务器月度出站保护</h2><span class="tag amber">本机估算 · 不是 Oracle 账单</span></div><p class="muted">Oracle 公示每月 10 TB 免费出站。此处 TB = 10¹² 字节，GiB = 2³⁰ 字节。仅一台实例也需要核对采集前的历史用量与官方报表延迟。账期采用 UTC 自然月。</p>
+<form id="budget-form" class="form-grid"><label>月度出站额度 / TB<input name="limit" type="number" min="0.001" max="1000" step="0.001" required value="10"></label><label>保留安全余量 / GB<input name="reserve" type="number" min="0" max="1000000" step="0.001" required value="1000"></label><label>截至现在的本期已用出站 / GB<input name="prior" type="number" min="0" max="10000000" step="0.001" placeholder="未知时留空，不会假定为零"></label><label class="checkbox"><input name="confirm" type="checkbox">我已核对当前账期用量，并计入未入账余量</label><label class="checkbox wide"><input name="guard" type="checkbox">启用服务器 VPN 总量保护（额度/历史未知或达到安全阈值时阻断所有 VPN Peer，含未纳管 Peer）</label><div class="form-actions"><button type="submit">保存出站保护策略</button></div></form>
+<p id="budget-detail" class="muted">等待采集。</p><p class="muted">采样约每 5 秒一次；服务异常时放行租约最多保留 20 秒。出站保护只阻断 VPN，管理服务与其他系统流量仍会消耗额度。安全余量用于覆盖延迟、加密开销和采样误差，不能承诺账单绝不超额。发现重启/计数缺口后将余额标为未知，启用保护时保持阻断，需重新核对基线。</p><a href="https://www.oracle.com/cloud/networking/virtual-cloud-network/pricing/" target="_blank" rel="noreferrer">Oracle 官方出站计价</a></section>
+<section id="audit" class="panel"><div class="panel-heading"><h2>策略与访问审计</h2><span class="tag">最近记录</span></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>管理员</th><th>操作</th><th>对象</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
+<footer>Oracle Proxy · Windows 便携客户端 + 服务器管理后台 <a href="/accounts/2fa/">双重验证设置</a></footer><div id="feedback" class="notice" role="status" aria-live="polite" hidden></div></main></body></html>

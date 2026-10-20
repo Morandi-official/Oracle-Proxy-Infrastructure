@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -178,10 +179,22 @@ def enable_https():
 
 
 def status():
-    for unit in host.UNIT_NAMES:
+    for unit in (*host.UNIT_NAMES, 'caddy.service', 'wg-quick@wg0.service'):
         result = subprocess.run(['systemctl', 'show', unit, '--property=ActiveState,SubState,User'],
                                 capture_output=True, text=True, check=False)
         print(unit + '\n' + result.stdout.strip())
+    print('LOCAL_APPLICATION_HEALTHY=' + str(host.healthy()))
+    try:
+        print('ADMIN_DNS=' + json.dumps(sorted({x[4][0] for x in socket.getaddrinfo(host.HOST, 443)})))
+    except OSError: print('ADMIN_DNS=UNRESOLVED')
+    # Read-only networking diagnostics; no private keys, config bodies or Peer inventories.
+    for command in (['ss', '-lnt', '( sport = :80 or sport = :443 or sport = :8787 )'],
+                    ['iptables', '-S', 'INPUT'], ['ip6tables', '-S', 'INPUT'],
+                    ['ufw', 'status'],
+                    ['journalctl', '--no-pager', '-n', '25', '-u', 'caddy.service']):
+        if shutil.which(command[0]):
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
+            print('DIAGNOSTIC=' + command[0] + '\n' + result.stdout[:20000])
 
 
 def logs():

@@ -104,6 +104,10 @@ class BridgeTests(unittest.TestCase):
                       {'operation':'status','request_id':'../../tmp'}):
             with self.assertRaises(ValueError): request.parse_request(json.dumps(value).encode())
 
+    def test_explicit_manifest_can_request_status_with_a_diagnostics_code_change(self):
+        with patch.dict(request.os.environ, {'GITHUB_EVENT_NAME':'push', 'BEFORE_REVISION':REVISION}), patch.object(request.subprocess, 'check_output', return_value=request.REQUEST + '\nops/oracle-project/project_operations.py\n'), patch.object(request.Path, 'read_bytes', return_value=b'{"operation":"status","request_id":"diagnostics-1"}'):
+            self.assertEqual(request.choose(), 'status')
+
     def test_root_owned_file_writer_rejects_symlink_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); target = root / 'target'; target.write_text('unchanged')

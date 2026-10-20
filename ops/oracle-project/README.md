@@ -60,7 +60,8 @@ OAuth Secret 直接填入 GitHub 的 Secret 输入框，不发送聊天，不写
 在激活前，push 事件明确跳过实际服务器操作；手动 workflow_dispatch 可用于定点操作。
 
 - main 上后台/运维代码更新，自动完成预检、必要依赖安装、配置、部署、HTTPS 配置和 HTTPS 检查。
-- 只修改 `ops/oracle-project/request.json` 可提交一个固定运维请求；例如：
+- 更新 `ops/oracle-project/request.json` 可提交一个固定运维请求，也可与诊断代码修复一同提交。
+  显式更新的请求优先于默认 deploy；例如：
 
 ```json
 {"operation":"preflight","request_id":"preflight-20261020-01"}

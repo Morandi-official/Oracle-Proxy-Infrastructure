@@ -43,6 +43,11 @@ def worker(path):
  def ping(expected):
   for address in ('10.200.0.2','fd42:200::2'):
    result=subprocess.run(['ip','netns','exec','opx-client','ping','-c','1','-W','1',address],capture_output=True)
+   if (result.returncode==0)!=expected:
+    print('SYNTHETIC_PACKET_TARGET='+address+'\n'+result.stdout.decode()+result.stderr.decode(),file=sys.stderr,flush=True)
+    for args in (['ip','netns','exec','opx-client','ip','route','get',address],['wg','show','wg0','latest-handshakes'],['ip','route','show'],['ip','-6','route','show'],['iptables','-S','FORWARD'],['ip6tables','-S','FORWARD']):
+     diagnostic=subprocess.run(args,capture_output=True,text=True,check=False)
+     print('SYNTHETIC_NAMESPACE_DIAGNOSTIC='+args[0]+' '+diagnostic.stdout+diagnostic.stderr,file=sys.stderr,flush=True)
    assert (result.returncode==0)==expected,'Synthetic forwarded IPv4/IPv6 packet disposition mismatch'
  def user(**kwargs):
   data={'id':None,'name':'CI synthetic user','quota_bytes':1000000,'expires_at':None,'enabled':True};data.update(kwargs)

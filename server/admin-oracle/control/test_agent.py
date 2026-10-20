@@ -13,7 +13,7 @@ KEY3='AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM='
 
 class FakeDriver:
  def __init__(self):
-  self.value={'peers':{KEY1:{'allowed_ips':['10.250.0.2/32'],'rx':100,'tx':100,'handshake':0},KEY2:{'allowed_ips':['10.250.0.3/32'],'rx':200,'tx':300,'handshake':0}},'nics':{'eth0':{'rx':1000,'tx':2000}},'boot':'first','networks':['10.250.0.1/24'],'server_public_key':KEY3,'listen_port':51820}
+  self.value={'peers':{KEY1:{'allowed_ips':['10.250.0.2/32'],'rx':100,'tx':100,'handshake':0},KEY2:{'allowed_ips':['10.250.0.3/32'],'rx':200,'tx':300,'handshake':0}},'nics':{'eth0':{'rx':1000,'tx':2000}},'boot':'first','networks':['10.250.0.1/24'],'server_public_key':'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=','listen_port':51820}
   self.allowed=set();self.managed=set();self.global_allowed=False;self.fail=False
  def initialize(self,guarded): self.guarded=guarded
  def leases(self,managed,allowed,global_allowed): self.managed.update(managed);self.allowed=set(allowed);self.global_allowed=global_allowed

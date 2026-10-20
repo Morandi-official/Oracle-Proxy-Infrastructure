@@ -335,6 +335,7 @@ class Engine:
             peer = self.observation['peers'].get(key)
             existing = self.db.execute('SELECT * FROM devices WHERE key=?',(key,)).fetchone()
             if operation == 'peer.create':
+                if key == self.observation['server_public_key']: raise ValueError('CLIENT_PUBLIC_KEY_EQUALS_SERVER')
                 if peer or existing: raise ValueError('PEER_ALREADY_EXISTS')
                 occupied = [ipaddress.ip_network(a) for p in self.observation['peers'].values() for a in p['allowed_ips']]
                 occupied.extend(ipaddress.ip_network(a) for row in self.db.execute('SELECT addresses FROM devices') for a in json.loads(row[0]))

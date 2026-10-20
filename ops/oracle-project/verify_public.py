@@ -14,7 +14,9 @@ def main():
     for path, expected in (('/login/', 200), ('/static/console/style.css', 200),
                            ('/static/console/app.js', 200), ('/style.css', 401), ('/app.js', 401),
                            ('/', 302), ('/api/status', 401), ('/api/audit', 401),
-                           ('/api/health', 404), ('/accounts/login/', 404)):
+                           ('/api/health', 404), ('/accounts/login/', 200),
+                           ('/accounts/password/reset/', 404), ('/accounts/password/set/', 404),
+                           ('/accounts/signup/', 404)):
         try:
             response = opener.open(BASE + path, timeout=10)
         except urllib.error.HTTPError as error:
@@ -26,6 +28,10 @@ def main():
                 assert response.headers.get('Strict-Transport-Security')
                 assert response.headers.get('X-Frame-Options') == 'DENY'
                 assert response.headers.get('X-Content-Type-Options') == 'nosniff'
+            if path in ('/login/', '/accounts/login/'):
+                body = response.read(65536)
+                assert b'github/login/' in body
+                assert b'type="password"' not in body
         print(f'PUBLIC_CHECK={path} HTTP_{expected}_PASS')
     print('PUBLIC_HTTPS_AND_UNAUTHENTICATED_BOUNDARIES=PASS')
 

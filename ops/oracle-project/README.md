@@ -82,7 +82,10 @@ OAuth Secret 直接填入 GitHub 的 Secret 输入框，不发送聊天，不写
   原有 Django/MFA 密钥保留；root-only 日志导出时对已知密钥脱敏。
 - HTTPS 配置添加专用 Caddy import/snippet，保存原配置；校验或 reload 失败时恢复原文件。
   现有同名 host 配置冲突会停止，不覆盖未知网站。
-- 不自动删除或重写现有 WireGuard Peer、SSH 配置、路由、DNS 或防火墙。
+- HTTPS 安装增加带 `oracle-proxy-admin-https` 标记的 TCP 80/443 入站放行规则，
+  由独立 oneshot systemd 服务在开机后恢复；不清空规则或改默认策略，事前规则备份保存在
+  `/var/backups/oracle-project-ops/before-web-iptables-save`（及 IPv6 对应文件）。
+- 不自动删除或重写现有 WireGuard Peer、SSH 配置、路由或 DNS。
   后续确有项目网络需求时，可在可信 main 中增加经过测试的特定操作。
 - 操作结果元数据写入 root-only `/var/lib/oracle-project-ops/audit.jsonl`，不写请求正文或密钥。
 - 已完成的网页 root-only 配置、备份和实际主机权限不能由云端构建成功替代，需激活后验证。

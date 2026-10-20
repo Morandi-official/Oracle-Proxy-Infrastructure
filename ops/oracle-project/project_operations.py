@@ -119,6 +119,28 @@ def atomic(path, body, mode):
         if os.path.exists(temporary): os.unlink(temporary)
 
 
+def enable_web_firewall():
+    helper = Path('/usr/local/libexec/oracle-project/web_firewall.py')
+    unit = Path('/etc/systemd/system/oracle-proxy-admin-web-firewall.service')
+    marker = 'Description=Oracle Proxy admin HTTP HTTPS firewall allowance'
+    if unit.is_symlink() or (unit.exists() and marker not in unit.read_text()):
+        raise ValueError('FOREIGN_FIREWALL_UNIT_REJECTED')
+    # Capture the prior rules for diagnosis without replacing or flushing any chains.
+    for name in ('iptables-save', 'ip6tables-save'):
+        if shutil.which(name):
+            backup = WEB_BACKUPS / ('before-web-' + name)
+            if not backup.exists():
+                atomic(backup, subprocess.check_output([name]), 0o600)
+    atomic(helper, Path(__file__).with_name('web_firewall.py').read_bytes(), 0o644)
+    atomic(unit, (f'[Unit]\n{marker}\nAfter=network-pre.target netfilter-persistent.service\n'
+                 'Before=caddy.service\n[Service]\nType=oneshot\nRemainAfterExit=yes\n'
+                 'ExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/web_firewall.py\n'
+                 '[Install]\nWantedBy=multi-user.target\n').encode(), 0o644)
+    run(['systemctl', 'daemon-reload'])
+    run(['systemctl', 'enable', 'oracle-proxy-admin-web-firewall.service'])
+    run(['systemctl', 'restart', 'oracle-proxy-admin-web-firewall.service'])
+
+
 def deploy(revision):
     current = host.ROOT / 'current'
     if current.is_symlink() and current.resolve().name == revision:
@@ -160,6 +182,7 @@ def enable_https():
     atomic(candidate, updated, 0o644)
     try:
         run(['caddy', 'validate', '--config', str(candidate), '--adapter', 'caddyfile'])
+        enable_web_firewall()
         atomic(main, updated, main_mode)
         if info is not None: os.chown(main, info.st_uid, info.st_gid)
         run(['systemctl', 'reload', 'caddy'])

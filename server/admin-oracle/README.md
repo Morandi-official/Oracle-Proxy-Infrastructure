@@ -14,11 +14,29 @@
 - TOTP 与恢复信息使用独立 Fernet 密钥加密；加密密钥和 Django 会话密钥保存在 root-only 配置文件。
 - SQLite 保存状态、会话、共享限速/防重放缓存及审计；无需第三方数据库。
 - 本机 systemd 定时器每分钟用普通系统账号采集 wg0 服务、接口与 UDP 51820 监听信息。
-- 无数据时显示未知，180 秒后显示过期，日志保留 30 天。Peer/流量/端口修改尚未接入。
+- 无数据时显示未知，诊断 180 秒后显示过期，网页审计保留 30 天。
+- 新增独立 root 控制服务：真实 Peer/握手、用户与设备绑定、月配额、到期/禁用、VNIC 出站与预算保护。
 - Gunicorn 仅监听 `127.0.0.1:8787`；Caddy 提供免费自动续期 HTTPS 证书。
 - 应用、诊断进程均不拥有 root、sudo 或 Linux capabilities；网页不包含 SSH 或任意命令入口。
 
-这是只读管理面首版，不代表完整 Windows VPN、防泄漏、UU 连续性和配置管理已经验收。
+Windows 正式便携客户端、防泄漏、UU 连续性、完整安装升级和端口配置仍需继续交付。
+
+## 用户与用量监管
+
+详见 [监管实现与操作说明](CONTROL.md)。网页和普通采集器继续无 sudo；新控制服务是独立的
+`oracle-proxy-control.service`，通过固定 Unix socket RPC 接受网页 UID，验证动作与字段，
+使用 root-only SQLite 保存用户策略和账本。它不读取 WireGuard 私钥、PSK 或网页数据库。
+
+既有 Peer 默认未纳管；管理员在设备表选中并绑定用户后才启用该用户策略。
+新设备输入 Windows 本机生成的公钥，自动选择不与既有路由重叠的隧道 IPv4 地址；
+服务器保留这类 Peer 并在 WireGuard 重启后恢复。不会上传或生成 Windows 私钥。
+设备的接入 JSON 是客户端整合契约，不冒充已完成的 Windows 自动导入流程。
+
+用户月配额为 UTC 自然月 WireGuard 上传+下载之和，同用户所有纳管设备共享。
+服务器预算按物理 VNIC TX 单独计量，含 VPN 外流量；两个数字不能互相替代。
+首次采集前的本月历史未知时余额显示未知；预算保护默认关闭，管理员明确配置后才启用。
+Oracle 官方 API 尚未接入。手工基线、本机增量及安全余量是估算，不能保证零超额计费。
+端口、SSH 和任意系统命令不向网页开放。
 
 ## GitHub 自动部署授权（推荐）
 
@@ -48,7 +66,7 @@ GitHub 可以预检环境、安装后台依赖、写入 OAuth 配置、部署/�
 - Homepage URL：`https://vpn-admin.morandi.dpdns.org`
 - Authorization callback URL：`https://vpn-admin.morandi.dpdns.org/accounts/github/login/callback/`
 
-记录 Client ID，并生成 Client Secret。**Client Secret 只填写到 Oracle 的 root-only 配置，
+记录 Client ID，并生成 Client Secret。**Client Secret 只填写到 Oracle 的 root-only 配置或指定 GitHub Environment Secret，
 不发送到聊天、GitHub 源码、Actions 日志或工单。** OAuth App 和域名要保持上述精确匹配。
 不需要 Cloudflare Account ID、D1 UUID 或 Zero Trust 团队域名。
 
@@ -150,6 +168,6 @@ GitHub OAuth HTTP 回包在自动化测试中被模拟；仍需真实 OAuth App�
 
 ## 仍未交付
 
-Peer 增删、逐设备用量、端口变更与服务端配置回滚仍需独立、固定动词的受限执行器。
-现有后台刻意不拥有这些权限。本方案没有把浏览器变成 root 终端。
-GitHub 目前构建和验证可安装源码包；新的项目管理员入口激活后可自动部署；激活前不声称 GitHub 已拥有真实服务器管理员权限。
+端口变更、设备单独撤销/删除、OCI 官方账单 API、签名客户端配置与 Windows 正式版接入尚未交付。
+用户/Peer/预算的固定权限执行器不提供 SSH 或任意命令能力。
+已授权 GitHub 管理通道可部署网页和独立控制服务；网页版本回滚保留控制服务、策略与账本。

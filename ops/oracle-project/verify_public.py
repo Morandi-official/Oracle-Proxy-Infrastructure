@@ -17,7 +17,7 @@ def main():
     csrf = None
     for path, expected in (('/login/', 200), ('/static/console/style.css', 200),
                            ('/static/console/app.js', 200), ('/style.css', 401), ('/app.js', 401),
-                           ('/', 302), ('/api/status', 401), ('/api/audit', 401),
+                           ('/', 302), ('/api/status', 401), ('/api/audit', 401), ('/api/control',401),
                            ('/api/health', 404), ('/accounts/login/', 200),
                            ('/accounts/password/reset/', 404), ('/accounts/password/set/', 404),
                            ('/accounts/signup/', 404)):

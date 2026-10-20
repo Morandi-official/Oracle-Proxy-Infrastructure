@@ -53,12 +53,42 @@ class AdminTests(TestCase):
         return user
 
     def test_anonymous_requests_cannot_read_data_assets_or_mutate(self):
-        for path in ['/api/status', '/api/audit', '/app.js', '/style.css']:
+        for path in ['/api/status', '/api/audit', '/api/control', '/app.js', '/style.css']:
             self.assertEqual(self.get(path).status_code, 401)
         self.assertRedirects(self.get('/'), '/login/', fetch_redirect_response=False)
         self.assertEqual(self.post('/api/status').status_code, 405)
         self.assertEqual(self.post('/api/peers').status_code, 404)
         self.assertEqual(self.post('/api/ingest').status_code, 404)
+
+    def test_control_requires_full_mfa_and_web_sets_actor(self):
+        with patch('console.views.control.call') as rpc:
+            self.assertEqual(self.get('/api/control').status_code,401);rpc.assert_not_called()
+            self.signed_in(mfa=False)
+            self.assertEqual(self.get('/api/control').status_code,403);rpc.assert_not_called()
+
+    def test_authenticated_control_uses_fixed_schema_and_never_accepts_actor_or_commands(self):
+        self.signed_in()
+        with patch('console.views.control.call',return_value={'users':[]}) as rpc:
+            self.assertEqual(self.get('/api/control').status_code,200)
+            rpc.assert_called_with('state','github:204281968',{})
+            for value in ({'operation':'sh','data':{}},{'operation':'user.put','data':{},'actor':'github:999'}):
+                self.assertEqual(self.post('/api/control',json.dumps(value),content_type='application/json').status_code,400)
+            self.assertEqual(rpc.call_count,1)
+            self.assertEqual(self.post('/api/control',json.dumps({'operation':'user.put','data':{'name':'Test'}}),content_type='application/json').status_code,200)
+            rpc.assert_called_with('user.put','github:204281968',{'name':'Test'})
+        with patch('console.views.control.call',side_effect=OSError()):
+            self.assertEqual(self.get('/api/control').status_code,503)
+
+    def test_control_mutations_keep_csrf_protection(self):
+        self.signed_in()
+        client=Client(HTTP_HOST=HOST,enforce_csrf_checks=True);client.cookies=self.client.cookies
+        page=client.get('/',secure=True)
+        token=re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"',page.content).group(1).decode()
+        body=json.dumps({'operation':'user.put','data':{'name':'Test'}})
+        with patch('console.views.control.call',return_value={'users':[]}) as rpc:
+            self.assertEqual(client.post('/api/control',body,content_type='application/json',secure=True,HTTP_REFERER=f'https://{HOST}/').status_code,403)
+            rpc.assert_not_called()
+            self.assertEqual(client.post('/api/control',body,content_type='application/json',secure=True,HTTP_REFERER=f'https://{HOST}/',HTTP_X_CSRFTOKEN=token).status_code,200)
 
     def test_login_requires_post_and_csrf_for_github(self):
         secure_client = Client(HTTP_HOST=HOST, enforce_csrf_checks=True)
@@ -156,8 +186,16 @@ class AdminTests(TestCase):
         self.assertEqual(self.get('/login/', HTTP_HOST='attacker.example.com').status_code, 400)
 
     def test_health_has_no_data_and_is_loopback_only(self):
-        self.assertEqual(self.get('/api/health').json(), {'ready': True})
-        self.assertEqual(self.get('/api/health', REMOTE_ADDR='192.0.2.1').status_code, 404)
+        with patch('console.views.control.call',side_effect=OSError()):
+            self.assertEqual(self.get('/api/health').json(), {'ready': True,'control':{'ready':False}})
+        with patch('console.views.control.call',return_value={'observed_at':123,'error':None,'users':[{'name':'sensitive-name'}],
+                   'peers':[{'managed':True,'public_key':'sensitive-peer'}],'budget':{'guard_enabled':False,'remaining_bytes':None}}) as rpc:
+            value=self.get('/api/health').json()
+            self.assertTrue(value['control']['ready']);self.assertEqual(value['control']['peer_count'],1)
+            self.assertNotIn('sensitive',json.dumps(value))
+            rpc.reset_mock()
+            self.assertEqual(self.get('/api/health', REMOTE_ADDR='192.0.2.1').status_code,404)
+            rpc.assert_not_called()
 
     def oauth_login(self, uid=204281968):
         response = self.post('/accounts/github/login/')

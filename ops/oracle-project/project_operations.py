@@ -52,6 +52,10 @@ def preflight():
 
 def install_runtime():
     runtime.seal_permissions()
+    if not all(shutil.which(name) for name in ('ipset','wg','ip','iptables','ip6tables')):
+        run(['apt-get','update'],env={**os.environ,'DEBIAN_FRONTEND':'noninteractive','NEEDRESTART_MODE':'l'})
+        run(['apt-get','install','-y','--no-install-recommends','ipset','wireguard-tools','iproute2','iptables'],
+            env={**os.environ,'DEBIAN_FRONTEND':'noninteractive','NEEDRESTART_MODE':'l'})
     try:
         python = runtime_python()
         if shutil.which('caddy') and subprocess.run([python, '-c', 'import venv,ensurepip'],
@@ -146,9 +150,65 @@ def deploy(revision):
     if current.is_symlink() and current.resolve().name == revision:
         run(['systemctl', 'restart', host.UNIT_NAMES[0]])
         if not host.healthy(): raise ValueError('APPLICATION_UNHEALTHY')
+        install_control()
+        verify_control()
         print('PROJECT_DEPLOYMENT=ALREADY_CURRENT_HEALTHY'); return
     python = runtime_python()
     run([python, '-I', str(SERVER / 'deploy/host.py'), 'install', '--revision', revision])
+    install_control()
+    verify_control()
+
+
+def verify_control():
+    import urllib.request
+    import time
+    for _ in range(15):
+        request=urllib.request.Request('http://127.0.0.1:8787/api/health',headers={'Host':host.HOST,'X-Forwarded-Proto':'https'})
+        try:
+            with urllib.request.urlopen(request,timeout=4) as response:
+                summary=json.load(response)['control']
+            if summary['ready']:
+                print('PROJECT_POLICY_CONTROL_HEALTH='+json.dumps(summary,sort_keys=True));return
+        except (OSError,ValueError,KeyError):pass
+        time.sleep(1)
+    raise ValueError('POLICY_CONTROL_OBSERVATION_NOT_READY')
+
+
+def install_control():
+    # This helper stays independent of the web current/previous symlink, preserving
+    # kernel enforcement and the root-only ledger even during a web rollback.
+    target = Path('/usr/local/libexec/oracle-project/control-agent.py')
+    unit = Path('/etc/systemd/system/oracle-proxy-control.service')
+    if unit.is_symlink() or (unit.exists() and 'Description=Oracle Proxy restricted policy' not in unit.read_text()):
+        raise ValueError('FOREIGN_CONTROL_UNIT')
+    for module in ('ip_set_hash_ip','ip_set_hash_net','xt_set'):
+        run(['modprobe',module])
+    lock = Path('/run/xtables.lock')
+    if lock.is_symlink(): raise ValueError('UNTRUSTED_FIREWALL_LOCK')
+    lock.touch(exist_ok=True)
+    previous = target.read_bytes() if target.exists() else None
+    atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
+    atomic(unit,(SERVER/'deploy/oracle-proxy-control.service').read_bytes(),0o644)
+    dropin = Path('/etc/systemd/system/wg-quick@wg0.service.d')
+    if dropin.is_symlink(): raise ValueError('UNTRUSTED_WIREGUARD_UNIT_DIRECTORY')
+    dropin.mkdir(mode=0o755,exist_ok=True)
+    atomic(dropin/'oracle-proxy-control.conf',b'[Unit]\nWants=oracle-proxy-control.service\nAfter=oracle-proxy-control.service\n[Service]\nExecStartPre=/usr/bin/systemctl is-active --quiet oracle-proxy-control.service\n',0o644)
+    run(['systemctl','daemon-reload'])
+    run(['systemctl','enable','oracle-proxy-control.service'])
+    try:
+        run(['systemctl','restart','oracle-proxy-control.service'])
+        import time
+        for _ in range(20):
+            if subprocess.run(['systemctl','is-active','--quiet','oracle-proxy-control.service'],check=False).returncode==0 and Path('/run/oracle-proxy-control/control.sock').exists():
+                print('PROJECT_POLICY_CONTROL=ACTIVE; no existing Peer enrolled or quota enabled automatically')
+                return
+            time.sleep(1)
+        raise ValueError('CONTROL_STARTUP_FAILED')
+    except Exception:
+        if previous is not None:
+            atomic(target,previous,0o644)
+            subprocess.run(['systemctl','restart','oracle-proxy-control.service'],check=False)
+        raise
 
 
 def enable_https():

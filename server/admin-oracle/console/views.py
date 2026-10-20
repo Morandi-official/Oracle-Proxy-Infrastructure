@@ -7,7 +7,9 @@ from django.conf import settings
 from django.http import FileResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_http_methods
+import json
+from . import control
 
 from .models import Audit, Snapshot
 
@@ -74,7 +76,7 @@ def status(request):
     return JsonResponse({'node_id': settings.NODE_ID, 'actor': request.user.username,
                          'snapshot': row.payload if row else None, 'age_seconds': age,
                          'freshness': 'unknown' if row is None else ('fresh' if age <= 180 else 'stale'),
-                         'capabilities': {'status': True, 'peers': False, 'usage': False, 'configuration': False},
+                         'capabilities': {'status': True, 'peers': True, 'usage': True, 'configuration': False},
                          'vpn_release': 'experimental-unverified'})
 
 
@@ -87,6 +89,31 @@ def audit(request):
                 'action': row.action, 'resource': row.resource}
                for row in Audit.objects.order_by('-occurred_at', '-id')[:100]]
     return JsonResponse({'entries': entries})
+
+
+@require_http_methods(['GET','POST'])
+def management(request):
+    rejected = deny(request)
+    if rejected is not None: return rejected
+    operation, data = 'state', {}
+    if request.method == 'POST':
+        if request.content_type != 'application/json' or len(request.body)>8192:
+            return JsonResponse({'error':'INVALID_REQUEST'},status=400)
+        try:
+            value = json.loads(request.body)
+            if not isinstance(value,dict) or set(value)!={'operation','data'} or value['operation'] not in (
+                    'user.put','peer.assign','peer.create','budget.set') or not isinstance(value['data'],dict):
+                raise ValueError()
+            operation, data = value['operation'], value['data']
+        except (ValueError,TypeError): return JsonResponse({'error':'INVALID_REQUEST'},status=400)
+    try: result = control.call(operation, f'github:{github_identity(request)}', data)
+    except (OSError,TimeoutError,json.JSONDecodeError):
+        return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
+    except ValueError as error:
+        return JsonResponse({'error':str(error)},status=400)
+    if operation!='state':
+        Audit.objects.create(actor=f'github:{github_identity(request)}',action=operation,resource='policy-control')
+    return JsonResponse(result)
 
 
 @require_GET
@@ -104,4 +131,14 @@ def health(request):
     if request.META.get('REMOTE_ADDR') not in ('127.0.0.1', '::1'):
         return JsonResponse({'error': 'NOT_FOUND'}, status=404)
     Snapshot.objects.exists()  # Include database/migration readiness.
-    return JsonResponse({'ready': True})
+    summary = {'ready':False}
+    try:
+        data=control.call('state',f'github:{next(iter(settings.ADMIN_GITHUB_IDS))}',{})
+        summary={'ready':bool(data.get('observed_at') and not data.get('error')),
+                 'observed_at':data.get('observed_at'),'error':data.get('error'),
+                 'user_count':len(data['users']),'peer_count':len(data['peers']),
+                 'managed_peer_count':sum(p['managed'] for p in data['peers']),
+                 'guard_enabled':data['budget']['guard_enabled'],
+                 'balance_known':data['budget']['remaining_bytes'] is not None}
+    except (OSError,ValueError,TimeoutError,KeyError): pass
+    return JsonResponse({'ready': True,'control':summary})

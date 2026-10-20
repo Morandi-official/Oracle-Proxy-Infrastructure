@@ -170,7 +170,8 @@ def healthy():
     for _ in range(15):
         try:
             with opener.open(request, timeout=2) as response:
-                if response.status == 200 and json.load(response) == {'ready': True}:
+                payload=json.load(response)
+                if response.status == 200 and isinstance(payload,dict) and payload.get('ready') is True:
                     return True
         except (OSError, ValueError):
             pass

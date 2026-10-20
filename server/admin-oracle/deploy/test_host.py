@@ -2,7 +2,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 spec = importlib.util.spec_from_file_location('host', Path(__file__).with_name('host.py'))
 host = importlib.util.module_from_spec(spec)
@@ -10,6 +10,14 @@ spec.loader.exec_module(host)
 
 
 class HostBoundaries(unittest.TestCase):
+    def test_health_allows_redacted_metadata_but_requires_explicit_ready_boolean(self):
+        response=MagicMock();response.status=200;response.__enter__.return_value=response
+        opener=MagicMock();opener.open.return_value=response
+        with patch.object(host.urllib.request,'build_opener',return_value=opener),patch.object(host.time,'sleep'):
+            response.read.return_value=b'{"ready":true,"control":{"ready":false}}'
+            self.assertTrue(host.healthy())
+            for body in (b'{"ready":false}',b'{}',b'{"ready":1}',b'[]'):
+                response.read.return_value=body;self.assertFalse(host.healthy())
     def candidate(self, root):
         (root / 'manage.py').write_text('# synthetic application fixture\n')
         (root / 'requirements.txt').write_text('Django==5.2.18\n')

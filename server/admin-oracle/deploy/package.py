@@ -20,7 +20,7 @@ with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
             raise SystemExit('Source symlink rejected')
         if any(part in ('dist', 'staticfiles', '__pycache__', '.venv') for part in relative.parts):
             continue
-        if not path.is_file() or path.name in ('ci_smoke.py', '.gitignore'):
+        if not path.is_file() or path.name == '.gitignore' or (relative.parts[0]=='deploy' and path.name.startswith('ci_')):
             continue
         if path.suffix not in ('.py', '.html', '.css', '.js', '.md', '.txt', '.service', '.timer') and path.name != 'Caddyfile':
             raise SystemExit(f'Unexpected artifact file: {relative}')

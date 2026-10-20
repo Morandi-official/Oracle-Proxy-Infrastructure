@@ -11,7 +11,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def main():
     opener = urllib.request.build_opener(NoRedirect)
-    for path, expected in (('/login/', 200), ('/style.css', 200), ('/app.js', 200),
+    for path, expected in (('/login/', 200), ('/static/console/style.css', 200),
+                           ('/static/console/app.js', 200), ('/style.css', 401), ('/app.js', 401),
                            ('/', 302), ('/api/status', 401), ('/api/audit', 401),
                            ('/api/health', 404), ('/accounts/login/', 404)):
         try:

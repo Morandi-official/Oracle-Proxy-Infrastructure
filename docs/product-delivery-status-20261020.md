@@ -12,7 +12,8 @@ GitHub 没有正式 Release。当前可下载的 Windows R114 是未签名实验
 按用户最新要求，管理后台已改为 Oracle 自托管，不再使用 Cloudflare Zero Trust、D1 或 Workers，
 也不要求绑定银行卡。采用 GitHub OAuth/PKCE + 验证器 TOTP、SQLite、普通用户 systemd 服务和 Caddy HTTPS。
 域名继续使用 `vpn-admin.morandi.dpdns.org`，Cloudflare 仅承担已有的 DNS 托管。
-源码与主机注册/回滚流程正在 PR #146 中验证；尚未安装到生产 Oracle。
+PR #146 已合并，后台已实际安装到 Oracle，并通过公网 HTTPS 登录页与未登录接口隔离检查。
+用户本人的 GitHub 授权、首次绑定验证器与完整登录验收仍待执行；不能以自动化测试代替本人登录。
 
 ## 用户已确认
 
@@ -35,7 +36,7 @@ Cloudflare 账号登录与产品后台登录相互独立；后台改用 GitHub O
 | 防泄漏 | WFP IPv4/IPv6、TCP/UDP/DNS、崩溃与恢复的多项隔离实验 | 持久/开机保护、多网卡、真实重启、独立抓包及完整状态机整体验收 |
 | UU | 有连续性证据门禁 | 网易 UU 在两种 Windows 上的真实长连接、重连和例外策略验收 |
 | Oracle | 已部署受限只读 Agent；日志确认 wg0 ACTIVE、接口 PRESENT、UDP51820 LISTENING | 握手、Peer 清单、用量与受限配置执行器，IPv6 公网出口能力核实 |
-| 网页后台 | Oracle 自托管版本：GitHub OAuth/PKCE、TOTP MFA、SQLite 审计、本机诊断、systemd 注册与回滚 | 真实主机部署、OAuth App、HTTPS、Peer/用量与配置接口 |
+| 网页后台 | 已部署 Oracle 自托管版本：HTTPS、GitHub OAuth/PKCE、TOTP MFA、SQLite 审计、本机诊断、systemd 注册与回滚 | 本人完整 OAuth/MFA 登录验收；Peer/用量与配置接口 |
 | 安装和升级 | 部分生命周期与回滚实验、来源校验 | 发布者签名、受保护服务安装、升级事务、卸载/重启恢复与密钥迁移 |
 
 Oracle 部署实证：[Actions 39415011683](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39415011683)。
@@ -103,9 +104,16 @@ TOTP 秘密用独立 Fernet 密钥加密；主机配置仅 root 可读，应用�
 新 CI 覆盖 Python 3.11/3.12，以及一次性 Linux 主机上真实 systemd 的启动、升级、失败恢复、回滚。
 它不修改或停止现有 Oracle 的生产 VPN。
 
-现有 `oracle-ci` forced-command 密钥不能注册 Web 服务，不扩权成任意 root shell。
-首次注册需要一次服务器管理员会话；代码包、预检、安装器和回滚工具会先完成验证。
-安装器保留现有 Web 配置，由管理员在预检后整合专用 Caddy host block。
+用户已明确授权 GitHub 以 root 执行可信 main 中的项目安装、配置、部署、HTTPS、服务管理和回滚。
+一次性 bootstrap 已由服务器管理员执行，新增 `oracle-project-ci` 通道已通过真实 SSH 预检。
+main 中的运维代码可以改变 root 行为，因此 main 写权限是管理员边界；网页进程仍无 sudo。
+原有 `oracle-ci` 保留，交互 shell、SFTP、转发仍禁用。授权与撤销见 [项目运维指南](../ops/oracle-project/README.md)。
+
+实际主机为 Ubuntu 22.04.5 ARM64。后台独立使用校验和固定的 Python 3.12.15，
+Caddy 2.11.7 负责 HTTPS，未替换 Ubuntu 系统 Python。
+HTTPS 安装保留原有 Caddy host，增加专用配置与带标记的 TCP 80/443 放行规则，
+通过专用 systemd oneshot 服务开机恢复；未改动 SSH、WireGuard Peer 或路由。
+真实状态检查确认后台本机健康、Caddy active、原 wg-quick@wg0 active。
 
 Peer/端口写入仍需要后续 Oracle 固定权限执行器，建议事务：
 创建带版本的请求 → 预检与白名单校验 → 生成只属于本产品的配置 → 保存已知正常版本 →
@@ -132,7 +140,10 @@ Oracle 自托管版的 16 项 Django 集成/身份测试、4 项部署边界测�
 Django 部署安全检查与静态资源构建通过。云端检查以 PR #146 最新提交的 Actions 为准，
 不把旧版 Cloudflare 检查结果算作 Oracle 部署证明。
 
-当前环境没有 Oracle 管理员凭据；已有 CI 提供受限诊断和固定项目服务操作，不能注册新后台或调整安全列表。
-需要账号所有者做 DNS A 记录、创建免费 GitHub OAuth App，并在一次管理员会话中填写主机配置。
+用户已完成 DNS、GitHub OAuth App、GitHub Environment Secret/Variable 和一次性 root 通道授权。
+真实 SSH 运维和后台部署已执行，DNS 正确指向 Oracle，公网证书可信。
+未登录的状态/审计接口返回 401，公网健康路由返回 404；本地密码设置、重置及注册关闭。
+最终部署与公网检查日志见 [Actions 39435712224](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/actions/runs/39435712224)。
+仍需用户本人完成首次 GitHub 授权与验证器绑定，核实完整浏览器登录。
 Client Secret、MFA 加密密钥与 SSH 私钥不应发送到聊天、代码仓库或 CI 日志。
 后台上线后仍需继续 Windows 产品整合、防泄漏与 UU 验收，不把只读后台或 R114 实验包标为最终成品。

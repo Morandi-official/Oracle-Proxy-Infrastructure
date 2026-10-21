@@ -1,70 +1,70 @@
-# Windows release gates — truthful alpha versus public product
+# Windows product delivery and acceptance gates
 
-Last reviewed: 2026-10-13. This document is deliberately a **blocking**
-checklist rather than a declaration that the product is finished.
+Updated 2026-10-21. Scope: Windows 10/11 x64 client and the Oracle administrator
+console. Earlier WireGuardNT laboratory milestones are historical evidence;
+the integrated product now embeds a source-built sing-box userspace
+WireGuard/TUN core and the official signed Wintun driver.
 
-## Real engineering achievements already verified
+## Evidence already obtained
 
-- G7: official pinned-source embeddable WireGuard `tunnel.dll` loaded by
-  custom Windows SCM host in disposable GitHub Windows VM. Two temporary
-  localhost peers handshook with signed WireGuardNT 1.1.
-- G11: **native GUI → Windows OS authenticated admin IPC → SYSTEM manager →
-  native SCM tunnel services**, real two-sided handshake and stop/cleanup.
-- Android A0: an Alpha debug APK has been built by GitHub CI, but not
-  verified on a real device or reviewed for release permissions.
-- Windows GUI preview: sanitized local diagnostics, no production tunnel.
+Disposable GitHub Windows machines have exercised the real public executable,
+SCM service, Windows identities, DPAPI and native WFP filters. Verified paths:
 
-Evidence: PR #12, #15 and GitHub Actions run 38390526504. The repository
-has multiple stacked draft PRs and no production security sign-off.
+- Ordinary owner controls fixed service operations without daily UAC; a different
+  ordinary Windows identity cannot use the pipe or decrypt SYSTEM state.
+- Service-bound pipe rejects rogue servers, duplicate fields and arbitrary
+  paths/commands. SYSTEM bundle extraction uses protected storage.
+- Actual TUN/WireGuard TCP and fresh UDP DNS reach an isolated peer. Ordinary
+  physical TCP and UDP DNS are blocked with protection enabled.
+- Peer loss and core crash retain persistent protection. A dead or wrong-image
+  core cannot authorize stale TUN permits. Explicit disconnect restores direct access.
+- Missing encrypted state retains protection. Explicit UAC recovery preserves
+  valid keys and commits OFF; failed service upgrades restore the previous image.
+- Uninstall removes owned services, local keys, recovery backups and bundle cache.
+- Official GameViewer 4.39.2.1561 and 4.41.1.2335 installers were statically
+  inspected; valid NetEase identities and unsafe writable executable rejection
+  were tested. This is not live UU continuity evidence.
+- Administrator-issued account APIs, device limits, expiry, quotas, revocation,
+  unified management, retained deletion accounting and server kernel enforcement
+  have browser and disposable real-Linux lifecycle coverage.
 
-## Must pass before calling Windows 1.0 GA
+## Acceptance bundle versus completed delivery
 
-| Gate | Objective external proof | Status |
-| --- | --- | --- |
-| 1. Controlled publish | **Default binary contains no disposable CI lab control**, reproducible artifact allowlist and SHA-256 manifest | Under CI verification in this PR |
-| 2. Provenance/legal | Review/ship all dependency license notices, distributable signed native DLL build, secure installer and code-signing certificates | BLOCKED |
-| 3. Genuine nonproduction network | New separate peer, actual different-machine UDP handshake, packet forwarding across two machines, DNS and IPv4/IPv6 captures | BLOCKED: no independent publicly reachable lab Linux VM connected |
-| 4. Production GUI control | Approved VPN profile import; no arbitrary service or shell commands; OS SID/signer-bound manager IPC, secret protection/DPAPI, durable ON/OFF intent, reproducible start/stop/reconnect | BLOCKED |
-| 5. **Real** fail-close | OS-enforced WFP IPv4, IPv6, TCP, UDP and DNS fail-close that survives disconnect, app crash, reboot, before login; no reliance on simulated Boolean flags | BLOCKED |
-| 6. UU uninterrupted | Verified exact UU executable identity and live UU UDP/P2P remote session, including failed tunnel and service restart, while other apps remain blocked | BLOCKED |
-| 7. Independent recovery | On-site/bare-metal recovery for live host; cloud noncritical VM has out-of-band console/snapshot revert demonstrated **before** any persistent WFP test | BLOCKED |
-| 8. Installer/updater | Signed installer/uninstaller/rollback that doesn't break WireSock or UU; no unintended route/WFP leftovers; update signature verification | BLOCKED |
-| 9. Android GA | VpnService permissions, external server transfer, screen-off/reconnect, DNS/IPv6, on-device leak enforcement and signing/distribution tested | BLOCKED |
-| 10. Server/backend | Separate documented and audited WireGuard server provisioning, key revocation/rotation, reliable sanitized management API, restricted access and rollback | BLOCKED |
+A main-branch acceptance bundle may be uploaded only after the isolated Windows
+fault suite and the dedicated low-quota account's real Oracle acceptance pass.
+The latter must show automatic device registration, Oracle public egress,
+GUI-process loss, SCM crash recovery, account usage linkage and explicit
+restoration of direct access. Missing test credentials are a failed prerequisite,
+not a skipped success. Pull-request jobs do not receive production test credentials.
 
-## GA criteria
+The binary allowlist is exactly OracleProxy.exe, OracleProxy.Core.exe and
+OracleProxy.Guard.dll. Notices, hashes, Chinese recovery instructions, exact
+revision/build metadata and corresponding build sources accompany the bundle.
+The source archive includes actual vendored Go dependencies and generated build
+pins. Private fixture and bad-upgrade executables are never distributed.
 
-**All critical gates** must have independent logs/captures and security
-review. A green CI build, two local peers shaking hands, or an unsigned
-installer alone is not enough. We will not label any release that cannot
-survive a real disconnect as "no leak".
+The application has no trusted publisher certificate. Candidate instructions and
+metadata must say it is unsigned. Hash verification does not replace Authenticode.
+The embedded Wintun bytes are separately compared against the official validly
+signed upstream release.
 
-## This PR's release-channel separation
+## Outstanding requirements before completed delivery
 
-By default, `EnableDisposableLabControls=false` and
-`LabAdminControlClient.cs` is excluded **at compile time**.
-Any `--ci-lab-start-a` / `--ci-lab-stop-a` CLI request returns exit 2
-even if `GITHUB_ACTIONS` and `RUNNER_ENVIRONMENT` are forged.
+| Requirement | Evidence still needed |
+| --- | --- |
+| Real Oracle end-to-end | Dedicated account secrets must reach the main job and every asserted stage must pass. |
+| UU compatibility | Logged-in controller and controlled-device sessions must stay usable during connect, peer loss, core/service failure and reconnect. Current core direct outbound alone does not prove survival of core failure. No fixed user installation path is permitted. |
+| Boot protection | Actual Windows restart and pre-login traffic behavior, durable connection intent and recovery on a locally recoverable computer. Same-boot filter inspection does not prove this. |
+| IPv6 | Oracle VCN/VNIC, routing, forwarding and policy readiness plus real IPv6 transfer/leak tests. The current server descriptor blocks IPv6 and must not be described as dual-stack forwarding. |
+| Update trust | Fixed payload hash checks and rollback are implemented; application publisher signing and a reviewed signed-update distribution mechanism remain outstanding. |
+| Oracle allowance | Actual official API access and reviewed metric coverage/SKU units. Local counters or a denied query do not establish remaining monthly free allowance. |
 
-Only tests that explicitly compile
-`-p:EnableDisposableLabControls=true` include that interface. CI never
-uploads that binary to an end-user artifact.
+Real UU and reboot tests require a computer with independent local recovery.
+Cloud fixtures remain the preferred place for destructive and repeatable fault
+coverage, but cannot establish an authenticated user's actual UU session.
+Do not run unattended protection experiments on a computer accessible only by UU.
 
-The downloadable preview is **read-only**, contains no native driver or
-manager service and has explicit `READ_ME_FIRST.txt` and hash/manifest. It
-is **unsigned** and not approved for critical UU-dependent remote hosts.
-
-## Zero-cost strategy and limitations
-
-- Keep all G11 lab work on disposable GitHub Windows virtual machines.
-- Do not require a local hypervisor or new Oracle VM.
-- Reuse production Oracle **only after** an explicit separately reviewed
-  isolation/rollback proposal; do not modify its wg0, UDP443, WFP/iptables
-  or live WireSock peer as a shortcut.
-- Real UU packet-level coexistence needs actual UU software and an
-  independently recoverable host; GitHub simulations cannot substitute it.
-- No unattended real WFP changes on user's UU-dependent second PC.
-
-The next product milestone after this gate is a securely packaged
-**lab-only functional client**, followed by honest true fail-close and UU
-acceptance; signed production GA comes last.
+The Oracle backend is deployed through the explicitly authorized current-main
+root bridge. Do not expose SSH credentials or a general command execution
+interface in the web administrator console. Instance-principal usage collection
+uses read-only IAM permissions and never exports its short-lived credentials.

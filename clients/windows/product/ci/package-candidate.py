@@ -85,6 +85,7 @@ def main():
                 'real_oracle_acceptance_passed': args.acceptance_passed,
                 'workflow_run': os.environ['GITHUB_RUN_ID'], 'workflow_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
                 'publisher_signed': False, 'payload_sha256': hashes,
+                'dotnet_sdk': run('dotnet', '--version'), 'go_toolchain': run('go', 'version'),
                 'remaining_gates': ['live logged-in UU session continuity', 'physical Windows reboot',
                                     'Oracle IPv6 provisioning and forwarding', 'application publisher signing'],
                 'nuget_packages': packages}

@@ -49,7 +49,7 @@ class PackageBoundaryTests(unittest.TestCase):
                   'project': {'frameworks': {}}}
         self.put('clients/windows/product/obj/project.assets.json', json.dumps(assets))
         tracked = '\n'.join('clients/windows/product/' + p for p in ('COPYING', 'LICENSE', 'BuildPins.cs', 'PORTABLE_README.zh-CN.txt'))
-        self.patches.enter_context(patch.object(candidate, 'run', side_effect=lambda *args, **kw: 'a' * 40 if args[1] == 'rev-parse' else tracked))
+        self.patches.enter_context(patch.object(candidate, 'run', side_effect=lambda *args, **kw: ('a' * 40 if args[1] == 'rev-parse' else tracked) if args[0] == 'git' else 'test-tool-version'))
 
     def put(self, name, value):
         path = self.root / name

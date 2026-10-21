@@ -38,6 +38,7 @@ jobs:
       - run: python -m unittest discover -s deploy -p 'test_*.py' -v
       - run: python -m unittest discover -s ../../ops/oracle-project -p 'test_*.py' -v
       - run: python -m unittest discover -s control -p 'test_*.py' -v
+      - run: python -m unittest discover -s relay -p 'test_*.py' -v
       - run: node --check static/console/app.js
       - name: Package source without test-only privileged entrypoints or credentials
         if: matrix.python == '3.12'

@@ -75,7 +75,8 @@ def client_state(snapshot, account, key):
             'device':{'public_key':key, 'handshake_at':peer['handshake'], 'usage':peer['usage']},
             'tunnel':{'endpoint':f"152.67.156.100:{snapshot['listen_port']}",
                       'server_public_key':snapshot['server_public_key'], 'addresses':peer['allowed_ips'],
-                      'allowed_ips':['0.0.0.0/0'], 'dns':['1.1.1.1'], 'ipv6_policy':'block'}}
+                      'allowed_ips':['0.0.0.0/0'], 'dns':['1.1.1.1'], 'ipv6_policy':'block',
+                      'https_relay':snapshot['listen_port']==51820}}
 
 
 @csrf_exempt

@@ -16,6 +16,14 @@ internal static class UuAclRepair
     private static string Backup=>Path.Combine(Platform.StateRoot,"uu-permissions-backup.json");
     private const int MaximumObjects=2048,MaximumBytes=8*1024*1024;
     private static readonly HashSet<string> KnownGroups=["S-1-5-11","S-1-5-32-545"];
+    internal static FileStream AcquireMaintenance()
+    {
+        Platform.VerifyProtected(Platform.StateRoot);
+        string path=Path.Combine(Platform.StateRoot,"uu-maintenance.lock");
+        if(File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");
+        try{return new FileStream(path,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None,1,FileOptions.DeleteOnClose);}
+        catch(Exception error) when(error is IOException or UnauthorizedAccessException){throw new IOException("UU_MAINTENANCE_BUSY");}
+    }
     private static string Sddl(FileSystemSecurity acl)=>acl.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
     // Hold every original object and directory open without FILE_SHARE_DELETE.
     // Writes use those same handles; a path swap must never redirect an elevated
@@ -208,9 +216,11 @@ internal static class UuAclRepair
         if(roots.Length==0)throw new IOException("UU_REPAIR_NO_MATCH");
         string message=(restore?"将恢复下列 UU 目录备份的权限，并保持 VPN 断开。恢复后连接检查可能再次拦截。":"将备份下列 UU 目录及现有子项的权限，仅将 Users/Authenticated Users 的额外“修改”授权收紧为“读取和执行”，保留系统、管理员和读取权限。不会停止 UU 或改写程序文件。普通用户写入安装目录或自动更新可能受到影响；可使用“恢复 UU 权限”回滚。请仅在可本地操作的测试机进行。")+"\r\n\r\n"+string.Join("\r\n",roots);
         if(MessageBox.Show(message,"UU 权限维护（UAC）",MessageBoxButtons.OKCancel,MessageBoxIcon.Warning)!=DialogResult.OK)return;
-        var state=Task.Run(()=>ControlPipe.Send(restore?"Disconnect":"Status")).GetAwaiter().GetResult();
-        if(state["ok"]?.GetValue<bool>()!=true || state["mode"]?.GetValue<string>()!="disconnected" || state["guard"]?.GetValue<bool>()==true || state["intent"]?.GetValue<bool>()==true)throw new IOException("UU_REPAIR_DISCONNECT_REQUIRED");
-        if(restore)Restore();else Apply(roots);
+        using(AcquireMaintenance()){
+            var state=Task.Run(()=>ControlPipe.Send(restore?"Disconnect":"Status")).GetAwaiter().GetResult();
+            if(state["ok"]?.GetValue<bool>()!=true || state["mode"]?.GetValue<string>()!="disconnected" || state["guard"]?.GetValue<bool>()==true || state["intent"]?.GetValue<bool>()==true)throw new IOException("UU_REPAIR_DISCONNECT_REQUIRED");
+            if(restore)Restore();else Apply(roots);
+        }
         MessageBox.Show(restore?"原权限已恢复，VPN 保持断开。":"权限修复已核验。请先确认 UU 正常，再返回客户端点击“重新识别 UU”。","UU 权限维护");
     }
 }

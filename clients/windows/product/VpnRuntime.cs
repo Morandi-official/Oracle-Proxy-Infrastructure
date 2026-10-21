@@ -94,15 +94,16 @@ internal sealed class VpnRuntime : IDisposable
                 }
                 var login=await _api.Call("login","",new JsonObject{["username"]=username,["password"]=password,["public_key"]=_secret.PublicKey,["device_name"]=Environment.MachineName});
                 _secret.Token=login["token"]!.GetValue<string>();login.Remove("token");_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error="";break;
-            case "Connect":
+            case "Connect":{
                 if(_secret.Token.Length==0)throw new IOException("LOGIN_REQUIRED");
                 if(_secret.RecoveryRequired)throw new IOException("RECOVERY_REQUIRED");
                 if(_core.Running && _mode=="connected")break;
+                using var uuMaintenance=UuAclRepair.AcquireMaintenance();
                 var inventory=UuDiscovery.Discover();_uuInventory=inventory;
                 if(inventory.Candidates>0 && inventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 _secret.UuPaths=inventory.Paths;_secret.ConnectIntent=true;_secret.Save();
                 NativeGuard.Apply(_secret.UuPaths);_mode="protected";
-                await Refresh();await StartCore();break;
+                await Refresh();await StartCore();break;}
             case "Disconnect":await Disconnect();break;
             case "Logout":
                 await Disconnect();

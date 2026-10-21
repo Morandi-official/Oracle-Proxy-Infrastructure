@@ -106,6 +106,7 @@ internal sealed class MainForm : Form
     private static string Message(string code)=>code switch{
         "INVALID_CREDENTIALS"=>"账号或密码错误。", "DEVICE_LIMIT_REACHED"=>"设备数量已达上限，请联系管理员撤销旧设备。", "RATE_LIMITED"=>"登录尝试过于频繁，请稍后重试。",
         "UU_TRUST_NOT_VERIFIED"=>"发现 UU 安装记录，但程序签名或目录权限尚未通过核验。保持原有网络，请勿在远控机器强行连接。",
+        "UU_MAINTENANCE_BUSY"=>"UU 权限维护进行中，请完成后再连接。",
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",
         "LOGIN_REQUIRED"=>"请先登录账号。", "DISCONNECT_BEFORE_LOGIN"=>"更换登录前请先断开。", _=>$"操作尚未完成：{code}。"};

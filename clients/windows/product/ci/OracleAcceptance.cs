@@ -42,6 +42,11 @@ internal static class OracleAcceptance
             Check(login["ok"]?.GetValue<bool>()==true && login["account"]?["username"]?.GetValue<string>()==username,"REAL_ORACLE_CLIENT_LOGIN_AND_AUTOMATIC_ENROLLMENT");
             var account=login["account"]!;long used=account["used_bytes"]!.GetValue<long>();int devices=account["device_count"]!.GetValue<int>();
             Check(account["status"]?.GetValue<string>()=="active" && account["limit_bytes"]?.GetValue<long>() is long limit && limit<=128*1024*1024 && limit-used>=4*1024*1024,"REAL_ACCOUNT_HAS_BOUNDED_TEST_BUDGET");
+            stage="UU_MAINTENANCE_CONCURRENCY";
+            using(UuAclRepair.AcquireMaintenance()){
+                var blocked=await ControlPipe.Send("Connect");
+                Check(blocked["ok"]?.GetValue<bool>()==false && blocked["error"]?.GetValue<string>()=="UU_MAINTENANCE_BUSY" && blocked["mode"]?.GetValue<string>()=="disconnected" && blocked["intent"]?.GetValue<bool>()==false,"REAL_CONNECT_REFUSED_DURING_ELEVATED_UU_MAINTENANCE");
+            }
             stage="CONNECT";await Send("Connect");await Connected();
             Check(await ExitIp()=="152.67.156.100","REAL_ORDINARY_WINDOWS_HTTP_THROUGH_ORACLE_WIREGUARD_EXIT");
             // The real public GUI is an ordinary process; closing/crashing it must

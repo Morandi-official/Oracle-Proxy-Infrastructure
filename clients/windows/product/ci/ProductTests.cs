@@ -26,6 +26,11 @@ internal static class ProductTests
     [STAThread]internal static int Main(string[] args)
     {
         if(args.SequenceEqual(new[]{"--uu-trust-signed"}))return UuTrustSigned();
+        if(args.SequenceEqual(new[]{"--uu-maintenance-probe"})){
+            if(!Platform.IsAdmin)return 3;
+            try{using var lease=UuAclRepair.AcquireMaintenance();return 0;}
+            catch(IOException error) when(error.Message=="UU_MAINTENANCE_BUSY"){return 4;}
+        }
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
         if(args.SequenceEqual(new[]{"--native-denial"})){
@@ -86,6 +91,10 @@ internal static class ProductTests
     }
     private static void UuAclRoundtrip(string root,string executable)
     {
+        int Probe(){using var process=Process.Start(new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=false,ArgumentList={"--uu-maintenance-probe"}})!;process.WaitForExit();return process.ExitCode;}
+        using(UuAclRepair.AcquireMaintenance())if(Probe()!=4)throw new IOException("UU_MAINTENANCE_CROSS_PROCESS_NOT_EXCLUSIVE");
+        if(Probe()!=0)throw new IOException("UU_MAINTENANCE_NOT_RELEASED");
+        Console.WriteLine("REAL_UU_MAINTENANCE_EXCLUSIVE_ACROSS_PROCESSES_AND_RELEASED=PASS");
         string keyPath=@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OracleProxy.GameViewerAclFixture";
         using(var existing=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath))if(existing is not null)throw new IOException("PREEXISTING_FIXTURE_REFUSED");
         string backup=Path.Combine(Platform.StateRoot,"uu-permissions-backup.json");

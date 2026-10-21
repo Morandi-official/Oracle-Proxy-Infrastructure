@@ -9,7 +9,7 @@ $out=Join-Path $PWD 'dist/gameviewer-review';New-Item -ItemType Directory -Force
 $rows=@()
 foreach($item in $versions){
   $installer=Join-Path $env:RUNNER_TEMP "GameViewer-$($item.Version).exe"
-  Invoke-WebRequest -Uri $item.Url -OutFile $installer -MaximumRedirection 2
+  Invoke-WebRequest -Uri $item.Url -OutFile $installer -MaximumRedirection 2 -MaximumRetryCount 3 -RetryIntervalSec 3
   if((Get-FileHash $installer -Algorithm SHA256).Hash -ne $item.SHA){throw 'GameViewer installer checksum mismatch'}
   $sig=Get-AuthenticodeSignature $installer
   if($sig.Status -ne 'Valid'){throw 'GameViewer installer signature is not trusted'}

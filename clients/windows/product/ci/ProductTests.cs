@@ -77,7 +77,7 @@ internal static class ProductTests
             if(!UuDiscovery.Trusted(path))return 1;
             acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-1-0"),System.Security.AccessControl.FileSystemRights.WriteData,System.Security.AccessControl.AccessControlType.Allow));
             new FileInfo(path).SetAccessControl(acl);
-            if(UuDiscovery.Trusted(path))return 1;
+            if(UuDiscovery.Trusted(path) || UuDiscovery.Inspect(path)?.Code!="UU_EXECUTABLE_WRITABLE")return 1;
             Console.WriteLine("REAL_NETEASE_SIGNATURE_ACCEPTED_AND_WRITABLE_EXECUTABLE_EXCEPTION_DENIED=PASS");return 0;
         }finally{File.Delete(path);Directory.Delete(root);}
     }
@@ -86,7 +86,13 @@ internal static class ProductTests
         Application.EnableVisualStyles();using var form=new MainForm();
         var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
         var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
+        snapshot["uu_candidates"]=1;snapshot["uu_rejected"]=1;
+        snapshot["uu_diagnostics"]=new JsonArray(new JsonObject{["path"]=@"E:\Apps\GameViewer",["code"]="UU_DIRECTORY_WRITABLE",["detail"]=""});
+        snapshot["password"]="SYNTHETIC_PASSWORD_DO_NOT_COPY";snapshot["token"]="SYNTHETIC_TOKEN_DO_NOT_COPY";
         form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
+        if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
+           form.UuReport.Contains("synthetic-user") || form.UuReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.UuReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY"))return 1;
+        Console.WriteLine("UU_DIAGNOSTIC_ACTIONABLE_WITHOUT_ACCOUNT_OR_CREDENTIALS=PASS");
         using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,form.ClientRectangle);Directory.CreateDirectory("dist/review");image.Save("dist/review/windows-client-synthetic.png");}
         snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
         return 0;

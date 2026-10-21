@@ -110,7 +110,8 @@ def login(request):
         with transaction.atomic():
             # Lock the credential version logically as well as the DB transaction:
             # a password reset racing an in-flight login cannot revive old access.
-            current = ClientAccount.objects.get(user_id=account.user_id)
+            current = ClientAccount.objects.filter(user_id=account.user_id).first()
+            if current is None: raise ValueError('INVALID_CREDENTIALS')
             if current.password != account.password: raise ValueError('INVALID_CREDENTIALS')
             ClientSession.objects.filter(account=account,public_key=key).delete()
             ClientSession.objects.filter(expires_at__lte=timezone.now()).delete()

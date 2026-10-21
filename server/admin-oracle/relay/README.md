@@ -24,7 +24,8 @@ the additional HTTPS overhead. An official Oracle remaining balance is still
 unknown until historical coverage and billing units have been reviewed.
 
 Deployment health requires both the existing web application and relay. Upgrade
-and rollback restart both; rollback to a version without this relay stops it.
+and rollback restart both; rollback to a version without this relay stops it
+and disables its autostart. Returning to a supporting release re-enables it.
 The local lifecycle test verifies the separate UID and denial of credential/DB
 access. Protocol tests cover real loopback datagrams, token revocation, duplicate
 sessions and invalid inputs. An actual Windows-to-Oracle HTTPS WireGuard exit

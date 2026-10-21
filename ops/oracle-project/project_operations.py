@@ -1,5 +1,6 @@
 """Project operations executed as root only after the SSH bridge verifies current main."""
 import importlib.util
+import ipaddress
 import json
 import os
 import re
@@ -36,6 +37,38 @@ def runtime_python():
     raise ValueError('PYTHON_311_OR_NEWER_REQUIRED')
 
 
+def ipv6_readiness():
+    """Read-only readiness categories; never exports host addresses or changes routes."""
+    result = {'status': 'OBSERVED', 'physical_global_address_count': 0,
+              'physical_route_present': False, 'wireguard_address_count': 0,
+              'forwarding_enabled': None, 'external_forwarding_acceptance': 'NOT_TESTED'}
+    try:
+        addresses = subprocess.run(['ip', '-j', '-6', 'address', 'show'],
+                                   capture_output=True, text=True, check=True, timeout=5)
+        route = subprocess.run(['ip', '-j', '-6', 'route', 'get', '2606:4700:4700::1111'],
+                              capture_output=True, text=True, check=False, timeout=5)
+        if len(addresses.stdout) > 65536 or len(route.stdout) > 65536 or route.returncode not in (0, 2):
+            raise ValueError('INVALID_NETWORK_OBSERVATION')
+        for interface in json.loads(addresses.stdout):
+            name = interface.get('ifname')
+            for item in interface.get('addr_info', []):
+                if item.get('family') != 'inet6' or any(flag in item.get('flags', []) for flag in ('tentative', 'dadfailed')):
+                    continue
+                address = ipaddress.IPv6Address(item['local'])
+                if name == 'wg0' and not address.is_link_local:
+                    result['wireguard_address_count'] += 1
+                elif name not in ('wg0', 'lo') and address.is_global:
+                    result['physical_global_address_count'] += 1
+        result['physical_route_present'] = route.returncode == 0 and any(
+            item.get('dev') not in (None, 'lo', 'wg0') and not item.get('error') for item in json.loads(route.stdout))
+        flag = Path('/proc/sys/net/ipv6/conf/all/forwarding').read_text().strip()
+        if flag not in ('0', '1'): raise ValueError('INVALID_FORWARDING_OBSERVATION')
+        result['forwarding_enabled'] = flag == '1'
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        result['status'] = 'OBSERVATION_UNAVAILABLE'
+    return result
+
+
 def preflight():
     try:
         value = host.preflight()
@@ -47,6 +80,7 @@ def preflight():
         host.read_environment(); value['application_configured'] = True
     except (OSError, ValueError):
         pass
+    value['ipv6_readiness'] = ipv6_readiness()
     print(json.dumps(value, indent=2))
 
 

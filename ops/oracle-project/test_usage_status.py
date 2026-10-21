@@ -23,6 +23,19 @@ class OfficialUsageSummary(unittest.TestCase):
         self.assertNotIn('not exported', json.dumps(result))
         self.assertNotIn('must not export', json.dumps(result))
 
+    def test_only_bounded_sku_units_and_quantities_are_exported(self):
+        value = {'schema': 1, 'billing_rows': [{'sku': 'Outbound Data Transfer', 'unit': 'GB',
+                 'quantity': 2.5, 'unexpected_customer_field': 'SECRET'}]}
+        def read(body):
+            with patch.object(project.Path, 'is_symlink', return_value=False), patch.object(project.Path, 'stat', return_value=SimpleNamespace(st_size=1024)), patch.object(project.Path, 'read_text', return_value=json.dumps(body)):
+                return project.official_usage_status()
+        result = read(value)
+        self.assertEqual(result['billing_rows'], [{'sku': 'Outbound Data Transfer', 'unit': 'GB', 'quantity': 2.5}])
+        self.assertNotIn('SECRET', json.dumps(result))
+        for quantity in (None, True, -1, float('inf'), 10**19):
+            value['billing_rows'][0]['quantity'] = quantity
+            self.assertEqual(read(value)['status'], 'CACHE_UNAVAILABLE')
+
     def test_missing_symlink_oversized_and_structured_fields_fail_closed(self):
         for link, size, body in ((True, 0, '{}'), (False, 32769, '{}'),
                                  (False, 10, '[]'), (False, 10, '{"schema":1,"status":{"raw":"error"}}')):

@@ -2,6 +2,7 @@
 import importlib.util
 import ipaddress
 import json
+import math
 import os
 import re
 import shutil
@@ -86,6 +87,17 @@ def official_usage_status():
         if any(not (item is None or type(item) is int or isinstance(item, str) and len(item) <= 96)
                for item in result.values()):
             raise ValueError('INVALID_USAGE_SUMMARY')
+        rows = value.get('billing_rows', [])
+        if not isinstance(rows, list) or len(rows) > 32:
+            raise ValueError('INVALID_BILLING_SUMMARY')
+        result['billing_rows'] = []
+        for row in rows:
+            if not isinstance(row, dict): raise ValueError('INVALID_BILLING_SUMMARY')
+            sku, unit, quantity = row.get('sku'), row.get('unit'), row.get('quantity')
+            if (not isinstance(sku, str) or len(sku) > 160 or not isinstance(unit, str) or len(unit) > 40 or
+                type(quantity) not in (int, float) or not math.isfinite(quantity) or not 0 <= quantity <= 10**18):
+                raise ValueError('INVALID_BILLING_SUMMARY')
+            result['billing_rows'].append({'sku': sku, 'unit': unit, 'quantity': quantity})
         result['remaining_bytes'] = None
         return result
     except (OSError, ValueError):

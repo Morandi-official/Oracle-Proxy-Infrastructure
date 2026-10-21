@@ -16,6 +16,13 @@ internal static class OracleAcceptance
         internal InitialUdpLoss(int port)
         {
             _policy=Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FwPolicy2")!)!;
+            // Hosted images can have inactive firewall profiles. Enable their
+            // filtering before using a block rule; never disable a profile.
+            // This fixture is restricted to disposable GitHub-hosted runners.
+            foreach(int profile in new[]{1,2,4}){
+                _policy.FirewallEnabled[profile]=true;
+                Check((bool)_policy.FirewallEnabled[profile],"REAL_HOSTED_FIREWALL_PROFILE_"+profile+"_ENABLED");
+            }
             foreach(dynamic existing in _policy.Rules)if(existing.Name==Name)throw new IOException("PREEXISTING_FIREWALL_RULE_REFUSED");
             dynamic rule=Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule")!)!;
             rule.Name=Name;rule.Description=Marker;rule.ApplicationName=Platform.Core;rule.Protocol=17;rule.RemoteAddresses="152.67.156.100";rule.RemotePorts=port.ToString();rule.Direction=2;rule.Action=0;rule.Profiles=int.MaxValue;rule.Enabled=true;
@@ -73,6 +80,10 @@ internal static class OracleAcceptance
             // ordinary GUI IPC deliberately never exposes the tunnel profile.
             using(var loss=new InitialUdpLoss(51820)){
                 var waiting=await ControlPipe.Send("Connect");
+                // Same fixed, credential-free fields as the public diagnostic
+                // report; never print the response object or exception message.
+                foreach(string field in new[]{"mode","error","guard","tun_permitted","core_stage","core_pid","connection_stage"})Console.WriteLine("INITIAL_LOSS_"+field.ToUpperInvariant()+"="+waiting[field]);
+                if(waiting["failure"] is JsonObject failure)foreach(string field in new[]{"category","hresult","native_error","socket_error","http_error","http_status"})Console.WriteLine("INITIAL_LOSS_FAILURE_"+field.ToUpperInvariant()+"="+failure[field]);
                 string code=waiting["error"]?.GetValue<string>() ?? "";
                 Check(waiting["mode"]?.GetValue<string>()=="protected" && waiting["guard"]?.GetValue<bool>()==true && waiting["tun_permitted"]?.GetValue<bool>()==true && waiting["core_stage"]?.GetValue<string>()=="READY" && code is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED","REAL_INITIAL_PROBE_FAILURE_RETAINS_LIVE_GUARDED_TUNNEL");
                 initialPid=waiting["core_pid"]!.GetValue<uint>();Check(initialPid>0,"REAL_INITIAL_HANDSHAKE_CORE_STAYS_ALIVE");

@@ -23,7 +23,7 @@ internal static class Installer
         }
         if(!File.Exists(Platform.Exe))return;
         // SCM status can become Stopped just before Windows unloads DLLs.
-        for(int i=0;i<30;i++){try{using var f=File.Open(Platform.Exe,FileMode.Open,FileAccess.ReadWrite,FileShare.None);return;}catch(IOException){Thread.Sleep(100);}}
+        for(int i=0;i<150;i++){try{using var f=File.Open(Platform.Exe,FileMode.Open,FileAccess.ReadWrite,FileShare.None);return;}catch(IOException){Thread.Sleep(100);}}
         throw new IOException("SERVICE_IMAGE_STILL_IN_USE");
     }
     internal static async Task Install(string owner)

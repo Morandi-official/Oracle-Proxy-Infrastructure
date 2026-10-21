@@ -15,6 +15,7 @@ internal sealed class MainForm : Form
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _busy;
+    private string _connectionReport="尚未读取系统服务。";
     private string _uuReport="请先在断开状态点击“重新识别 UU”。";
     internal MainForm()
     {
@@ -29,6 +30,7 @@ internal sealed class MainForm : Form
         foreach(var (label,action) in new (string,Action)[]{("安装 / 升级服务",()=>Installer.Elevate(false)),("卸载",()=>{if(MessageBox.Show(this,"将恢复直连并卸载系统服务、删除本机密钥。服务器仍保留设备记录与用量，请联系管理员撤销旧设备以释放名额。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK)Installer.Elevate(true);})}){
             var b=new Button{Text=label,AutoSize=true};b.Click+=(_,_)=>{try{action();}catch{_detail.Text="操作未完成，请检查 UAC 提示或使用完整便携包。";}};tools.Controls.Add(b);}
         var refreshUu=new Button{Text="重新识别 UU",AutoSize=true};refreshUu.Click+=async(_,_)=>await Act("RefreshUu");tools.Controls.Add(refreshUu);
+        var inspectConnection=new Button{Text="连接诊断",AutoSize=true};inspectConnection.Click+=(_,_)=>ShowReport("连接诊断",_connectionReport);tools.Controls.Add(inspectConnection);
         var inspectUu=new Button{Text="UU 检查详情",AutoSize=true};inspectUu.Click+=(_,_)=>ShowUuReport();tools.Controls.Add(inspectUu);
         foreach(bool restore in new[]{false,true}){
             var maintenance=new Button{Text=restore?"恢复 UU 权限（UAC）":"修复 UU 权限（UAC）",AutoSize=true};
@@ -54,11 +56,12 @@ internal sealed class MainForm : Form
         }
         finally{_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;}
     }
-    private void ShowUuReport()
+    private void ShowUuReport()=>ShowReport("UU 自动识别详情",_uuReport);
+    private void ShowReport(string title,string report)
     {
-        using var dialog=new Form{Text="UU 自动识别详情",StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(760,400),MinimizeBox=false,MaximizeBox=false};
-        var text=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Text=_uuReport};
-        var copy=new Button{Text="复制诊断（不含账号密码或密钥）",Dock=DockStyle.Bottom,Height=40};copy.Click+=(_,_)=>Clipboard.SetText(_uuReport);
+        using var dialog=new Form{Text=title,StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(760,400),MinimizeBox=false,MaximizeBox=false};
+        var text=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Text=report};
+        var copy=new Button{Text="复制诊断（不含账号密码或密钥）",Dock=DockStyle.Bottom,Height=40};copy.Click+=(_,_)=>Clipboard.SetText(report);
         dialog.Controls.Add(text);dialog.Controls.Add(copy);dialog.ShowDialog(this);
     }
     private static string UuReason(string code)=>code switch{
@@ -73,11 +76,15 @@ internal sealed class MainForm : Form
         "UU_DIRECTORY_UNREADABLE"=>"安装目录不可读取或超出扫描限制",
         _=>"尚未通过检查"};
     internal string UuReport=>_uuReport;
+    internal string ConnectionReport=>_connectionReport;
     internal int UsageProgress=>_progress.Value;
     internal bool UsageFresh=>_progress.Enabled;
     internal void Display(JsonObject state)
     {
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc3");
+            _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","connection_stage","core_stage","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc4");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
@@ -106,6 +113,10 @@ internal sealed class MainForm : Form
     private static string Message(string code)=>code switch{
         "INVALID_CREDENTIALS"=>"账号或密码错误。", "DEVICE_LIMIT_REACHED"=>"设备数量已达上限，请联系管理员撤销旧设备。", "RATE_LIMITED"=>"登录尝试过于频繁，请稍后重试。",
         "UU_TRUST_NOT_VERIFIED"=>"发现 UU 安装记录，但程序签名或目录权限尚未通过核验。保持原有网络，请勿在远控机器强行连接。",
+        "SERVICE_OPERATION_FAILED"=>"连接未完成，请点击“连接诊断”查看失败阶段和错误码。",
+        "CORE_READY_TIMEOUT"=>"隧道核心启动超时，保护保持启用。请复制“连接诊断”。",
+        "ORACLE_PROBE_TIMEOUT"=>"Oracle 出口验证超时，保护保持启用。请复制“连接诊断”。",
+        "ORACLE_PROBE_HTTP_FAILED"=>"Oracle 出口请求失败，保护保持启用。请复制“连接诊断”。",
         "UU_MAINTENANCE_BUSY"=>"UU 权限维护进行中，请完成后再连接。",
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",

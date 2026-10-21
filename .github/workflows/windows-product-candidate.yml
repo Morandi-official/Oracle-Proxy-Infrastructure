@@ -70,7 +70,7 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/AppData/Local/go-build
-          key: oracle-product-go-${{ runner.os }}-1.27.1-${{ hashFiles('clients/windows/product/core/go.mod') }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
       - name: Verify embedded Wintun bytes against official signed x64 release
         shell: pwsh
         run: ./clients/windows/product/ci/verify-wintun.ps1
@@ -139,7 +139,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc3-win-x64-unsigned-acceptance-candidate
+          name: OracleProxy-0.3.0-rc4-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             !dist/candidate/*-source.zip
@@ -150,7 +150,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc3-corresponding-source
+          name: OracleProxy-0.3.0-rc4-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt

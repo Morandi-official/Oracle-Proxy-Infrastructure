@@ -1,5 +1,6 @@
 $ErrorActionPreference='Continue'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Disposable hosted Windows required'}
+. (Join-Path $PSScriptRoot 'uu-network-fixture.ps1')
 $test=Join-Path $PWD 'dist/product-tests/OracleProxy.Product.Tests.exe'
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
 if((Test-Path $test) -and (Test-Path "$root/authorized") -and (Test-Path "$env:ProgramFiles/OracleProxy/OracleProxy.Guard.dll")){
@@ -13,6 +14,12 @@ if((Test-Path $test) -and (Test-Path "$root/authorized") -and (Test-Path "$env:P
 foreach($name in @('OracleProxyCandidateFixture','OracleProxyService','OracleProxyRecovery')){
   $service=Get-Service $name -ErrorAction SilentlyContinue
   if($service){Stop-Service $name -Force -ErrorAction SilentlyContinue; & sc.exe delete $name | Out-Null}
+}
+Remove-CIUuNetworkFixture
+$probeRule=Get-NetFirewallRule -DisplayName OracleProxyCandidateInitialUdp -ErrorAction SilentlyContinue
+if($probeRule -and $probeRule.Description -eq 'Oracle Proxy disposable initial handshake loss'){
+  $application=$probeRule | Get-NetFirewallApplicationFilter
+  if($application.Program -eq "$env:ProgramFiles\OracleProxy\OracleProxy.Core.exe"){$probeRule | Remove-NetFirewallRule}
 }
 foreach($task in @('OracleProxyCandidateWatchdog','OracleProxyCandidateRescue','OracleProxyCandidateVerifyRecovery')){Stop-ScheduledTask $task -ErrorAction SilentlyContinue;Unregister-ScheduledTask $task -Confirm:$false -ErrorAction SilentlyContinue}
 if(Test-Path "$root/owner-created"){Remove-LocalUser OracleProxyOwner -ErrorAction SilentlyContinue;Remove-Item "$root/owner-created" -ErrorAction SilentlyContinue}

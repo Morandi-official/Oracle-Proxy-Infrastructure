@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop'
 $module=Join-Path ((go env GOMODCACHE).Trim()) 'github.com/sagernet/sing-tun@v0.9.7-0.20261009020158-bca4bf029237/internal/wintun/amd64/wintun.dll'
 if(!(Test-Path $module)){throw 'Pinned upstream Wintun payload missing'}
 $archive=Join-Path $env:RUNNER_TEMP 'oracle-wintun-0.14.1.zip'
-Get-OfficialFile -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $archive
+Get-OfficialFile -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $archive -SHA256 '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51'
 $directory=Join-Path $env:RUNNER_TEMP 'oracle-official-wintun'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip=[IO.Compression.ZipFile]::OpenRead($archive)

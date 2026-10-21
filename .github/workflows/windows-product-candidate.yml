@@ -140,7 +140,21 @@ jobs:
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: OracleProxy-0.3.0-rc1-win-x64-unsigned-acceptance-candidate
-          path: dist/candidate/*
+          path: |
+            dist/candidate/*.zip
+            !dist/candidate/*-source.zip
+            dist/candidate/SHA256SUMS.txt
+            dist/candidate/BUILD.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: OracleProxy-0.3.0-rc1-corresponding-source
+          path: |
+            dist/candidate/*-source.zip
+            dist/candidate/SHA256SUMS.txt
+            dist/candidate/BUILD.json
           if-no-files-found: error
           retention-days: 14
       - name: Retain source build and hashes for review

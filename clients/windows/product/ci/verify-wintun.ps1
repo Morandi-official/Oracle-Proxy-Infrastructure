@@ -14,10 +14,12 @@ try{
   New-Item -ItemType Directory -Force $directory | Out-Null
   $official=Join-Path $directory 'wintun.dll'
   [IO.Compression.ZipFileExtensions]::ExtractToFile($entry,$official,$true)
-  foreach($name in @('wintun/COPYING','wintun/LICENSE','wintun/README.md','wintun/README.txt')){
-    $license=$zip.GetEntry($name)
-    if($license -and $license.Length -lt 200000){[IO.Compression.ZipFileExtensions]::ExtractToFile($license,(Join-Path $directory ([IO.Path]::GetFileName($name))),$true)}
+  foreach($license in $zip.Entries | Where-Object FullName -Match '^wintun/(LICENSE|COPYING|README)(\.[^/]{1,10})?$'){
+    if($license.Length -gt 0 -and $license.Length -lt 200000){
+      [IO.Compression.ZipFileExtensions]::ExtractToFile($license,(Join-Path $directory ([IO.Path]::GetFileName($license.FullName))),$true)
+    }
   }
+  if(!(Get-ChildItem $directory -File | Where-Object Name -Match '^(LICENSE|COPYING)(\.|$)')){throw 'Official Wintun distribution license missing'}
 }finally{$zip.Dispose()}
 if((Get-FileHash $module -Algorithm SHA256).Hash -ne (Get-FileHash $official -Algorithm SHA256).Hash){throw 'Embedded Wintun differs from official signed release'}
 $signature=Get-AuthenticodeSignature $official

@@ -27,7 +27,7 @@ APP_USER = 'oracle-proxy-admin'
 BUILD_USER = 'oracle-proxy-admin-build'
 SOURCE = Path(__file__).resolve().parents[1]
 UNIT_NAMES = ('oracle-proxy-admin.service', 'oracle-proxy-admin-collect.service',
-              'oracle-proxy-admin-collect.timer')
+              'oracle-proxy-admin-collect.timer', 'oracle-proxy-relay.service')
 HOST = 'vpn-admin.morandi.dpdns.org'
 
 
@@ -162,6 +162,16 @@ def switch(release):
     temporary.replace(ROOT / 'current')
 
 
+def relay_expected():
+    return (ROOT / 'current/relay/server.py').is_file()
+
+
+def restart_application():
+    command(['systemctl', 'restart', UNIT_NAMES[0]])
+    if relay_expected(): command(['systemctl', 'restart', UNIT_NAMES[3]])
+    else: subprocess.run(['systemctl', 'stop', UNIT_NAMES[3]], check=False)
+
+
 def healthy():
     request = urllib.request.Request(f'http://127.0.0.1:8787/api/health', headers={
         'Host': HOST, 'X-Forwarded-Proto': 'https'})
@@ -172,7 +182,10 @@ def healthy():
             with opener.open(request, timeout=2) as response:
                 payload=json.load(response)
                 if response.status == 200 and isinstance(payload,dict) and payload.get('ready') is True:
-                    return True
+                    if not relay_expected(): return True
+                    with opener.open('http://127.0.0.1:8788/health', timeout=2) as relay:
+                        state = json.load(relay)
+                        if relay.status == 200 and isinstance(state, dict) and state.get('ready') is True: return True
         except (OSError, ValueError):
             pass
         time.sleep(1)
@@ -202,6 +215,7 @@ def install(revision):
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     create_user(APP_USER, STATE)
     create_user(BUILD_USER, '/nonexistent')
+    create_user('oracle-proxy-relay', '/nonexistent')
     app = pwd.getpwnam(APP_USER)
     os.chown(STATE, app.pw_uid, app.pw_gid); STATE.chmod(0o700)
     release = ROOT / 'releases' / revision
@@ -248,20 +262,20 @@ def install(revision):
     switch(release)
     command(['systemctl', 'daemon-reload'])
     try:
-        command(['systemctl', 'restart', UNIT_NAMES[0]])
+        restart_application()
         if not healthy():
             raise ValueError('Application failed local health verification')
     except (ValueError, subprocess.CalledProcessError):
         if previous is not None:
             switch(previous)
-            command(['systemctl', 'restart', UNIT_NAMES[0]])
+            restart_application()
         else:
-            subprocess.run(['systemctl', 'stop', UNIT_NAMES[0]], check=False)
+            subprocess.run(['systemctl', 'stop', UNIT_NAMES[0], UNIT_NAMES[3]], check=False)
         raise
     if previous is not None:
         (ROOT / 'previous').unlink(missing_ok=True)
         (ROOT / 'previous').symlink_to(previous)
-    command(['systemctl', 'enable', UNIT_NAMES[0], UNIT_NAMES[2]])
+    command(['systemctl', 'enable', UNIT_NAMES[0], UNIT_NAMES[2], UNIT_NAMES[3]])
     command(['systemctl', 'restart', UNIT_NAMES[2]])
     print('ORACLE_ADMIN=ACTIVE_LOOPBACK_ONLY')
     print('Review deploy/Caddyfile and merge its dedicated host block into your existing Caddy config.')
@@ -277,9 +291,9 @@ def rollback():
         raise ValueError('Invalid previous release')
     current = (ROOT / 'current').resolve()
     switch(target)
-    command(['systemctl', 'restart', UNIT_NAMES[0]])
+    restart_application()
     if not healthy():
-        switch(current); command(['systemctl', 'restart', UNIT_NAMES[0]])
+        switch(current); restart_application()
         raise ValueError('Rollback health check failed; current version restored')
     print('ORACLE_ADMIN=ROLLED_BACK; database and host secrets retained')
 

@@ -10,6 +10,15 @@ spec.loader.exec_module(host)
 
 
 class HostBoundaries(unittest.TestCase):
+    def test_new_release_requires_both_web_and_relay_health(self):
+        response=MagicMock();response.status=200;response.__enter__.return_value=response
+        response.read.return_value=b'{"ready":true}'
+        relay=MagicMock();relay.status=200;relay.__enter__.return_value=relay
+        opener=MagicMock();opener.open.side_effect=lambda request,**kw: relay if isinstance(request,str) else response
+        with patch.object(host,'relay_expected',return_value=True),patch.object(host.urllib.request,'build_opener',return_value=opener),patch.object(host.time,'sleep'):
+            for body in (b'{"ready":false}',b'[]',b'{"ready":1}'):
+                relay.read.return_value=body;self.assertFalse(host.healthy())
+            relay.read.return_value=b'{"ready":true}';self.assertTrue(host.healthy())
     def test_health_allows_redacted_metadata_but_requires_explicit_ready_boolean(self):
         response=MagicMock();response.status=200;response.__enter__.return_value=response
         opener=MagicMock();opener.open.return_value=response

@@ -57,6 +57,12 @@ def main():
     service_user = subprocess.check_output(['systemctl', 'show', '-p', 'User', '--value',
                                            host.UNIT_NAMES[0]], text=True).strip()
     assert service_user == host.APP_USER
+    assert subprocess.check_output(['systemctl', 'show', '-p', 'User', '--value',
+                                    host.UNIT_NAMES[3]], text=True).strip() == 'oracle-proxy-relay'
+    assert run(['runuser', '-u', 'oracle-proxy-relay', '--', 'test', '!', '-r', host.CONFIG]).returncode == 0
+    assert (host.STATE / 'admin.sqlite3').is_file()
+    assert run(['runuser', '-u', 'oracle-proxy-relay', '--', 'test', '!', '-r', host.STATE / 'admin.sqlite3']).returncode == 0
+    print('REAL_RELAY_LOOPBACK_HEALTH_AND_NO_ADMIN_CREDENTIAL_ACCESS=PASS')
     request = urllib.request.Request(f'http://127.0.0.1:8787/api/status', headers={
         'Host': host.HOST, 'X-Forwarded-Proto': 'https'})
     try:

@@ -10,7 +10,7 @@ internal sealed record UuIssue(string Path,string Code,string Detail="");
 internal sealed record UuInventory(string[] Paths,int Candidates,int Rejected,UuIssue[] Issues);
 internal static class UuDiscovery
 {
-    internal static UuInventory Discover()
+    internal static string[] InstallationRoots()
     {
         var roots=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach(var view in new[]{RegistryView.Registry64,RegistryView.Registry32}){
@@ -44,6 +44,11 @@ internal static class UuDiscovery
         foreach(var process in Process.GetProcesses())using(process){
             try{if(Related(process.ProcessName))AddRoot(process.MainModule?.FileName ?? "",roots);}catch{ /* counted through installation records when available */ }
         }
+        return roots.ToArray();
+    }
+    internal static UuInventory Discover()
+    {
+        var roots=InstallationRoots();
         var valid=new HashSet<string>(StringComparer.OrdinalIgnoreCase);int count=0,rejected=0;var issues=new List<UuIssue>();
         void Issue(UuIssue issue){if(issues.Count<6 && !issues.Any(i=>i.Path==issue.Path && i.Code==issue.Code))issues.Add(issue with{Path=issue.Path.Length>256?issue.Path[..256]:issue.Path});}
         foreach(string root in roots){
@@ -56,7 +61,7 @@ internal static class UuDiscovery
                 }
             }catch(Exception error){rejected++;Issue(new(root,error is IOException && error.Message=="REPARSE_POINT_REJECTED"?"UU_REPARSE_POINT":"UU_DIRECTORY_UNREADABLE"));}
         }
-        return new(valid.Order(StringComparer.OrdinalIgnoreCase).ToArray(),Math.Max(count,roots.Count),rejected,issues.ToArray());
+        return new(valid.Order(StringComparer.OrdinalIgnoreCase).ToArray(),Math.Max(count,roots.Length),rejected,issues.ToArray());
     }
     private static bool Related(string name)=>name.Contains("GameViewer",StringComparison.OrdinalIgnoreCase)||name.Contains("UURemote",StringComparison.OrdinalIgnoreCase)||name.Contains("UU远程",StringComparison.OrdinalIgnoreCase);
     private static void AddRoot(string value,HashSet<string> roots)
@@ -87,18 +92,24 @@ internal static class UuDiscovery
                 if(!TrustedOwner(security))return new(dir.FullName,"UU_DIRECTORY_OWNER_UNTRUSTED");
                 if(UnsafeWriter(security))return new(dir.FullName,"UU_DIRECTORY_WRITABLE");
             }
+            return SignatureIssue(path);
+        }catch(IOException error) when(error.Message=="REPARSE_POINT_REJECTED"){return new(path,"UU_REPARSE_POINT");}
+        catch(System.Security.Cryptography.CryptographicException){return new(path,"UU_SIGNATURE_UNREADABLE");}
+        catch{return new(path,"UU_TRUST_INSPECTION_FAILED");}
+    }
+    internal static UuIssue? SignatureIssue(string path)
+    {
+        try{
             using var certificate=new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
             string publisher=certificate.GetNameInfo(X509NameType.SimpleName,false);
             if(publisher is not ("NetEase (Hangzhou) Network Co., Ltd" or "NetEase(Hangzhou) Network Co. Ltd." or "NetEase (Hangzhou) Network Co., Ltd." or "Hangzhou NetEase Leihuo Technology Co., Ltd."))return new(path,"UU_PUBLISHER_UNRECOGNIZED");
             int status=VerifySignature(path);
             return status==0?null:new(path,"UU_SIGNATURE_NOT_VERIFIED","0x"+unchecked((uint)status).ToString("X8"));
-        }catch(IOException error) when(error.Message=="REPARSE_POINT_REJECTED"){return new(path,"UU_REPARSE_POINT");}
-        catch(System.Security.Cryptography.CryptographicException){return new(path,"UU_SIGNATURE_UNREADABLE");}
-        catch{return new(path,"UU_TRUST_INSPECTION_FAILED");}
+        }catch{return new(path,"UU_SIGNATURE_UNREADABLE");}
     }
-    private static bool TrustedOwner(FileSystemSecurity security)=>
+    internal static bool TrustedOwner(FileSystemSecurity security)=>
         security.GetOwner(typeof(SecurityIdentifier))?.Value is "S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
-    private static bool UnsafeWriter(FileSystemSecurity security)=>security.GetAccessRules(true,true,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(rule=>
+    internal static bool UnsafeWriter(FileSystemSecurity security)=>security.GetAccessRules(true,true,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(rule=>
         !rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly) && rule.AccessControlType==AccessControlType.Allow &&
         rule.IdentityReference.Value is not ("S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464") &&
         (rule.FileSystemRights&(FileSystemRights.WriteData|FileSystemRights.CreateDirectories|FileSystemRights.Delete|FileSystemRights.DeleteSubdirectoriesAndFiles|FileSystemRights.ChangePermissions|FileSystemRights.TakeOwnership))!=0);

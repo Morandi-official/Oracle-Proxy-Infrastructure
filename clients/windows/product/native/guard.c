@@ -18,7 +18,7 @@
 static DWORD stage=0;
 static SRWLOCK policy_lock=SRWLOCK_INIT;
 static HANDLE tun_engine=NULL;
-static UINT64 tun_value=0,tun_filters[4]={0};
+static UINT64 tun_value=0,tun_filters[8]={0};
 static const GUID provider={0x4936aef1,0x9f84,0x4291,{0x88,0x72,0x36,0x47,0x19,0x80,0x21,0xa1}};
 static const GUID sublayer={0xbb18a732,0x9015,0x4871,{0x92,0x01,0xc1,0x62,0xa1,0x40,0x77,0x92}};
 static const GUID *ale[]={&FWPM_LAYER_ALE_AUTH_CONNECT_V4,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,&FWPM_LAYER_ALE_AUTH_CONNECT_V6,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6};
@@ -64,9 +64,13 @@ static DWORD live_tun(UINT64 value){
  e=FwpmEngineOpen0(NULL,RPC_C_AUTHN_WINNT,NULL,&session,&tun_engine);if(e)return e;
  e=FwpmTransactionBegin0(tun_engine,0);
  if(!e){
-  FWPM_FILTER_CONDITION0 condition={0};condition.fieldKey=FWPM_CONDITION_IP_LOCAL_INTERFACE;condition.matchType=FWP_MATCH_EQUAL;condition.conditionValue.type=FWP_UINT64;condition.conditionValue.uint64=&value;
-  for(int i=0;i<4&&!e;i++){
-   stage++;FWPM_FILTER0 f={0};f.providerKey=(GUID*)&provider;f.subLayerKey=sublayer;f.layerKey=*ale[i];f.displayData.name=L"Oracle Proxy current tunnel only";
+  FWPM_FILTER_CONDITION0 condition={0};condition.matchType=FWP_MATCH_EQUAL;condition.conditionValue.type=FWP_UINT64;condition.conditionValue.uint64=&value;
+  // Bind authorization to the actual packet path, not the source-address
+  // interface. Incoming response reauthorization has no next-hop value, so
+  // a separate arrival-interface rule is required (and vice versa).
+  for(int i=0;i<8&&!e;i++){
+   condition.fieldKey=(i%2)==0?FWPM_CONDITION_IP_NEXTHOP_INTERFACE:FWPM_CONDITION_IP_ARRIVAL_INTERFACE;
+   stage++;FWPM_FILTER0 f={0};f.providerKey=(GUID*)&provider;f.subLayerKey=sublayer;f.layerKey=*ale[i/2];f.displayData.name=L"Oracle Proxy current tunnel packet path";
    UINT64 weight=220;f.weight.type=FWP_UINT64;f.weight.uint64=&weight;f.action.type=FWP_ACTION_PERMIT;f.numFilterConditions=1;f.filterCondition=&condition;
    e=FwpmFilterAdd0(tun_engine,&f,NULL,&tun_filters[i]);
   }
@@ -170,7 +174,7 @@ API OpGuardApply(const wchar_t *service_path,const wchar_t *core_path,const wcha
 API OpGuardSuspendTun(void){if(!system_only())return ERROR_ACCESS_DENIED;AcquireSRWLockExclusive(&policy_lock);close_tun();ReleaseSRWLockExclusive(&policy_lock);return 0;}
 API OpGuardTunReady(void){
  AcquireSRWLockShared(&policy_lock);NET_LUID actual={0};BOOL ok=tun_engine&&ConvertInterfaceAliasToLuid(L"OracleProxy",&actual)==0&&actual.Value==tun_value;
- for(int i=0;i<4&&ok;i++){FWPM_FILTER0 *filter=NULL;ok=FwpmFilterGetById0(tun_engine,tun_filters[i],&filter)==0;if(filter)FwpmFreeMemory0((void**)&filter);}
+ for(int i=0;i<8&&ok;i++){FWPM_FILTER0 *filter=NULL;ok=FwpmFilterGetById0(tun_engine,tun_filters[i],&filter)==0;if(filter)FwpmFreeMemory0((void**)&filter);}
  ReleaseSRWLockShared(&policy_lock);return ok?1:0;
 }
 static DWORD clear_internal(void){

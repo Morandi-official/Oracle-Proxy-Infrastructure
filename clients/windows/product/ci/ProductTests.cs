@@ -142,7 +142,14 @@ internal static class ProductTests
             exit=await Launch(server);client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();NativeGuard.Apply([],luid);
             Require(NativeGuard.TunPermitted,"REAL_CURRENT_TUN_DYNAMIC_SESSION_PERMIT_AUDITED");
-            Require(await Tcp(),"REAL_TUN_USERSPACE_WIREGUARD_TCP_TO_ISOLATED_PEER");
+            bool tunneled=await Tcp();
+            if(!tunneled){
+                var proxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service","synthetic-probe-only")};
+                using var probe=new HttpClient(new SocketsHttpHandler{Proxy=proxy,UseProxy=true,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)};
+                try{using var response=await probe.GetAsync("https://1.1.1.1/cdn-cgi/trace");Evidence.Add("SYNTHETIC_WG_SOCKS_PATH="+(response.IsSuccessStatusCode?"PASS":"FAIL"));}catch{Evidence.Add("SYNTHETIC_WG_SOCKS_PATH=FAIL");}
+                NativeGuard.Clear();Evidence.Add("SYNTHETIC_TUN_WITHOUT_OWNED_GUARD="+(await Tcp()?"PASS":"FAIL"));
+            }
+            Require(tunneled,"REAL_TUN_USERSPACE_WIREGUARD_TCP_TO_ISOLATED_PEER");
             Require(await Dns(),"REAL_TUN_USERSPACE_WIREGUARD_UDP_DNS_TO_ISOLATED_PEER");
             await Stop(exit);exit=null;
             Require(!await Tcp(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_TCP_FALLBACK");

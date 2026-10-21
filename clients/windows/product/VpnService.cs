@@ -15,10 +15,11 @@ internal sealed class VpnService : ServiceBase
                 var tasks=new[]{_runtime.Run(_cancel.Token),ControlPipe.Serve(_runtime,_cancel.Token)};
                 await Task.WhenAny(tasks);
                 if(!_cancel.IsCancellationRequested)Environment.Exit(3);
+                await Task.WhenAll(tasks);
             }catch(OperationCanceledException)when(_cancel.IsCancellationRequested){}
             catch(Exception error){Platform.RecordFailure("service",error);Environment.Exit(3);} // SCM recovery; no raw exception/secret logs.
         });
     }
-    protected override void OnStop(){_cancel.Cancel();try{_worker?.Wait(TimeSpan.FromSeconds(3));}catch{} _runtime?.Dispose();}
+    protected override void OnStop(){RequestAdditionalTime(30000);_cancel.Cancel();_runtime?.BeginStop();try{if(_worker?.Wait(TimeSpan.FromSeconds(25))==false)Environment.Exit(3);}catch{} _runtime?.Dispose();}
     protected override void OnShutdown()=>OnStop();
 }

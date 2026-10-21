@@ -65,7 +65,7 @@ internal sealed class MainForm : Form
                 long? expires=account["expires_at"]?.GetValue<long>();
                 _expiry.Text=$"到期：{(expires is null?"长期":DateTimeOffset.FromUnixTimeSeconds(expires.Value).ToLocalTime().ToString("yyyy-MM-dd HH:mm"))}   ·   设备 {account["device_count"]}/{account["device_limit"]}   ·   UTC 账期 {state["period"]}";
             }else{_usage.Text="登录后显示本月用量与限额";_progress.Value=0;_expiry.Text="账号由管理员创建，不开放自行注册。";}
-            long? latency=state["latency_ms"]?.GetValue<long>();long? at=state["received_at"]?.GetValue<long>();
+            long? latency=state["latency_ms"]?.GetValue<long>();long? at=state["observed_at"]?.GetValue<long>();
             bool fresh=at is long received && DateTimeOffset.UtcNow.ToUnixTimeSeconds()-received<=20;_progress.Enabled=fresh;
             if(!fresh && account is not null)_detail.Text+=" 用量未刷新，显示的是上次读取值。";
             _telemetry.Text=$"隧道 HTTP 延迟：{(latency is null?"—":latency+" ms")} · 已验证 UU 程序：{state["uu_verified_programs"]} · 用量更新时间：{(at is null?"—":DateTimeOffset.FromUnixTimeSeconds(at.Value).ToLocalTime().ToString("HH:mm:ss"))}";

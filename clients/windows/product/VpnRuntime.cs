@@ -37,7 +37,7 @@ internal sealed class VpnRuntime : IDisposable
                     try{await Refresh();
                         if(_secret.ConnectIntent && !_secret.RecoveryRequired){
                             if(ActivePolicy()){
-                                if(_core.Running && _runningProfile!=Profile())await _core.Stop();
+                                if(_core.Running && (_runningProfile!=Profile() || !NativeGuard.TunPermitted))await _core.Stop();
                                 if(!_core.Running)await StartCore();
                                 else if(DateTimeOffset.UtcNow-_probed>TimeSpan.FromSeconds(15))await Probe();
                             }else{_latency=null;_mode="protected";}
@@ -129,7 +129,8 @@ internal sealed class VpnRuntime : IDisposable
         }
         throw new IOException("OWNED_TUNNEL_CLEANUP_NOT_VERIFIED");
     }
-    private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length};
+    private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length};
     private static string Code(Exception e)=>e.Message.Length<=80 && e.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?e.Message:"SERVICE_OPERATION_FAILED";
+    internal void BeginStop(){_api.Cancel();_core.Cancel();}
     public void Dispose(){_core.Dispose();_api.Dispose();_gate.Dispose();}
 }

@@ -53,10 +53,10 @@ internal static class ProductTests
     {
         Application.EnableVisualStyles();using var form=new MainForm();
         var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
-        var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
+        var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
         form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
         using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,form.ClientRectangle);Directory.CreateDirectory("dist/review");image.Save("dist/review/windows-client-synthetic.png");}
-        snapshot["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
+        snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
         return 0;
     }
     private static async Task<int> RoguePipe()
@@ -141,6 +141,7 @@ internal static class ProductTests
         try{
             exit=await Launch(server);client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();NativeGuard.Apply([],luid);
+            Require(NativeGuard.TunPermitted,"REAL_CURRENT_TUN_DYNAMIC_SESSION_PERMIT_AUDITED");
             Require(await Tcp(),"REAL_TUN_USERSPACE_WIREGUARD_TCP_TO_ISOLATED_PEER");
             Require(await Dns(),"REAL_TUN_USERSPACE_WIREGUARD_UDP_DNS_TO_ISOLATED_PEER");
             await Stop(exit);exit=null;
@@ -148,6 +149,7 @@ internal static class ProductTests
             Require(!await Dns(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_DNS_FALLBACK");
             client.Kill(true);await client.WaitForExitAsync();client.Dispose();client=null;
             Require(NativeGuard.Active,"REAL_CORE_CRASH_PERSISTENT_GUARD_SURVIVES");
+            Require(!NativeGuard.TunPermitted,"REAL_DEAD_TUN_CANNOT_AUTHORIZE_A_STALE_PERMIT");
             Require(!await Tcp(),"REAL_CORE_CRASH_NO_DIRECT_TCP_FALLBACK");
         }finally{await Stop(client);await Stop(exit);}
         NativeGuard.Clear();

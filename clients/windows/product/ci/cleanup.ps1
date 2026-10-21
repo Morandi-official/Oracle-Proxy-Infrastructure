@@ -15,4 +15,5 @@ foreach($name in @('OracleProxyCandidateFixture','OracleProxyService','OraclePro
   if($service){Stop-Service $name -Force -ErrorAction SilentlyContinue; & sc.exe delete $name | Out-Null}
 }
 foreach($task in @('OracleProxyCandidateWatchdog','OracleProxyCandidateRescue','OracleProxyCandidateVerifyRecovery')){Stop-ScheduledTask $task -ErrorAction SilentlyContinue;Unregister-ScheduledTask $task -Confirm:$false -ErrorAction SilentlyContinue}
+if(Test-Path "$root/owner-created"){Remove-LocalUser OracleProxyOwner -ErrorAction SilentlyContinue;Remove-Item "$root/owner-created" -ErrorAction SilentlyContinue}
 exit 0

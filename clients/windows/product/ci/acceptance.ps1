@@ -4,7 +4,16 @@ if(Get-Service OracleProxyService,OracleProxyCandidateFixture -ErrorAction Silen
 if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting install refused'}
 $exe=(Resolve-Path './dist/product/OracleProxy.exe').Path
 $test=(Resolve-Path './dist/product-tests/OracleProxy.Product.Tests.exe').Path
-$owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if(Get-LocalUser OracleProxyOwner,OracleProxyOther -ErrorAction SilentlyContinue){throw 'Preexisting fixture user refused'}
+$root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
+if(Test-Path $root){throw 'Preexisting fixture state refused'}
+New-Item -ItemType Directory -Path $root | Out-Null
+Set-Content "$root/authorized" 'DISPOSABLE_GITHUB_ONLY'
+$ownerPassword=ConvertTo-SecureString ('OracleProxy!'+[Guid]::NewGuid().ToString('N')) -AsPlainText -Force
+$ownerUser=New-LocalUser -Name OracleProxyOwner -Password $ownerPassword -AccountNeverExpires -PasswordNeverExpires
+Set-Content "$root/owner-created" 'OracleProxyOwner'
+$owner=$ownerUser.SID.Value
+$ownerCredential=[Management.Automation.PSCredential]::new("$env:COMPUTERNAME\OracleProxyOwner",$ownerPassword)
 $install=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
 if($install.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};Get-Service OracleProxyService -ErrorAction SilentlyContinue | Select-Object Status,Name;throw 'Actual product setup failed'}
 & $test --owner-status
@@ -20,6 +29,9 @@ Stop-Service OracleProxyService
 if($LASTEXITCODE -ne 0){throw 'Client sent credentials to a rogue pipe'}
 Start-Service OracleProxyService
 Write-Host 'REAL_SCM_BOUND_PIPE_REJECTS_ROGUE_SERVER_DUPLICATE_FIELDS_AND_ARBITRARY_PATHS=PASS'
+$normalOwner=Start-Process $test -ArgumentList '--owner-control' -Credential $ownerCredential -WorkingDirectory $env:WINDIR -LoadUserProfile -Wait -PassThru
+if($normalOwner.ExitCode -ne 0){throw 'Actual ordinary owner could not use fixed SYSTEM control commands'}
+Write-Host 'REAL_NONADMIN_OWNER_USES_FIXED_SYSTEM_COMMANDS_WITHOUT_UAC=PASS' 
 $other='OracleProxyOther'
 $fixturePassword=ConvertTo-SecureString ('OracleProxy!'+[Guid]::NewGuid().ToString('N')) -AsPlainText -Force
 try{
@@ -39,9 +51,6 @@ try{
   & $test --uu-trust-signed
   if($LASTEXITCODE -ne 0){throw 'Actual signed NetEase file/ACL trust boundary failed'}
 }finally{if(Test-Path $uuFixture){Remove-Item -Recurse -Force $uuFixture}}
-$root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
-New-Item -ItemType Directory -Path $root | Out-Null
-Set-Content (Join-Path $root 'authorized') 'DISPOSABLE_GITHUB_ONLY'
 $action=New-ScheduledTaskAction -Execute $test -Argument '--watchdog'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog' -Action $action -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'

@@ -37,6 +37,10 @@ internal static class ProductTests
         }
         if(args.SequenceEqual(new[]{"--rogue-pipe"}))return RoguePipe().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--malformed-pipe"}))return MalformedPipe().GetAwaiter().GetResult();
+        if(args.SequenceEqual(new[]{"--owner-control"})){
+            if(Platform.IsAdmin || Platform.IsSystem)return 2;
+            try{var refresh=ControlPipe.Send("RefreshUu").GetAwaiter().GetResult();var off=ControlPipe.Send("Disconnect").GetAwaiter().GetResult();return refresh["ok"]?.GetValue<bool>()==true && off["mode"]?.GetValue<string>()=="disconnected"?0:1;}catch{return 1;}
+        }
         if(args.SequenceEqual(new[]{"--owner-status"})){
             try{var state=ControlPipe.Send("Status").GetAwaiter().GetResult();return state["mode"]?.GetValue<string>()=="disconnected"?0:1;}catch{return 1;}
         }

@@ -17,7 +17,11 @@ internal sealed class VpnService : ServiceBase
                 await Task.WhenAny(tasks);
                 if(!_cancel.IsCancellationRequested)Environment.Exit(3);
                 await Task.WhenAll(tasks);
-            }catch(OperationCanceledException)when(_cancel.IsCancellationRequested){}
+            }catch(Exception)when(_cancel.IsCancellationRequested){
+                // Named-pipe/HTTP teardown may surface IOException as well as
+                // cancellation. An explicitly stopped service must not request
+                // SCM crash recovery while the installer waits for its image.
+            }
             catch(Exception error){Platform.RecordFailure("service",error);Environment.Exit(3);} // SCM recovery; no raw exception/secret logs.
         });
     }

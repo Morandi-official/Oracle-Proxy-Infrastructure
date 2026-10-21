@@ -92,7 +92,7 @@ Write-Host 'REAL_MISSING_ENCRYPTED_STATE_STARTUP_RETAINS_PERSISTENT_GUARD=PASS'
 Stop-Service OracleProxyService
 Move-Item $stateBackup "$env:ProgramData/OracleProxy/state.dpapi" -Force
 $recovery=Start-Process $exe -ArgumentList '--recover' -Wait -PassThru
-if($recovery.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};throw 'Public fixed-action SYSTEM recovery failed'}
+if($recovery.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};Get-Service OracleProxyService -ErrorAction SilentlyContinue | Select-Object Status,Name;throw 'Public fixed-action SYSTEM recovery failed'}
 $verification=New-ScheduledTaskAction -Execute $test -Argument '--verify-recovered'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery' -Action $verification -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery'

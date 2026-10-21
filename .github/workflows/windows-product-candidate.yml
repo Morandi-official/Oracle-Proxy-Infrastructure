@@ -50,14 +50,26 @@ jobs:
           [IO.File]::WriteAllText((Resolve-Path $pins),$body)
           dotnet publish ./clients/windows/product/OracleProxy.Product.csproj -c Release -p:DebugType=None -o ./dist/product
           if($LASTEXITCODE -ne 0){throw 'Product build failed'}
-          & ./dist/product/OracleProxy.exe --self-test
-          if($LASTEXITCODE -ne 0){throw 'Public product offline invariants failed'}
-          & ./dist/product/OracleProxy.exe --service
-          if($LASTEXITCODE -ne 3){throw 'Unprivileged service entrypoint unexpectedly admitted'}
-          & ./dist/product/OracleProxy.exe --arbitrary-command
-          if($LASTEXITCODE -ne 2){throw 'Unknown command accepted'}
+          foreach($case in @(@('--self-test',0),@('--service',3),@('--arbitrary-command',2))){
+            $result=Start-Process -FilePath (Resolve-Path './dist/product/OracleProxy.exe') -ArgumentList $case[0] -Wait -PassThru
+            if($result.ExitCode -ne $case[1]){throw "Product boundary $($case[0]) exited $($result.ExitCode), expected $($case[1])"}
+          }
           Write-Host 'PRODUCT_COMPILE_AND_OFFLINE_BOUNDARIES=PASS'
           exit 0
+      - name: Build disposable SYSTEM fixture (not shipped)
+        shell: pwsh
+        run: |
+          dotnet publish ./clients/windows/product/ci/OracleProxy.Product.Tests.csproj -c Release -p:DebugType=None -o ./dist/product-tests
+          if($LASTEXITCODE -ne 0){throw 'Fixture build failed'}
+      - name: Real SCM, SYSTEM DPAPI and isolated WireGuard/WFP fault acceptance
+        if: github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        shell: pwsh
+        timeout-minutes: 6
+        run: ./clients/windows/product/ci/acceptance.ps1
+      - name: Always clean up only candidate-owned disposable services and filters
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/product/ci/cleanup.ps1
       - name: Retain source build and hashes for review (no installable artifact yet)
         shell: pwsh
         run: |

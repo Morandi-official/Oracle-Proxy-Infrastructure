@@ -21,7 +21,7 @@ internal static class Program
             if(args.Length!=0)return 2;
             ApplicationConfiguration.Initialize();Application.Run(new MainForm());return 0;
         }catch{
-            if(Environment.UserInteractive)MessageBox.Show("操作未完成，已有保护与密钥保留。请使用完整便携包，并检查系统服务状态。","Oracle Proxy");
+            if(args.Length==0 && Environment.UserInteractive)MessageBox.Show("操作未完成，已有保护与密钥保留。请使用完整便携包，并检查系统服务状态。","Oracle Proxy");
             return 3;
         }
     }

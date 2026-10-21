@@ -75,8 +75,15 @@ internal sealed class VpnRuntime : IDisposable
             _stage="CORE_START";await _core.Start(_state!,_secret);
             _stage="TUN_AUTHORIZE";
             NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);
-            await Probe();_runningProfile=Profile();
-        }catch{await _core.Stop();_mode="protected";throw;}
+            _runningProfile=Profile();await Probe();
+        }catch(Exception error){
+            // An HTTP probe timeout is not proof that the encrypted core is
+            // broken. Keep its handshake/NAT state while it and the guarded
+            // TUN lease remain valid. Wrong egress and all other failures stop it.
+            bool retryable=error is IOException && error.Message is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED";
+            if(!(retryable && _core.Running && NativeGuard.Active && NativeGuard.TunPermitted))await _core.Stop();
+            _mode="protected";throw;
+        }
     }
     internal async Task<JsonObject> Command(JsonObject value)
     {
@@ -145,7 +152,8 @@ internal sealed class VpnRuntime : IDisposable
         throw new IOException("OWNED_TUNNEL_CLEANUP_NOT_VERIFIED");
     }
     private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
-        ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,
+        ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,
+        ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};

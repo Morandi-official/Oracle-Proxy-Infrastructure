@@ -82,7 +82,7 @@ internal sealed class MainForm : Form
     internal void Display(JsonObject state)
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","connection_stage","core_stage","uu_verified_programs"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","connection_stage","core_stage","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs"})_connectionReport+=$"{key}: {state[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
             Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc4");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+

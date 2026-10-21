@@ -7,6 +7,27 @@ using OracleProxy.Product;
 
 internal static class OracleAcceptance
 {
+    // Disposable hosted fault only; this is never compiled into the product.
+    private sealed class InitialUdpLoss : IDisposable
+    {
+        private readonly dynamic _policy;
+        private const string Name="OracleProxyCandidateInitialUdp";
+        private const string Marker="Oracle Proxy disposable initial handshake loss";
+        internal InitialUdpLoss(int port)
+        {
+            _policy=Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FwPolicy2")!)!;
+            foreach(dynamic existing in _policy.Rules)if(existing.Name==Name)throw new IOException("PREEXISTING_FIREWALL_RULE_REFUSED");
+            dynamic rule=Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule")!)!;
+            rule.Name=Name;rule.Description=Marker;rule.ApplicationName=Platform.Core;rule.Protocol=17;rule.RemoteAddresses="152.67.156.100";rule.RemotePorts=port.ToString();rule.Direction=2;rule.Action=0;rule.Profiles=int.MaxValue;rule.Enabled=true;
+            _policy.Rules.Add(rule);
+        }
+        public void Dispose()
+        {
+            dynamic rule=_policy.Rules.Item(Name);
+            if(rule.Description!=Marker || !string.Equals((string)rule.ApplicationName,Platform.Core,StringComparison.OrdinalIgnoreCase))throw new IOException("FOREIGN_FIREWALL_RULE_REFUSED");
+            _policy.Rules.Remove(Name);
+        }
+    }
     private static void Check(bool condition,string code){if(!condition)throw new IOException(code);Console.WriteLine(code+"=PASS");}
     private static async Task<JsonObject> Send(string command)
     {
@@ -47,7 +68,17 @@ internal static class OracleAcceptance
                 var blocked=await ControlPipe.Send("Connect");
                 Check(blocked["ok"]?.GetValue<bool>()==false && blocked["error"]?.GetValue<string>()=="UU_MAINTENANCE_BUSY" && blocked["mode"]?.GetValue<string>()=="disconnected" && blocked["intent"]?.GetValue<bool>()==false,"REAL_CONNECT_REFUSED_DURING_ELEVATED_UU_MAINTENANCE");
             }
-            stage="CONNECT";await Send("Connect");await Connected();
+            stage="INITIAL_TRANSIENT_UDP_LOSS";uint initialPid;
+            // The acceptance target has a fixed deployed WireGuard port. The
+            // ordinary GUI IPC deliberately never exposes the tunnel profile.
+            using(var loss=new InitialUdpLoss(51820)){
+                var waiting=await ControlPipe.Send("Connect");
+                string code=waiting["error"]?.GetValue<string>() ?? "";
+                Check(waiting["mode"]?.GetValue<string>()=="protected" && waiting["guard"]?.GetValue<bool>()==true && waiting["tun_permitted"]?.GetValue<bool>()==true && waiting["core_stage"]?.GetValue<string>()=="READY" && code is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED","REAL_INITIAL_PROBE_FAILURE_RETAINS_LIVE_GUARDED_TUNNEL");
+                initialPid=waiting["core_pid"]!.GetValue<uint>();Check(initialPid>0,"REAL_INITIAL_HANDSHAKE_CORE_STAYS_ALIVE");
+            }
+            stage="CONNECT_AFTER_TRANSIENT_LOSS";var stable=await Connected();
+            Check(stable["core_pid"]?.GetValue<uint>()==initialPid,"REAL_ORACLE_HANDSHAKE_RECOVERS_WITHOUT_CORE_RESTART");
             Check((await Send("Status"))["uu_verified_programs"]?.GetValue<int>()==19,"REAL_ORACLE_CONNECTION_WITH_NINETEEN_VERIFIED_NETEASE_PATHS");
             Check(await ExitIp()=="152.67.156.100","REAL_ORDINARY_WINDOWS_HTTP_THROUGH_ORACLE_WIREGUARD_EXIT");
             // The real public GUI is an ordinary process; closing/crashing it must

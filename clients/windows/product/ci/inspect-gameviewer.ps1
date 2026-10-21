@@ -15,8 +15,18 @@ foreach($item in $versions){
   if($sig.Status -ne 'Valid'){throw 'GameViewer installer signature is not trusted'}
   Write-Host "GAMEVIEWER_INSTALLER=$($item.Version);SIGNER=$($sig.SignerCertificate.Subject);STATUS=$($sig.Status)"
   $extract=Join-Path $env:RUNNER_TEMP "GameViewer-static-$($item.Version)"
-  & 'C:/Program Files/7-Zip/7z.exe' x $installer "-o$extract" -y | Out-Null
-  if($LASTEXITCODE -ne 0){throw 'Static NSIS extraction failed'}
+  & 'C:/Program Files/7-Zip/7z.exe' x '-tNsis' $installer "-o$extract" -y | Out-Null
+  if($LASTEXITCODE -ne 0){
+    & 'C:/Program Files/7-Zip/7z.exe' x $installer "-o$extract" -y | Out-Null
+    if($LASTEXITCODE -ne 0){throw 'Static PE extraction failed'}
+    $overlay=Join-Path $extract '[0]'
+    if(Test-Path -LiteralPath $overlay){
+      $header=[IO.File]::ReadAllBytes($overlay)
+      Write-Host "STATIC_OVERLAY_HEADER=$([BitConverter]::ToString($header[0..63]))"
+      & 'C:/Program Files/7-Zip/7z.exe' x '-tNsis' $overlay "-o$extract/overlay" -y | Out-Null
+      $global:LASTEXITCODE=0
+    }
+  }
   $contents=@(Get-ChildItem $extract -Recurse -File)
   Write-Host "GAMEVIEWER_ARCHIVE_BYTES=$((Get-Item $installer).Length);ITEMS=$($contents.Count)"
   $contents | Select-Object -First 30 | ForEach-Object {Write-Host "STATIC_ARCHIVE_FILE=$($_.FullName.Substring($extract.Length+1))"}

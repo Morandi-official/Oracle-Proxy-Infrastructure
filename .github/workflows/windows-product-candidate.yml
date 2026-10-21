@@ -18,7 +18,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.1'
-          cache-dependency-path: clients/windows/product/core/go.mod
+          cache: false
+      - uses: actions/cache/restore@v4
+        id: go-cache
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/AppData/Local/go-build
+          key: oracle-product-go-${{ runner.os }}-1.27.1-${{ hashFiles('clients/windows/product/core/go.mod') }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -37,6 +44,13 @@ jobs:
           New-Item -ItemType Directory -Force ../../../../dist/product | Out-Null
           go build -trimpath -tags 'with_gvisor,with_wireguard' -ldflags '-s -w -buildid=' -o ../../../../dist/product/OracleProxy.Core.exe .
           if($LASTEXITCODE -ne 0){throw 'Core build failed'}
+      - uses: actions/cache/save@v4
+        if: steps.go-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/AppData/Local/go-build
+          key: oracle-product-go-${{ runner.os }}-1.27.1-${{ hashFiles('clients/windows/product/core/go.mod') }}
       - name: Compile owned native WFP boundary with Windows SDK
         shell: cmd
         run: cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\product\OracleProxy.Guard.dll /DYNAMICBASE /NXCOMPAT /Brepro
@@ -75,6 +89,7 @@ jobs:
         shell: pwsh
         run: ./clients/windows/product/ci/cleanup.ps1
       - name: Retain source build and hashes for review (no installable artifact yet)
+        if: always()
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'
@@ -83,6 +98,7 @@ jobs:
           Copy-Item ./clients/windows/product/core/go.mod,./clients/windows/product/core/go.sum $out
           Get-ChildItem ./dist/product -File | Where-Object Name -in @('OracleProxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll') | ForEach-Object {"$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content "$out/SHA256SUMS.txt"
       - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('dist/review/*') != ''
         with:
           name: Windows-product-build-review-only
           path: dist/review/*

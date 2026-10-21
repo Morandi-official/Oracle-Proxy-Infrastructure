@@ -20,7 +20,7 @@ Stop-Service OracleProxyService
 if($LASTEXITCODE -ne 0){throw 'Client sent credentials to a rogue pipe'}
 Start-Service OracleProxyService
 Write-Host 'REAL_SCM_BOUND_PIPE_REJECTS_ROGUE_SERVER_DUPLICATE_FIELDS_AND_ARBITRARY_PATHS=PASS'
-$other='OracleProxyFixtureOther'
+$other='OracleProxyOther'
 $fixturePassword=ConvertTo-SecureString ('OracleProxy!'+[Guid]::NewGuid().ToString('N')) -AsPlainText -Force
 try{
   New-LocalUser -Name $other -Password $fixturePassword -AccountNeverExpires -PasswordNeverExpires | Out-Null

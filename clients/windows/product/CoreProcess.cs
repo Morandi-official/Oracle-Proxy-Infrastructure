@@ -13,6 +13,7 @@ internal sealed class CoreProcess : IDisposable
     internal async Task Start(JsonObject state,DurableState secret)
     {
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
+        if(_process is not null)await Stop();
         Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
         // A suspended native launch + job assignment would narrow the creation

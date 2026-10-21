@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Private child of OracleProxyService. Configuration stays in a pipe, never a
+// plaintext file or command line. EOF requests graceful route/DNS cleanup.
+package main
+
+import (
+ "bufio"
+ "context"
+ "fmt"
+ "io"
+ "os"
+
+ box "github.com/sagernet/sing-box"
+ "github.com/sagernet/sing-box/include"
+ "github.com/sagernet/sing-box/option"
+ "github.com/sagernet/sing/common/json"
+ "golang.org/x/sys/windows"
+)
+func run() error {
+ check := len(os.Args)==2 && os.Args[1]=="--check"
+ if !check && len(os.Args)!=1 { return fmt.Errorf("arguments") }
+ if !check {
+  user,err:=windows.GetCurrentProcessToken().GetTokenUser()
+  if err!=nil || user.User.Sid.String()!="S-1-5-18" { return fmt.Errorf("identity") }
+ }
+ input:=bufio.NewReaderSize(os.Stdin,65536)
+ line,err:=input.ReadSlice('\n');if err!=nil || len(line)>65536 {return fmt.Errorf("frame")}
+ ctx:=include.Context(context.Background())
+ options,err:=json.UnmarshalExtendedContext[option.Options](ctx,line)
+ for i:=range line {line[i]=0}
+ if err!=nil {return fmt.Errorf("configuration")}
+ instance,err:=box.New(box.Options{Context:ctx,Options:options});if err!=nil{return fmt.Errorf("create")}
+ if check {fmt.Println("CONFIG_VALID");return nil}
+ if err=instance.Start();err!=nil{return fmt.Errorf("start")}
+ fmt.Println("READY")
+ // No arbitrary command interface. The owning SYSTEM process closes this
+ // anonymous pipe to stop gracefully; unexpected input also shuts down.
+ _,_=io.Copy(io.Discard,io.LimitReader(input,1))
+ if err=instance.Close();err!=nil{return fmt.Errorf("close")}
+ fmt.Println("CLOSED");return nil
+}
+func main(){if run()!=nil {fmt.Fprintln(os.Stderr,"CORE_FAILED");os.Exit(3)}}

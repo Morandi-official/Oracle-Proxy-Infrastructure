@@ -1,0 +1,74 @@
+name: Windows integrated product candidate (not GA)
+on:
+  pull_request:
+    paths: ['clients/windows/product/**', '.github/workflows/windows-product-candidate.yml']
+  push:
+    branches: [main]
+    paths: ['clients/windows/product/**', '.github/workflows/windows-product-candidate.yml']
+permissions:
+  contents: read
+jobs:
+  build-candidate:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build pinned userspace WireGuard/TUN core from source
+        shell: pwsh
+        working-directory: clients/windows/product/core
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          $ErrorActionPreference='Stop'
+          go mod tidy
+          if($LASTEXITCODE -ne 0){throw 'Core dependency resolution failed'}
+          New-Item -ItemType Directory -Force ../../../../dist/product | Out-Null
+          go build -trimpath -tags 'with_gvisor,with_wireguard' -ldflags '-s -w -buildid=' -o ../../../../dist/product/OracleProxy.Core.exe .
+          if($LASTEXITCODE -ne 0){throw 'Core build failed'}
+      - name: Compile owned native WFP boundary with Windows SDK
+        shell: cmd
+        run: cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\product\OracleProxy.Guard.dll /DYNAMICBASE /NXCOMPAT
+      - name: Embed immutable native payload hashes and compile self-contained Windows client
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $pins='./clients/windows/product/BuildPins.cs'
+          $body=Get-Content -Raw $pins
+          $body=$body.Replace('BUILD_MUST_PIN_CORE',(Get-FileHash './dist/product/OracleProxy.Core.exe' -Algorithm SHA256).Hash.ToLowerInvariant())
+          $body=$body.Replace('BUILD_MUST_PIN_GUARD',(Get-FileHash './dist/product/OracleProxy.Guard.dll' -Algorithm SHA256).Hash.ToLowerInvariant())
+          [IO.File]::WriteAllText((Resolve-Path $pins),$body)
+          dotnet publish ./clients/windows/product/OracleProxy.Product.csproj -c Release -p:DebugType=None -o ./dist/product
+          if($LASTEXITCODE -ne 0){throw 'Product build failed'}
+          & ./dist/product/OracleProxy.exe --self-test
+          if($LASTEXITCODE -ne 0){throw 'Public product offline invariants failed'}
+          & ./dist/product/OracleProxy.exe --service
+          if($LASTEXITCODE -ne 3){throw 'Unprivileged service entrypoint unexpectedly admitted'}
+          & ./dist/product/OracleProxy.exe --arbitrary-command
+          if($LASTEXITCODE -ne 2){throw 'Unknown command accepted'}
+          Write-Host 'PRODUCT_COMPILE_AND_OFFLINE_BOUNDARIES=PASS'
+          exit 0
+      - name: Retain source build and hashes for review (no installable artifact yet)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $out='./dist/review'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item ./clients/windows/product/core/go.mod,./clients/windows/product/core/go.sum $out
+          Get-ChildItem ./dist/product -File | Where-Object Name -in @('OracleProxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll') | ForEach-Object {"$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content "$out/SHA256SUMS.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-product-build-review-only
+          path: dist/review/*
+          if-no-files-found: error
+          retention-days: 14

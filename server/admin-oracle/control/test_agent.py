@@ -135,4 +135,21 @@ class PolicyTests(unittest.TestCase):
   with self.assertRaises(ValueError):self.user(quota_bytes=True)
   with self.assertRaises(ValueError):self.request('budget.set',{'command':'id'})
 
+ def test_default_cap_reassignment_and_revocation_tombstone(self):
+  user=self.user(quota_bytes=100000)
+  self.bind(KEY1,user);self.bind(KEY2,user)
+  self.request('peer.create',{'public_key':KEY3,'user_id':user['id'],'name':'Third'})
+  extra=agent.base64.b64encode(b'\x09'*32).decode()
+  with self.assertRaisesRegex(ValueError,'DEVICE_LIMIT_REACHED'):
+   self.request('peer.create',{'public_key':extra,'user_id':user['id'],'name':'Fourth'})
+  with self.assertRaisesRegex(ValueError,'REVOKE_DEVICES_BEFORE_LOWERING_LIMIT'):
+   self.request('user.limit',{'user_id':user['id'],'device_limit':2})
+  self.request('peer.revoke',{'public_key':KEY1});self.assertNotIn('10.250.0.2',self.driver.allowed)
+  self.request('peer.create',{'public_key':extra,'user_id':user['id'],'name':'Replacement'})
+  self.assertEqual(self.engine.device_count(user['id']),3)
+  with self.assertRaisesRegex(ValueError,'DEVICE_REVOKED'):self.bind(KEY1,user)
+  self.engine.db.close();self.engine=agent.Engine(self.database,self.driver,lambda:self.clock[0]);self.engine.tick()
+  self.assertNotIn('10.250.0.2',self.driver.allowed)
+  self.assertEqual(self.engine.device_limit(user['id']),3)
+
 if __name__=='__main__':unittest.main()

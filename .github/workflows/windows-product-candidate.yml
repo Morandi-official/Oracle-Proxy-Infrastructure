@@ -61,6 +61,9 @@ jobs:
         run: |
           dotnet publish ./clients/windows/product/ci/OracleProxy.Product.Tests.csproj -c Release -p:DebugType=None -o ./dist/product-tests
           if($LASTEXITCODE -ne 0){throw 'Fixture build failed'}
+          dotnet publish ./clients/windows/product/ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ./dist/bad-upgrade
+          if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
+          Copy-Item ./dist/product/OracleProxy.Core.exe,./dist/product/OracleProxy.Guard.dll ./dist/bad-upgrade
       - name: Real SCM, SYSTEM DPAPI and isolated WireGuard/WFP fault acceptance
         if: github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
         shell: pwsh
@@ -84,3 +87,19 @@ jobs:
           path: dist/review/*
           if-no-files-found: error
           retention-days: 14
+  gameviewer-identities:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect official GameViewer versions without running or logging into UU
+        shell: pwsh
+        run: ./clients/windows/product/ci/inspect-gameviewer.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GameViewer-official-binary-identities-review
+          path: dist/gameviewer-review/*.json
+          retention-days: 14
+          if-no-files-found: error

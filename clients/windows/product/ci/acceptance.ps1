@@ -9,6 +9,22 @@ $install=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
 if($install.ExitCode -ne 0){throw 'Actual product setup failed'}
 & $test --owner-status
 if($LASTEXITCODE -ne 0){throw 'SCM-authenticated owner pipe failed'}
+& $test --malformed-pipe
+if($LASTEXITCODE -ne 0){throw 'Malformed/arbitrary pipe requests were not rejected'}
+Stop-Service OracleProxyService
+& $test --rogue-pipe
+if($LASTEXITCODE -ne 0){throw 'Client sent credentials to a rogue pipe'}
+Start-Service OracleProxyService
+Write-Host 'REAL_SCM_BOUND_PIPE_REJECTS_ROGUE_SERVER_DUPLICATE_FIELDS_AND_ARBITRARY_PATHS=PASS'
+$other='OracleProxyFixtureOther'
+$fixturePassword=ConvertTo-SecureString ('OracleProxy!'+[Guid]::NewGuid().ToString('N')) -AsPlainText -Force
+try{
+  New-LocalUser -Name $other -Password $fixturePassword -AccountNeverExpires -PasswordNeverExpires | Out-Null
+  $credential=[Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$other",$fixturePassword)
+  $denial=Start-Process $test -ArgumentList '--nonowner-pipe' -Credential $credential -WorkingDirectory $env:WINDIR -LoadUserProfile -Wait -PassThru
+  if($denial.ExitCode -ne 0){throw 'Actual non-owner pipe denial not established'}
+  Write-Host 'REAL_NONADMIN_NONOWNER_WINDOWS_IDENTITY_PIPE_ACCESS_DENIED=PASS'
+}finally{Remove-LocalUser $other -ErrorAction SilentlyContinue}
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
 New-Item -ItemType Directory -Path $root | Out-Null
 Set-Content (Join-Path $root 'authorized') 'DISPOSABLE_GITHUB_ONLY'
@@ -37,6 +53,14 @@ try{[Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes("$e
 if(!$denied){throw 'Runner identity decrypted SYSTEM key storage'}
 Write-Host 'REAL_OTHER_WINDOWS_IDENTITY_CANNOT_UNSEAL_SYSTEM_DPAPI=PASS'
 Remove-Item "$env:ProgramData/OracleProxy/state.dpapi"
+$oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.exe").Hash
+$bad=(Resolve-Path './dist/bad-upgrade/OracleProxy.exe').Path
+$upgrade=Start-Process $bad -ArgumentList @('--install',$owner) -Wait -PassThru
+if($upgrade.ExitCode -eq 0){throw 'Deliberate bad startup unexpectedly installed'}
+if((Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.exe").Hash -ne $oldHash){throw 'Automatic rollback did not restore the previous executable'}
+& $test --owner-status
+if($LASTEXITCODE -ne 0){throw 'Previous service did not recover after rollback'}
+Write-Host 'REAL_BAD_UPGRADE_AUTOMATIC_BINARY_AND_SERVICE_ROLLBACK=PASS' 
 $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
 if($remove.ExitCode -ne 0){throw 'Actual product uninstall failed'}
 if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){throw 'Service survived uninstall'}

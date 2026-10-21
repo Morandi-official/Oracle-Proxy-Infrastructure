@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.IO.Pipes;
+using System.Text;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.ServiceProcess;
@@ -21,6 +23,12 @@ internal static class ProductTests
     private static void Require(bool condition,string message){if(!condition)throw new IOException(message);Evidence.Add(message+"=PASS");}
     internal static int Main(string[] args)
     {
+        if(args.SequenceEqual(new[]{"--nonowner-pipe"})){
+            try{ControlPipe.Send("Status").GetAwaiter().GetResult();return 1;}
+            catch(UnauthorizedAccessException){return 0;}catch{return 2;}
+        }
+        if(args.SequenceEqual(new[]{"--rogue-pipe"}))return RoguePipe().GetAwaiter().GetResult();
+        if(args.SequenceEqual(new[]{"--malformed-pipe"}))return MalformedPipe().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--owner-status"})){
             try{var state=ControlPipe.Send("Status").GetAwaiter().GetResult();return state["mode"]?.GetValue<string>()=="disconnected"?0:1;}catch{return 1;}
         }
@@ -32,6 +40,23 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
         return 2;
     }
+    private static async Task<int> RoguePipe()
+    {
+        using var server=new NamedPipeServerStream(Platform.Pipe,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
+        var client=Task.Run(async()=>{try{await ControlPipe.Send("Login","SYNTHETIC_ACCOUNT","SYNTHETIC_PASSWORD");return false;}catch(IOException e){return e.Message=="SERVICE_IDENTITY_NOT_VERIFIED";}catch{return false;}});
+        await server.WaitForConnectionAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        byte[] bytes=new byte[1];int count=await server.ReadAsync(bytes).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        return await client && count==0?0:1;
+    }
+    private static async Task<int> MalformedPipe()
+    {
+        foreach(string frame in new[]{"{\"version\":1,\"command\":\"Status\",\"path\":\"C:\\\\Windows\"}","{\"version\":1,\"command\":\"Status\",\"command\":\"Run\"}",new string('x',9000)}){
+            using var pipe=new NamedPipeClientStream(".",Platform.Pipe,PipeDirection.InOut,PipeOptions.Asynchronous,System.Security.Principal.TokenImpersonationLevel.Impersonation);
+            await pipe.ConnectAsync(3000);byte[] data=Encoding.UTF8.GetBytes(frame+"\n");
+            try{await pipe.WriteAsync(data);byte[] response=new byte[1];int n=await pipe.ReadAsync(response).AsTask().WaitAsync(TimeSpan.FromSeconds(5));if(n!=0)return 1;}catch(IOException){}
+        }
+        return 0;
+    }
     private static void Rescue()
     {
         try{foreach(var p in Process.GetProcessesByName("OracleProxy.Core"))using(p){if(p.MainModule?.FileName==Platform.Core)p.Kill(true);}}catch{}
@@ -41,7 +66,7 @@ internal static class ProductTests
     {
         internal Fixture(){ServiceName=Name;AutoLog=false;}
         protected override void OnStart(string[] args)=>Task.Run(async()=>{
-            try{await Run();File.WriteAllText(Path.Combine(Root,"result.txt"),string.Join('\n',Evidence)+"\nRESULT=PASS\n");}
+            try{await ProductTests.Run();File.WriteAllText(Path.Combine(Root,"result.txt"),string.Join('\n',Evidence)+"\nRESULT=PASS\n");}
             catch(Exception e){File.WriteAllText(Path.Combine(Root,"result.txt"),string.Join('\n',Evidence)+"\nRESULT=FAIL\nCATEGORY="+e.GetType().Name+"\nSTAGE="+e.Message.Replace('\n',' ') +"\n");}
             finally{Rescue();Stop();}
         });
@@ -72,7 +97,8 @@ internal static class ProductTests
     {
         Require(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"),"DISPOSABLE_NO_PREEXISTING_PRODUCT_TUN");
         Require(await Tcp(),"BASELINE_REAL_PHYSICAL_TCP");Require(await Dns(),"BASELINE_REAL_PHYSICAL_UDP_DNS");
-        var saved=new DurableState{Token="synthetic-not-a-production-token"};saved.Save();
+        var synthetic=KeyPair();var saved=new DurableState{Token="synthetic-not-a-production-token",PrivateKey=synthetic.Private,PublicKey=synthetic.Public};saved.Save();
+        Require(File.ReadAllBytes(Path.Combine(Platform.StateRoot,"state.dpapi")).AsSpan().IndexOf(Encoding.UTF8.GetBytes(synthetic.Private))<0,"REAL_KEY_FILE_HAS_NO_PLAINTEXT_PRIVATE_KEY");
         Require(DurableState.Load().Token==saved.Token,"REAL_SYSTEM_DPAPI_STATE_ROUNDTRIP");
         NativeGuard.Apply([]);
         Require(NativeGuard.Active,"REAL_OWNED_PERSISTENT_AND_BOOT_FILTERS");

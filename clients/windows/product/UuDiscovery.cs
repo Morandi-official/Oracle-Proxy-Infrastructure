@@ -71,7 +71,7 @@ internal static class UuDiscovery
             if(p.Contains(","))p=p.Split(',')[0].Trim('"');
             if(!Path.IsPathFullyQualified(p)||p.StartsWith(@"\\"))return;
             if(File.Exists(p))p=Path.GetDirectoryName(p)!;
-            if(Directory.Exists(p)&&Related(p)&&Path.GetPathRoot(p)!=p)roots.Add(Path.GetFullPath(p));
+            if(Directory.Exists(p)&&Related(p)&&Path.GetPathRoot(p)!=p)roots.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)));
         }catch{}
     }
     internal static bool Trusted(string path)=>Inspect(path) is null;

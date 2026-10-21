@@ -95,7 +95,7 @@ internal static class ProductTests
         File.WriteAllText(child,"synthetic configuration; no passwords");
         string content=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(executable)));
         using(var key=Microsoft.Win32.Registry.LocalMachine.CreateSubKey(keyPath)){
-            key.SetValue("DisplayName","GameViewer ACL fixture");key.SetValue("InstallLocation",root);
+            key.SetValue("DisplayName","GameViewer ACL fixture");key.SetValue("InstallLocation",root+Path.DirectorySeparatorChar);
         }
         string Descriptor(string name,bool directory)=>(directory?(System.Security.AccessControl.FileSystemSecurity)new DirectoryInfo(name).GetAccessControl():new FileInfo(name).GetAccessControl()).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
         try{

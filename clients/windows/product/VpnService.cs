@@ -9,6 +9,7 @@ internal sealed class VpnService : ServiceBase
     protected override void OnStart(string[] args)
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();
+        Platform.VerifyServiceEnvironment();
         _worker=Task.Run(async ()=>{
             try{
                 _runtime=new VpnRuntime();await _runtime.Initialize();

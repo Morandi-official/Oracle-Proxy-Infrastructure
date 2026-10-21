@@ -31,7 +31,8 @@ Start-Service OracleProxyService
 Write-Host 'REAL_SCM_BOUND_PIPE_REJECTS_ROGUE_SERVER_DUPLICATE_FIELDS_AND_ARBITRARY_PATHS=PASS'
 $normalOwner=Start-Process $test -ArgumentList '--owner-control' -Credential $ownerCredential -WorkingDirectory $env:WINDIR -LoadUserProfile -Wait -PassThru
 if($normalOwner.ExitCode -ne 0){throw 'Actual ordinary owner could not use fixed SYSTEM control commands'}
-Write-Host 'REAL_NONADMIN_OWNER_USES_FIXED_SYSTEM_COMMANDS_WITHOUT_UAC=PASS' 
+Write-Host 'REAL_NONADMIN_OWNER_USES_FIXED_SYSTEM_COMMANDS_WITHOUT_UAC=PASS'
+Write-Host 'REAL_NONADMIN_OWNER_CANNOT_READ_SYSTEM_BUNDLE_CACHE=PASS' 
 $other='OracleProxyOther'
 $fixturePassword=ConvertTo-SecureString ('OracleProxy!'+[Guid]::NewGuid().ToString('N')) -AsPlainText -Force
 try{
@@ -75,6 +76,17 @@ $denied=$false
 try{[Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes("$env:ProgramData/OracleProxy/state.dpapi"),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser) | Out-Null}catch{$denied=$true}
 if(!$denied){throw 'Runner identity decrypted SYSTEM key storage'}
 Write-Host 'REAL_OTHER_WINDOWS_IDENTITY_CANNOT_UNSEAL_SYSTEM_DPAPI=PASS'
+$serviceEnvironment=(Get-ItemProperty 'HKLM:/SYSTEM/CurrentControlSet/Services/OracleProxyService').Environment
+if($serviceEnvironment -notcontains "DOTNET_BUNDLE_EXTRACT_BASE_DIR=$env:ProgramData\OracleProxy\bundle"){throw 'SYSTEM runtime extraction is not pinned to protected product state'}
+Stop-Service OracleProxyService
+$stateBackup="$env:ProgramData/OracleProxy/state.recovery-$([Guid]::NewGuid().ToString('N')).dpapi"
+Move-Item "$env:ProgramData/OracleProxy/state.dpapi" $stateBackup
+Start-Service OracleProxyService
+& $test --owner-protected
+if($LASTEXITCODE -ne 0){throw 'Missing encrypted state silently disabled persistent protection'}
+Write-Host 'REAL_MISSING_ENCRYPTED_STATE_STARTUP_RETAINS_PERSISTENT_GUARD=PASS'
+Stop-Service OracleProxyService
+Move-Item $stateBackup "$env:ProgramData/OracleProxy/state.dpapi" -Force
 $recovery=Start-Process $exe -ArgumentList '--recover' -Wait -PassThru
 if($recovery.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};throw 'Public fixed-action SYSTEM recovery failed'}
 $verification=New-ScheduledTaskAction -Execute $test -Argument '--verify-recovered'
@@ -83,6 +95,7 @@ Start-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery'
 for($i=0;$i -lt 30 -and !(Test-Path "$root/recovery-verified");$i++){Start-Sleep -Milliseconds 250}
 if(!(Test-Path "$root/recovery-verified") -or (Get-Content -Raw "$root/recovery-verified") -ne 'KEY_AND_SAFE_OFF_PRESERVED'){throw 'Recovery lost encrypted key or failed to commit safe Off'}
 Write-Host 'REAL_PRODUCT_UAC_SYSTEM_RECOVERY_PRESERVES_KEY_AND_COMMITS_SAFE_OFF=PASS' 
+Copy-Item "$env:ProgramData/OracleProxy/state.dpapi" "$env:ProgramData/OracleProxy/state.recovery-$([Guid]::NewGuid().ToString('N')).dpapi"
 Remove-Item "$env:ProgramData/OracleProxy/state.dpapi"
 $oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash
 $bad=(Resolve-Path './dist/bad-upgrade/OracleProxy.exe').Path
@@ -95,5 +108,5 @@ Write-Host 'REAL_BAD_UPGRADE_AUTOMATIC_BINARY_AND_SERVICE_ROLLBACK=PASS'
 $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
 if($remove.ExitCode -ne 0){throw 'Actual product uninstall failed'}
 if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){throw 'Service survived uninstall'}
-if(Test-Path "$env:ProgramData/OracleProxy/state.dpapi"){throw 'Secret state survived uninstall'}
+if(Test-Path "$env:ProgramData/OracleProxy"){throw 'Product key/runtime state survived uninstall'}
 Write-Host 'REAL_PRODUCT_SETUP_AUTHENTICATED_IPC_AND_UNINSTALL=PASS'

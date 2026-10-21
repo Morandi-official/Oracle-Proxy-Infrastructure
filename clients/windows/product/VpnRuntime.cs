@@ -20,7 +20,15 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();
         Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);Platform.VerifyBundle(Platform.Root);
+        bool missing=!File.Exists(Path.Combine(Platform.StateRoot,"state.dpapi"));
         _secret=DurableState.Load();
+        if(missing && NativeGuard.Active){
+            // A lost state file is not an explicit Off request. Keep the last
+            // persistent policy (including existing UU exceptions) and require
+            // local recovery rather than opening ordinary application egress.
+            _secret.ConnectIntent=true;_secret.RecoveryRequired=true;_secret.Save();
+            _mode="recovery";_error="STATE_MISSING_RECOVERY_REQUIRED";return;
+        }
         if(_secret.ConnectIntent){NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());_mode="protected";}
         else{await EnsureTunnelGone();NativeGuard.Clear();_mode="disconnected";}
     }

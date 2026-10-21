@@ -18,6 +18,33 @@ internal static class Platform
     internal static bool IsSystem => WindowsIdentity.GetCurrent().User?.IsWellKnown(WellKnownSidType.LocalSystemSid)==true && Process.GetCurrentProcess().SessionId==0;
     internal static bool IsAdmin => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
+    internal static string BundleCache=>Path.Combine(StateRoot,"bundle");
+    internal static void ServiceEnvironment(string name)
+    {
+        VerifyProtected(StateRoot);
+        if(!Directory.Exists(BundleCache))Directory.CreateDirectory(BundleCache);
+        Protect(BundleCache,false);
+        using var key=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\"+name,true) ?? throw new IOException("SERVICE_NOT_REGISTERED");
+        key.SetValue("Environment",new[]{"DOTNET_BUNDLE_EXTRACT_BASE_DIR="+BundleCache},Microsoft.Win32.RegistryValueKind.MultiString);
+    }
+    internal static void VerifyServiceEnvironment()
+    {
+        if(!string.Equals(Environment.GetEnvironmentVariable("DOTNET_BUNDLE_EXTRACT_BASE_DIR"),BundleCache,StringComparison.OrdinalIgnoreCase))throw new IOException("UNPROTECTED_BUNDLE_CACHE");
+        VerifyProtected(BundleCache);
+    }
+    internal static void ClearBundleCache()
+    {
+        if(!Directory.Exists(BundleCache))return;
+        VerifyProtected(BundleCache);
+        void Delete(DirectoryInfo directory){
+            foreach(var item in directory.EnumerateFileSystemInfos()){
+                if(item.Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");
+                if(item is DirectoryInfo child)Delete(child);else item.Delete();
+            }
+            directory.Delete();
+        }
+        Delete(new DirectoryInfo(BundleCache));
+    }
     internal static void NoLinks(string path)
     {
         for(var p=new DirectoryInfo(Path.GetFullPath(path));p is not null;p=p.Parent)

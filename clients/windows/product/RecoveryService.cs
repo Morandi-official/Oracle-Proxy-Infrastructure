@@ -12,6 +12,7 @@ internal sealed class RecoveryService : ServiceBase
     protected override void OnStart(string[] args)=>Task.Run(async()=>{
         try{
             if(!Platform.IsSystem)throw new UnauthorizedAccessException();
+            Platform.VerifyServiceEnvironment();
             Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);Platform.VerifyBundle(Platform.Root);
             foreach(var process in Process.GetProcessesByName("OracleProxy.Core"))using(process){
                 if(process.SessionId==0 && string.Equals(process.MainModule?.FileName,Platform.Core,StringComparison.OrdinalIgnoreCase)){
@@ -21,7 +22,7 @@ internal sealed class RecoveryService : ServiceBase
             await VpnRuntime.EnsureTunnelGone();
             DurableState state;
             try{state=DurableState.Load();}
-            catch(Exception e)when(e is CryptographicException or JsonException){
+            catch(Exception e)when(e is CryptographicException or JsonException || e is IOException && e.Message=="STATE_CORRUPT"){
                 // Preserve the encrypted damaged record for diagnosis/rollback.
                 File.Move(Path.Combine(Platform.StateRoot,"state.dpapi"),Path.Combine(Platform.StateRoot,"state.recovery-"+Guid.NewGuid().ToString("N")+".dpapi"));
                 state=new DurableState();

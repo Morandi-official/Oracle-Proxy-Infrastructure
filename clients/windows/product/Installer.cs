@@ -52,6 +52,7 @@ internal static class Installer
             }
             foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"OracleProxy.exe":name),Path.Combine(Platform.Root,name),true);
             if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Oracle Proxy VPN");
+            Platform.ServiceEnvironment(Platform.Service);
             Sc("failure",Platform.Service,"reset=","86400","actions=","restart/3000/restart/10000/restart/30000");
             Sc("start",Platform.Service);
             using var service=new ServiceController(Platform.Service);service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(25));
@@ -71,13 +72,20 @@ internal static class Installer
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();VerifyService();Platform.VerifyProtected(Platform.Root);
         var status=await ControlPipe.Send("Disconnect");
         if(status["ok"]?.GetValue<bool>()!=true || status["mode"]?.GetValue<string>()!="disconnected")throw new IOException("SAFE_DISCONNECT_REQUIRED");
-        Stop();Sc("delete",Platform.Service);
+        Stop();
+        try{Platform.ClearBundleCache();}catch{try{Sc("start",Platform.Service);}catch{}throw;}
+        Sc("delete",Platform.Service);
         // Fixed allowlist only: leave unexpected files for manual inspection.
         foreach(string name in Files.Concat(new[]{"owner.sid","product.marker","owner.sid.pending","product.marker.pending","diagnostics.json","diagnostics.json.pending"})){
             string path=Path.Combine(Platform.Root,name);if(File.Exists(path)){if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");File.Delete(path);}}
         string previous=Path.Combine(Platform.Root,"previous");if(Directory.Exists(previous)){Platform.VerifyProtected(previous);foreach(string name in Files)File.Delete(Path.Combine(previous,name));if(!Directory.EnumerateFileSystemEntries(previous).Any())Directory.Delete(previous);}
         Platform.VerifyProtected(Platform.StateRoot);
         foreach(string name in new[]{"state.dpapi","state.dpapi.pending"})File.Delete(Path.Combine(Platform.StateRoot,name));
+        foreach(string path in Directory.EnumerateFiles(Platform.StateRoot,"state.recovery-*.dpapi")){
+            if(System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path),@"^state\.recovery-[a-f0-9]{32}\.dpapi$")){
+                if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");File.Delete(path);
+            }
+        }
         if(!Directory.EnumerateFileSystemEntries(Platform.StateRoot).Any())Directory.Delete(Platform.StateRoot);
         if(!Directory.EnumerateFileSystemEntries(Platform.Root).Any())Directory.Delete(Platform.Root);
     }
@@ -91,6 +99,7 @@ internal static class Installer
             if(existing is not null && existing.GetValue("ImagePath") as string!=image)throw new IOException("RECOVERY_SERVICE_COLLISION");
             if(existing is null)Sc("create",RecoveryService.Name,"binPath=",image,"start=","demand","obj=","LocalSystem");
         }
+        Platform.ServiceEnvironment(RecoveryService.Name);
         string diagnostic=Path.Combine(Platform.Root,"diagnostics.json");File.Delete(diagnostic);
         try{
             Sc("start",RecoveryService.Name);

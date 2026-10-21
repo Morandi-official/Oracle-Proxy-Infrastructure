@@ -69,6 +69,27 @@ def ipv6_readiness():
     return result
 
 
+def official_usage_status():
+    """Export only fixed public observation fields, never the complete root cache."""
+    path = Path('/var/lib/oracle-proxy-control/oci-usage.json')
+    try:
+        if path.is_symlink() or path.stat().st_size > 32768:
+            raise ValueError('INVALID_USAGE_CACHE')
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict) or value.get('schema') != 1:
+            raise ValueError('INVALID_USAGE_CACHE')
+        fields = ('checked_at', 'period', 'status', 'monitoring_status', 'billing_status',
+                  'vnic_count', 'vnic_outbound_bytes', 'metric_points', 'metric_through')
+        result = {name: value.get(name) for name in fields}
+        if any(not (item is None or type(item) is int or isinstance(item, str) and len(item) <= 96)
+               for item in result.values()):
+            raise ValueError('INVALID_USAGE_SUMMARY')
+        result['remaining_bytes'] = None
+        return result
+    except (OSError, ValueError):
+        return {'status': 'CACHE_UNAVAILABLE', 'remaining_bytes': None}
+
+
 def preflight():
     try:
         value = host.preflight()
@@ -81,6 +102,7 @@ def preflight():
     except (OSError, ValueError):
         pass
     value['ipv6_readiness'] = ipv6_readiness()
+    value['official_usage'] = official_usage_status()
     print(json.dumps(value, indent=2))
 
 

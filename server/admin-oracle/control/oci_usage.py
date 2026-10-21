@@ -35,6 +35,27 @@ def error_code(error):
     return 'API_UNAVAILABLE'
 
 
+def error_details(error):
+    """Classify bounded diagnostics without logging exception text or credentials."""
+    status=getattr(error,'status',None)
+    code=getattr(error,'code',None)
+    allowed={'InvalidParameter','InvalidParameterValue','InvalidRequest','InvalidTimeInterval',
+             'NotAuthenticated','NotAuthorizedOrNotFound','NotAuthorized','InternalError',
+             'TooManyRequests','NotSupported','LimitExceeded','BadRequest'}
+    category=('HTTP_ERROR' if type(status) is int else
+              'SDK_RESPONSE_ERROR' if isinstance(error,AttributeError) else
+              'SDK_VALIDATION_ERROR' if isinstance(error,(ValueError,TypeError)) else
+              'TIMEOUT' if isinstance(error,TimeoutError) else 'TRANSPORT_OR_SDK_ERROR')
+    return {'http_status':status if type(status) is int and 100<=status<=599 else None,
+            'category':category,'service_code':code if isinstance(code,str) and code in allowed else 'OTHER'}
+
+
+def billing_range(now):
+    # DAILY reports must not imply that today's partial usage is complete.
+    end=now.astimezone(dt.timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0)
+    return end.replace(day=1),end
+
+
 def finite(value):
     value=float(value)
     if not math.isfinite(value) or value<0: raise ValueError('INVALID_METRIC')
@@ -56,6 +77,9 @@ def collect():
         # Only non-secret resource identifiers, visible to the sole administrator,
         # are retained to make an exact-instance dynamic-group rule reviewable.
         result.update(region=region,instance_id=instance['id'],compartment_id=compartment,vnic_count=len(ids))
+        created=instance.get('timeCreated')
+        if type(created) is int and 0<created//1000<=int(now.timestamp()):
+            result['instance_created_at']=created//1000
     except Exception: return result
     os.environ['OCI_PYTHON_SDK_NO_SERVICE_IMPORTS']='true'
     from oci.auth.signers import InstancePrincipalsSecurityTokenSigner
@@ -77,7 +101,7 @@ def collect():
     end=now.replace(minute=0,second=0,microsecond=0)
     try:
         client=MonitoringClient({'region':region},signer=signer,timeout=(3,8),retry_strategy=retry)
-        total=0;latest=None;points=0
+        total=0;latest=None;earliest=None;points=0
         for identity in ids:
             details=SummarizeMetricsDataDetails(namespace='oci_vcn',query='VnicToNetworkBytes[1h]{resourceId="'+identity+'"}.sum()',start_time=start,end_time=end,resolution='1h')
             data=client.summarize_metrics_data(compartment,details,retry_strategy=retry).data
@@ -86,12 +110,19 @@ def collect():
                 for point in stream.aggregated_datapoints:
                     total+=finite(point.value);points+=1
                     latest=max(latest or point.timestamp,point.timestamp)
+                    earliest=min(earliest or point.timestamp,point.timestamp)
         result.update(monitoring_status='OBSERVED_WITH_UNVERIFIED_COVERAGE' if points else 'NO_DATA',vnic_outbound_bytes=int(total) if points else None,
-                      metric_through=int(latest.timestamp()) if latest else None,metric_points=points)
+                      metric_through=int(latest.timestamp()) if latest else None,metric_from=int(earliest.timestamp()) if earliest else None,
+                      metric_query_from=int(start.timestamp()),metric_query_to=int(end.timestamp()),metric_points=points)
     except Exception as error: result['monitoring_status']=error_code(error)
     try:
         client=UsageapiClient({'region':region},signer=signer,timeout=(3,8),retry_strategy=retry)
-        details=RequestSummarizedUsagesDetails(tenant_id=signer.tenancy_id,time_usage_started=start,time_usage_ended=end,
+        billing_start,billing_end=billing_range(now)
+        result['billing_through']=int(billing_end.timestamp())
+        if billing_end<=billing_start:
+            result['billing_status']='NO_COMPLETED_DAYS'
+            return result
+        details=RequestSummarizedUsagesDetails(tenant_id=signer.tenancy_id,time_usage_started=billing_start,time_usage_ended=billing_end,
                     granularity='DAILY',query_type='USAGE',group_by=['service','skuName','unit'],is_aggregate_by_time=True)
         response=client.request_summarized_usages(details,retry_strategy=retry)
         rows=[]
@@ -100,9 +131,11 @@ def collect():
             # zero-cost/free-tier row. Preserve the official SKU/unit for review.
             label=row.sku_name or ''
             if re.search(r'outbound|outgoing|data transfer',label,re.I):
-                rows.append({'sku':label[:160],'unit':(row.unit or '')[:40],'quantity':finite(row.computed_quantity or 0)})
+                rows.append({'sku':label[:160],'unit':(row.unit or '')[:40],'quantity':finite(row.computed_quantity)})
         result.update(billing_status='PAGINATED_INCOMPLETE' if response.headers.get('opc-next-page') else 'ROWS_REQUIRE_SKU_REVIEW' if rows else 'NO_EGRESS_ROWS',billing_rows=rows[:32])
-    except Exception as error: result['billing_status']=error_code(error)
+    except Exception as error:
+        result['billing_status']=error_code(error)
+        for key,value in error_details(error).items():result['billing_error_'+key]=value
     return result
 
 

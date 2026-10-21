@@ -123,7 +123,11 @@ internal static class ProductTests
     private static async Task<bool> Dns()
     {
         using var client=new UdpClient();client.Client.ReceiveTimeout=2500;
-        try{await client.SendAsync(Convert.FromHexString("123401000001000000000000076578616d706c6503636f6d0000010001"),new IPEndPoint(IPAddress.Parse("1.1.1.1"),53));var r=await client.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(3));return r.Buffer.Length>12&&r.Buffer[0]==0x12&&r.Buffer[1]==0x34;}catch{return false;}
+        // A cached answer after peer loss is legitimate and says nothing about
+        // leakage. Use a fresh question for every actual packet-path assertion.
+        byte[] id=RandomNumberGenerator.GetBytes(2);
+        byte[] query=id.Concat(Convert.FromHexString("01000001000000000000")).Concat(new byte[]{32}).Concat(Encoding.ASCII.GetBytes(Guid.NewGuid().ToString("N"))).Concat(Convert.FromHexString("076578616d706c6503636f6d0000010001")).ToArray();
+        try{await client.SendAsync(query,new IPEndPoint(IPAddress.Parse("1.1.1.1"),53));var r=await client.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(3));return r.Buffer.Length>12&&r.Buffer[0]==id[0]&&r.Buffer[1]==id[1];}catch{return false;}
     }
     private static (string Private,string Public) KeyPair(){byte[] k=RandomNumberGenerator.GetBytes(32),p=new byte[32];k[0]&=248;k[31]&=127;k[31]|=64;try{X25519.GeneratePublicKey(k,0,p,0);return(Convert.ToBase64String(k),Convert.ToBase64String(p));}finally{CryptographicOperations.ZeroMemory(k);CryptographicOperations.ZeroMemory(p);}}
     private static async Task<Process> Launch(JsonObject config)

@@ -67,7 +67,7 @@ static DWORD live_tun(UINT64 value){
   FWPM_FILTER_CONDITION0 condition={0};condition.fieldKey=FWPM_CONDITION_IP_LOCAL_INTERFACE;condition.matchType=FWP_MATCH_EQUAL;condition.conditionValue.type=FWP_UINT64;condition.conditionValue.uint64=&value;
   for(int i=0;i<4&&!e;i++){
    stage++;FWPM_FILTER0 f={0};f.providerKey=(GUID*)&provider;f.subLayerKey=sublayer;f.layerKey=*ale[i];f.displayData.name=L"Oracle Proxy current tunnel only";
-   f.weight.type=FWP_UINT8;f.weight.uint8=220;f.action.type=FWP_ACTION_PERMIT;f.numFilterConditions=1;f.filterCondition=&condition;
+   UINT64 weight=220;f.weight.type=FWP_UINT64;f.weight.uint64=&weight;f.action.type=FWP_ACTION_PERMIT;f.numFilterConditions=1;f.filterCondition=&condition;
    e=FwpmFilterAdd0(tun_engine,&f,NULL,&tun_filters[i]);
   }
   if(!e)e=FwpmTransactionCommit0(tun_engine);else FwpmTransactionAbort0(tun_engine);
@@ -77,7 +77,7 @@ static DWORD live_tun(UINT64 value){
 static DWORD add(HANDLE engine,const GUID *layer,BOOL at_boot,FWP_ACTION_TYPE action,UINT8 weight,FWPM_FILTER_CONDITION0 *conditions,UINT32 count){
  stage++;FWPM_FILTER0 f={0};f.providerKey=(GUID*)&provider;f.subLayerKey=sublayer;f.layerKey=*layer;f.displayData.name=L"Oracle Proxy fixed access policy";
  f.flags=at_boot?FWPM_FILTER_FLAG_BOOTTIME:FWPM_FILTER_FLAG_PERSISTENT;
- f.weight.type=FWP_UINT8;f.weight.uint8=weight;f.action.type=action;f.numFilterConditions=count;f.filterCondition=conditions;
+ UINT64 exact_weight=weight;f.weight.type=FWP_UINT64;f.weight.uint64=&exact_weight;f.action.type=action;f.numFilterConditions=count;f.filterCondition=conditions;
  return FwpmFilterAdd0(engine,&f,NULL,NULL);
 }
 static FWPM_FILTER_CONDITION0 number(const GUID *key,FWP_DATA_TYPE type,UINT32 value){

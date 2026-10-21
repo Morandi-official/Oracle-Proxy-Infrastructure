@@ -16,6 +16,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Check dedicated acceptance credential presence before building
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $usernamePresent=![string]::IsNullOrWhiteSpace($env:ORACLE_CLIENT_ACCEPTANCE_USERNAME)
+          $passwordPresent=![string]::IsNullOrEmpty($env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD)
+          Write-Host "CLIENT_ACCEPTANCE_USERNAME_PRESENT=$usernamePresent"
+          Write-Host "CLIENT_ACCEPTANCE_PASSWORD_PRESENT=$passwordPresent"
+          if(!$usernamePresent -or !$passwordPresent){throw 'Set both named Environment secrets in windows-client-acceptance; no login was attempted'}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.1'

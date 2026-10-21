@@ -1,4 +1,5 @@
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'uu-network-fixture.ps1')
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:GITHUB_REF -ne 'refs/heads/main'){throw 'Main-only disposable Oracle client acceptance required'}
 if(!$env:ORACLE_CLIENT_ACCEPTANCE_USERNAME -or !$env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD){throw 'Dedicated client Environment credentials are missing'}
 if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){throw 'Preexisting product service refused'}
@@ -15,8 +16,10 @@ Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'
 try{
   $setup=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
   if($setup.ExitCode -ne 0){throw 'Oracle acceptance setup failed'}
+  New-CIUuNetworkFixture
   & $test --oracle-client
   if($LASTEXITCODE -ne 0){throw 'Real Oracle acceptance failed; no credential or private-key logs are exported'}
+  Remove-CIUuNetworkFixture
   $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
   if($remove.ExitCode -ne 0){throw 'Post-acceptance uninstall failed'}
 }finally{

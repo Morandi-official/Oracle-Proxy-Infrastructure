@@ -1,5 +1,6 @@
 $ErrorActionPreference='Continue'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Disposable hosted Windows required'}
+. (Join-Path $PSScriptRoot 'uu-network-fixture.ps1')
 $test=Join-Path $PWD 'dist/product-tests/OracleProxy.Product.Tests.exe'
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
 if((Test-Path $test) -and (Test-Path "$root/authorized") -and (Test-Path "$env:ProgramFiles/OracleProxy/OracleProxy.Guard.dll")){
@@ -14,6 +15,7 @@ foreach($name in @('OracleProxyCandidateFixture','OracleProxyService','OraclePro
   $service=Get-Service $name -ErrorAction SilentlyContinue
   if($service){Stop-Service $name -Force -ErrorAction SilentlyContinue; & sc.exe delete $name | Out-Null}
 }
+Remove-CIUuNetworkFixture
 foreach($task in @('OracleProxyCandidateWatchdog','OracleProxyCandidateRescue','OracleProxyCandidateVerifyRecovery')){Stop-ScheduledTask $task -ErrorAction SilentlyContinue;Unregister-ScheduledTask $task -Confirm:$false -ErrorAction SilentlyContinue}
 if(Test-Path "$root/owner-created"){Remove-LocalUser OracleProxyOwner -ErrorAction SilentlyContinue;Remove-Item "$root/owner-created" -ErrorAction SilentlyContinue}
 exit 0

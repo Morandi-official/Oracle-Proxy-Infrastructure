@@ -159,7 +159,11 @@ internal static class ProductTests
         snapshot["uu_candidates"]=1;snapshot["uu_rejected"]=1;
         snapshot["uu_diagnostics"]=new JsonArray(new JsonObject{["path"]=@"E:\Apps\GameViewer",["code"]="UU_DIRECTORY_WRITABLE",["detail"]=""});
         snapshot["password"]="SYNTHETIC_PASSWORD_DO_NOT_COPY";snapshot["token"]="SYNTHETIC_TOKEN_DO_NOT_COPY";
+        snapshot["failure"]=ConnectionFailure.Capture("ORACLE_EGRESS_PROBE",new HttpRequestException(HttpRequestError.ProxyTunnelError,"SYNTHETIC_SECRET_URL_PASSWORD",new SocketException((int)SocketError.ConnectionRefused)),"READY");
+        if(snapshot["failure"]!["socket_error"]?.GetValue<string>()!="ConnectionRefused" || snapshot["failure"]!.ToJsonString().Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
+        if(!form.ConnectionReport.Contains("ORACLE_EGRESS_PROBE") || !form.ConnectionReport.Contains("ConnectionRefused") || form.ConnectionReport.Contains("synthetic-user") || form.ConnectionReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
+        Console.WriteLine("CONNECTION_FAILURE_STAGE_AND_ENUMS_EXPORTED_WITHOUT_MESSAGES_OR_CREDENTIALS=PASS");
         if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
            form.UuReport.Contains("synthetic-user") || form.UuReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.UuReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY"))return 1;
         Console.WriteLine("UU_DIAGNOSTIC_ACTIONABLE_WITHOUT_ACCOUNT_OR_CREDENTIALS=PASS");
@@ -236,10 +240,12 @@ internal static class ProductTests
     {
         Require(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"),"DISPOSABLE_NO_PREEXISTING_PRODUCT_TUN");
         Require(await Tcp(),"BASELINE_REAL_PHYSICAL_TCP");Require(await Dns(),"BASELINE_REAL_PHYSICAL_UDP_DNS");
+        string[] uuPaths=UuDiscovery.Discover().Paths;
+        Require(uuPaths.Length==19,"REAL_SYSTEM_TRUSTS_NINETEEN_SIGNED_NETEASE_PATHS");
         var synthetic=KeyPair();var saved=new DurableState{Token="synthetic-not-a-production-token",PrivateKey=synthetic.Private,PublicKey=synthetic.Public};saved.Save();
         Require(File.ReadAllBytes(Path.Combine(Platform.StateRoot,"state.dpapi")).AsSpan().IndexOf(Encoding.UTF8.GetBytes(synthetic.Private))<0,"REAL_KEY_FILE_HAS_NO_PLAINTEXT_PRIVATE_KEY");
         Require(DurableState.Load().Token==saved.Token,"REAL_SYSTEM_DPAPI_STATE_ROUNDTRIP");
-        NativeGuard.Apply([]);
+        NativeGuard.Apply(uuPaths);
         Require(NativeGuard.Active,"REAL_OWNED_PERSISTENT_AND_BOOT_FILTERS");
         Require(!await Tcp(),"REAL_ALL_APP_PHYSICAL_TCP_BLOCK");Require(!await Dns(),"REAL_ALL_APP_PHYSICAL_UDP_DNS_BLOCK");
         File.WriteAllText(Path.Combine(Root,"public-sha256"),Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(saved.PublicKey))));
@@ -251,7 +257,7 @@ internal static class ProductTests
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="exit"}),["route"]=new JsonObject{["auto_detect_interface"]=true,["final"]="exit"}
         };
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:59999",["server_public_key"]=serverKey.Public,["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
-        var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private},"synthetic-probe-only");
+        var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private,UuPaths=uuPaths},"synthetic-probe-only");
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";
@@ -262,9 +268,9 @@ internal static class ProductTests
             Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
             client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();bool wrongCoreDenied=false;
-            try{NativeGuard.Apply([],luid,(uint)Environment.ProcessId);}catch(IOException error){wrongCoreDenied=error.Message.StartsWith("WFP_APPLY_5_",StringComparison.Ordinal);}
+            try{NativeGuard.Apply(uuPaths,luid,(uint)Environment.ProcessId);}catch(IOException error){wrongCoreDenied=error.Message.StartsWith("WFP_APPLY_5_",StringComparison.Ordinal);}
             Require(wrongCoreDenied && NativeGuard.Active && !NativeGuard.TunPermitted,"REAL_TUN_PERMISSION_REJECTS_WRONG_SYSTEM_PROCESS_IMAGE");
-            NativeGuard.Apply([],luid,(uint)client.Id);
+            NativeGuard.Apply(uuPaths,luid,(uint)client.Id);
             Require(NativeGuard.TunPermitted && NativeGuard.CoreLifecycle==3,"REAL_CURRENT_TUN_DYNAMIC_SESSION_PERMIT_AUDITED");
             bool tunneled=await Tcp();
             if(!tunneled){

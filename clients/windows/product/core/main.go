@@ -39,4 +39,8 @@ func run() error {
  if err=instance.Close();err!=nil{return fmt.Errorf("close")}
  fmt.Println("CLOSED");return nil
 }
-func main(){if run()!=nil {fmt.Fprintln(os.Stderr,"CORE_FAILED");os.Exit(3)}}
+func main(){if err:=run();err!=nil {
+ stage:="CORE_UNKNOWN_FAILED"
+ switch err.Error(){case "identity":stage="CORE_IDENTITY_FAILED";case "arguments","frame":stage="CORE_INPUT_FAILED";case "configuration":stage="CORE_CONFIGURATION_FAILED";case "create":stage="CORE_CREATE_FAILED";case "start":stage="CORE_START_FAILED";case "close":stage="CORE_CLOSE_FAILED"}
+ fmt.Fprintln(os.Stderr,stage);os.Exit(3)
+}}

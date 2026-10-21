@@ -1,5 +1,6 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'official-download.ps1')
+. (Join-Path $PSScriptRoot 'uu-network-fixture.ps1')
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Disposable hosted Windows required'}
 if(Get-Service OracleProxyService,OracleProxyCandidateFixture -ErrorAction SilentlyContinue){throw 'Preexisting service refused'}
 if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting install refused'}
@@ -53,6 +54,7 @@ try{
   & $test --uu-trust-signed
   if($LASTEXITCODE -ne 0){throw 'Actual signed NetEase file/ACL trust boundary failed'}
 }finally{if(Test-Path $uuFixture){Remove-Item -Recurse -Force $uuFixture}}
+New-CIUuNetworkFixture
 $action=New-ScheduledTaskAction -Execute $test -Argument '--watchdog'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog' -Action $action -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'
@@ -70,6 +72,7 @@ if(!(Test-Path $result)){throw 'Fixture timed out; SYSTEM watchdog retains recov
 $body=Get-Content -Raw $result
 Write-Host $body
 if($body -notmatch 'RESULT=PASS'){throw 'Actual WFP/WireGuard fixture failed'}
+Remove-CIUuNetworkFixture
 # The runner account is an Administrator, but is not LocalSystem; CurrentUser
 # DPAPI ciphertext created inside the real SCM process must remain unreadable.
 Add-Type -AssemblyName System.Security

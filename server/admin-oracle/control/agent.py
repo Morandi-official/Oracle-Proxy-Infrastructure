@@ -164,6 +164,8 @@ class Engine:
             expires INTEGER, enabled INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS devices (key TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
             addresses TEXT NOT NULL, owned INTEGER NOT NULL DEFAULT 0);
+          CREATE TABLE IF NOT EXISTS device_limits (user_id TEXT PRIMARY KEY, maximum INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS revoked_devices (key TEXT PRIMARY KEY);
           CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY, rx INTEGER, tx INTEGER, boot TEXT);
           CREATE TABLE IF NOT EXISTS usage (month TEXT, kind TEXT, key TEXT, rx INTEGER, tx INTEGER,
             PRIMARY KEY(month,kind,key));
@@ -198,6 +200,16 @@ class Engine:
         row = self.db.execute('SELECT rx,tx FROM usage WHERE month=? AND kind=? AND key=?', (period(self.now()), kind, key)).fetchone()
         return {'rx': row['rx'], 'tx': row['tx']} if row else {'rx': 0, 'tx': 0}
 
+    def device_limit(self, user_id):
+        row = self.db.execute('SELECT maximum FROM device_limits WHERE user_id=?', (user_id,)).fetchone()
+        return row[0] if row else 3
+
+    def device_count(self, user_id):
+        return self.db.execute('SELECT count(*) FROM devices WHERE user_id=? AND key NOT IN (SELECT key FROM revoked_devices)', (user_id,)).fetchone()[0]
+
+    def revoked(self, key):
+        return self.db.execute('SELECT 1 FROM revoked_devices WHERE key=?', (key,)).fetchone() is not None
+
     def reason(self, user):
         if not user['enabled']: return 'disabled'
         if user['expires'] is not None and user['expires'] <= self.now(): return 'expired'
@@ -223,7 +235,7 @@ class Engine:
         try:
             observation = self.driver.observe()
             # New product-owned peers are restored after wg-quick/reboot, without reading/writing wg0.conf.
-            for device in self.db.execute('SELECT * FROM devices WHERE owned=1'):
+            for device in self.db.execute('SELECT * FROM devices WHERE owned=1 AND key NOT IN (SELECT key FROM revoked_devices)'):
                 addresses = json.loads(device['addresses'])
                 if device['key'] not in observation['peers']:
                     occupied = [ipaddress.ip_network(ip) for peer in observation['peers'].values() for ip in peer['allowed_ips']]
@@ -283,7 +295,7 @@ class Engine:
                 addresses = host_ips(current['allowed_ips']); managed.update(addresses)
                 if sorted(addresses) != sorted(saved): continue
                 user = users[device['user_id']]
-                if self.reason(user) == 'active':
+                if self.reason(user) == 'active' and not self.revoked(device['key']):
                     timeout = LEASE if user['expires'] is None else min(LEASE,max(1,int(user['expires']-self.now())))
                     allowed.update({address:timeout for address in addresses})
         try: self.driver.leases(managed, allowed, not self.budget_state()['guard_blocked'])
@@ -307,7 +319,7 @@ class Engine:
             usage = self.used('user', user['id'])
             users.append({**dict(user), 'enabled': bool(user['enabled']), 'usage': usage,
                           'remaining_bytes': max(0, user['quota']-usage['rx']-usage['tx']) if user['quota'] is not None else None,
-                          'status': self.reason(user)})
+                          'status': self.reason(user), 'device_limit':self.device_limit(user['id']), 'device_count':self.device_count(user['id'])})
         bindings = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM devices')}
         peers = []
         for key in sorted(set(observation['peers']) | set(bindings)):
@@ -316,7 +328,7 @@ class Engine:
                 'user_id':device['user_id'] if device else None, 'name':device['name'] if device else '',
                 'allowed_ips': peer['allowed_ips'] if peer else json.loads(device['addresses']),
                 'handshake':peer['handshake'] if peer else 0, 'present':peer is not None,
-                'managed':device is not None, 'owned':bool(device and device['owned']), 'usage': self.used('peer',key)})
+                'revoked':self.revoked(key), 'managed':device is not None, 'owned':bool(device and device['owned']), 'usage': self.used('peer',key)})
         return {'schema':1, 'observed_at':self.last_sample, 'enforced_at':self.last_enforced, 'error':self.error,
             'period': period(self.now()), 'sample_interval_seconds':TICK, 'lease_seconds':LEASE,
             'users':users, 'peers':peers, 'budget':self.budget_state(), 'nics':sorted(observation['nics']),
@@ -342,6 +354,22 @@ class Engine:
             if self.db.execute('SELECT count(*) FROM users').fetchone()[0] >= 256 and not data['id']: raise ValueError('USER_LIMIT')
             self.db.execute('INSERT OR REPLACE INTO users VALUES (?,?,?,?,?)', (user_id,data['name'].strip(),quota,expires,data['enabled']))
             self.audit(actor,'user.updated',user_id)
+        elif operation == 'user.limit':
+            if set(data) != {'user_id','device_limit'}: raise ValueError('INVALID_FIELDS')
+            user_id = identifier(data['user_id']); maximum = integer(data['device_limit'], 32)
+            if maximum < 1: raise ValueError('INVALID_DEVICE_LIMIT')
+            if not self.db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
+            if self.device_count(user_id) > maximum: raise ValueError('REVOKE_DEVICES_BEFORE_LOWERING_LIMIT')
+            self.db.execute('INSERT OR REPLACE INTO device_limits VALUES (?,?)', (user_id,maximum))
+            self.audit(actor,operation,user_id)
+        elif operation == 'peer.revoke':
+            if set(data) != {'public_key'}: raise ValueError('INVALID_FIELDS')
+            key = public_key(data['public_key'])
+            if not self.db.execute('SELECT 1 FROM devices WHERE key=?', (key,)).fetchone(): raise ValueError('PEER_NOT_FOUND')
+            # Keep the address tombstone and accounting history. Never free an old
+            # address while an old wg configuration might still contain this key.
+            self.db.execute('INSERT OR IGNORE INTO revoked_devices VALUES (?)', (key,))
+            self.audit(actor,operation,hashlib.sha256(key.encode()).hexdigest()[:12])
         elif operation in ('peer.assign','peer.create'):
             expected = {'public_key','user_id','name'}
             if set(data) != expected: raise ValueError('INVALID_FIELDS')
@@ -350,6 +378,9 @@ class Engine:
             if not isinstance(data['name'],str) or not 1 <= len(data['name'].strip()) <= 80 or any(ord(c)<32 for c in data['name']): raise ValueError('INVALID_NAME')
             peer = self.observation['peers'].get(key)
             existing = self.db.execute('SELECT * FROM devices WHERE key=?',(key,)).fetchone()
+            if self.revoked(key): raise ValueError('DEVICE_REVOKED')
+            if (not existing or existing['user_id'] != user_id) and self.device_count(user_id) >= self.device_limit(user_id):
+                raise ValueError('DEVICE_LIMIT_REACHED')
             if operation == 'peer.create':
                 if len(self.observation['peers'])>=512: raise ValueError('PEER_LIMIT')
                 if key == self.observation['server_public_key']: raise ValueError('CLIENT_PUBLIC_KEY_EQUALS_SERVER')

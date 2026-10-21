@@ -9,9 +9,9 @@ from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 import json
-from . import control
+from . import control, client_api
 
-from .models import Audit, Snapshot
+from .models import Audit, Snapshot, ClientAccount
 
 
 def github_identity(request):
@@ -102,17 +102,20 @@ def management(request):
         try:
             value = json.loads(request.body)
             if not isinstance(value,dict) or set(value)!={'operation','data'} or value['operation'] not in (
-                    'user.put','peer.assign','peer.create','budget.set') or not isinstance(value['data'],dict):
+                    'user.put','peer.assign','peer.create','peer.revoke','user.limit','account.put','budget.set') or not isinstance(value['data'],dict):
                 raise ValueError()
             operation, data = value['operation'], value['data']
         except (ValueError,TypeError): return JsonResponse({'error':'INVALID_REQUEST'},status=400)
-    try: result = control.call(operation, f'github:{github_identity(request)}', data)
+    try:
+        result = client_api.set_account(request,data) if operation=='account.put' else control.call(operation, f'github:{github_identity(request)}', data)
     except (OSError,TimeoutError,json.JSONDecodeError):
         return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
     except ValueError as error:
         return JsonResponse({'error':str(error)},status=400)
     if operation!='state':
         Audit.objects.create(actor=f'github:{github_identity(request)}',action=operation,resource='policy-control')
+    accounts = {str(a.user_id):a.username for a in ClientAccount.objects.all()}
+    for user in result.get('users',[]): user['username'] = accounts.get(user['id'])
     return JsonResponse(result)
 
 

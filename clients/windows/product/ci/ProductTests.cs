@@ -65,7 +65,7 @@ internal static class ProductTests
     private static int UuTrustSigned()
     {
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" || !Platform.IsAdmin)return 3;
-        string root=Path.Combine(Platform.Root,"UU-Trust-Fixture"),path=Path.Combine(root,"GameViewerInstaller.exe");
+        string root=Path.Combine(Platform.Root,"GameViewer-Trust-Fixture"),path=Path.Combine(root,"GameViewer.exe");
         if(!Directory.Exists(root)||!File.Exists(path))return 2;
         Platform.Protect(root,true);
         var acl=new System.Security.AccessControl.FileSecurity();acl.SetAccessRuleProtection(true,false);
@@ -78,9 +78,70 @@ internal static class ProductTests
             acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-1-0"),System.Security.AccessControl.FileSystemRights.WriteData,System.Security.AccessControl.AccessControlType.Allow));
             new FileInfo(path).SetAccessControl(acl);
             if(UuDiscovery.Trusted(path) || UuDiscovery.Inspect(path)?.Code!="UU_EXECUTABLE_WRITABLE")return 1;
+            acl.RemoveAccessRuleSpecific(new FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-1-0"),FileSystemRights.WriteData,AccessControlType.Allow));
+            new FileInfo(path).SetAccessControl(acl);
+            UuAclRoundtrip(root,path);
             Console.WriteLine("REAL_NETEASE_SIGNATURE_ACCEPTED_AND_WRITABLE_EXECUTABLE_EXCEPTION_DENIED=PASS");return 0;
         }finally{File.Delete(path);Directory.Delete(root);}
     }
+    private static void UuAclRoundtrip(string root,string executable)
+    {
+        string keyPath=@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OracleProxy.GameViewerAclFixture";
+        using(var existing=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath))if(existing is not null)throw new IOException("PREEXISTING_FIXTURE_REFUSED");
+        string backup=Path.Combine(Platform.StateRoot,"uu-permissions-backup.json");
+        if(File.Exists(backup))throw new IOException("PREEXISTING_BACKUP_REFUSED");
+        string child=Path.Combine(root,"mutable.txt"),saved=child+".saved",link=Path.Combine(root,"link"),outside=Path.Combine(Platform.Root,"fixture-outside.txt");
+        if(File.Exists(outside))throw new IOException("PREEXISTING_FIXTURE_REFUSED");
+        File.WriteAllText(child,"synthetic configuration; no passwords");
+        string content=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(executable)));
+        using(var key=Microsoft.Win32.Registry.LocalMachine.CreateSubKey(keyPath)){
+            key.SetValue("DisplayName","GameViewer ACL fixture");key.SetValue("InstallLocation",root+Path.DirectorySeparatorChar);
+        }
+        string Descriptor(string name,bool directory)=>(directory?(System.Security.AccessControl.FileSystemSecurity)new DirectoryInfo(name).GetAccessControl():new FileInfo(name).GetAccessControl()).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        try{
+            var directory=new DirectoryInfo(root);var original=directory.GetAccessControl();
+            foreach(string sid in new[]{"S-1-5-11","S-1-5-32-545"})original.AddAccessRule(new FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(sid),FileSystemRights.Modify,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
+            directory.SetAccessControl(original);string before=Descriptor(root,true),protectedBefore=Descriptor(executable,false),childBefore=Descriptor(child,false);
+            if(UuDiscovery.Inspect(executable)?.Code!="UU_DIRECTORY_WRITABLE" || !UuAclRepair.EligibleRoots().Contains(root,StringComparer.OrdinalIgnoreCase))throw new IOException("UU_ACL_REPRODUCTION_FAILED");
+            UuAclRepair.Apply([root]);string after=Descriptor(root,true);
+            if(!UuDiscovery.Trusted(executable) || protectedBefore!=Descriptor(executable,false))throw new IOException("UU_ACL_REPAIR_FAILED");
+            // Another administrator/updater's object replacement must not receive
+            // permissions from an old backup, even at exactly the same path.
+            File.Move(child,saved);File.WriteAllText(child,"replacement");
+            bool denied=false;try{UuAclRepair.Restore();}catch(IOException error) when(error.Message=="UU_REPAIR_OBJECT_CHANGED"){denied=true;}
+            if(!denied||Descriptor(root,true)!=after)throw new IOException("UU_ACL_REPLACEMENT_NOT_DENIED");
+            File.Delete(child);File.Move(saved,child);
+            var changed=new FileInfo(child).GetAccessControl();changed.AddAccessRule(new FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-5-19"),FileSystemRights.ReadAttributes,AccessControlType.Allow));new FileInfo(child).SetAccessControl(changed);
+            denied=false;try{UuAclRepair.Restore();}catch(IOException error) when(error.Message=="UU_REPAIR_ACL_CHANGED"){denied=true;}
+            if(!denied||Descriptor(root,true)!=after)throw new IOException("UU_ACL_CONCURRENT_CHANGE_NOT_DENIED");
+            changed.RemoveAccessRuleSpecific(new FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-5-19"),FileSystemRights.ReadAttributes,AccessControlType.Allow));new FileInfo(child).SetAccessControl(changed);
+            UuAclRepair.Restore();
+            if(Descriptor(root,true)!=before || Descriptor(child,false)!=childBefore || Descriptor(executable,false)!=protectedBefore || content!=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(executable))))throw new IOException("UU_ACL_ROUNDTRIP_FAILED");
+            Console.WriteLine("REAL_UU_MODIFY_DIRECTORY_REPRODUCED_FIXED_AND_EXACT_ACL_ROLLBACK=PASS");
+            Console.WriteLine("REAL_UU_ROLLBACK_REJECTS_REPLACED_OBJECT_AND_CONCURRENT_ACL_CHANGE=PASS");
+            // Refuse broader unexpected grants without changing the directory.
+            var unsafeAcl=directory.GetAccessControl();unsafeAcl.AddAccessRule(new FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-1-0"),FileSystemRights.FullControl,AccessControlType.Allow));directory.SetAccessControl(unsafeAcl);
+            string unexpected=Descriptor(root,true);denied=false;
+            try{UuAclRepair.Restricted(directory.GetAccessControl());}catch(IOException error) when(error.Message=="UU_REPAIR_PERMISSIONS_REFUSED"){denied=true;}
+            if(!denied||Descriptor(root,true)!=unexpected)throw new IOException("UU_ACL_UNEXPECTED_GRANT_NOT_DENIED");
+            unsafeAcl.RemoveAccessRuleSpecific(new FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-1-0"),FileSystemRights.FullControl,AccessControlType.Allow));directory.SetAccessControl(unsafeAcl);
+            System.IO.Directory.CreateSymbolicLink(link,Platform.Root);denied=false;
+            try{UuAclRepair.Apply([root]);}catch(IOException error) when(error.Message=="REPARSE_POINT_REJECTED" || error.Message=="UU_REPAIR_LINK_REFUSED"){denied=true;}
+            System.IO.Directory.Delete(link);
+            if(!denied||Descriptor(root,true)!=before)throw new IOException("UU_ACL_REPARSE_NOT_DENIED");
+            File.WriteAllText(outside,"synthetic outside target");string outsideBefore=Descriptor(outside,false);
+            if(!CreateHardLink(Path.Combine(root,"hardlink.txt"),outside,IntPtr.Zero))throw new IOException("UU_ACL_HARDLINK_FIXTURE_FAILED");
+            denied=false;try{UuAclRepair.Apply([root]);}catch(IOException error) when(error.Message=="UU_REPAIR_LINK_REFUSED"){denied=true;}
+            File.Delete(Path.Combine(root,"hardlink.txt"));
+            if(!denied||Descriptor(outside,false)!=outsideBefore||Descriptor(root,true)!=before)throw new IOException("UU_ACL_HARDLINK_NOT_DENIED");
+            Console.WriteLine("REAL_UU_REPAIR_REJECTS_UNEXPECTED_GRANTS_REPARSE_AND_HARDLINKS=PASS");
+        }finally{
+            if(System.IO.Directory.Exists(link))System.IO.Directory.Delete(link);
+            foreach(string name in new[]{child,saved,outside,Path.Combine(root,"hardlink.txt"),backup})if(File.Exists(name))File.Delete(name);
+            Microsoft.Win32.Registry.LocalMachine.DeleteSubKeyTree(keyPath,false);
+        }
+    }
+    [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
     private static int Ui()
     {
         Application.EnableVisualStyles();using var form=new MainForm();

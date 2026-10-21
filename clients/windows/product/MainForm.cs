@@ -30,6 +30,10 @@ internal sealed class MainForm : Form
             var b=new Button{Text=label,AutoSize=true};b.Click+=(_,_)=>{try{action();}catch{_detail.Text="操作未完成，请检查 UAC 提示或使用完整便携包。";}};tools.Controls.Add(b);}
         var refreshUu=new Button{Text="重新识别 UU",AutoSize=true};refreshUu.Click+=async(_,_)=>await Act("RefreshUu");tools.Controls.Add(refreshUu);
         var inspectUu=new Button{Text="UU 检查详情",AutoSize=true};inspectUu.Click+=(_,_)=>ShowUuReport();tools.Controls.Add(inspectUu);
+        foreach(bool restore in new[]{false,true}){
+            var maintenance=new Button{Text=restore?"恢复 UU 权限（UAC）":"修复 UU 权限（UAC）",AutoSize=true};
+            maintenance.Click+=(_,_)=>{try{Installer.ElevateUuPermissions(restore);}catch{_detail.Text="UU 权限维护未启动，请检查 UAC 提示。";}};tools.Controls.Add(maintenance);
+        }
         var recover=new Button{Text="恢复直连（UAC）",AutoSize=true};recover.Click+=(_,_)=>{if(MessageBox.Show(this,"将停止本产品的隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","紧急恢复",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.ElevateRecovery();}catch{_detail.Text="恢复请求未完成。";}}};tools.Controls.Add(recover);
         var logout=new Button{Text="退出账号",AutoSize=true};logout.Click+=async(_,_)=>await Act("Logout");tools.Controls.Add(logout);body.Controls.Add(tools);
         body.Controls.Add(new Label{Text="本包为集成候选版。IPv6 当前阻断；UU 实机连续性与重启验收尚未完成。",AutoSize=true,MaximumSize=new Size(650,0),ForeColor=Color.DarkOrange});
@@ -73,7 +77,7 @@ internal sealed class MainForm : Form
     internal bool UsageFresh=>_progress.Enabled;
     internal void Display(JsonObject state)
     {
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc2");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc3");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){

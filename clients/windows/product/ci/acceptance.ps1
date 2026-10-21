@@ -43,9 +43,9 @@ try{
   if($denial.ExitCode -ne 0){throw 'Actual non-owner pipe denial not established'}
   Write-Host 'REAL_NONADMIN_NONOWNER_WINDOWS_IDENTITY_PIPE_ACCESS_DENIED=PASS'
 }finally{Remove-LocalUser $other -ErrorAction SilentlyContinue}
-$uuFixture=Join-Path $env:ProgramFiles 'OracleProxy/UU-Trust-Fixture'
+$uuFixture=Join-Path $env:ProgramFiles 'OracleProxy/GameViewer-Trust-Fixture'
 New-Item -ItemType Directory $uuFixture | Out-Null
-$officialInstaller=Join-Path $uuFixture 'GameViewerInstaller.exe'
+$officialInstaller=Join-Path $uuFixture 'GameViewer.exe'
 try{
   Get-OfficialFile -Uri 'https://a56.gdl.netease.com/UURemote_Setup_4.39.2.1561_0904121034_gwqd.exe' -OutFile $officialInstaller -SHA256 'CF06187BE7B1382EAB9D53AFA129E4DC0DC07B0C7526D1E7A849475E0CA046F5'
   if((Get-FileHash $officialInstaller -Algorithm SHA256).Hash -ne 'CF06187BE7B1382EAB9D53AFA129E4DC0DC07B0C7526D1E7A849475E0CA046F5'){throw 'Official UU fixture checksum mismatch'}

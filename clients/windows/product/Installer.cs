@@ -116,6 +116,11 @@ internal static class Installer
         }
         Sc("start",Platform.Service);
     }
+    internal static void ElevateUuPermissions(bool restore)
+    {
+        var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};
+        info.ArgumentList.Add(restore?"--restore-uu-permissions":"--repair-uu-permissions");Process.Start(info);
+    }
     internal static void ElevateRecovery()
     {
         var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};info.ArgumentList.Add("--recover");Process.Start(info);

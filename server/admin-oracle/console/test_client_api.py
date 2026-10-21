@@ -90,3 +90,34 @@ class ClientApiTests(TestCase):
         self.assertEqual(self.login().status_code,401)
         self.assertEqual(self.login(password='replacement-password-012345').status_code,200)
         self.assertFalse(self.client.login(username='client01',password='replacement-password-012345'))
+
+    def test_unified_save_keeps_password_and_usage_then_delete_revokes_every_device(self):
+        from .client_api import save_account, delete_account
+        token=self.login().json()['token']; key=ClientSession.objects.first().public_key
+        self.driver.value['peers'][key]['tx']+=42;self.engine.tick()
+        value={'id':self.user['id'],'name':'Renamed','username':'client01','password':'','device_limit':4,'quota_bytes':200000,'expires_at':None,'enabled':True}
+        result=save_account(None,value)
+        self.assertEqual(result['users'][0]['usage']['tx'],42)
+        self.assertEqual(result['users'][0]['device_limit'],4)
+        self.assertEqual(self.state(token).status_code,200)
+        delete_account(None,{'user_id':self.user['id']})
+        self.assertEqual(self.state(token).status_code,401)
+        self.assertFalse(ClientAccount.objects.exists());self.assertFalse(self.driver.allowed)
+        self.assertEqual(self.engine.snapshot()['users'],[])
+        self.assertTrue(next(p for p in self.engine.snapshot()['peers'] if p['public_key']==key)['user_deleted'])
+        self.assertEqual(self.engine.used('user',self.user['id'])['tx'],42)
+        self.assertEqual(self.login().status_code,401)
+        delete_account(None,{'user_id':self.user['id']})  # retry is safe
+        with self.assertRaisesRegex(ValueError,'USER_DELETED'): save_account(None,{**value,'password':'new-test-password-123'})
+
+    def test_unified_create_validation_before_mutation_and_partial_failure_stays_disabled(self):
+        from .client_api import save_account
+        value={'id':None,'name':'New account','username':'new01','password':'test-password-only-123','device_limit':3,'quota_bytes':12345,'expires_at':None,'enabled':True}
+        with self.assertRaisesRegex(ValueError,'USERNAME_ALREADY_EXISTS'):save_account(None,{**value,'username':'client01'})
+        self.assertEqual(len(self.engine.snapshot()['users']),1)
+        with patch('console.client_api.ClientAccount.objects.update_or_create',side_effect=OSError('synthetic database failure')):
+            with self.assertRaises(OSError):save_account(None,value)
+        pending=next(u for u in self.engine.snapshot()['users'] if u['name']=='New account')
+        self.assertFalse(pending['enabled']);self.assertFalse(ClientAccount.objects.filter(username='new01').exists())
+        saved=save_account(None,{**value,'id':pending['id']})
+        self.assertTrue(next(u for u in saved['users'] if u['id']==pending['id'])['enabled'])

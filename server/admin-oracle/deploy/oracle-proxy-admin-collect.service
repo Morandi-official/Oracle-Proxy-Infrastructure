@@ -13,6 +13,8 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/oracle-proxy-admin/current/.venv/bin/python manage.py collect_status
 UMask=0077
 NoNewPrivileges=true
+# Keep instance-principal credentials out of the web/collector security domain.
+IPAddressDeny=169.254.169.254/32
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict

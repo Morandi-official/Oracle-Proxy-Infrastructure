@@ -152,4 +152,18 @@ class PolicyTests(unittest.TestCase):
   self.assertNotIn('10.250.0.2',self.driver.allowed)
   self.assertEqual(self.engine.device_limit(user['id']),3)
 
+ def test_unified_policy_limit_validation_is_atomic_and_delete_survives_restart(self):
+  user=self.user(quota_bytes=100000);self.bind(KEY1,user);self.bind(KEY2,user)
+  value={'id':user['id'],'name':'Do not save','quota_bytes':0,'expires_at':None,'enabled':False,'device_limit':1}
+  with self.assertRaisesRegex(ValueError,'REVOKE_DEVICES_BEFORE_LOWERING_LIMIT'):self.request('user.save',value)
+  self.assertEqual(self.engine.snapshot()['users'][0]['name'],'Test user');self.assertEqual(len(self.driver.allowed),2)
+  self.driver.value['peers'][KEY1]['tx']+=40
+  self.request('user.delete',{'user_id':user['id']});self.assertFalse(self.driver.allowed)
+  self.assertEqual(self.engine.snapshot()['users'],[]);self.assertEqual(self.engine.used('user',user['id'])['tx'],40)
+  self.engine.db.close();self.engine=agent.Engine(self.database,self.driver,lambda:self.clock[0]);self.engine.tick()
+  self.assertFalse(self.driver.allowed)
+  self.assertTrue(all(p['revoked'] and p['user_deleted'] for p in self.engine.snapshot()['peers']))
+  with self.assertRaisesRegex(ValueError,'USER_DELETED'):self.user(id=user['id'])
+  with self.assertRaisesRegex(ValueError,'USER_DELETED'):self.bind(KEY1,user)
+
 if __name__=='__main__':unittest.main()

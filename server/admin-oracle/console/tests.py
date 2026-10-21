@@ -74,8 +74,8 @@ class AdminTests(TestCase):
             for value in ({'operation':'sh','data':{}},{'operation':'user.put','data':{},'actor':'github:999'}):
                 self.assertEqual(self.post('/api/control',json.dumps(value),content_type='application/json').status_code,400)
             self.assertEqual(rpc.call_count,1)
-            self.assertEqual(self.post('/api/control',json.dumps({'operation':'user.put','data':{'name':'Test'}}),content_type='application/json').status_code,200)
-            rpc.assert_called_with('user.put','github:204281968',{'name':'Test'})
+            self.assertEqual(self.post('/api/control',json.dumps({'operation':'peer.revoke','data':{'public_key':'synthetic'}}),content_type='application/json').status_code,200)
+            rpc.assert_called_with('peer.revoke','github:204281968',{'public_key':'synthetic'})
         with patch('console.views.control.call',side_effect=OSError()):
             self.assertEqual(self.get('/api/control').status_code,503)
 
@@ -84,7 +84,7 @@ class AdminTests(TestCase):
         client=Client(HTTP_HOST=HOST,enforce_csrf_checks=True);client.cookies=self.client.cookies
         page=client.get('/',secure=True)
         token=re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"',page.content).group(1).decode()
-        body=json.dumps({'operation':'user.put','data':{'name':'Test'}})
+        body=json.dumps({'operation':'peer.revoke','data':{'public_key':'synthetic'}})
         with patch('console.views.control.call',return_value={'users':[]}) as rpc:
             self.assertEqual(client.post('/api/control',body,content_type='application/json',secure=True,HTTP_REFERER=f'https://{HOST}/').status_code,403)
             rpc.assert_not_called()

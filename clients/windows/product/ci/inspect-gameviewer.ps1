@@ -1,5 +1,6 @@
 # Static inspection only: installers and extracted programs are never run.
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'official-download.ps1')
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Disposable hosted Windows required'}
 $versions=@(
   @{Version='4.39.2.1561';Url='https://a56.gdl.netease.com/UURemote_Setup_4.39.2.1561_0904121034_gwqd.exe';SHA='CF06187BE7B1382EAB9D53AFA129E4DC0DC07B0C7526D1E7A849475E0CA046F5'},
@@ -9,7 +10,7 @@ $out=Join-Path $PWD 'dist/gameviewer-review';New-Item -ItemType Directory -Force
 $rows=@()
 foreach($item in $versions){
   $installer=Join-Path $env:RUNNER_TEMP "GameViewer-$($item.Version).exe"
-  Invoke-WebRequest -Uri $item.Url -OutFile $installer -MaximumRedirection 2 -MaximumRetryCount 3 -RetryIntervalSec 3
+  Get-OfficialFile -Uri $item.Url -OutFile $installer -SHA256 $item.SHA
   if((Get-FileHash $installer -Algorithm SHA256).Hash -ne $item.SHA){throw 'GameViewer installer checksum mismatch'}
   $sig=Get-AuthenticodeSignature $installer
   if($sig.Status -ne 'Valid'){throw 'GameViewer installer signature is not trusted'}

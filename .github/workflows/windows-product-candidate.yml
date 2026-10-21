@@ -33,6 +33,9 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Verify bounded download retries and atomic digest failure
+        shell: pwsh
+        run: ./clients/windows/product/ci/test-official-download.ps1
       - name: Build pinned userspace WireGuard/TUN core from source
         shell: pwsh
         working-directory: clients/windows/product/core

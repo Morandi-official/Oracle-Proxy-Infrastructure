@@ -15,7 +15,10 @@ internal sealed class VpnRuntime : IDisposable
     private string _mode="starting",_error="";
     private string _stage="IDLE";
     private JsonObject? _failure;
-    private void Failed(Exception error){_error=Code(error);_failure=ConnectionFailure.Capture(_stage,error,_core.SafeStage);}
+    private bool _httpsRelay;
+    private int _probeFailures;
+    private DateTimeOffset _udpStarted;
+    private void Failed(Exception error){_error=Code(error);_failure=ConnectionFailure.Capture(_stage,error,_core.SafeStage);if(_stage=="ORACLE_EGRESS_PROBE" && _error is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED")_probeFailures++;}
     private long? _latency;
     private DateTimeOffset _probed;
     private string _runningProfile="";
@@ -49,6 +52,11 @@ internal sealed class VpnRuntime : IDisposable
                     try{await Refresh();
                         if(_secret.ConnectIntent && !_secret.RecoveryRequired){
                             if(ActivePolicy()){
+                                long handshake=_state?["device"]?["handshake_at"]?.GetValue<long>() ?? 0;
+                                if(!_httpsRelay && _probeFailures>=2 && _state?["tunnel"]?["https_relay"]?.GetValue<bool>()==true &&
+                                   (handshake==0 || handshake<_udpStarted.ToUnixTimeSeconds())){
+                                    _httpsRelay=true;_stage="HTTPS_FALLBACK";await _core.Stop();
+                                }
                                 if(_core.Running && (_runningProfile!=Profile() || !NativeGuard.TunPermitted))await _core.Stop();
                                 if(!_core.Running)await StartCore();
                                 else if(DateTimeOffset.UtcNow-_probed>TimeSpan.FromSeconds(15))await Probe();
@@ -62,7 +70,7 @@ internal sealed class VpnRuntime : IDisposable
     }
     private async Task Refresh(){_stage="ACCOUNT_STATE";_state=await _api.Call("state",_secret.Token);_received=DateTimeOffset.UtcNow;_error="";}
     private bool ActivePolicy()=>_state?["account"]?["status"]?.GetValue<string>()=="active" && _state["observed_at"]?.GetValue<long>() is long at && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
-    private async Task Probe(){_stage="ORACLE_EGRESS_PROBE";_latency=await _core.Probe();_probed=DateTimeOffset.UtcNow;_mode="connected";_failure=null;}
+    private async Task Probe(){_stage="ORACLE_EGRESS_PROBE";_latency=await _core.Probe();_probed=DateTimeOffset.UtcNow;_mode="connected";_failure=null;_probeFailures=0;}
     private async Task StartCore()
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
@@ -72,7 +80,7 @@ internal sealed class VpnRuntime : IDisposable
         NativeGuard.Apply(_secret.UuPaths);
         _mode="connecting";
         try{
-            _stage="CORE_START";await _core.Start(_state!,_secret);
+            _stage="CORE_START";if(!_httpsRelay)_udpStarted=DateTimeOffset.UtcNow;await _core.Start(_state!,_secret,_httpsRelay);
             _stage="TUN_AUTHORIZE";
             NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);
             _runningProfile=Profile();await Probe();
@@ -110,6 +118,7 @@ internal sealed class VpnRuntime : IDisposable
                 if(_secret.Token.Length==0)throw new IOException("LOGIN_REQUIRED");
                 if(_secret.RecoveryRequired)throw new IOException("RECOVERY_REQUIRED");
                 if(_core.Running && _mode=="connected")break;
+                if(!_secret.ConnectIntent){_httpsRelay=false;_probeFailures=0;}
                 using var uuMaintenance=UuAclRepair.AcquireMaintenance();
                 _stage="UU_DISCOVERY";var inventory=UuDiscovery.Discover();_uuInventory=inventory;
                 if(inventory.Candidates>0 && inventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
@@ -136,7 +145,7 @@ internal sealed class VpnRuntime : IDisposable
         try{
             _stage="DISCONNECT";await _core.Stop();await EnsureTunnelGone();
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
-            NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";
+            NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_httpsRelay=false;_probeFailures=0;
         }catch{
             _secret.ConnectIntent=true;_secret.RecoveryRequired=true;_secret.Save();
             try{NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());}catch{}
@@ -152,7 +161,7 @@ internal sealed class VpnRuntime : IDisposable
         throw new IOException("OWNED_TUNNEL_CLEANUP_NOT_VERIFIED");
     }
     private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
-        ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,
+        ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=_httpsRelay?"wireguard-https":"wireguard-udp",
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,

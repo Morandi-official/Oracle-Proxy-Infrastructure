@@ -2,6 +2,7 @@
 // account from the windows-client-acceptance Environment, never SSH/OAuth keys.
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
@@ -56,6 +57,22 @@ internal static class OracleAcceptance
         }
         throw new IOException("ORACLE_RECONNECT_TIMED_OUT");
     }
+    private static async Task<bool> CarrierDirectBlocked()
+    {
+        using var socket=new TcpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try{await socket.ConnectAsync(IPAddress.Parse("152.67.156.100"),443,timeout.Token);return false;}catch{return true;}
+    }
+    private static async Task<bool> FreshDns()
+    {
+        byte[] id=System.Security.Cryptography.RandomNumberGenerator.GetBytes(2);
+        var query=new List<byte>{id[0],id[1],1,0,0,1,0,0,0,0,0,0};
+        foreach(string part in ("opx-"+Guid.NewGuid().ToString("N")+".example.com").Split('.')){query.Add((byte)part.Length);query.AddRange(System.Text.Encoding.ASCII.GetBytes(part));}
+        query.AddRange(new byte[]{0,0,1,0,1});
+        using var udp=new UdpClient();udp.Connect("1.1.1.1",53);
+        await udp.SendAsync(query.ToArray());using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var reply=(await udp.ReceiveAsync(timeout.Token)).Buffer;
+        return reply.Length>=12 && reply[0]==id[0] && reply[1]==id[1] && (reply[2]&128)!=0 && (reply[3]&15) is 0 or 3;
+    }
     internal static async Task<int> Run()
     {
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
@@ -103,6 +120,22 @@ internal static class OracleAcceptance
             var recovered=await Connected();
             Check(recovered["account"]?["device_count"]?.GetValue<int>()==devices,"REAL_SCM_RECOVERY_REUSES_EXISTING_DEVICE_IDENTITY");
             Check(await ExitIp()=="152.67.156.100","REAL_SCM_RECOVERY_ORACLE_EXIT");
+            stage="AUTOMATIC_HTTPS_FALLBACK";await Send("Disconnect");
+            using(var loss=new InitialUdpLoss()){
+                var pending=await ControlPipe.Send("Connect");
+                Check(pending["mode"]?.GetValue<string>()=="protected" && pending["guard"]?.GetValue<bool>()==true,"REAL_UDP_LOSS_STARTS_WITH_PROTECTED_NATIVE_ATTEMPT");
+                var carrier=await Connected();
+                Check(carrier["transport"]?.GetValue<string>()=="wireguard-https" && await ExitIp()=="152.67.156.100","REAL_AUTOMATIC_HTTPS_WIREGUARD_ORACLE_EXIT_WITH_NATIVE_UDP_BLOCKED");
+                Check(await FreshDns(),"REAL_HTTPS_WIREGUARD_FRESH_UDP_DNS");
+                Check(await CarrierDirectBlocked(),"REAL_ORDINARY_APP_CANNOT_USE_CARRIER_ROUTE_AS_DIRECT_ESCAPE");
+                stage="HTTPS_SERVICE_CRASH_RECOVERY";
+                using(var carrierService=Process.GetProcessesByName("OracleProxy.Service").Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe)){
+                    carrierService.Kill(true);await carrierService.WaitForExitAsync();
+                }
+                try{Check(await ExitIp()=="152.67.156.100","REAL_HTTPS_SERVICE_CRASH_NO_DIRECT_EXIT");}catch(IOException){throw;}catch{Console.WriteLine("REAL_HTTPS_SERVICE_CRASH_PROBE_BLOCKED=PASS");}
+                var restored=await Connected();
+                Check(restored["transport"]?.GetValue<string>()=="wireguard-https" && restored["account"]?["device_count"]?.GetValue<int>()==devices && await ExitIp()=="152.67.156.100","REAL_SCM_HTTPS_FALLBACK_RECOVERY_SAME_DEVICE_WHILE_NATIVE_UDP_REMAINS_BLOCKED");
+            }
             stage="USAGE_LINKAGE";await Task.Delay(6000);var after=await Send("Status");
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
             stage="DISCONNECT";Check((await Send("Disconnect"))["mode"]?.GetValue<string>()=="disconnected" && await ExitIp()!="152.67.156.100","REAL_EXPLICIT_DISCONNECT_RESTORES_DIRECT_EXIT");

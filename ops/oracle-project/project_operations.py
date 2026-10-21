@@ -152,11 +152,13 @@ def deploy(revision):
         if not host.healthy(): raise ValueError('APPLICATION_UNHEALTHY')
         install_control()
         verify_control()
+        install_usage_probe()
         print('PROJECT_DEPLOYMENT=ALREADY_CURRENT_HEALTHY'); return
     python = runtime_python()
     run([python, '-I', str(SERVER / 'deploy/host.py'), 'install', '--revision', revision])
     install_control()
     verify_control()
+    install_usage_probe()
 
 
 def verify_control():
@@ -172,6 +174,23 @@ def verify_control():
         except (OSError,ValueError,KeyError):pass
         time.sleep(1)
     raise ValueError('POLICY_CONTROL_OBSERVATION_NOT_READY')
+
+
+def install_usage_probe():
+    atomic(Path('/usr/local/libexec/oracle-project/oci-usage.py'),(SERVER/'control/oci_usage.py').read_bytes(),0o644)
+    for name in ('oracle-proxy-oci-usage.service','oracle-proxy-oci-usage.timer'):
+        path=Path('/etc/systemd/system')/name
+        if path.is_symlink() or (path.exists() and 'Description=Oracle Proxy' not in path.read_text()): raise ValueError('FOREIGN_USAGE_PROBE_UNIT')
+        atomic(path,(SERVER/'deploy'/name).read_bytes(),0o644)
+    run(['systemctl','daemon-reload'])
+    run(['systemctl','enable','--now','oracle-proxy-oci-usage.timer'])
+    # Independent bounded process: failures cannot pause kernel lease renewal.
+    result=subprocess.run(['systemctl','start','oracle-proxy-oci-usage.service'],check=False,timeout=90)
+    cache=Path('/var/lib/oracle-proxy-control/oci-usage.json')
+    if result.returncode==0 and cache.is_file():
+        value=json.loads(cache.read_text())
+        print('OCI_READ_ONLY_API_PROBE='+json.dumps({k:value.get(k) for k in ('status','monitoring_status','billing_status','vnic_count','vnic_outbound_bytes','metric_through')},sort_keys=True))
+    else: print('OCI_READ_ONLY_API_PROBE=UNAVAILABLE; budget remains unknown')
 
 
 def install_control():

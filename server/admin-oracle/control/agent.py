@@ -166,6 +166,7 @@ class Engine:
             addresses TEXT NOT NULL, owned INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE IF NOT EXISTS device_limits (user_id TEXT PRIMARY KEY, maximum INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS revoked_devices (key TEXT PRIMARY KEY);
+          CREATE TABLE IF NOT EXISTS deleted_users (user_id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY, rx INTEGER, tx INTEGER, boot TEXT);
           CREATE TABLE IF NOT EXISTS usage (month TEXT, kind TEXT, key TEXT, rx INTEGER, tx INTEGER,
             PRIMARY KEY(month,kind,key));
@@ -210,7 +211,11 @@ class Engine:
     def revoked(self, key):
         return self.db.execute('SELECT 1 FROM revoked_devices WHERE key=?', (key,)).fetchone() is not None
 
+    def deleted(self, user_id):
+        return self.db.execute("SELECT 1 FROM deleted_users WHERE user_id=?", (user_id,)).fetchone() is not None
+
     def reason(self, user):
+        if self.deleted(user["id"]): return "deleted"
         if not user['enabled']: return 'disabled'
         if user['expires'] is not None and user['expires'] <= self.now(): return 'expired'
         usage = self.used('user', user['id'])
@@ -315,7 +320,7 @@ class Engine:
     def snapshot(self):
         observation = self.observation or {'peers':{}, 'nics':{}, 'networks':[], 'server_public_key':None, 'listen_port':None}
         users = []
-        for user in self.db.execute('SELECT * FROM users ORDER BY name,id'):
+        for user in self.db.execute('SELECT * FROM users WHERE id NOT IN (SELECT user_id FROM deleted_users) ORDER BY name,id'):
             usage = self.used('user', user['id'])
             users.append({**dict(user), 'enabled': bool(user['enabled']), 'usage': usage,
                           'remaining_bytes': max(0, user['quota']-usage['rx']-usage['tx']) if user['quota'] is not None else None,
@@ -328,12 +333,21 @@ class Engine:
                 'user_id':device['user_id'] if device else None, 'name':device['name'] if device else '',
                 'allowed_ips': peer['allowed_ips'] if peer else json.loads(device['addresses']),
                 'handshake':peer['handshake'] if peer else 0, 'present':peer is not None,
-                'revoked':self.revoked(key), 'managed':device is not None, 'owned':bool(device and device['owned']), 'usage': self.used('peer',key)})
+                'user_deleted':bool(device and self.deleted(device['user_id'])), 'revoked':self.revoked(key), 'managed':device is not None, 'owned':bool(device and device['owned']), 'usage': self.used('peer',key)})
         return {'schema':1, 'observed_at':self.last_sample, 'enforced_at':self.last_enforced, 'error':self.error,
             'period': period(self.now()), 'sample_interval_seconds':TICK, 'lease_seconds':LEASE,
-            'users':users, 'peers':peers, 'budget':self.budget_state(), 'nics':sorted(observation['nics']),
+            'users':users, 'peers':peers, 'budget':self.budget_state(), 'official_usage':self.official_usage(), 'nics':sorted(observation['nics']),
             'server_public_key':observation['server_public_key'], 'listen_port':observation['listen_port'],
             'audit':[dict(row) for row in self.db.execute('SELECT at,actor,action,resource FROM audit ORDER BY id DESC LIMIT 50')]}
+
+    def official_usage(self):
+        try:
+            path=STATE/'oci-usage.json'
+            if path.is_symlink() or path.stat().st_size>32768: raise ValueError()
+            value=json.loads(path.read_text())
+            if value.get('schema')!=1: raise ValueError()
+            return value
+        except (OSError,ValueError): return {'status':'NOT_QUERIED','remaining_bytes':None}
 
     def dispatch(self, request):
         if not isinstance(request, dict) or set(request) != {'operation','actor','data'}: raise ValueError('INVALID_REQUEST')
@@ -343,20 +357,49 @@ class Engine:
         if operation == 'state' and not data: return self.snapshot()
         # Account all current counters under the old ownership before any binding/config mutation.
         self.tick()
-        if operation == 'user.put':
-            if set(data) != {'id','name','quota_bytes','expires_at','enabled'}: raise ValueError('INVALID_FIELDS')
+        saved_user_id = None
+        if operation in ('user.put','user.save'):
+            expected = {'id','name','quota_bytes','expires_at','enabled'}
+            if operation == 'user.save': expected.add('device_limit')
+            if set(data) != expected: raise ValueError('INVALID_FIELDS')
             user_id = identifier(data['id']) if data['id'] else str(uuid.uuid4())
             if data['id'] and not self.db.execute('SELECT 1 FROM users WHERE id=?',(user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
+            if self.deleted(user_id): raise ValueError('USER_DELETED')
             if not isinstance(data['name'],str) or not 1 <= len(data['name'].strip()) <= 80 or any(ord(c)<32 for c in data['name']): raise ValueError('INVALID_NAME')
             if type(data['enabled']) is not bool: raise ValueError('INVALID_ENABLED')
             quota = integer(data['quota_bytes']) if data['quota_bytes'] is not None else None
             expires = integer(data['expires_at'], 4102444800) if data['expires_at'] is not None else None
             if self.db.execute('SELECT count(*) FROM users').fetchone()[0] >= 256 and not data['id']: raise ValueError('USER_LIMIT')
-            self.db.execute('INSERT OR REPLACE INTO users VALUES (?,?,?,?,?)', (user_id,data['name'].strip(),quota,expires,data['enabled']))
+            maximum = integer(data['device_limit'],32) if operation == 'user.save' else self.device_limit(user_id)
+            if maximum < 1: raise ValueError('INVALID_DEVICE_LIMIT')
+            if self.device_count(user_id) > maximum: raise ValueError('REVOKE_DEVICES_BEFORE_LOWERING_LIMIT')
+            self.db.execute('BEGIN IMMEDIATE')
+            try:
+                self.db.execute('INSERT OR REPLACE INTO users VALUES (?,?,?,?,?)', (user_id,data['name'].strip(),quota,expires,data['enabled']))
+                self.db.execute('INSERT OR REPLACE INTO device_limits VALUES (?,?)', (user_id,maximum))
+                self.db.execute('COMMIT')
+            except Exception:
+                self.db.execute('ROLLBACK'); raise
+            saved_user_id = user_id
             self.audit(actor,'user.updated',user_id)
+        elif operation == 'user.delete':
+            if set(data) != {'user_id'}: raise ValueError('INVALID_FIELDS')
+            user_id = identifier(data['user_id'])
+            if not self.db.execute('SELECT 1 FROM users WHERE id=?',(user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
+            self.db.execute('BEGIN IMMEDIATE')
+            try:
+                self.db.execute('UPDATE users SET enabled=0 WHERE id=?',(user_id,))
+                self.db.execute('INSERT OR IGNORE INTO deleted_users VALUES (?,?)',(user_id,int(self.now())))
+                self.db.execute('INSERT OR IGNORE INTO revoked_devices SELECT key FROM devices WHERE user_id=?',(user_id,))
+                self.audit(actor,operation,user_id)
+                self.db.execute('COMMIT')
+            except Exception:
+                self.db.execute('ROLLBACK'); raise
         elif operation == 'user.limit':
             if set(data) != {'user_id','device_limit'}: raise ValueError('INVALID_FIELDS')
-            user_id = identifier(data['user_id']); maximum = integer(data['device_limit'], 32)
+            user_id = identifier(data['user_id'])
+            if self.deleted(user_id): raise ValueError('USER_DELETED')
+            maximum = integer(data['device_limit'], 32)
             if maximum < 1: raise ValueError('INVALID_DEVICE_LIMIT')
             if not self.db.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
             if self.device_count(user_id) > maximum: raise ValueError('REVOKE_DEVICES_BEFORE_LOWERING_LIMIT')
@@ -374,6 +417,7 @@ class Engine:
             expected = {'public_key','user_id','name'}
             if set(data) != expected: raise ValueError('INVALID_FIELDS')
             key = public_key(data['public_key']); user_id = identifier(data['user_id'])
+            if self.deleted(user_id): raise ValueError('USER_DELETED')
             if not self.db.execute('SELECT 1 FROM users WHERE id=?',(user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
             if not isinstance(data['name'],str) or not 1 <= len(data['name'].strip()) <= 80 or any(ord(c)<32 for c in data['name']): raise ValueError('INVALID_NAME')
             peer = self.observation['peers'].get(key)
@@ -431,7 +475,9 @@ class Engine:
             self.audit(actor,'budget.updated',period(self.now()))
         else: raise ValueError('UNKNOWN_OPERATION')
         self.enforce()
-        return self.snapshot()
+        result = self.snapshot()
+        if saved_user_id: result['saved_user_id'] = saved_user_id
+        return result
 
 
 def main():

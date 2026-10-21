@@ -1,4 +1,6 @@
 """Native-client API. No browser session, signup, admin identity or arbitrary RPC."""
+import fcntl
+from contextlib import contextmanager
 import hashlib
 import json
 import re
@@ -162,3 +164,52 @@ def set_account(request, value):
         ClientSession.objects.filter(account=account).delete()
     Audit.objects.create(actor=actor(),action='account.credentials.reset',resource=user_id)
     return snapshot
+
+
+@contextmanager
+def management_lock():
+    # Serialize multi-worker credential/ledger transitions; lock contains no secret.
+    settings.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with (settings.STATE_DIR/'account-management.lock').open('a') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield
+
+
+def save_account(request, value):
+    fields = {'id','name','username','password','device_limit','quota_bytes','expires_at','enabled'}
+    if set(value) != fields: raise ValueError('INVALID_FIELDS')
+    username, password = value['username'], value['password']
+    if not isinstance(username,str) or not re.fullmatch(r'[a-z0-9][a-z0-9_.-]{2,63}',username): raise ValueError('INVALID_USERNAME')
+    if not isinstance(password,str) or (password and not 12 <= len(password) <= 128): raise ValueError('PASSWORD_LENGTH_12_TO_128_REQUIRED')
+    with management_lock():
+        if value['id'] is not None and not isinstance(value['id'],str): raise ValueError('INVALID_USER_ID')
+        user_id = str(uuid.UUID(value['id'])) if value['id'] else None
+        account = ClientAccount.objects.filter(user_id=user_id).first() if user_id else None
+        if not account and not password: raise ValueError('PASSWORD_LENGTH_12_TO_128_REQUIRED')
+        if ClientAccount.objects.filter(username=username).exclude(user_id=user_id).exists(): raise ValueError('USERNAME_ALREADY_EXISTS')
+        encoded = make_password(password) if password else account.password
+        policy = {k:value[k] for k in ('id','name','device_limit','quota_bytes','expires_at','enabled')}
+        # Across the separate root and web databases, stage access disabled first.
+        # A partial write leaves the account blocked, never with mismatched access.
+        staged = control.call('user.save',actor(),{**policy,'enabled':False})
+        user_id = staged['saved_user_id']; policy['id'] = user_id
+        with transaction.atomic():
+            current,_ = ClientAccount.objects.update_or_create(user_id=user_id,defaults={'username':username,'password':encoded})
+            if password or (account and account.username != username):
+                ClientSession.objects.filter(account=current).delete()
+            Audit.objects.create(actor=actor(),action='account.saved',resource=user_id)
+        return control.call('user.save',actor(),policy)
+
+
+def delete_account(request, value):
+    if set(value) != {'user_id'}: raise ValueError('INVALID_FIELDS')
+    if not isinstance(value['user_id'],str): raise ValueError('INVALID_USER_ID')
+    user_id = str(uuid.UUID(value['user_id']))
+    with management_lock():
+        # Root tombstones/revokes every device before deleting bearer credentials.
+        # Retrying is idempotent if the web database write was interrupted.
+        snapshot = control.call('user.delete',actor(),{'user_id':user_id})
+        with transaction.atomic():
+            ClientAccount.objects.filter(user_id=user_id).delete()
+            Audit.objects.create(actor=actor(),action='account.deleted',resource=user_id)
+        return snapshot

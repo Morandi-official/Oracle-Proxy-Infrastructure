@@ -16,6 +16,8 @@ Restart=on-failure
 RestartSec=5
 UMask=0077
 NoNewPrivileges=true
+# Keep instance-principal credentials out of the web/collector security domain.
+IPAddressDeny=169.254.169.254/32
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict

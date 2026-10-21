@@ -102,12 +102,14 @@ def management(request):
         try:
             value = json.loads(request.body)
             if not isinstance(value,dict) or set(value)!={'operation','data'} or value['operation'] not in (
-                    'user.put','peer.assign','peer.create','peer.revoke','user.limit','account.put','budget.set') or not isinstance(value['data'],dict):
+                    'peer.assign','peer.create','peer.revoke','account.save','account.delete','budget.set') or not isinstance(value['data'],dict):
                 raise ValueError()
             operation, data = value['operation'], value['data']
         except (ValueError,TypeError): return JsonResponse({'error':'INVALID_REQUEST'},status=400)
     try:
-        result = client_api.set_account(request,data) if operation=='account.put' else control.call(operation, f'github:{github_identity(request)}', data)
+        if operation == 'account.save': result = client_api.save_account(request,data)
+        elif operation == 'account.delete': result = client_api.delete_account(request,data)
+        else: result = control.call(operation, f'github:{github_identity(request)}', data)
     except (OSError,TimeoutError,json.JSONDecodeError):
         return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
     except ValueError as error:

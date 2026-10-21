@@ -32,9 +32,13 @@ def main():
        if route.request.method=='POST':
         assert route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
         value=route.request.post_data_json
-        if value['operation']=='account.put':
-         account=value['data'];accounts[account['user_id']]=account['username']
-         data=engine.dispatch({'actor':'github:204281968','operation':'user.limit','data':{'user_id':account['user_id'],'device_limit':account['device_limit']}})
+        if value['operation']=='account.save':
+         account=value['data']; policy={k:account[k] for k in ('id','name','quota_bytes','expires_at','enabled','device_limit')}
+         data=engine.dispatch({'actor':'github:204281968','operation':'user.save','data':policy})
+         accounts[data['saved_user_id']]=account['username']
+        elif value['operation']=='account.delete':
+         data=engine.dispatch({'actor':'github:204281968','operation':'user.delete','data':value['data']})
+         accounts.pop(value['data']['user_id'],None)
         else:data=engine.dispatch({'actor':'github:204281968',**value})
        else:data=engine.snapshot()
        for u in data['users']:u['username']=accounts.get(u['id'])
@@ -47,18 +51,14 @@ def main():
      page.goto('https://management-fixture.invalid/',wait_until='networkidle')
      expect(page.locator('#remaining')).to_have_text('未知')
      label='CI browser user <b>literal</b>'
+     page.locator('#user-form [name=username]').fill('ci-user01');page.locator('#user-form [name=password]').fill('synthetic-password-only-123')
      page.locator('#user-form [name=name]').fill(label);page.locator('#user-form [name=quota]').fill('1')
-     page.get_by_role('button',name='保存用户策略',exact=True).click()
+     page.get_by_role('button',name='保存用户',exact=True).click()
      row=page.locator('#user-rows tr').filter(has_text=label);expect(row).to_contain_text('可用')
      assert page.locator('#user-rows b').count()==0
      user=engine.snapshot()['users'][0]
-     account_form=page.locator('#account-form')
-     expect(account_form.locator('[name=device_limit]')).to_have_value('3')
-     account_form.locator('[name=user_id]').select_option(user['id'])
-     account_form.locator('[name=username]').fill('ci-user01')
-     account_form.locator('[name=password]').fill('synthetic-password-only-123')
-     page.get_by_role('button',name='分配账号 / 重置密码',exact=True).click()
-     expect(row).to_contain_text('ci-user01');expect(account_form.locator('[name=password]')).to_have_value('')
+     expect(row).to_contain_text('ci-user01');expect(page.locator('#user-form [name=password]')).to_have_value('')
+     assert page.locator('#account-form').count()==0
      assert 'synthetic-password-only-123' not in page.locator('body').inner_text()
      page.locator('#peer-form [name=name]').fill('CI Windows PC');page.locator('#peer-form [name=user_id]').select_option(user['id'])
      page.locator('#peer-form [name=public_key]').fill(fixture.KEY1)
@@ -68,14 +68,20 @@ def main():
      page.locator('#peer-form [name=name]').fill('CI New Windows PC');page.locator('#peer-form [name=public_key]').fill(fixture.KEY3)
      page.get_by_role('button',name='新增 Peer',exact=True).click()
      expect(page.locator('#peer-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('10.250.0.4/32')
-     row.get_by_role('button',name='禁用',exact=True).click();expect(row).to_contain_text('已禁用');assert not driver.allowed
-     row.get_by_role('button',name='启用',exact=True).click();expect(row).to_contain_text('可用')
+     row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=enabled]').uncheck()
+     page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('已禁用');assert not driver.allowed
+     row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=enabled]').check()
+     page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('可用')
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=expires]').fill('2020-01-01T00:00')
-     page.get_by_role('button',name='保存用户策略',exact=True).click();expect(row).to_contain_text('已到期');assert not driver.allowed
+     page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('已到期');assert not driver.allowed
      page.locator('#budget-form [name=prior]').fill('10');page.locator('#budget-form [name=confirm]').check();page.locator('#budget-form [name=guard]').check()
      page.get_by_role('button',name='保存出站保护策略',exact=True).click()
      expect(page.locator('#balance-basis')).to_have_text('手工核对基线 + 本机增量估算')
      assert engine.budget_state()['estimated_used_bytes']==10_000_000_000
+     page.on('dialog',lambda dialog:dialog.accept())
+     row.get_by_role('button',name='删除',exact=True).click();expect(page.locator('#user-rows')).to_contain_text('尚无用户')
+     assert not engine.snapshot()['users'] and not driver.allowed
+     assert all(p['revoked'] for p in engine.snapshot()['peers'] if p['managed'])
      assert not errors, 'Synthetic management UI raised JavaScript errors'
      print(f'SYNTHETIC_{name.upper()}_UI_USER_PEER_QUOTA_EXPIRY_BUDGET_CSRF_HEADER_AND_TEXT_ESCAPE=PASS',flush=True)
     finally:context.close();browser.close();engine.db.close()

@@ -91,6 +91,7 @@ def main():
                 'nuget_packages': packages}
     tag = 'OracleProxy-0.3.0-rc1-win-x64-' + revision[:12]
     source_name = tag + '-source.zip'
+    metadata['corresponding_source_archive'] = source_name
     tracked = run('git', 'ls-files', 'clients/windows/product', 'clients/windows/service-host/NativeDriverTrust.cs',
                   '.github/workflows/windows-product-candidate.yml').splitlines()
     source_files = {p: ROOT / p for p in tracked}
@@ -129,6 +130,8 @@ def main():
     sums = ''.join(digest(path) + '  ' + path.name + '\n' for path in sorted(out.glob('*.zip')))
     (out / 'SHA256SUMS.txt').write_text(sums, encoding='utf-8')
     (out / 'BUILD.json').write_text(json.dumps(metadata, indent=2), encoding='utf-8')
+    for path in sorted(out.glob('*.zip')):
+        print('CANDIDATE_ARCHIVE_BYTES=' + path.name + ':' + str(path.stat().st_size))
     print('CANDIDATE_ALLOWLIST_LICENSES_AND_CORRESPONDING_SOURCE=PASS')
 
 

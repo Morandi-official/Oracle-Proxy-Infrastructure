@@ -1,5 +1,5 @@
 // Non-shipped disposable Windows SCM/packet fixture. Never accesses production
-// accounts, Oracle, user keys, arbitrary config files or the public API.
+// accounts or Oracle. Dedicated opt-in Oracle acceptance is in OracleAcceptance.cs.
 using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -20,9 +20,11 @@ internal static class ProductTests
     [UnmanagedFunctionPointer(CallingConvention.Cdecl,CharSet=CharSet.Unicode)]private delegate uint Apply(string service,string core,string uu,ulong luid);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint Clear();
     private static readonly List<string> Evidence=[];
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,int> CoreEvents=new();
     private static void Require(bool condition,string message){if(!condition)throw new IOException(message);Evidence.Add(message+"=PASS");}
     [STAThread]internal static int Main(string[] args)
     {
+        if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
         if(args.SequenceEqual(new[]{"--native-denial"})){
             IntPtr module=NativeLibrary.Load(Platform.Guard);return Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))()==5?0:1;
@@ -106,7 +108,12 @@ internal static class ProductTests
     private static async Task<Process> Launch(JsonObject config)
     {
         var start=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=Platform.Root};
-        var p=Process.Start(start)!;p.ErrorDataReceived+=(_,_)=>{};p.BeginErrorReadLine();
+        config["log"]=new JsonObject{["level"]="debug",["timestamp"]=false};
+        var p=Process.Start(start)!;p.ErrorDataReceived+=(_,line)=>{
+            string value=(line.Data ?? "").ToLowerInvariant();
+            foreach(string category in new[]{"handshake","completed","timeout","no route","unreachable","denied","refused","bind","listen","loopback","invalid","error","outbound connection","inbound connection"})
+                if(value.Contains(category))CoreEvents.AddOrUpdate(category,1,(_,count)=>count+1);
+        };p.BeginErrorReadLine();
         await p.StandardInput.WriteLineAsync(config.ToJsonString());await p.StandardInput.FlushAsync();
         if(await p.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))!="READY")throw new IOException("SYNTHETIC_CORE_START_FAILED");return p;
     }
@@ -127,9 +134,10 @@ internal static class ProductTests
         Require(!await Tcp(),"REAL_ALL_APP_PHYSICAL_TCP_BLOCK");Require(!await Dns(),"REAL_ALL_APP_PHYSICAL_UDP_DNS_BLOCK");
         File.WriteAllText(Path.Combine(Root,"public-sha256"),Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(saved.PublicKey))));
         var serverKey=KeyPair();var clientKey=KeyPair();
+        string loopback=NetworkInterface.GetAllNetworkInterfaces().First(n=>n.NetworkInterfaceType==NetworkInterfaceType.Loopback).Name;
         var server=new JsonObject{
             ["log"]=new JsonObject{["disabled"]=true},
-            ["endpoints"]=new JsonArray(new JsonObject{["type"]="wireguard",["tag"]="wg-server",["system"]=false,["address"]=new JsonArray("10.200.0.1/24"),["private_key"]=serverKey.Private,["listen_port"]=59999,["peers"]=new JsonArray(new JsonObject{["public_key"]=clientKey.Public,["allowed_ips"]=new JsonArray("10.200.0.2/32")})}),
+            ["endpoints"]=new JsonArray(new JsonObject{["type"]="wireguard",["tag"]="wg-server",["bind_interface"]=loopback,["system"]=false,["address"]=new JsonArray("10.200.0.1/24"),["private_key"]=serverKey.Private,["listen_port"]=59999,["peers"]=new JsonArray(new JsonObject{["public_key"]=clientKey.Public,["allowed_ips"]=new JsonArray("10.200.0.2/32")})}),
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="exit"}),["route"]=new JsonObject{["auto_detect_interface"]=true,["final"]="exit"}
         };
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:59999",["server_public_key"]=serverKey.Public,["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
@@ -137,9 +145,12 @@ internal static class ProductTests
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";
+        config["endpoints"]![0]!["bind_interface"]=loopback;
         Process? exit=null,client=null;
         try{
-            exit=await Launch(server);client=await Launch(config);
+            exit=await Launch(server);
+            Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
+            client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();NativeGuard.Apply([],luid);
             Require(NativeGuard.TunPermitted,"REAL_CURRENT_TUN_DYNAMIC_SESSION_PERMIT_AUDITED");
             bool tunneled=await Tcp();
@@ -147,6 +158,7 @@ internal static class ProductTests
                 var proxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service","synthetic-probe-only")};
                 using var probe=new HttpClient(new SocketsHttpHandler{Proxy=proxy,UseProxy=true,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)};
                 try{using var response=await probe.GetAsync("https://1.1.1.1/cdn-cgi/trace");Evidence.Add("SYNTHETIC_WG_SOCKS_PATH="+(response.IsSuccessStatusCode?"PASS":"FAIL"));}catch{Evidence.Add("SYNTHETIC_WG_SOCKS_PATH=FAIL");}
+                foreach(var item in CoreEvents.OrderBy(p=>p.Key))Evidence.Add("SYNTHETIC_CORE_EVENT_"+item.Key.Replace(' ','_').ToUpperInvariant()+"="+item.Value);
                 NativeGuard.Clear();Evidence.Add("SYNTHETIC_TUN_WITHOUT_OWNED_GUARD="+(await Tcp()?"PASS":"FAIL"));
             }
             Require(tunneled,"REAL_TUN_USERSPACE_WIREGUARD_TCP_TO_ISOLATED_PEER");

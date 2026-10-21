@@ -10,6 +10,13 @@ spec.loader.exec_module(host)
 
 
 class HostBoundaries(unittest.TestCase):
+    def test_legacy_rollback_disables_relay_and_forward_recovery_enables_it(self):
+        with patch.object(host,'relay_expected',return_value=False),patch.object(host,'command') as command:
+            host.restart_application()
+            self.assertEqual(command.call_args_list[-1].args[0],['systemctl','disable','--now',host.UNIT_NAMES[3]])
+        with patch.object(host,'relay_expected',return_value=True),patch.object(host,'command') as command:
+            host.restart_application()
+            self.assertIn(unittest.mock.call(['systemctl','enable',host.UNIT_NAMES[3]]),command.call_args_list)
     def test_new_release_requires_both_web_and_relay_health(self):
         response=MagicMock();response.status=200;response.__enter__.return_value=response
         response.read.return_value=b'{"ready":true}'

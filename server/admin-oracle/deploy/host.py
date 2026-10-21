@@ -168,8 +168,11 @@ def relay_expected():
 
 def restart_application():
     command(['systemctl', 'restart', UNIT_NAMES[0]])
-    if relay_expected(): command(['systemctl', 'restart', UNIT_NAMES[3]])
-    else: subprocess.run(['systemctl', 'stop', UNIT_NAMES[3]], check=False)
+    if relay_expected():
+        command(['systemctl', 'enable', UNIT_NAMES[3]])
+        command(['systemctl', 'restart', UNIT_NAMES[3]])
+    else:
+        command(['systemctl', 'disable', '--now', UNIT_NAMES[3]])
 
 
 def healthy():

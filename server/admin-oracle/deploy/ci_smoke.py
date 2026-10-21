@@ -89,6 +89,22 @@ def main():
     run([sys.executable, source / 'deploy/host.py', 'install', '--revision', second])
     assert (host.ROOT / 'current').resolve().name == second
     run([sys.executable, source / 'deploy/host.py', 'rollback'])
+    # Simulate the actual legacy rollback target, which has no relay module.
+    # Only this disposable harness changes its own synthetic sealed release.
+    relay_source = host.ROOT / 'current/relay/server.py'
+    relay_saved = relay_source.with_suffix('.py.legacy-test')
+    relay_source.rename(relay_saved)
+    try:
+        host.restart_application()
+        assert host.healthy()
+        assert subprocess.run(['systemctl', 'is-enabled', '--quiet', host.UNIT_NAMES[3]], check=False).returncode != 0
+        assert subprocess.run(['systemctl', 'is-active', '--quiet', host.UNIT_NAMES[3]], check=False).returncode != 0
+    finally:
+        relay_saved.rename(relay_source)
+        host.restart_application()
+    assert host.healthy()
+    assert subprocess.run(['systemctl', 'is-enabled', '--quiet', host.UNIT_NAMES[3]], check=False).returncode == 0
+    print('REAL_LEGACY_ROLLBACK_DISALLOWS_RELAY_AUTOSTART_AND_FORWARD_RECOVERY=PASS')
     assert (host.ROOT / 'current').resolve().name == first
     assert host.healthy()
     print('DISPOSABLE_SYSTEMD_NONROOT_STARTUP_UPGRADE_FAILED_START_AUTO_RESTORE_EXPLICIT_ROLLBACK=PASS')

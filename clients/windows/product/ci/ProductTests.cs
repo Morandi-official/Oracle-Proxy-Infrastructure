@@ -62,7 +62,7 @@ internal static class ProductTests
             File.WriteAllText(Path.Combine(Root,"recovery-verified"),valid?"KEY_AND_SAFE_OFF_PRESERVED":"FAIL");return valid?0:1;
         }
         if(args.SequenceEqual(new[]{"--watchdog"})){
-            Thread.Sleep(TimeSpan.FromMinutes(2));Rescue();return 0;
+            Thread.Sleep(TimeSpan.FromMinutes(4));Rescue();return 0;
         }
         if(args.SequenceEqual(new[]{"--rescue"})){Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}

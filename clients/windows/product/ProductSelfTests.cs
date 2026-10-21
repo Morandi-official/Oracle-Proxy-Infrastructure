@@ -14,6 +14,12 @@ internal static class ProductSelfTests
         var config=CoreConfig.Build(state,secret,"synthetic-only");
         if(config["route"]?["final"]?.GetValue<string>()!="oracle-wireguard" || !System.Text.RegularExpressions.Regex.IsMatch(secret.UuPaths[0].ToLowerInvariant(),config["route"]!["rules"]![0]!["process_path_regex"]![0]!.GetValue<string>()))return false;
         if(config["endpoints"]?[0]?["peers"]?[0]?["port"]?.GetValue<int>()!=51820)return false;
+        try{CoreConfig.Build(state,secret,"synthetic-only",true);return false;}catch(IOException){}
+        state["tunnel"]!["https_relay"]=true;secret.Token=new string('A',43);
+        var relay=CoreConfig.Build(state,secret,"synthetic-only",true);
+        if(relay["endpoints"]?[0]?["detour"]?.GetValue<string>()!="oracle-https-relay" ||
+           relay["outbounds"]?[1]?["type"]?.GetValue<string>()!="oracle-https" ||
+           relay["inbounds"]?[0]?["route_exclude_address"]?[0]?.GetValue<string>()!="152.67.156.100/32")return false;
         state["tunnel"]!["endpoint"]="evil.invalid:443";
         try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}
         CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);return true;

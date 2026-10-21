@@ -79,7 +79,9 @@ def official_usage_status():
         if not isinstance(value, dict) or value.get('schema') != 1:
             raise ValueError('INVALID_USAGE_CACHE')
         fields = ('checked_at', 'period', 'status', 'monitoring_status', 'billing_status',
-                  'vnic_count', 'vnic_outbound_bytes', 'metric_points', 'metric_through')
+                  'vnic_count', 'vnic_outbound_bytes', 'metric_points', 'metric_from', 'metric_through',
+                  'metric_query_from', 'metric_query_to', 'instance_created_at', 'billing_through',
+                  'billing_error_http_status', 'billing_error_category', 'billing_error_service_code')
         result = {name: value.get(name) for name in fields}
         if any(not (item is None or type(item) is int or isinstance(item, str) and len(item) <= 96)
                for item in result.values()):
@@ -245,7 +247,9 @@ def install_usage_probe():
     cache=Path('/var/lib/oracle-proxy-control/oci-usage.json')
     if result.returncode==0 and cache.is_file():
         value=json.loads(cache.read_text())
-        print('OCI_READ_ONLY_API_PROBE='+json.dumps({k:value.get(k) for k in ('status','monitoring_status','billing_status','vnic_count','vnic_outbound_bytes','metric_through')},sort_keys=True))
+        print('OCI_READ_ONLY_API_PROBE='+json.dumps({k:value.get(k) for k in ('status','monitoring_status','billing_status','vnic_count','vnic_outbound_bytes','metric_through',
+                 'instance_created_at','metric_from','metric_points','billing_through',
+                 'billing_error_http_status','billing_error_category','billing_error_service_code')},sort_keys=True))
     else: print('OCI_READ_ONLY_API_PROBE=UNAVAILABLE; budget remains unknown')
 
 

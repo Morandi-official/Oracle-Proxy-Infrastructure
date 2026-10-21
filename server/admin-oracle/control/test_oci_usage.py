@@ -1,6 +1,9 @@
 import importlib.util
+import datetime as dt
 import json
 import tempfile
+import sys
+from types import SimpleNamespace as NS
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -25,3 +28,54 @@ class ReadOnlyUsageTests(unittest.TestCase):
    self.assertIsNone(json.loads(probe.CACHE.read_text())['remaining_bytes'])
   for path in ('identity/key.pem','../instance/','http://example.invalid/'):
    with self.assertRaises(ValueError):probe.metadata(path)
+
+ def test_daily_billing_range_excludes_current_partial_day_and_first_day_is_empty(self):
+  now=dt.datetime(2026,10,21,18,13,tzinfo=dt.timezone(dt.timedelta(hours=8)))
+  start,end=probe.billing_range(now)
+  self.assertEqual(start,dt.datetime(2026,10,1,tzinfo=dt.timezone.utc))
+  self.assertEqual(end,dt.datetime(2026,10,21,tzinfo=dt.timezone.utc))
+  start,end=probe.billing_range(dt.datetime(2026,11,1,2,tzinfo=dt.timezone.utc))
+  self.assertEqual(start,end)
+ def test_error_diagnostics_do_not_export_messages_headers_or_arbitrary_service_codes(self):
+  error=type('ServiceError',(Exception,),{'status':400,'code':'InvalidParameter','headers':{'authorization':'SECRET'}})('SECRET_REQUEST_BODY')
+  details=probe.error_details(error)
+  self.assertEqual(details,{'http_status':400,'category':'HTTP_ERROR','service_code':'InvalidParameter'})
+  self.assertNotIn('SECRET',json.dumps(details))
+  error.code='SECRET_SESSION_TOKEN';self.assertEqual(probe.error_details(error)['service_code'],'OTHER')
+  self.assertEqual(probe.error_details(AttributeError('SECRET'))['category'],'SDK_RESPONSE_ERROR')
+
+ def fake_collect(self,quantity):
+  class Frozen(dt.datetime):
+   @classmethod
+   def now(cls,tz=None):return cls(2026,10,21,10,13,tzinfo=dt.timezone.utc)
+  key='ocid1.vnic.oc1..fixture';calls=[]
+  def billing(details,**_):
+   calls.append(details)
+   return NS(data=NS(items=[NS(sku_name='Outbound Data Transfer',unit='GB',computed_quantity=quantity)]),headers={})
+  monitor=NS(summarize_metrics_data=lambda *a,**k:NS(data=[NS(name='VnicToNetworkBytes',dimensions={'resourceId':key},aggregated_datapoints=[NS(value=100,timestamp=Frozen(2026,10,20,tzinfo=dt.timezone.utc))])]))
+  modules={
+   'oci.auth.signers':NS(InstancePrincipalsSecurityTokenSigner=lambda **k:NS(tenancy_id='ocid1.tenancy.fixture')),
+   'oci.retry':NS(NoneRetryStrategy=lambda:None),
+   'oci.monitoring':NS(MonitoringClient=lambda *a,**k:monitor),
+   'oci.monitoring.models':NS(SummarizeMetricsDataDetails=lambda **k:NS(**k)),
+   'oci.usage_api':NS(UsageapiClient=lambda *a,**k:NS(request_summarized_usages=billing)),
+   'oci.usage_api.models':NS(RequestSummarizedUsagesDetails=lambda **k:NS(**k))}
+  metadata={'id':'ocid1.instance.fixture','region':'us-ashburn-1','compartmentId':'ocid1.compartment.fixture','timeCreated':1791763200000}
+  with patch.dict(sys.modules,modules),patch.object(probe,'metadata',side_effect=lambda path:metadata if path=='instance/' else [{'vnicId':key}]),patch.object(probe.dt,'datetime',Frozen):
+   result=probe.collect()
+  return result,calls
+ def test_full_collection_uses_complete_daily_range_and_preserves_metric_history(self):
+  result,calls=self.fake_collect(2.5)
+  self.assertEqual(calls[0].time_usage_ended,dt.datetime(2026,10,21,tzinfo=dt.timezone.utc))
+  self.assertEqual(calls[0].time_usage_started,dt.datetime(2026,10,1,tzinfo=dt.timezone.utc))
+  self.assertEqual(result['billing_status'],'ROWS_REQUIRE_SKU_REVIEW')
+  self.assertEqual(result['billing_rows'][0]['quantity'],2.5)
+  self.assertEqual(result['vnic_outbound_bytes'],100)
+  self.assertEqual(result['instance_created_at'],1791763200)
+  self.assertIsNone(result['remaining_bytes'])
+ def test_missing_billing_quantity_cannot_be_silently_zero(self):
+  result,_=self.fake_collect(None)
+  self.assertEqual(result['billing_status'],'API_UNAVAILABLE')
+  self.assertEqual(result['billing_error_category'],'SDK_VALIDATION_ERROR')
+  self.assertEqual(result['vnic_outbound_bytes'],100)
+  self.assertIsNone(result['remaining_bytes'])

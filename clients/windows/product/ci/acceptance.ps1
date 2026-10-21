@@ -1,4 +1,5 @@
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'official-download.ps1')
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Disposable hosted Windows required'}
 if(Get-Service OracleProxyService,OracleProxyCandidateFixture -ErrorAction SilentlyContinue){throw 'Preexisting service refused'}
 if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting install refused'}
@@ -46,7 +47,7 @@ $uuFixture=Join-Path $env:ProgramFiles 'OracleProxy/UU-Trust-Fixture'
 New-Item -ItemType Directory $uuFixture | Out-Null
 $officialInstaller=Join-Path $uuFixture 'GameViewerInstaller.exe'
 try{
-  Invoke-WebRequest 'https://a56.gdl.netease.com/UURemote_Setup_4.39.2.1561_0904121034_gwqd.exe' -OutFile $officialInstaller -MaximumRedirection 2 -MaximumRetryCount 3 -RetryIntervalSec 3
+  Get-OfficialFile -Uri 'https://a56.gdl.netease.com/UURemote_Setup_4.39.2.1561_0904121034_gwqd.exe' -OutFile $officialInstaller -SHA256 'CF06187BE7B1382EAB9D53AFA129E4DC0DC07B0C7526D1E7A849475E0CA046F5'
   if((Get-FileHash $officialInstaller -Algorithm SHA256).Hash -ne 'CF06187BE7B1382EAB9D53AFA129E4DC0DC07B0C7526D1E7A849475E0CA046F5'){throw 'Official UU fixture checksum mismatch'}
   if((Get-AuthenticodeSignature $officialInstaller).Status -ne 'Valid'){throw 'Official UU fixture signature invalid'}
   & $test --uu-trust-signed

@@ -1,9 +1,10 @@
 # Verify the exact upstream embedded x64 DLL against the official signed release.
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'official-download.ps1')
 $module=Join-Path ((go env GOMODCACHE).Trim()) 'github.com/sagernet/sing-tun@v0.9.7-0.20261009020158-bca4bf029237/internal/wintun/amd64/wintun.dll'
 if(!(Test-Path $module)){throw 'Pinned upstream Wintun payload missing'}
 $archive=Join-Path $env:RUNNER_TEMP 'oracle-wintun-0.14.1.zip'
-Invoke-WebRequest 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $archive -MaximumRedirection 2 -MaximumRetryCount 3 -RetryIntervalSec 3
+Get-OfficialFile -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $archive
 $directory=Join-Path $env:RUNNER_TEMP 'oracle-official-wintun'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip=[IO.Compression.ZipFile]::OpenRead($archive)

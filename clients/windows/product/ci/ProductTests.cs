@@ -189,7 +189,7 @@ internal static class ProductTests
             try{NativeGuard.Apply([],luid,(uint)Environment.ProcessId);}catch(IOException error){wrongCoreDenied=error.Message.StartsWith("WFP_APPLY_5_",StringComparison.Ordinal);}
             Require(wrongCoreDenied && NativeGuard.Active && !NativeGuard.TunPermitted,"REAL_TUN_PERMISSION_REJECTS_WRONG_SYSTEM_PROCESS_IMAGE");
             NativeGuard.Apply([],luid,(uint)client.Id);
-            Require(NativeGuard.TunPermitted,"REAL_CURRENT_TUN_DYNAMIC_SESSION_PERMIT_AUDITED");
+            Require(NativeGuard.TunPermitted && NativeGuard.CoreLifecycle==3,"REAL_CURRENT_TUN_DYNAMIC_SESSION_PERMIT_AUDITED");
             bool tunneled=await Tcp();
             if(!tunneled){
                 var proxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service","synthetic-probe-only")};
@@ -205,7 +205,8 @@ internal static class ProductTests
             Require(!await Dns(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_DNS_FALLBACK");
             client.Kill(true);await client.WaitForExitAsync();client.Dispose();client=null;
             Require(NativeGuard.Active,"REAL_CORE_CRASH_PERSISTENT_GUARD_SURVIVES");
-            Require(!NativeGuard.TunPermitted,"REAL_DEAD_TUN_CANNOT_AUTHORIZE_A_STALE_PERMIT");
+            Evidence.Add("REAL_CORE_EXIT_LIFECYCLE_FLAGS="+NativeGuard.CoreLifecycle);
+            Require((NativeGuard.CoreLifecycle&1)==0 && !NativeGuard.TunPermitted,"REAL_DEAD_TUN_CANNOT_AUTHORIZE_A_STALE_PERMIT");
             Require(!await Tcp(),"REAL_CORE_CRASH_NO_DIRECT_TCP_FALLBACK");
             Require(!await Dns(),"REAL_CORE_CRASH_NO_DIRECT_DNS_FALLBACK");
         }finally{await Stop(client);await Stop(exit);}

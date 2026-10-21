@@ -99,6 +99,8 @@ jobs:
         run: |
           dotnet publish ./clients/windows/product/ci/OracleProxy.Product.Tests.csproj -c Release -p:DebugType=None -o ./dist/product-tests
           if($LASTEXITCODE -ne 0){throw 'Fixture build failed'}
+          cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients/windows/product/ci/udp-loss.c /link /OUT:dist/product-tests/OracleProxy.Fault.dll /DYNAMICBASE /NXCOMPAT /Brepro
+          if($LASTEXITCODE -ne 0){throw 'Disposable UDP fault build failed'}
           dotnet publish ./clients/windows/product/ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ./dist/bad-upgrade
           if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
           Copy-Item ./dist/product/OracleProxy.Core.exe,./dist/product/OracleProxy.Guard.dll ./dist/bad-upgrade

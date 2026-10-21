@@ -2,6 +2,8 @@
 // account from the windows-client-acceptance Environment, never SSH/OAuth keys.
 using System.Diagnostics;
 using System.Net;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using OracleProxy.Product;
 
@@ -10,30 +12,26 @@ internal static class OracleAcceptance
     // Disposable hosted fault only; this is never compiled into the product.
     private sealed class InitialUdpLoss : IDisposable
     {
-        private readonly dynamic _policy;
-        private const string Name="OracleProxyCandidateInitialUdp";
-        private const string Marker="Oracle Proxy disposable initial handshake loss";
-        internal InitialUdpLoss(int port)
+        private IntPtr _engine;
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_begin(out IntPtr engine);
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_end(IntPtr engine);
+        internal InitialUdpLoss()
         {
-            _policy=Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FwPolicy2")!)!;
-            // Hosted images can have inactive firewall profiles. Enable their
-            // filtering before using a block rule; never disable a profile.
-            // This fixture is restricted to disposable GitHub-hosted runners.
-            foreach(int profile in new[]{1,2,4}){
-                _policy.FirewallEnabled[profile]=true;
-                Check((bool)_policy.FirewallEnabled[profile],"REAL_HOSTED_FIREWALL_PROFILE_"+profile+"_ENABLED");
-            }
-            foreach(dynamic existing in _policy.Rules)if(existing.Name==Name)throw new IOException("PREEXISTING_FIREWALL_RULE_REFUSED");
-            dynamic rule=Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule")!)!;
-            rule.Name=Name;rule.Description=Marker;rule.ApplicationName=Platform.Core;rule.Protocol=17;rule.RemoteAddresses="152.67.156.100";rule.RemotePorts=port.ToString();rule.Direction=2;rule.Action=0;rule.Profiles=int.MaxValue;rule.Enabled=true;
-            _policy.Rules.Add(rule);
+            uint code=fixture_udp_loss_begin(out _engine);
+            if(code!=0){Console.WriteLine("INITIAL_UDP_NATIVE_ERROR="+code);throw new Win32Exception((int)code);}
         }
         public void Dispose()
         {
-            dynamic rule=_policy.Rules.Item(Name);
-            if(rule.Description!=Marker || !string.Equals((string)rule.ApplicationName,Platform.Core,StringComparison.OrdinalIgnoreCase))throw new IOException("FOREIGN_FIREWALL_RULE_REFUSED");
-            _policy.Rules.Remove(Name);
+            if(_engine==IntPtr.Zero)return;
+            uint code=fixture_udp_loss_end(_engine);_engine=IntPtr.Zero;
+            if(code!=0)throw new Win32Exception((int)code);
         }
+    }
+    internal static int VerifyUdpFaultSession()
+    {
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" || !Platform.IsAdmin)return 3;
+        using(var loss=new InitialUdpLoss())Check(true,"REAL_DISPOSABLE_PACKET_LAYER_UDP_FAULT_SESSION");
+        return 0;
     }
     private static void Check(bool condition,string code){if(!condition)throw new IOException(code);Console.WriteLine(code+"=PASS");}
     private static async Task<JsonObject> Send(string command)
@@ -78,7 +76,7 @@ internal static class OracleAcceptance
             stage="INITIAL_TRANSIENT_UDP_LOSS";uint initialPid;
             // The acceptance target has a fixed deployed WireGuard port. The
             // ordinary GUI IPC deliberately never exposes the tunnel profile.
-            using(var loss=new InitialUdpLoss(51820)){
+            using(var loss=new InitialUdpLoss()){
                 var waiting=await ControlPipe.Send("Connect");
                 // Same fixed, credential-free fields as the public diagnostic
                 // report; never print the response object or exception message.

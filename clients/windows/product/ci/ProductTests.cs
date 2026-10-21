@@ -32,6 +32,7 @@ internal static class ProductTests
             catch(IOException error) when(error.Message=="UU_MAINTENANCE_BUSY"){return 4;}
         }
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
+        if(args.SequenceEqual(new[]{"--udp-loss-self-test"}))return OracleAcceptance.VerifyUdpFaultSession();
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
         if(args.SequenceEqual(new[]{"--native-denial"})){
             IntPtr module=NativeLibrary.Load(Platform.Guard);return Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))()==5?0:1;

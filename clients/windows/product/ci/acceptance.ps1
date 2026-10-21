@@ -6,6 +6,8 @@ if(Get-Service OracleProxyService,OracleProxyCandidateFixture -ErrorAction Silen
 if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting install refused'}
 $exe=(Resolve-Path './dist/product/OracleProxy.exe').Path
 $test=(Resolve-Path './dist/product-tests/OracleProxy.Product.Tests.exe').Path
+& $test --udp-loss-self-test
+if($LASTEXITCODE -ne 0){throw 'Disposable packet-layer UDP fault session failed'}
 if(Get-LocalUser OracleProxyOwner,OracleProxyOther -ErrorAction SilentlyContinue){throw 'Preexisting fixture user refused'}
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
 if(Test-Path $root){throw 'Preexisting fixture state refused'}

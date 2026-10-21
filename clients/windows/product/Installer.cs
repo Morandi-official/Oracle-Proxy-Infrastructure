@@ -71,6 +71,36 @@ internal static class Installer
         if(!Directory.EnumerateFileSystemEntries(Platform.StateRoot).Any())Directory.Delete(Platform.StateRoot);
         if(!Directory.EnumerateFileSystemEntries(Platform.Root).Any())Directory.Delete(Platform.Root);
     }
+    internal static async Task Recover()
+    {
+        if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
+        VerifyService();Platform.VerifyProtected(Platform.Root);Platform.VerifyBundle(Platform.Root);
+        Stop();
+        string image="\""+Platform.Exe+"\" --recovery-service";
+        using(var existing=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\"+RecoveryService.Name)){
+            if(existing is not null && existing.GetValue("ImagePath") as string!=image)throw new IOException("RECOVERY_SERVICE_COLLISION");
+            if(existing is null)Sc("create",RecoveryService.Name,"binPath=",image,"start=","demand","obj=","LocalSystem");
+        }
+        string diagnostic=Path.Combine(Platform.Root,"diagnostics.json");File.Delete(diagnostic);
+        try{
+            Sc("start",RecoveryService.Name);
+            bool finished=false;
+            for(int i=0;i<80;i++){
+                using var helper=new ServiceController(RecoveryService.Name);
+                if(helper.Status==ServiceControllerStatus.Stopped && File.Exists(diagnostic)){finished=true;break;}
+                await Task.Delay(250);
+            }
+            if(!finished || System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(diagnostic))?["code"]?.GetValue<string>()!="RECOVERED_DIRECT")throw new IOException("RECOVERY_NOT_VERIFIED");
+        }finally{
+            using var helper=new ServiceController(RecoveryService.Name);
+            if(helper.Status==ServiceControllerStatus.Stopped)Sc("delete",RecoveryService.Name);
+        }
+        Sc("start",Platform.Service);
+    }
+    internal static void ElevateRecovery()
+    {
+        var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};info.ArgumentList.Add("--recover");Process.Start(info);
+    }
     internal static void Elevate(bool uninstall)
     {
         var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};

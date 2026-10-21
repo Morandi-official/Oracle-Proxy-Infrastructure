@@ -37,6 +37,11 @@ internal static class ProductTests
             try{var state=ControlPipe.Send("Status").GetAwaiter().GetResult();return state["mode"]?.GetValue<string>()=="disconnected"?0:1;}catch{return 1;}
         }
         if(!Platform.IsSystem || !File.Exists(Path.Combine(Root,"authorized")))return 3;
+        if(args.SequenceEqual(new[]{"--verify-recovered"})){
+            var value=DurableState.Load();string digest=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.PublicKey)));
+            bool valid=!value.ConnectIntent && !value.RecoveryRequired && value.Token=="" && value.PrivateKey.Length==44 && digest==File.ReadAllText(Path.Combine(Root,"public-sha256")) && !NativeGuard.Active;
+            File.WriteAllText(Path.Combine(Root,"recovery-verified"),valid?"KEY_AND_SAFE_OFF_PRESERVED":"FAIL");return valid?0:1;
+        }
         if(args.SequenceEqual(new[]{"--watchdog"})){
             Thread.Sleep(TimeSpan.FromMinutes(2));Rescue();return 0;
         }
@@ -73,6 +78,7 @@ internal static class ProductTests
     }
     private static void Rescue()
     {
+        try{using var service=new ServiceController(Platform.Service);if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(15));}}catch{}
         try{foreach(var p in Process.GetProcessesByName("OracleProxy.Core"))using(p){if(p.MainModule?.FileName==Platform.Core)p.Kill(true);}}catch{}
         try{IntPtr module=NativeLibrary.Load(Platform.Guard);uint result=Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))();if(result==0)File.WriteAllText(Path.Combine(Root,"rescued"),"OWNED_FILTERS_CLEARED");}catch{}
     }
@@ -80,9 +86,11 @@ internal static class ProductTests
     {
         internal Fixture(){ServiceName=Name;AutoLog=false;}
         protected override void OnStart(string[] args)=>Task.Run(async()=>{
-            try{await ProductTests.Run();File.WriteAllText(Path.Combine(Root,"result.txt"),string.Join('\n',Evidence)+"\nRESULT=PASS\n");}
-            catch(Exception e){File.WriteAllText(Path.Combine(Root,"result.txt"),string.Join('\n',Evidence)+"\nRESULT=FAIL\nCATEGORY="+e.GetType().Name+"\nSTAGE="+e.Message.Replace('\n',' ') +"\n");}
-            finally{Rescue();Stop();}
+            bool success=false;string result;
+            try{await ProductTests.Run();success=true;result=string.Join('\n',Evidence)+"\nRESULT=PASS\n";}
+            catch(Exception e){result=string.Join('\n',Evidence)+"\nRESULT=FAIL\nCATEGORY="+e.GetType().Name+"\nSTAGE="+e.Message.Replace('\n',' ')+"\n";}
+            finally{if(!success)Rescue();}
+            File.WriteAllText(Path.Combine(Root,"result.txt"),result);Stop();
         });
     }
     private static async Task<bool> Tcp()
@@ -117,6 +125,7 @@ internal static class ProductTests
         NativeGuard.Apply([]);
         Require(NativeGuard.Active,"REAL_OWNED_PERSISTENT_AND_BOOT_FILTERS");
         Require(!await Tcp(),"REAL_ALL_APP_PHYSICAL_TCP_BLOCK");Require(!await Dns(),"REAL_ALL_APP_PHYSICAL_UDP_DNS_BLOCK");
+        File.WriteAllText(Path.Combine(Root,"public-sha256"),Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(saved.PublicKey))));
         var serverKey=KeyPair();var clientKey=KeyPair();
         var server=new JsonObject{
             ["log"]=new JsonObject{["disabled"]=true},
@@ -145,6 +154,8 @@ internal static class ProductTests
         Require(await Tcp(),"REAL_EXPLICIT_OFF_PHYSICAL_TCP_RESTORED");Require(await Dns(),"REAL_EXPLICIT_OFF_PHYSICAL_UDP_DNS_RESTORED");
         Require(!UuDiscovery.Trusted(Environment.ProcessPath!),"UU_UNSIGNED_TEST_EXECUTABLE_REJECTED");
         // No IPv6 or GameViewer proof is manufactured from IPv4 loopback tests.
+        saved.Token="";saved.ConnectIntent=true;saved.RecoveryRequired=true;saved.Save();NativeGuard.Apply([]);
+        Evidence.Add("PRODUCT_RECOVERY_FIXTURE_GUARDED_WITH_ENCRYPTED_KEY=PASS");
         Evidence.Add("REAL_GAMEVIEWER_CONTINUITY=NOT_TESTED");Evidence.Add("ACTUAL_OS_REBOOT=NOT_TESTED");Evidence.Add("PHYSICAL_IPV6=NOT_TESTED");
     }
 }

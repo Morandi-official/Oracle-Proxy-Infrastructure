@@ -14,6 +14,8 @@ internal sealed class VpnRuntime : IDisposable
     private string _mode="starting",_error="";
     private long? _latency;
     private DateTimeOffset _probed;
+    private string _runningProfile="";
+    private string Profile()=>Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(_state!["tunnel"]!.ToJsonString())));
     internal async Task Initialize()
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();
@@ -35,6 +37,7 @@ internal sealed class VpnRuntime : IDisposable
                     try{await Refresh();
                         if(_secret.ConnectIntent && !_secret.RecoveryRequired){
                             if(ActivePolicy()){
+                                if(_core.Running && _runningProfile!=Profile())await _core.Stop();
                                 if(!_core.Running)await StartCore();
                                 else if(DateTimeOffset.UtcNow-_probed>TimeSpan.FromSeconds(15))await Probe();
                             }else{_latency=null;_mode="protected";}
@@ -58,7 +61,7 @@ internal sealed class VpnRuntime : IDisposable
         try{
             await _core.Start(_state!,_secret);
             NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid());
-            await Probe();
+            await Probe();_runningProfile=Profile();
         }catch{await _core.Stop();_mode="protected";throw;}
     }
     internal async Task<JsonObject> Command(JsonObject value)
@@ -118,7 +121,7 @@ internal sealed class VpnRuntime : IDisposable
             _mode="recovery";throw new IOException("RECOVERY_REQUIRED");
         }
     }
-    private static async Task EnsureTunnelGone()
+    internal static async Task EnsureTunnelGone()
     {
         for(int i=0;i<30;i++){
             if(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"))return;

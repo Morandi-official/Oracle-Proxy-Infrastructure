@@ -10,9 +10,9 @@ if((Test-Path $test) -and (Test-Path "$root/authorized") -and (Test-Path "$env:P
   for($i=0;$i -lt 30 -and !(Test-Path "$root/rescued");$i++){Start-Sleep -Seconds 1}
   if(!(Test-Path "$root/rescued")){throw 'Immediate rescue not verified; keep SYSTEM watchdog active'}
 }
-foreach($name in @('OracleProxyCandidateFixture','OracleProxyService')){
+foreach($name in @('OracleProxyCandidateFixture','OracleProxyService','OracleProxyRecovery')){
   $service=Get-Service $name -ErrorAction SilentlyContinue
   if($service){Stop-Service $name -Force -ErrorAction SilentlyContinue; & sc.exe delete $name | Out-Null}
 }
-foreach($task in @('OracleProxyCandidateWatchdog','OracleProxyCandidateRescue')){Stop-ScheduledTask $task -ErrorAction SilentlyContinue;Unregister-ScheduledTask $task -Confirm:$false -ErrorAction SilentlyContinue}
+foreach($task in @('OracleProxyCandidateWatchdog','OracleProxyCandidateRescue','OracleProxyCandidateVerifyRecovery')){Stop-ScheduledTask $task -ErrorAction SilentlyContinue;Unregister-ScheduledTask $task -Confirm:$false -ErrorAction SilentlyContinue}
 exit 0

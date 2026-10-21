@@ -25,9 +25,10 @@ internal sealed class MainForm : Form
         var buttons=new FlowLayoutPanel{AutoSize=true,Width=660,Height=60};buttons.Controls.AddRange([_connect,_disconnect]);body.Controls.Add(buttons);
         var credentials=new FlowLayoutPanel{AutoSize=true,Width=660,Height=40};credentials.Controls.AddRange([_username,_password,_login]);body.Controls.Add(credentials);
         var tools=new FlowLayoutPanel{AutoSize=true,Width=660,Height=45};
-        foreach(var (label,action) in new (string,Action)[]{("安装 / 升级服务",()=>Installer.Elevate(false)),("卸载",()=>{if(MessageBox.Show(this,"将停止 VPN 并恢复直连，再卸载系统服务。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK)Installer.Elevate(true);})}){
+        foreach(var (label,action) in new (string,Action)[]{("安装 / 升级服务",()=>Installer.Elevate(false)),("卸载",()=>{if(MessageBox.Show(this,"将恢复直连并卸载系统服务、删除本机密钥。服务器仍保留设备记录与用量，请联系管理员撤销旧设备以释放名额。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK)Installer.Elevate(true);})}){
             var b=new Button{Text=label,AutoSize=true};b.Click+=(_,_)=>{try{action();}catch{_detail.Text="操作未完成，请检查 UAC 提示或使用完整便携包。";}};tools.Controls.Add(b);}
         var refreshUu=new Button{Text="重新识别 UU",AutoSize=true};refreshUu.Click+=async(_,_)=>await Act("RefreshUu");tools.Controls.Add(refreshUu);
+        var recover=new Button{Text="恢复直连（UAC）",AutoSize=true};recover.Click+=(_,_)=>{if(MessageBox.Show(this,"将停止本产品的隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","紧急恢复",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.ElevateRecovery();}catch{_detail.Text="恢复请求未完成。";}}};tools.Controls.Add(recover);
         var logout=new Button{Text="退出账号",AutoSize=true};logout.Click+=async(_,_)=>await Act("Logout");tools.Controls.Add(logout);body.Controls.Add(tools);
         body.Controls.Add(new Label{Text="本包为集成候选版。IPv6 当前阻断；UU 实机连续性与重启验收尚未完成。",AutoSize=true,MaximumSize=new Size(650,0),ForeColor=Color.DarkOrange});
         Controls.Add(body);body.BringToFront();

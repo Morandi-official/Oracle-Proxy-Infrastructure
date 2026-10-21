@@ -14,6 +14,14 @@ internal static class Program
                 if(!Platform.IsAdmin)return 3;
                 Installer.Install(args[1]).GetAwaiter().GetResult();return 0;
             }
+            if(args.SequenceEqual(new[]{"--recovery-service"})){
+                if(!Platform.IsSystem)return 3;
+                ServiceBase.Run(new RecoveryService());return 0;
+            }
+            if(args.SequenceEqual(new[]{"--recover"})){
+                if(!Platform.IsAdmin)return 3;
+                Installer.Recover().GetAwaiter().GetResult();return 0;
+            }
             if(args.SequenceEqual(new[]{"--uninstall"})){
                 if(!Platform.IsAdmin)return 3;
                 Installer.Remove().GetAwaiter().GetResult();return 0;

@@ -15,29 +15,11 @@ foreach($item in $versions){
   if($sig.Status -ne 'Valid'){throw 'GameViewer installer signature is not trusted'}
   Write-Host "GAMEVIEWER_INSTALLER=$($item.Version);SIGNER=$($sig.SignerCertificate.Subject);STATUS=$($sig.Status)"
   $extract=Join-Path $env:RUNNER_TEMP "GameViewer-static-$($item.Version)"
-  & 'C:/Program Files/7-Zip/7z.exe' x '-tNsis' $installer "-o$extract" -y | Out-Null
-  if($LASTEXITCODE -ne 0){
-    & 'C:/Program Files/7-Zip/7z.exe' x $installer "-o$extract" -y | Out-Null
-    if($LASTEXITCODE -ne 0){throw 'Static PE extraction failed'}
-    $overlay=Join-Path $extract '[0]'
-    if(Test-Path -LiteralPath $overlay){
-      $header=[IO.File]::ReadAllBytes($overlay)
-      Write-Host "STATIC_OVERLAY_HEADER=$([BitConverter]::ToString($header[0..63]))"
-      & 'C:/Program Files/7-Zip/7z.exe' x '-tNsis' $overlay "-o$extract/overlay" -y | Out-Null
-      $global:LASTEXITCODE=0
-    }
-  }
-  $contents=@(Get-ChildItem $extract -Recurse -File)
-  Write-Host "GAMEVIEWER_ARCHIVE_BYTES=$((Get-Item $installer).Length);ITEMS=$($contents.Count)"
-  $contents | Select-Object -First 30 | ForEach-Object {Write-Host "STATIC_ARCHIVE_FILE=$($_.FullName.Substring($extract.Length+1))"}
-  foreach($archive in $contents | Where-Object Extension -in @('.7z','.zip')){
-    $nested=Join-Path $extract ('nested-'+$archive.BaseName)
-    & 'C:/Program Files/7-Zip/7z.exe' x $archive.FullName "-o$nested" -y | Out-Null
-    if($LASTEXITCODE -ne 0){throw 'Embedded archive extraction failed'}
-  }
+  python ./clients/windows/product/ci/extract_nsis_lzma2.py $installer $extract
+  if($LASTEXITCODE -ne 0){throw 'Bounded static NSIS extraction failed'}
   foreach($file in Get-ChildItem $extract -Filter '*.exe' -Recurse -File){
     $signature=Get-AuthenticodeSignature $file.FullName
-    $rows+=@{version=$item.Version;file=$file.FullName.Substring($extract.Length+1);signature=$signature.Status.ToString();publisher=if($signature.SignerCertificate){$signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false)}else{''};sha256=(Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
+    $rows+=@{version=$item.Version;file=$file.VersionInfo.OriginalFilename;product=$file.VersionInfo.ProductName;signature=$signature.Status.ToString();publisher=if($signature.SignerCertificate){$signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false)}else{''};sha256=(Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
   }
 }
 ConvertTo-Json -InputObject @($rows) -Depth 4 | Set-Content "$out/gameviewer-signatures.json"

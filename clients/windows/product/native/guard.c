@@ -9,11 +9,13 @@
 #include <sddl.h>
 #include <iphlpapi.h>
 #include <stdint.h>
+#include <wchar.h>
 #pragma comment(lib,"fwpuclnt.lib")
 #pragma comment(lib,"advapi32.lib")
 #pragma comment(lib,"iphlpapi.lib")
 #pragma comment(lib,"rpcrt4.lib")
 #define API __declspec(dllexport) DWORD __cdecl
+static DWORD stage=0;
 static const GUID provider={0x4936aef1,0x9f84,0x4291,{0x88,0x72,0x36,0x47,0x19,0x80,0x21,0xa1}};
 static const GUID sublayer={0xbb18a732,0x9015,0x4871,{0x92,0x01,0xc1,0x62,0xa1,0x40,0x77,0x92}};
 static const GUID *ale[]={&FWPM_LAYER_ALE_AUTH_CONNECT_V4,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,&FWPM_LAYER_ALE_AUTH_CONNECT_V6,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6};
@@ -32,7 +34,7 @@ static DWORD objects(HANDLE engine){
  e=FwpmSubLayerAdd0(engine,&s,NULL);return e==FWP_E_ALREADY_EXISTS?0:e;
 }
 static DWORD remove_filters(HANDLE engine){
- FWPM_FILTER_ENUM_TEMPLATE0 t={0};t.providerKey=(GUID*)&provider;t.flags=FWP_FILTER_ENUM_FLAG_INCLUDE_BOOTTIME|FWP_FILTER_ENUM_FLAG_INCLUDE_DISABLED;HANDLE iterator=NULL;
+ FWPM_FILTER_ENUM_TEMPLATE0 t={0};t.providerKey=(GUID*)&provider;t.actionMask=0xFFFFFFFF;t.flags=FWP_FILTER_ENUM_FLAG_INCLUDE_BOOTTIME|FWP_FILTER_ENUM_FLAG_INCLUDE_DISABLED;HANDLE iterator=NULL;
  DWORD e=FwpmFilterCreateEnumHandle0(engine,&t,&iterator);if(e)return e;
  for(;;){FWPM_FILTER0 **filters=NULL;UINT32 count=0;e=FwpmFilterEnum0(engine,iterator,128,&filters,&count);if(e)break;
   for(UINT32 i=0;i<count;i++){e=FwpmFilterDeleteById0(engine,filters[i]->filterId);if(e)break;}
@@ -41,7 +43,7 @@ static DWORD remove_filters(HANDLE engine){
  FwpmFilterDestroyEnumHandle0(engine,iterator);return e;
 }
 static DWORD add(HANDLE engine,const GUID *layer,BOOL at_boot,FWP_ACTION_TYPE action,UINT8 weight,FWPM_FILTER_CONDITION0 *conditions,UINT32 count){
- FWPM_FILTER0 f={0};f.providerKey=(GUID*)&provider;f.subLayerKey=sublayer;f.layerKey=*layer;f.displayData.name=L"Oracle Proxy fixed access policy";
+ stage++;FWPM_FILTER0 f={0};f.providerKey=(GUID*)&provider;f.subLayerKey=sublayer;f.layerKey=*layer;f.displayData.name=L"Oracle Proxy fixed access policy";
  f.flags=at_boot?FWPM_FILTER_FLAG_BOOTTIME:FWPM_FILTER_FLAG_PERSISTENT;
  f.weight.type=FWP_UINT8;f.weight.uint8=weight;f.action.type=action;f.numFilterConditions=count;f.filterCondition=conditions;
  return FwpmFilterAdd0(engine,&f,NULL,NULL);
@@ -61,25 +63,59 @@ static DWORD permit_app(HANDLE engine,const wchar_t *path,BOOL system){
  for(int i=0;i<4&&!e;i++)e=add(engine,ale[i],FALSE,FWP_ACTION_PERMIT,240,c,count);
  if(sd)LocalFree(sd);FwpmFreeMemory0((void**)&appid);return e;
 }
+static DWORD dhcp_rule(HANDLE engine,const GUID *layer,BOOL at_boot,int index,FWPM_FILTER_CONDITION0 *base){
+ FWPM_FILTER_CONDITION0 c[5]={0};CopyMemory(c,base,3*sizeof(*base));
+ if(at_boot){
+  // Before BFE loads the persistent identity rules, permit only the
+  // broadcast/multicast DHCP bootstrap destinations for outbound packets.
+  if(index==0){c[3]=number(&FWPM_CONDITION_IP_REMOTE_ADDRESS,FWP_UINT32,0xffffffff);return add(engine,layer,TRUE,FWP_ACTION_PERMIT,210,c,4);}
+  if(index==2){
+   FWP_BYTE_ARRAY16 target={{0xff,0x02,0,0,0,0,0,0,0,0,0,0,0,1,0,2}};
+   c[3].fieldKey=FWPM_CONDITION_IP_REMOTE_ADDRESS;c[3].matchType=FWP_MATCH_EQUAL;c[3].conditionValue.type=FWP_BYTE_ARRAY16_TYPE;c[3].conditionValue.byteArray16=&target;
+   DWORD e=add(engine,layer,TRUE,FWP_ACTION_PERMIT,210,c,4);if(e)return e;
+   target.byteArray16[1]=0x05;target.byteArray16[15]=3;return add(engine,layer,TRUE,FWP_ACTION_PERMIT,210,c,4);
+  }
+  return add(engine,layer,TRUE,FWP_ACTION_PERMIT,210,c,3);
+ }
+ // Low numbered UDP ports are not privileged on Windows. Port-only live
+ // exceptions would let an ordinary app use UDP/68 as an escape channel.
+ wchar_t host[MAX_PATH];UINT length=GetSystemDirectoryW(host,MAX_PATH);
+ if(!length||length>MAX_PATH-15)return ERROR_INVALID_NAME;
+ wcscat_s(host,MAX_PATH,L"\\svchost.exe");
+ FWP_BYTE_BLOB *appid=NULL;DWORD e=FwpmGetAppIdFromFileName0(host,&appid);if(e)return e;
+ c[3].fieldKey=FWPM_CONDITION_ALE_APP_ID;c[3].matchType=FWP_MATCH_EQUAL;c[3].conditionValue.type=FWP_BYTE_BLOB_TYPE;c[3].conditionValue.byteBlob=appid;
+ PSECURITY_DESCRIPTOR sd=NULL;FWP_BYTE_BLOB blob={0};
+ if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(A;;CC;;;SY)(A;;CC;;;LS)(A;;CC;;;NS)",SDDL_REVISION_1,&sd,&blob.size)){FwpmFreeMemory0((void**)&appid);return GetLastError();}
+ blob.data=(UINT8*)sd;c[4].fieldKey=FWPM_CONDITION_ALE_USER_ID;c[4].matchType=FWP_MATCH_EQUAL;c[4].conditionValue.type=FWP_SECURITY_DESCRIPTOR_TYPE;c[4].conditionValue.sd=&blob;
+ e=add(engine,layer,FALSE,FWP_ACTION_PERMIT,210,c,5);
+ LocalFree(sd);FwpmFreeMemory0((void**)&appid);return e;
+}
 static DWORD necessities(HANDLE engine,const GUID *layer,BOOL at_boot,int index){
  DWORD e=0;FWPM_FILTER_CONDITION0 c[4];
- // DHCP client ports only. No general DNS/HTTPS/system-service bypass.
  c[0]=number(&FWPM_CONDITION_IP_PROTOCOL,FWP_UINT8,IPPROTO_UDP);
  c[1]=number(&FWPM_CONDITION_IP_LOCAL_PORT,FWP_UINT16,index<2?68:546);
  c[2]=number(&FWPM_CONDITION_IP_REMOTE_PORT,FWP_UINT16,index<2?67:547);
- e=add(engine,layer,at_boot,FWP_ACTION_PERMIT,210,c,3);if(e)return e;
+ e=dhcp_rule(engine,layer,at_boot,index,c);if(e)return e;
  if(index>=2){
   c[0]=number(&FWPM_CONDITION_IP_PROTOCOL,FWP_UINT8,IPPROTO_ICMPV6);
   c[2]=number(&FWPM_CONDITION_ICMP_CODE,FWP_UINT16,0);
   for(UINT32 type=133;type<=137;type++){
    if(type==133&&(index%2)==1)continue;if((type==134||type==137)&&(index%2)==0)continue;
-   c[1]=number(&FWPM_CONDITION_ICMP_TYPE,FWP_UINT16,type);
-   e=add(engine,layer,at_boot,FWP_ACTION_PERMIT,210,c,3);if(e)return e;
+   c[1]=number(&FWPM_CONDITION_ICMP_TYPE,FWP_UINT16,type);UINT32 count=3;
+   FWP_V6_ADDR_AND_MASK local={{0xfe,0x80},10};FWP_BYTE_ARRAY16 router={{0xff,0x02,0,0,0,0,0,0,0,0,0,0,0,0,0,2}};
+   if(type==133||type==134||type==137){
+    ZeroMemory(&c[3],sizeof(c[3]));c[3].fieldKey=FWPM_CONDITION_IP_REMOTE_ADDRESS;c[3].matchType=FWP_MATCH_EQUAL;count=4;
+    if(type==133){c[3].conditionValue.type=FWP_BYTE_ARRAY16_TYPE;c[3].conditionValue.byteArray16=&router;}
+    else{c[3].conditionValue.type=FWP_V6_ADDR_MASK;c[3].conditionValue.v6AddrMask=&local;}
+   }
+   e=add(engine,layer,at_boot,FWP_ACTION_PERMIT,210,c,count);if(e)return e;
   }
  }
  return 0;
 }
+API OpGuardStage(void){return stage;}
 API OpGuardApply(const wchar_t *service_path,const wchar_t *core_path,const wchar_t *uu_paths,UINT64 tun_luid){
+ stage=0;
  if(!system_only())return ERROR_ACCESS_DENIED;
  HANDLE engine=NULL;DWORD e=open_engine(&engine);if(e)return e;
  e=FwpmTransactionBegin0(engine,0);if(e){FwpmEngineClose0(engine);return e;}
@@ -110,7 +146,10 @@ API OpGuardClear(void){
 }
 API OpGuardCount(DWORD *persistent,DWORD *boot_count){
  HANDLE engine=NULL,iterator=NULL;DWORD e=open_engine(&engine);if(e)return e;*persistent=0;*boot_count=0;
- FWPM_FILTER_ENUM_TEMPLATE0 t={0};t.providerKey=(GUID*)&provider;t.flags=FWP_FILTER_ENUM_FLAG_INCLUDE_BOOTTIME|FWP_FILTER_ENUM_FLAG_INCLUDE_DISABLED;e=FwpmFilterCreateEnumHandle0(engine,&t,&iterator);
+ FWPM_PROVIDER0 *existing=NULL;e=FwpmProviderGetByKey0(engine,&provider,&existing);
+ if(e==FWP_E_PROVIDER_NOT_FOUND){FwpmEngineClose0(engine);return 0;}
+ if(existing)FwpmFreeMemory0((void**)&existing);if(e){FwpmEngineClose0(engine);return e;}
+ FWPM_FILTER_ENUM_TEMPLATE0 t={0};t.providerKey=(GUID*)&provider;t.actionMask=0xFFFFFFFF;t.flags=FWP_FILTER_ENUM_FLAG_INCLUDE_BOOTTIME|FWP_FILTER_ENUM_FLAG_INCLUDE_DISABLED;e=FwpmFilterCreateEnumHandle0(engine,&t,&iterator);
  if(!e){for(;;){FWPM_FILTER0 **f=NULL;UINT32 count=0;e=FwpmFilterEnum0(engine,iterator,128,&f,&count);if(e)break;
   for(UINT32 i=0;i<count;i++){if(f[i]->flags&FWPM_FILTER_FLAG_PERSISTENT)(*persistent)++;if(f[i]->flags&FWPM_FILTER_FLAG_BOOTTIME)(*boot_count)++;}
   if(f)FwpmFreeMemory0((void**)&f);if(count<128)break;

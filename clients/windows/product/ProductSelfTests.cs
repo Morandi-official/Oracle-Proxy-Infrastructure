@@ -12,7 +12,7 @@ internal static class ProductSelfTests
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:51820",["server_public_key"]=Convert.ToBase64String(pub),["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
         var secret=new DurableState{PrivateKey=Convert.ToBase64String(key),UuPaths=[@"E:\Different\GameViewer\GameViewer.exe"]};
         var config=CoreConfig.Build(state,secret,"synthetic-only");
-        if(config["route"]?["final"]?.GetValue<string>()!="oracle-wireguard" || config["route"]?["rules"]?[0]?["process_path"]?[0]?.GetValue<string>()!=secret.UuPaths[0])return false;
+        if(config["route"]?["final"]?.GetValue<string>()!="oracle-wireguard" || !System.Text.RegularExpressions.Regex.IsMatch(secret.UuPaths[0].ToLowerInvariant(),config["route"]!["rules"]![0]!["process_path_regex"]![0]!.GetValue<string>()))return false;
         if(config["endpoints"]?[0]?["peers"]?[0]?["port"]?.GetValue<int>()!=51820)return false;
         state["tunnel"]!["endpoint"]="evil.invalid:443";
         try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}

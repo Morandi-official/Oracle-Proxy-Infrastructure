@@ -56,6 +56,14 @@ $denied=$false
 try{[Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes("$env:ProgramData/OracleProxy/state.dpapi"),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser) | Out-Null}catch{$denied=$true}
 if(!$denied){throw 'Runner identity decrypted SYSTEM key storage'}
 Write-Host 'REAL_OTHER_WINDOWS_IDENTITY_CANNOT_UNSEAL_SYSTEM_DPAPI=PASS'
+$recovery=Start-Process $exe -ArgumentList '--recover' -Wait -PassThru
+if($recovery.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};throw 'Public fixed-action SYSTEM recovery failed'}
+$verification=New-ScheduledTaskAction -Execute $test -Argument '--verify-recovered'
+Register-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery' -Action $verification -User SYSTEM -RunLevel Highest -Force | Out-Null
+Start-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery'
+for($i=0;$i -lt 30 -and !(Test-Path "$root/recovery-verified");$i++){Start-Sleep -Milliseconds 250}
+if(!(Test-Path "$root/recovery-verified") -or (Get-Content -Raw "$root/recovery-verified") -ne 'KEY_AND_SAFE_OFF_PRESERVED'){throw 'Recovery lost encrypted key or failed to commit safe Off'}
+Write-Host 'REAL_PRODUCT_UAC_SYSTEM_RECOVERY_PRESERVES_KEY_AND_COMMITS_SAFE_OFF=PASS' 
 Remove-Item "$env:ProgramData/OracleProxy/state.dpapi"
 $oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash
 $bad=(Resolve-Path './dist/bad-upgrade/OracleProxy.exe').Path

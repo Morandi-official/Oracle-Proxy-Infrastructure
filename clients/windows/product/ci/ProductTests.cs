@@ -21,8 +21,12 @@ internal static class ProductTests
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint Clear();
     private static readonly List<string> Evidence=[];
     private static void Require(bool condition,string message){if(!condition)throw new IOException(message);Evidence.Add(message+"=PASS");}
-    internal static int Main(string[] args)
+    [STAThread]internal static int Main(string[] args)
     {
+        if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
+        if(args.SequenceEqual(new[]{"--native-denial"})){
+            IntPtr module=NativeLibrary.Load(Platform.Guard);return Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))()==5?0:1;
+        }
         if(args.SequenceEqual(new[]{"--nonowner-pipe"})){
             try{ControlPipe.Send("Status").GetAwaiter().GetResult();return 1;}
             catch(UnauthorizedAccessException){return 0;}catch{return 2;}
@@ -39,6 +43,16 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--rescue"})){Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
         return 2;
+    }
+    private static int Ui()
+    {
+        Application.EnableVisualStyles();using var form=new MainForm();
+        var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
+        var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
+        form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
+        using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,form.ClientRectangle);Directory.CreateDirectory("dist/review");image.Save("dist/review/windows-client-synthetic.png");}
+        snapshot["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
+        return 0;
     }
     private static async Task<int> RoguePipe()
     {

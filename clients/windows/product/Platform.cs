@@ -12,7 +12,7 @@ internal static class Platform
     internal const string Pipe = "OracleProxy.Control.v1";
     internal static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"OracleProxy");
     internal static string StateRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"OracleProxy");
-    internal static string Exe => Path.Combine(Root,"OracleProxy.exe");
+    internal static string Exe => Path.Combine(Root,"OracleProxy.Service.exe");
     internal static string Core => Path.Combine(Root,"OracleProxy.Core.exe");
     internal static string Guard => Path.Combine(Root,"OracleProxy.Guard.dll");
     internal static bool IsSystem => WindowsIdentity.GetCurrent().User?.IsWellKnown(WellKnownSidType.LocalSystemSid)==true && Process.GetCurrentProcess().SessionId==0;
@@ -61,6 +61,14 @@ internal static class Platform
         if(File.Exists(pending) && new FileInfo(pending).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");
         using(var f=new FileStream(pending,FileMode.Create,FileAccess.Write,FileShare.None)){f.Write(content);f.Flush(true);}
         File.Move(pending,path,true);
+    }
+    internal static void RecordFailure(string stage,Exception error)
+    {
+        try{
+            VerifyProtected(Root);
+            string code=error.Message.Length<=80 && error.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?error.Message:error.HResult.ToString("X8");
+            WriteAtomic(Path.Combine(Root,"diagnostics.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,stage,code,category=error.GetType().Name,at=DateTimeOffset.UtcNow.ToUnixTimeSeconds()}));
+        }catch{}
     }
     internal static int FixedCommand(string exe,params string[] arguments)
     {

@@ -27,6 +27,10 @@ internal sealed class VpnRuntime : IDisposable
         while(!cancel.IsCancellationRequested){
             await _gate.WaitAsync(cancel);
             try{
+                if(_secret.ConnectIntent && !NativeGuard.Active){
+                    _secret.RecoveryRequired=true;_secret.Save();_mode="recovery";_error="WFP_POLICY_LOST";
+                    await _core.Stop();NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());
+                }
                 if(_secret.Token.Length>0){
                     try{await Refresh();
                         if(_secret.ConnectIntent && !_secret.RecoveryRequired){

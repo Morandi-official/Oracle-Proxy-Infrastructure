@@ -102,6 +102,10 @@ API OpGuardApply(const wchar_t *service_path,const wchar_t *core_path,const wcha
 API OpGuardClear(void){
  if(!system_only())return ERROR_ACCESS_DENIED;
  HANDLE engine=NULL;DWORD e=open_engine(&engine);if(e)return e;
+ FWPM_PROVIDER0 *existing=NULL;e=FwpmProviderGetByKey0(engine,&provider,&existing);
+ if(e==FWP_E_PROVIDER_NOT_FOUND){FwpmEngineClose0(engine);return 0;}
+ if(existing)FwpmFreeMemory0((void**)&existing);
+ if(e){FwpmEngineClose0(engine);return e;}
  e=FwpmTransactionBegin0(engine,0);if(!e){e=remove_filters(engine);if(!e)e=FwpmTransactionCommit0(engine);else FwpmTransactionAbort0(engine);}FwpmEngineClose0(engine);return e;
 }
 API OpGuardCount(DWORD *persistent,DWORD *boot_count){

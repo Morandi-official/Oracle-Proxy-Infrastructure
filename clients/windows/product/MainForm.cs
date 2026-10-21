@@ -40,10 +40,22 @@ internal sealed class MainForm : Form
         try{
             var state=await ControlPipe.Send(command,command=="Login"?_username.Text:null,command=="Login"?_password.Text:null);
             if(command=="Login")_password.Clear();
+            Display(state);
+        }catch{
+            _mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";
+            try{string path=Path.Combine(Platform.Root,"diagnostics.json");if(new FileInfo(path).Length<=4096){var d=JsonNode.Parse(File.ReadAllText(path));_detail.Text+=$" 诊断：{d?["stage"]} / {d?["code"]}。";}}catch{}
+        }
+        finally{_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;}
+    }
+    internal int UsageProgress=>_progress.Value;
+    internal bool UsageFresh=>_progress.Enabled;
+    internal void Display(JsonObject state)
+    {
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
             _mode.Text=mode switch{"connected"=>guard?"已连接 Oracle":"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;
-            _detail.Text=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?"防泄漏规则保持启用。意外中断时不会主动恢复普通应用直连。":"点击连接前，请先登录管理员分配的账号。";
+            string policy=state["account"]?["status"]?.GetValue<string>() ?? "";
+            _detail.Text=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?(policy is "disabled" or "expired" or "quota" or "server_budget" or "unavailable"?$"账号状态：{PolicyName(policy)}。防泄漏保护保留。":"防泄漏规则保持启用。意外中断时不会主动恢复普通应用直连。"):"点击连接前，请先登录管理员分配的账号。";
             var account=state["account"]?.AsObject();
             if(account is not null){
                 long used=account["used_bytes"]!.GetValue<long>();long? limit=account["limit_bytes"]?.GetValue<long>();
@@ -53,10 +65,11 @@ internal sealed class MainForm : Form
                 _expiry.Text=$"到期：{(expires is null?"长期":DateTimeOffset.FromUnixTimeSeconds(expires.Value).ToLocalTime().ToString("yyyy-MM-dd HH:mm"))}   ·   设备 {account["device_count"]}/{account["device_limit"]}   ·   UTC 账期 {state["period"]}";
             }else{_usage.Text="登录后显示本月用量与限额";_progress.Value=0;_expiry.Text="账号由管理员创建，不开放自行注册。";}
             long? latency=state["latency_ms"]?.GetValue<long>();long? at=state["received_at"]?.GetValue<long>();
+            bool fresh=at is long received && DateTimeOffset.UtcNow.ToUnixTimeSeconds()-received<=20;_progress.Enabled=fresh;
+            if(!fresh && account is not null)_detail.Text+=" 用量未刷新，显示的是上次读取值。";
             _telemetry.Text=$"隧道 HTTP 延迟：{(latency is null?"—":latency+" ms")} · 已验证 UU 程序：{state["uu_verified_programs"]} · 用量更新时间：{(at is null?"—":DateTimeOffset.FromUnixTimeSeconds(at.Value).ToLocalTime().ToString("HH:mm:ss"))}";
-        }catch{_mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";}
-        finally{_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;}
     }
+    private static string PolicyName(string status)=>status switch{"disabled"=>"已停用","expired"=>"已到期","quota"=>"配额已耗尽","server_budget"=>"服务器出站额度保护中",_=>"待核对"};
     private static string FormatBytes(long bytes)=>$"{bytes/(double)(1L<<30):0.00} GiB（{bytes:N0} B）";
     private static string Message(string code)=>code switch{
         "INVALID_CREDENTIALS"=>"账号或密码错误。", "DEVICE_LIMIT_REACHED"=>"设备数量已达上限，请联系管理员撤销旧设备。", "RATE_LIMITED"=>"登录尝试过于频繁，请稍后重试。",

@@ -5,7 +5,7 @@ using Microsoft.Win32;
 namespace OracleProxy.Product;
 internal static class Installer
 {
-    private static readonly string[] Files=["OracleProxy.exe","OracleProxy.Core.exe","OracleProxy.Guard.dll"];
+    private static readonly string[] Files=["OracleProxy.Service.exe","OracleProxy.Core.exe","OracleProxy.Guard.dll"];
     private static string Image=>"\""+Platform.Exe+"\" --service";
     private static void VerifyService()
     {
@@ -38,7 +38,7 @@ internal static class Installer
             foreach(string name in Files)File.Copy(Path.Combine(Platform.Root,name),Path.Combine(previous,name),true);
         }
         try{
-            foreach(string name in Files)File.Copy(Path.Combine(source,name),Path.Combine(Platform.Root,name),true);
+            foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"OracleProxy.exe":name),Path.Combine(Platform.Root,name),true);
             if(!existing)Platform.WriteAtomic(Path.Combine(Platform.Root,"owner.sid"),System.Text.Encoding.UTF8.GetBytes(owner));
             Platform.WriteAtomic(Path.Combine(Platform.Root,"product.marker"),System.Text.Encoding.UTF8.GetBytes("OracleProxy.Product.v1"));
             if(!existing)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Oracle Proxy VPN");
@@ -63,7 +63,7 @@ internal static class Installer
         if(status["ok"]?.GetValue<bool>()!=true || status["mode"]?.GetValue<string>()!="disconnected")throw new IOException("SAFE_DISCONNECT_REQUIRED");
         Stop();Sc("delete",Platform.Service);
         // Fixed allowlist only: leave unexpected files for manual inspection.
-        foreach(string name in Files.Concat(new[]{"owner.sid","product.marker","owner.sid.pending","product.marker.pending"})){
+        foreach(string name in Files.Concat(new[]{"owner.sid","product.marker","owner.sid.pending","product.marker.pending","diagnostics.json","diagnostics.json.pending"})){
             string path=Path.Combine(Platform.Root,name);if(File.Exists(path)){if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");File.Delete(path);}}
         string previous=Path.Combine(Platform.Root,"previous");if(Directory.Exists(previous)){Platform.VerifyProtected(previous);foreach(string name in Files)File.Delete(Path.Combine(previous,name));if(!Directory.EnumerateFileSystemEntries(previous).Any())Directory.Delete(previous);}
         Platform.VerifyProtected(Platform.StateRoot);

@@ -6,9 +6,13 @@ $exe=(Resolve-Path './dist/product/OracleProxy.exe').Path
 $test=(Resolve-Path './dist/product-tests/OracleProxy.Product.Tests.exe').Path
 $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $install=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
-if($install.ExitCode -ne 0){throw 'Actual product setup failed'}
+if($install.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};Get-Service OracleProxyService -ErrorAction SilentlyContinue | Select-Object Status,Name;throw 'Actual product setup failed'}
 & $test --owner-status
 if($LASTEXITCODE -ne 0){throw 'SCM-authenticated owner pipe failed'}
+& $test --native-denial
+if($LASTEXITCODE -ne 0){throw 'Native policy mutation admitted non-SYSTEM caller'}
+& $test --ui-self-test
+if($LASTEXITCODE -ne 0){throw 'Client usage progress/staleness render failed'}
 & $test --malformed-pipe
 if($LASTEXITCODE -ne 0){throw 'Malformed/arbitrary pipe requests were not rejected'}
 Stop-Service OracleProxyService
@@ -53,11 +57,11 @@ try{[Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes("$e
 if(!$denied){throw 'Runner identity decrypted SYSTEM key storage'}
 Write-Host 'REAL_OTHER_WINDOWS_IDENTITY_CANNOT_UNSEAL_SYSTEM_DPAPI=PASS'
 Remove-Item "$env:ProgramData/OracleProxy/state.dpapi"
-$oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.exe").Hash
+$oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash
 $bad=(Resolve-Path './dist/bad-upgrade/OracleProxy.exe').Path
 $upgrade=Start-Process $bad -ArgumentList @('--install',$owner) -Wait -PassThru
 if($upgrade.ExitCode -eq 0){throw 'Deliberate bad startup unexpectedly installed'}
-if((Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.exe").Hash -ne $oldHash){throw 'Automatic rollback did not restore the previous executable'}
+if((Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash -ne $oldHash){throw 'Automatic rollback did not restore the previous executable'}
 & $test --owner-status
 if($LASTEXITCODE -ne 0){throw 'Previous service did not recover after rollback'}
 Write-Host 'REAL_BAD_UPGRADE_AUTOMATIC_BINARY_AND_SERVICE_ROLLBACK=PASS' 

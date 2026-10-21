@@ -16,7 +16,7 @@ internal sealed class VpnService : ServiceBase
                 await Task.WhenAny(tasks);
                 if(!_cancel.IsCancellationRequested)Environment.Exit(3);
             }catch(OperationCanceledException)when(_cancel.IsCancellationRequested){}
-            catch{Environment.Exit(3);} // SCM recovery; no raw exception/secret logs.
+            catch(Exception error){Platform.RecordFailure("service",error);Environment.Exit(3);} // SCM recovery; no raw exception/secret logs.
         });
     }
     protected override void OnStop(){_cancel.Cancel();try{_worker?.Wait(TimeSpan.FromSeconds(3));}catch{} _runtime?.Dispose();}

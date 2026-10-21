@@ -68,7 +68,7 @@ internal static class UuDiscovery
             }
             using var certificate=new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
             string publisher=certificate.GetNameInfo(X509NameType.SimpleName,false);
-            if(publisher is not ("NetEase(Hangzhou) Network Co. Ltd." or "NetEase (Hangzhou) Network Co., Ltd." or "Hangzhou NetEase Leihuo Technology Co., Ltd."))return false;
+            if(publisher is not ("NetEase (Hangzhou) Network Co., Ltd" or "NetEase(Hangzhou) Network Co. Ltd." or "NetEase (Hangzhou) Network Co., Ltd." or "Hangzhou NetEase Leihuo Technology Co., Ltd."))return false;
             return VerifySignature(path);
         }catch{return false;}
     }

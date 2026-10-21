@@ -60,7 +60,7 @@ internal sealed class VpnRuntime : IDisposable
         _mode="connecting";
         try{
             await _core.Start(_state!,_secret);
-            NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid());
+            NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);
             await Probe();_runningProfile=Profile();
         }catch{await _core.Stop();_mode="protected";throw;}
     }

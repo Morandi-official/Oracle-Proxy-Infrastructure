@@ -18,7 +18,7 @@ internal static class ProductTests
 {
     internal const string Name="OracleProxyCandidateFixture";
     internal static string Root=>Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),Name);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl,CharSet=CharSet.Unicode)]private delegate uint Apply(string service,string core,string uu,ulong luid);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl,CharSet=CharSet.Unicode)]private delegate uint Apply(string service,string core,string uu,ulong luid,uint corePid);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint Clear();
     private static readonly List<string> Evidence=[];
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,int> CoreEvents=new();
@@ -180,7 +180,7 @@ internal static class ProductTests
             exit=await Launch(server);
             Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
             client=await Launch(config);
-            ulong luid=NativeGuard.TunLuid();NativeGuard.Apply([],luid);
+            ulong luid=NativeGuard.TunLuid();NativeGuard.Apply([],luid,(uint)client.Id);
             Require(NativeGuard.TunPermitted,"REAL_CURRENT_TUN_DYNAMIC_SESSION_PERMIT_AUDITED");
             bool tunneled=await Tcp();
             if(!tunneled){

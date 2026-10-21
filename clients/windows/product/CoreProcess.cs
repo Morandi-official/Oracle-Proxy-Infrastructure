@@ -10,6 +10,7 @@ internal sealed class CoreProcess : IDisposable
     private readonly CancellationTokenSource _stop=new();
     private IntPtr _job;
     private string _probeSecret="";
+    internal uint Pid=>Running?(uint)_process!.Id:0;
     internal bool Running=>_process is not null && !_process.HasExited;
     internal async Task Start(JsonObject state,DurableState secret)
     {

@@ -17,7 +17,7 @@
 #define API __declspec(dllexport) DWORD __cdecl
 static DWORD stage=0;
 static SRWLOCK policy_lock=SRWLOCK_INIT;
-static HANDLE tun_engine=NULL;
+static HANDLE tun_engine=NULL,tun_process=NULL;
 static UINT64 tun_value=0,tun_filters[8]={0};
 static const GUID provider={0x4936aef1,0x9f84,0x4291,{0x88,0x72,0x36,0x47,0x19,0x80,0x21,0xa1}};
 static const GUID sublayer={0xbb18a732,0x9015,0x4871,{0x92,0x01,0xc1,0x62,0xa1,0x40,0x77,0x92}};
@@ -57,11 +57,20 @@ static DWORD enumerate_owned(HANDLE engine,BOOL remove,DWORD *persistent,DWORD *
  return 0;
 }
 static DWORD remove_filters(HANDLE engine){return enumerate_owned(engine,TRUE,NULL,NULL);}
-static void close_tun(void){if(tun_engine)FwpmEngineClose0(tun_engine);tun_engine=NULL;tun_value=0;ZeroMemory(tun_filters,sizeof(tun_filters));}
-static DWORD live_tun(UINT64 value){
- NET_LUID actual={0};DWORD e=ConvertInterfaceAliasToLuid(L"OracleProxy",&actual);if(e||actual.Value!=value)return ERROR_INVALID_DATA;
+static void close_tun(void){if(tun_process)CloseHandle(tun_process);tun_process=NULL;if(tun_engine)FwpmEngineClose0(tun_engine);tun_engine=NULL;tun_value=0;ZeroMemory(tun_filters,sizeof(tun_filters));}
+static DWORD live_tun(UINT64 value,const wchar_t *core_path,DWORD core_pid){
+ if(!core_pid)return ERROR_INVALID_PARAMETER;
+ tun_process=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,core_pid);
+ if(!tun_process)return GetLastError();
+ wchar_t image[32768];DWORD length=32768;HANDLE token=NULL;BYTE user[256];DWORD needed=0;PSID system_sid=NULL;DWORD session_id=1;
+ BOOL valid=QueryFullProcessImageNameW(tun_process,0,image,&length)&&_wcsicmp(image,core_path)==0&&ProcessIdToSessionId(core_pid,&session_id)&&session_id==0&&OpenProcessToken(tun_process,TOKEN_QUERY,&token);
+ if(valid)valid=GetTokenInformation(token,TokenUser,user,sizeof(user),&needed)&&ConvertStringSidToSidW(L"S-1-5-18",&system_sid)&&EqualSid(((TOKEN_USER*)user)->User.Sid,system_sid);
+ if(system_sid)LocalFree(system_sid);if(token)CloseHandle(token);
+ if(!valid||WaitForSingleObject(tun_process,0)!=WAIT_TIMEOUT){close_tun();return ERROR_ACCESS_DENIED;}
+
+ NET_LUID actual={0};DWORD e=ConvertInterfaceAliasToLuid(L"OracleProxy",&actual);if(e||actual.Value!=value){close_tun();return ERROR_INVALID_DATA;}
  FWPM_SESSION0 session={0};session.displayData.name=L"Oracle Proxy live tunnel lease";session.flags=FWPM_SESSION_FLAG_DYNAMIC;
- e=FwpmEngineOpen0(NULL,RPC_C_AUTHN_WINNT,NULL,&session,&tun_engine);if(e)return e;
+ e=FwpmEngineOpen0(NULL,RPC_C_AUTHN_WINNT,NULL,&session,&tun_engine);if(e){close_tun();return e;}
  e=FwpmTransactionBegin0(tun_engine,0);
  if(!e){
   FWPM_FILTER_CONDITION0 condition={0};condition.matchType=FWP_MATCH_EQUAL;condition.conditionValue.type=FWP_UINT64;condition.conditionValue.uint64=&value;
@@ -150,7 +159,7 @@ static DWORD necessities(HANDLE engine,const GUID *layer,BOOL at_boot,int index)
  return 0;
 }
 API OpGuardStage(void){return stage;}
-static DWORD apply_internal(const wchar_t *service_path,const wchar_t *core_path,const wchar_t *uu_paths,UINT64 tun_luid){
+static DWORD apply_internal(const wchar_t *service_path,const wchar_t *core_path,const wchar_t *uu_paths,UINT64 tun_luid,DWORD core_pid){
  stage=0;
  if(!system_only())return ERROR_ACCESS_DENIED;
  close_tun();
@@ -168,14 +177,14 @@ static DWORD apply_internal(const wchar_t *service_path,const wchar_t *core_path
  if(!e)e=permit_app(engine,service_path,TRUE);if(!e)e=permit_app(engine,core_path,TRUE);
  if(uu_paths)for(const wchar_t *p=uu_paths;*p&&!e;p+=lstrlenW(p)+1)e=permit_app(engine,p,FALSE);
  if(!e)e=FwpmTransactionCommit0(engine);else FwpmTransactionAbort0(engine);
- FwpmEngineClose0(engine);if(!e&&tun_luid)e=live_tun(tun_luid);return e;
+ FwpmEngineClose0(engine);if(!e&&tun_luid)e=live_tun(tun_luid,core_path,core_pid);return e;
 }
-API OpGuardApply(const wchar_t *service_path,const wchar_t *core_path,const wchar_t *uu_paths,UINT64 value){AcquireSRWLockExclusive(&policy_lock);DWORD e=apply_internal(service_path,core_path,uu_paths,value);ReleaseSRWLockExclusive(&policy_lock);return e;}
+API OpGuardApply(const wchar_t *service_path,const wchar_t *core_path,const wchar_t *uu_paths,UINT64 value,DWORD core_pid){AcquireSRWLockExclusive(&policy_lock);DWORD e=apply_internal(service_path,core_path,uu_paths,value,core_pid);ReleaseSRWLockExclusive(&policy_lock);return e;}
 API OpGuardSuspendTun(void){if(!system_only())return ERROR_ACCESS_DENIED;AcquireSRWLockExclusive(&policy_lock);close_tun();ReleaseSRWLockExclusive(&policy_lock);return 0;}
 API OpGuardTunReady(void){
- AcquireSRWLockShared(&policy_lock);NET_LUID actual={0};BOOL ok=tun_engine&&ConvertInterfaceAliasToLuid(L"OracleProxy",&actual)==0&&actual.Value==tun_value;
+ AcquireSRWLockExclusive(&policy_lock);NET_LUID actual={0};BOOL ok=tun_engine&&tun_process&&WaitForSingleObject(tun_process,0)==WAIT_TIMEOUT&&ConvertInterfaceAliasToLuid(L"OracleProxy",&actual)==0&&actual.Value==tun_value;
  for(int i=0;i<8&&ok;i++){FWPM_FILTER0 *filter=NULL;ok=FwpmFilterGetById0(tun_engine,tun_filters[i],&filter)==0;if(filter)FwpmFreeMemory0((void**)&filter);}
- ReleaseSRWLockShared(&policy_lock);return ok?1:0;
+ if(!ok)close_tun();ReleaseSRWLockExclusive(&policy_lock);return ok?1:0;
 }
 static DWORD clear_internal(void){
  if(!system_only())return ERROR_ACCESS_DENIED;

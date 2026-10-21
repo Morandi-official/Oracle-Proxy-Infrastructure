@@ -3,7 +3,7 @@ namespace OracleProxy.Product;
 internal static class NativeGuard
 {
     private static IntPtr _module;
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl,CharSet=CharSet.Unicode)]private delegate uint ApplyDelegate(string service,string core,string uu,ulong luid);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl,CharSet=CharSet.Unicode)]private delegate uint ApplyDelegate(string service,string core,string uu,ulong luid,uint corePid);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint ClearDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint CountDelegate(out uint persistent,out uint boot);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint LuidDelegate(out ulong value);
@@ -13,10 +13,10 @@ internal static class NativeGuard
         if(_module==IntPtr.Zero){Platform.VerifyProtected(Platform.Root);Platform.VerifyBundle(Platform.Root);_module=NativeLibrary.Load(Platform.Guard);}
         return Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(_module,name));
     }
-    internal static void Apply(string[] uu,ulong luid=0)
+    internal static void Apply(string[] uu,ulong luid=0,uint corePid=0)
     {
         foreach(string path in uu)if(!UuDiscovery.Trusted(path))throw new IOException("UU_SIGNATURE_OR_DIRECTORY_CHANGED");
-        uint result=Function<ApplyDelegate>("OpGuardApply")(Platform.Exe,Platform.Core,string.Join('\0',uu)+"\0\0",luid);
+        uint result=Function<ApplyDelegate>("OpGuardApply")(Platform.Exe,Platform.Core,string.Join('\0',uu)+"\0\0",luid,corePid);
         if(result!=0)throw new IOException("WFP_APPLY_"+result+"_S"+Function<ClearDelegate>("OpGuardStage")());
         if(!Active)throw new IOException("WFP_AUDIT_FAILED");
     }

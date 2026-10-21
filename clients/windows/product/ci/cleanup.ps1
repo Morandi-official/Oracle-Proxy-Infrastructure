@@ -16,11 +16,6 @@ foreach($name in @('OracleProxyCandidateFixture','OracleProxyService','OraclePro
   if($service){Stop-Service $name -Force -ErrorAction SilentlyContinue; & sc.exe delete $name | Out-Null}
 }
 Remove-CIUuNetworkFixture
-$probeRule=Get-NetFirewallRule -DisplayName OracleProxyCandidateInitialUdp -ErrorAction SilentlyContinue
-if($probeRule -and $probeRule.Description -eq 'Oracle Proxy disposable initial handshake loss'){
-  $application=$probeRule | Get-NetFirewallApplicationFilter
-  if($application.Program -eq "$env:ProgramFiles\OracleProxy\OracleProxy.Core.exe"){$probeRule | Remove-NetFirewallRule}
-}
 foreach($task in @('OracleProxyCandidateWatchdog','OracleProxyCandidateRescue','OracleProxyCandidateVerifyRecovery')){Stop-ScheduledTask $task -ErrorAction SilentlyContinue;Unregister-ScheduledTask $task -Confirm:$false -ErrorAction SilentlyContinue}
 if(Test-Path "$root/owner-created"){Remove-LocalUser OracleProxyOwner -ErrorAction SilentlyContinue;Remove-Item "$root/owner-created" -ErrorAction SilentlyContinue}
 exit 0

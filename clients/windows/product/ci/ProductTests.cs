@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 // Non-shipped disposable Windows SCM/packet fixture. Never accesses production
 // accounts or Oracle. Dedicated opt-in Oracle acceptance is in OracleAcceptance.cs.
 using System.Diagnostics;
@@ -24,6 +25,7 @@ internal static class ProductTests
     private static void Require(bool condition,string message){if(!condition)throw new IOException(message);Evidence.Add(message+"=PASS");}
     [STAThread]internal static int Main(string[] args)
     {
+        if(args.SequenceEqual(new[]{"--uu-trust-signed"}))return UuTrustSigned();
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
         if(args.SequenceEqual(new[]{"--native-denial"})){
@@ -50,6 +52,25 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--rescue"})){Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
         return 2;
+    }
+    private static int UuTrustSigned()
+    {
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" || !Platform.IsAdmin)return 3;
+        string root=Path.Combine(Platform.Root,"UU-Trust-Fixture"),path=Path.Combine(root,"GameViewerInstaller.exe");
+        if(!Directory.Exists(root)||!File.Exists(path))return 2;
+        Platform.Protect(root,true);
+        var acl=new System.Security.AccessControl.FileSecurity();acl.SetAccessRuleProtection(true,false);
+        acl.SetOwner(new System.Security.Principal.SecurityIdentifier("S-1-5-32-544"));
+        foreach(string sid in new[]{"S-1-5-18","S-1-5-32-544"})acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(sid),System.Security.AccessControl.FileSystemRights.FullControl,System.Security.AccessControl.AccessControlType.Allow));
+        acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-5-32-545"),System.Security.AccessControl.FileSystemRights.ReadAndExecute,System.Security.AccessControl.AccessControlType.Allow));
+        new FileInfo(path).SetAccessControl(acl);
+        try{
+            if(!UuDiscovery.Trusted(path))return 1;
+            acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-1-0"),System.Security.AccessControl.FileSystemRights.WriteData,System.Security.AccessControl.AccessControlType.Allow));
+            new FileInfo(path).SetAccessControl(acl);
+            if(UuDiscovery.Trusted(path))return 1;
+            Console.WriteLine("REAL_NETEASE_SIGNATURE_ACCEPTED_AND_WRITABLE_EXECUTABLE_EXCEPTION_DENIED=PASS");return 0;
+        }finally{File.Delete(path);Directory.Delete(root);}
     }
     private static int Ui()
     {

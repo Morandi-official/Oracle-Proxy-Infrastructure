@@ -29,6 +29,16 @@ try{
   if($denial.ExitCode -ne 0){throw 'Actual non-owner pipe denial not established'}
   Write-Host 'REAL_NONADMIN_NONOWNER_WINDOWS_IDENTITY_PIPE_ACCESS_DENIED=PASS'
 }finally{Remove-LocalUser $other -ErrorAction SilentlyContinue}
+$uuFixture=Join-Path $env:ProgramFiles 'OracleProxy/UU-Trust-Fixture'
+New-Item -ItemType Directory $uuFixture | Out-Null
+$officialInstaller=Join-Path $uuFixture 'GameViewerInstaller.exe'
+try{
+  Invoke-WebRequest 'https://a56.gdl.netease.com/UURemote_Setup_4.39.2.1561_0904121034_gwqd.exe' -OutFile $officialInstaller -MaximumRedirection 2 -MaximumRetryCount 3 -RetryIntervalSec 3
+  if((Get-FileHash $officialInstaller -Algorithm SHA256).Hash -ne 'CF06187BE7B1382EAB9D53AFA129E4DC0DC07B0C7526D1E7A849475E0CA046F5'){throw 'Official UU fixture checksum mismatch'}
+  if((Get-AuthenticodeSignature $officialInstaller).Status -ne 'Valid'){throw 'Official UU fixture signature invalid'}
+  & $test --uu-trust-signed
+  if($LASTEXITCODE -ne 0){throw 'Actual signed NetEase file/ACL trust boundary failed'}
+}finally{if(Test-Path $uuFixture){Remove-Item -Recurse -Force $uuFixture}}
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
 New-Item -ItemType Directory -Path $root | Out-Null
 Set-Content (Join-Path $root 'authorized') 'DISPOSABLE_GITHUB_ONLY'

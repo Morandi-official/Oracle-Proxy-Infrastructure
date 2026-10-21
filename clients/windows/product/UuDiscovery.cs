@@ -26,6 +26,20 @@ internal static class UuDiscovery
                 AddRoot(app?.GetValue("DisplayIcon") as string ?? "",roots);
             }
         }
+        // Discover per-user installations from loaded profiles as well. The
+        // SYSTEM HKCU is not the interactive user's hive. Every path still has
+        // to pass the same publisher, ownership and ACL checks below.
+        using(var profiles=RegistryKey.OpenBaseKey(RegistryHive.Users,RegistryView.Registry64))
+        foreach(string sid in profiles.GetSubKeyNames().Where(s=>s.StartsWith("S-1-5-21-",StringComparison.Ordinal) && !s.EndsWith("_Classes",StringComparison.Ordinal))){
+            using var uninstall=profiles.OpenSubKey(sid+@"\Software\Microsoft\Windows\CurrentVersion\Uninstall");
+            if(uninstall is null)continue;
+            foreach(string name in uninstall.GetSubKeyNames()){
+                using var app=uninstall.OpenSubKey(name);
+                if(!Related(app?.GetValue("DisplayName") as string ?? ""))continue;
+                AddRoot(app?.GetValue("InstallLocation") as string ?? "",roots);
+                AddRoot(app?.GetValue("DisplayIcon") as string ?? "",roots);
+            }
+        }
         foreach(var process in Process.GetProcesses())using(process){
             try{if(Related(process.ProcessName))AddRoot(process.MainModule?.FileName ?? "",roots);}catch{ /* counted through installation records when available */ }
         }
@@ -40,7 +54,7 @@ internal static class UuDiscovery
                 }
             }catch{rejected++;}
         }
-        return new(valid.Order(StringComparer.OrdinalIgnoreCase).ToArray(),count,rejected);
+        return new(valid.Order(StringComparer.OrdinalIgnoreCase).ToArray(),Math.Max(count,roots.Count),rejected);
     }
     private static bool Related(string name)=>name.Contains("GameViewer",StringComparison.OrdinalIgnoreCase)||name.Contains("UURemote",StringComparison.OrdinalIgnoreCase)||name.Contains("UU远程",StringComparison.OrdinalIgnoreCase);
     private static void AddRoot(string value,HashSet<string> roots)
@@ -57,14 +71,15 @@ internal static class UuDiscovery
     {
         try{
             var file=new FileInfo(path);if(!file.Exists||file.Length is <1024 or >300_000_000||file.Attributes.HasFlag(FileAttributes.ReparsePoint))return false;
-            // Refuse writable parents all the way to the volume root: a trusted
-            // signature at discovery time is insufficient if a user can replace
-            // a parent or DLL dependency after SYSTEM grants a path exception.
+            Platform.NoLinks(file.DirectoryName!);
+            if(!ProtectedFile(file))return false;
+            // A protected directory can contain a separately writable file;
+            // verify both ownership and effective object ACEs, including the
+            // executable itself, before granting a path-based exception.
             for(var dir=file.Directory;dir?.Parent is not null;dir=dir.Parent){
-                Platform.NoLinks(dir.FullName);
-                foreach(FileSystemAccessRule rule in dir.GetAccessControl().GetAccessRules(true,true,typeof(SecurityIdentifier)))
-                    if(!rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly) && rule.AccessControlType==AccessControlType.Allow && rule.IdentityReference.Value is not ("S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464") &&
-                       (rule.FileSystemRights&(FileSystemRights.WriteData|FileSystemRights.CreateDirectories|FileSystemRights.Delete|FileSystemRights.DeleteSubdirectoriesAndFiles|FileSystemRights.ChangePermissions|FileSystemRights.TakeOwnership))!=0)return false;
+                var security=dir.GetAccessControl();
+                if(!TrustedOwner(security))return false;
+                if(UnsafeWriter(security))return false;
             }
             using var certificate=new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
             string publisher=certificate.GetNameInfo(X509NameType.SimpleName,false);
@@ -72,6 +87,13 @@ internal static class UuDiscovery
             return VerifySignature(path);
         }catch{return false;}
     }
+    private static bool TrustedOwner(FileSystemSecurity security)=>
+        security.GetOwner(typeof(SecurityIdentifier))?.Value is "S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+    private static bool UnsafeWriter(FileSystemSecurity security)=>security.GetAccessRules(true,true,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(rule=>
+        !rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly) && rule.AccessControlType==AccessControlType.Allow &&
+        rule.IdentityReference.Value is not ("S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464") &&
+        (rule.FileSystemRights&(FileSystemRights.WriteData|FileSystemRights.CreateDirectories|FileSystemRights.Delete|FileSystemRights.DeleteSubdirectoriesAndFiles|FileSystemRights.ChangePermissions|FileSystemRights.TakeOwnership))!=0);
+    private static bool ProtectedFile(FileInfo file){var security=file.GetAccessControl();return TrustedOwner(security)&&!UnsafeWriter(security);}
     [StructLayout(LayoutKind.Sequential)]private struct TrustFile{public uint Size;public IntPtr Path,Handle,Subject;}
     [StructLayout(LayoutKind.Sequential)]private struct TrustData{public uint Size;public IntPtr Policy,Sip;public uint Ui,Revocation,Choice;public IntPtr File;public uint State;public IntPtr StateData,Url;public uint Flags,Context;public IntPtr Signature;}
     [DllImport("wintrust.dll",ExactSpelling=true)]private static extern int WinVerifyTrust(IntPtr window,ref Guid action,ref TrustData data);

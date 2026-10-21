@@ -13,10 +13,15 @@ internal static class Installer
         if(key is not null && key.GetValue("ImagePath") as string!=Image)throw new IOException("SERVICE_NAME_COLLISION");
     }
     private static void Sc(params string[] args){if(Platform.FixedCommand("sc.exe",args)!=0)throw new IOException("SERVICE_CONFIGURATION_FAILED");}
+    private static bool Registered(){using var key=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\"+Platform.Service);return key is not null;}
     private static void Stop()
     {
-        VerifyService();using var service=new ServiceController(Platform.Service);
-        if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));}
+        VerifyService();
+        if(Registered()){
+            using var service=new ServiceController(Platform.Service);
+            if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));}
+        }
+        if(!File.Exists(Platform.Exe))return;
         // SCM status can become Stopped just before Windows unloads DLLs.
         for(int i=0;i<30;i++){try{using var f=File.Open(Platform.Exe,FileMode.Open,FileAccess.ReadWrite,FileShare.None);return;}catch(IOException){Thread.Sleep(100);}}
         throw new IOException("SERVICE_IMAGE_STILL_IN_USE");
@@ -24,32 +29,37 @@ internal static class Installer
     internal static async Task Install(string owner)
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
-        _=new SecurityIdentifier(owner);VerifyService();
+        _=new SecurityIdentifier(owner);VerifyService();bool registered=Registered();
         string source=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
         if(string.Equals(source,Platform.Root,StringComparison.OrdinalIgnoreCase))throw new IOException("USE_PORTABLE_PACKAGE_TO_UPGRADE");
         Platform.VerifyBundle(source);Platform.NoLinks(Platform.Root);Platform.NoLinks(Platform.StateRoot);
         bool existing=Directory.Exists(Platform.Root);string previous=Path.Combine(Platform.Root,"previous");
-        if(existing){Platform.VerifyProtected(Platform.Root);if(!File.Exists(Path.Combine(Platform.Root,"product.marker")))throw new IOException("INSTALL_DIRECTORY_COLLISION");Stop();}
-        else{Directory.CreateDirectory(Platform.Root);Platform.Protect(Platform.Root,true);}
+        if(existing){Platform.VerifyProtected(Platform.Root);if(!File.Exists(Path.Combine(Platform.Root,"product.marker")))throw new IOException("INSTALL_DIRECTORY_COLLISION");}
+        else{
+            Directory.CreateDirectory(Platform.Root);Platform.Protect(Platform.Root,true);
+            Platform.WriteAtomic(Path.Combine(Platform.Root,"product.marker"),System.Text.Encoding.UTF8.GetBytes("OracleProxy.Product.v1"));
+        }
         if(Directory.Exists(Platform.StateRoot))Platform.VerifyProtected(Platform.StateRoot);
         else{Directory.CreateDirectory(Platform.StateRoot);Platform.Protect(Platform.StateRoot,false);}
-        if(existing){
-            Directory.CreateDirectory(previous);Platform.Protect(previous,true);
-            foreach(string name in Files)File.Copy(Path.Combine(Platform.Root,name),Path.Combine(previous,name),true);
-        }
+        if(!File.Exists(Path.Combine(Platform.Root,"owner.sid")))Platform.WriteAtomic(Path.Combine(Platform.Root,"owner.sid"),System.Text.Encoding.UTF8.GetBytes(owner));
+        bool backedUp=false;
         try{
+            Stop();
+            if(registered && Files.All(name=>File.Exists(Path.Combine(Platform.Root,name)))){
+                Directory.CreateDirectory(previous);Platform.Protect(previous,true);
+                foreach(string name in Files)File.Copy(Path.Combine(Platform.Root,name),Path.Combine(previous,name),true);
+                backedUp=true;
+            }
             foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"OracleProxy.exe":name),Path.Combine(Platform.Root,name),true);
-            if(!existing)Platform.WriteAtomic(Path.Combine(Platform.Root,"owner.sid"),System.Text.Encoding.UTF8.GetBytes(owner));
-            Platform.WriteAtomic(Path.Combine(Platform.Root,"product.marker"),System.Text.Encoding.UTF8.GetBytes("OracleProxy.Product.v1"));
-            if(!existing)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Oracle Proxy VPN");
+            if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Oracle Proxy VPN");
             Sc("failure",Platform.Service,"reset=","86400","actions=","restart/3000/restart/10000/restart/30000");
             Sc("start",Platform.Service);
             using var service=new ServiceController(Platform.Service);service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(25));
             bool ready=false;for(int i=0;i<20;i++){try{await ControlPipe.Send("Status");ready=true;break;}catch{await Task.Delay(500);}}
             if(!ready)throw new IOException("SERVICE_START_FAILED");
         }catch{
-            if(existing){
-                try{Stop();foreach(string name in Files)File.Copy(Path.Combine(previous,name),Path.Combine(Platform.Root,name),true);Sc("start",Platform.Service);}catch{}
+            if(registered){
+                try{Stop();if(backedUp)foreach(string name in Files)File.Copy(Path.Combine(previous,name),Path.Combine(Platform.Root,name),true);Sc("start",Platform.Service);}catch{}
             }
             // Preserve state and owned firewall on failure. Never manufacture
             // an Off intent or clear protection as an installation side effect.

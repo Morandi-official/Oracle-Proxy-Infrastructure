@@ -4,6 +4,9 @@ $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Disposable hosted Windows required'}
 $versions=@(
   @{Version='4.39.2.1561';Url='https://a56.gdl.netease.com/UURemote_Setup_4.39.2.1561_0904121034_gwqd.exe';SHA='CF06187BE7B1382EAB9D53AFA129E4DC0DC07B0C7526D1E7A849475E0CA046F5'},
+  # Locator: cmontage/scoopbucket-soup@eff2d369e20beb642c2a84a1ae0ffa3946725e14/bucket/uuyc.json.
+  # Only official NetEase bytes are downloaded; hash and Windows trust are both required.
+  @{Version='4.40.1.2090';Url='https://a56.gdl.netease.com/UURemote_Setup_4.40.1.2090_0914120217_gwqd.exe';SHA='64F918B80A99A570DD43A0CA0C8C4FAC5B9B734AD6308E0F5C69BC0BE6CE5167'},
   @{Version='4.41.1.2335';Url='https://a56.gdl.netease.com/UURemote_Setup_4.41.1.2335_0917134939_gwqd.exe';SHA='4DE4AF35656D8395E01BE64D094C5F750B2FD7C8B47DB4289BCE7B05CF85412E'}
 )
 $out=Join-Path $PWD 'dist/gameviewer-review';New-Item -ItemType Directory -Force $out | Out-Null

@@ -10,6 +10,7 @@ internal sealed class VpnRuntime : IDisposable
     private readonly CoreProcess _core=new();
     private readonly SemaphoreSlim _gate=new(1,1);
     private JsonObject? _state;
+    private UuInventory? _uuInventory;
     private DateTimeOffset _received;
     private string _mode="starting",_error="";
     private long? _latency;
@@ -97,7 +98,7 @@ internal sealed class VpnRuntime : IDisposable
                 if(_secret.Token.Length==0)throw new IOException("LOGIN_REQUIRED");
                 if(_secret.RecoveryRequired)throw new IOException("RECOVERY_REQUIRED");
                 if(_core.Running && _mode=="connected")break;
-                var inventory=UuDiscovery.Discover();
+                var inventory=UuDiscovery.Discover();_uuInventory=inventory;
                 if(inventory.Candidates>0 && inventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 _secret.UuPaths=inventory.Paths;_secret.ConnectIntent=true;_secret.Save();
                 NativeGuard.Apply(_secret.UuPaths);_mode="protected";
@@ -108,7 +109,7 @@ internal sealed class VpnRuntime : IDisposable
                 if(_secret.Token.Length>0){try{await _api.Call("logout",_secret.Token,new JsonObject());}catch{ /* expire remotely; locally erase bearer regardless */ }}
                 _secret.Token="";_secret.Save();_state=null;break;
             case "RefreshUu":
-                var found=UuDiscovery.Discover();
+                var found=UuDiscovery.Discover();_uuInventory=found;
                 if(found.Candidates>0 && found.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_UU_REFRESH");
                 _secret.UuPaths=found.Paths;_secret.Save();break;
@@ -137,7 +138,10 @@ internal sealed class VpnRuntime : IDisposable
         }
         throw new IOException("OWNED_TUNNEL_CLEANUP_NOT_VERIFIED");
     }
-    private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length};
+    private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
+        ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
+        ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
+        ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};
     private static string Code(Exception e)=>e.Message.Length<=80 && e.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?e.Message:"SERVICE_OPERATION_FAILED";
     internal void BeginStop(){_api.Cancel();_core.Cancel();}
     public void Dispose(){_core.Dispose();_api.Dispose();_gate.Dispose();}

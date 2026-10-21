@@ -15,6 +15,7 @@ internal sealed class MainForm : Form
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _busy;
+    private string _uuReport="请先在断开状态点击“重新识别 UU”。";
     internal MainForm()
     {
         Text="Oracle Proxy";ClientSize=new Size(920,625);MinimumSize=new Size(850,650);BackColor=Color.FromArgb(243,246,251);Font=new Font("Microsoft YaHei UI",10);StartPosition=FormStartPosition.CenterScreen;
@@ -28,6 +29,7 @@ internal sealed class MainForm : Form
         foreach(var (label,action) in new (string,Action)[]{("安装 / 升级服务",()=>Installer.Elevate(false)),("卸载",()=>{if(MessageBox.Show(this,"将恢复直连并卸载系统服务、删除本机密钥。服务器仍保留设备记录与用量，请联系管理员撤销旧设备以释放名额。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK)Installer.Elevate(true);})}){
             var b=new Button{Text=label,AutoSize=true};b.Click+=(_,_)=>{try{action();}catch{_detail.Text="操作未完成，请检查 UAC 提示或使用完整便携包。";}};tools.Controls.Add(b);}
         var refreshUu=new Button{Text="重新识别 UU",AutoSize=true};refreshUu.Click+=async(_,_)=>await Act("RefreshUu");tools.Controls.Add(refreshUu);
+        var inspectUu=new Button{Text="UU 检查详情",AutoSize=true};inspectUu.Click+=(_,_)=>ShowUuReport();tools.Controls.Add(inspectUu);
         var recover=new Button{Text="恢复直连（UAC）",AutoSize=true};recover.Click+=(_,_)=>{if(MessageBox.Show(this,"将停止本产品的隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","紧急恢复",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.ElevateRecovery();}catch{_detail.Text="恢复请求未完成。";}}};tools.Controls.Add(recover);
         var logout=new Button{Text="退出账号",AutoSize=true};logout.Click+=async(_,_)=>await Act("Logout");tools.Controls.Add(logout);body.Controls.Add(tools);
         body.Controls.Add(new Label{Text="本包为集成候选版。IPv6 当前阻断；UU 实机连续性与重启验收尚未完成。",AutoSize=true,MaximumSize=new Size(650,0),ForeColor=Color.DarkOrange});
@@ -48,10 +50,35 @@ internal sealed class MainForm : Form
         }
         finally{_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;}
     }
+    private void ShowUuReport()
+    {
+        using var dialog=new Form{Text="UU 自动识别详情",StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(760,400),MinimizeBox=false,MaximizeBox=false};
+        var text=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Text=_uuReport};
+        var copy=new Button{Text="复制诊断（不含账号密码或密钥）",Dock=DockStyle.Bottom,Height=40};copy.Click+=(_,_)=>Clipboard.SetText(_uuReport);
+        dialog.Controls.Add(text);dialog.Controls.Add(copy);dialog.ShowDialog(this);
+    }
+    private static string UuReason(string code)=>code switch{
+        "UU_EXECUTABLE_OWNER_UNTRUSTED"=>"程序文件由普通用户拥有，可被改变权限",
+        "UU_EXECUTABLE_WRITABLE"=>"程序文件允许普通用户改写",
+        "UU_DIRECTORY_OWNER_UNTRUSTED"=>"安装目录或父目录由普通用户拥有",
+        "UU_DIRECTORY_WRITABLE"=>"安装目录或父目录允许普通用户修改",
+        "UU_REPARSE_POINT"=>"安装路径含链接或重解析点",
+        "UU_PUBLISHER_UNRECOGNIZED"=>"签名发布者未在网易允许名单中",
+        "UU_SIGNATURE_NOT_VERIFIED"=>"Windows 未通过数字签名验证（可能涉及证书缓存）",
+        "UU_SIGNATURE_UNREADABLE"=>"没有可读取的数字签名",
+        "UU_DIRECTORY_UNREADABLE"=>"安装目录不可读取或超出扫描限制",
+        _=>"尚未通过检查"};
+    internal string UuReport=>_uuReport;
     internal int UsageProgress=>_progress.Value;
     internal bool UsageFresh=>_progress.Enabled;
     internal void Display(JsonObject state)
     {
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc2");
+            _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
+                $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
+            if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
+                foreach(var item in uuIssues)_uuReport+=$"\r\n{UuReason(item!["code"]!.GetValue<string>())}\r\n{item["code"]} {item["detail"]}\r\n{item["path"]}\r\n";
+            }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
             _mode.Text=mode switch{"connected"=>guard?"已连接 Oracle":"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;

@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc7 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc8 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc7.json')
+MANIFEST = Path(__file__).with_name('windows-rc8.json')
 
 
 def gh(*args, output=None):
@@ -59,7 +59,7 @@ def read_archive(archive, output, expected_prefix):
 def main():
     if sys.argv[1:] not in (['--check'],['--publish']): raise ValueError('INVALID_ARGUMENTS')
     manifest=json.loads(MANIFEST.read_text())
-    if manifest['version']!='0.3.0-rc7': raise ValueError('ONLY_RC7_PRERELEASE_SUPPORTED')
+    if manifest['version']!='0.3.0-rc8': raise ValueError('ONLY_RC8_PRERELEASE_SUPPORTED')
     validate_run(api(f"actions/runs/{manifest['run_id']}"),manifest)
     for artifact in manifest['artifacts']:
         value=api(f"actions/artifacts/{artifact['id']}")
@@ -93,8 +93,9 @@ def main():
         notes=root/'notes.md'
         notes.write_text('Windows 10/11 x64 便携验收版；完整解压后打开 OracleProxy.exe，首次安装或升级服务需要 UAC。\n\n'
                          '通道顺序：WireGuard UDP 51820 → QUIC UDP 8443 → HTTPS/TLS 443。断开后保留已验证的预备通道以加速重连；同一物理网络短暂记住失败通道，换网重新首选 UDP。首次使用和网络变化仍需实际握手与出口核验。\n\n'
-                         '持续屏蔽原生 UDP 的云端验收中，QUIC 连续三次重连为 324、328、316 毫秒；这适用于已预备的连接，不是冷启动或 MetaWise 实机承诺。\n\n'
-                         '云端已验证三通道出口、TCP/UDP DNS、防泄漏、服务崩溃恢复与账号用量联动，并拒绝新核心继承旧核心的出口核验。\n\n'
+                         '修复未连接时文字与按钮闪烁，预备就绪后降低轮询频率；读取状态时点击连接会排队执行。\n\n'
+                         '原生 WireGuard UDP 使用面向实际 IPv4 Peer 的已连接 socket，保留 UDP 出口探测记录供排障。云端通过不代表 MetaWise 网络已验证，仍需实机确认。\n\n'
+                         '云端已验证三通道出口、TCP/UDP DNS、防泄漏、服务崩溃恢复与账号用量联动，并拒绝新核心继承旧核心的出口核验。预备后的原生 UDP 点击切换为 398 ms；持续屏蔽原生 UDP 时，QUIC 连续重连为 281、302、273 ms。这不是冷启动或 MetaWise 实机时延承诺。\n\n'
                          '**仍为未签名候选版：IPv6 当前阻断；真实 UU 会话的故障与重启连续性仍待实机验收。**\n\n'
                          f"构建提交：`{manifest['source_revision']}`；[完整验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']

@@ -92,15 +92,22 @@ class QuicTLS(unittest.IsolatedAsyncioTestCase):
             client.send(PACKET)
             await asyncio.wait_for(client.wait_closed(),2)
             self.assertFalse(self.state.active)
-    async def test_duplicate_token_cannot_open_second_session(self):
+    async def test_authenticated_new_session_replaces_stale_owner(self):
         async with self.connection() as first:
             self.assertEqual(await first.auth(),b'OK\n')
             async with self.connection() as second:
-                with contextlib.suppress(ConnectionError,asyncio.TimeoutError): await second.auth()
+                self.assertEqual(await second.auth(),b'OK\n')
+                await asyncio.wait_for(first.wait_closed(),2)
+                self.assertEqual(len(self.state.active),1)
+                second.send(PACKET);self.assertEqual(await asyncio.wait_for(second.received.get(),2),PACKET)
+    async def test_denied_new_session_cannot_displace_existing_owner(self):
+        async with self.connection() as first:
+            self.assertEqual(await first.auth(),b'OK\n')
+            async with self.connection() as second:
+                with contextlib.suppress(ConnectionError,asyncio.TimeoutError):await second.auth(token='b'*43)
                 await asyncio.wait_for(second.wait_closed(),2)
                 self.assertEqual(len(self.state.active),1)
-            first.send(PACKET)
-            self.assertEqual(await asyncio.wait_for(first.received.get(),2),PACKET)
+                first.send(PACKET);self.assertEqual(await asyncio.wait_for(first.received.get(),2),PACKET)
     async def test_incomplete_fragments_cannot_bypass_rate_limit(self):
         async with self.connection() as client:
             self.assertEqual(await client.auth(),b'OK\n')
@@ -144,13 +151,20 @@ class Http3TLS(QuicTLS):
             self.assertEqual(await client.auth(),b'200');client.send(PACKET)
             self.assertEqual(await asyncio.wait_for(client.received.get(),2),PACKET)
             self.allowed=False;await asyncio.wait_for(client.wait_closed(),2);self.assertFalse(self.state.active)
-    async def test_duplicate_token_cannot_open_second_session(self):
+    async def test_authenticated_new_session_replaces_stale_owner(self):
         async with self.connection() as first:
             self.assertEqual(await first.auth(),b'200')
             async with self.connection() as second:
-                with contextlib.suppress(ConnectionError,asyncio.TimeoutError):await second.auth()
+                self.assertEqual(await second.auth(),b'200')
+                await asyncio.wait_for(first.wait_closed(),2);self.assertEqual(len(self.state.active),1)
+                second.send(PACKET);self.assertEqual(await asyncio.wait_for(second.received.get(),2),PACKET)
+    async def test_denied_new_session_cannot_displace_existing_owner(self):
+        async with self.connection() as first:
+            self.assertEqual(await first.auth(),b'200')
+            async with self.connection() as second:
+                with contextlib.suppress(ConnectionError,asyncio.TimeoutError):await second.auth(token='b'*43)
                 await asyncio.wait_for(second.wait_closed(),2);self.assertEqual(len(self.state.active),1)
-            first.send(PACKET);self.assertEqual(await asyncio.wait_for(first.received.get(),2),PACKET)
+                first.send(PACKET);self.assertEqual(await asyncio.wait_for(first.received.get(),2),PACKET)
     async def test_incomplete_fragments_cannot_bypass_rate_limit(self):
         async with self.connection() as client:
             self.assertEqual(await client.auth(),b'200');self.state.rate=Rate(10)

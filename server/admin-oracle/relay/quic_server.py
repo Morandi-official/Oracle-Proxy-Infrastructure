@@ -30,7 +30,7 @@ class DatagramH3(H3Connection):
 class RelayState:
     def __init__(self, session, auth=authenticate, target=('127.0.0.1', 51820), refresh=5):
         self.session, self.auth, self.target, self.refresh = session, auth, target, refresh
-        self.active = set()
+        self.active = {}
         self.pending = 0
         self.attempts = Rate(128)
         self.rate = Rate(16 * 1024 * 1024)
@@ -62,7 +62,9 @@ class RelayProtocol(QuicConnectionProtocol):
         for task in self.tasks: task.cancel()
         self.tasks.clear()
         if self.udp is not None: self.udp.close(); self.udp = None
-        if self.identity is not None: self.state.active.discard(self.identity); self.identity = None
+        if self.identity is not None:
+            if self.state.active.get(self.identity) is self: self.state.active.pop(self.identity,None)
+            self.identity = None
         if self.auth_slot: self.state.pending -= 1; self.auth_slot = False
         self.fragments.pending.clear()
         self.header.clear()
@@ -82,7 +84,7 @@ class RelayProtocol(QuicConnectionProtocol):
             self.header.extend(event.data)
             if event.end_stream:
                 if not re.fullmatch(rb'[A-Za-z0-9_-]{43}\n', self.header): self.reject(); return
-                if self.state.pending >= 16 or len(self.state.active) >= 32 or not self.state.attempts.accept(1):
+                if self.state.pending >= 16 or not self.state.attempts.accept(1):
                     self.reject(); return
                 self.started = True
                 self.auth_slot = True
@@ -117,7 +119,7 @@ class RelayProtocol(QuicConnectionProtocol):
                 self.reject(); return
             bearer=headers.get(b'authorization',b'')
             if not re.fullmatch(rb'Bearer [A-Za-z0-9_-]{43}',bearer): self.reject(); return
-            if self.state.pending>=16 or len(self.state.active)>=32 or not self.state.attempts.accept(1):
+            if self.state.pending>=16 or not self.state.attempts.accept(1):
                 self.reject(); return
             self.started=True;self.http_stream=event.stream_id;self.auth_slot=True;self.state.pending+=1
             self.tasks.append(asyncio.create_task(self.authorize(bearer[7:].decode('ascii'))))
@@ -141,9 +143,14 @@ class RelayProtocol(QuicConnectionProtocol):
         try:
             if not await self.state.auth(self.state.session, token): self.reject(); return
             identity = hashlib.sha256(token.encode()).digest()
-            if identity in self.state.active or len(self.state.active) >= 32: self.reject(); return
+            previous=self.state.active.get(identity)
+            if previous is None and len(self.state.active)>=32: self.reject(); return
+            # Authenticate first, then replace the old owner synchronously.
+            # A dead UDP client cannot send CONNECTION_CLOSE; refusing the same
+            # token until the 45s idle timeout breaks normal crash recovery.
+            if previous is not None: previous.reject()
             self.identity = identity
-            self.state.active.add(identity)
+            self.state.active[identity]=self
             queue = PacketQueue()
             transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(lambda: queue, remote_addr=self.state.target)
             # A timeout or peer close can occur during the awaited socket creation.

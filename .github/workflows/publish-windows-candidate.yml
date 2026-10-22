@@ -1,0 +1,40 @@
+name: Publish verified Windows rc6 prerelease
+on:
+  pull_request:
+    paths: ['ops/distribution/**', '.github/workflows/publish-windows-candidate.yml']
+  push:
+    branches: [main]
+    paths: ['ops/distribution/**', '.github/workflows/publish-windows-candidate.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  check-pinned-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s ops/distribution -p 'test_*.py' -v
+      - run: python3 ops/distribution/publish_candidate.py --check
+        env:
+          GH_TOKEN: ${{ github.token }}
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: check-pinned-acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: oracle-proxy-rc6-publication
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 ops/distribution/publish_candidate.py --publish
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -32,6 +32,8 @@ async def probe(info):
     try:
         await asyncio.wait_for(handshake(),8)
         print('PUBLIC_QUIC_TLS=PASS')
+        if not info.get('http3'):
+            print('PUBLIC_HTTP3=NOT_ADVERTISED_BY_CURRENT_DEPLOYMENT');return True
         config.alpn_protocols=['h3']
         async with connect('152.67.156.100',8443,configuration=config,create_protocol=Http3Probe) as client:
             if not await client.health(): raise ConnectionError()

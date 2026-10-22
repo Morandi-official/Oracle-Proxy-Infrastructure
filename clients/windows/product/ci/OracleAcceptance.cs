@@ -114,7 +114,7 @@ internal static class OracleAcceptance
                 await Task.Delay(500);
             }
             Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && !NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await ExitIp()!="152.67.156.100","REAL_PREPARATION_HAS_NO_TUN_ROUTES_OR_ORDINARY_APP_PROXY");
-            Check(prepared["transport"]?.GetValue<string>()=="wireguard-udp" && prepared["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && prepared["native_udp_attempt"]?["started_without_tun"]?.GetValue<bool>()==true && prepared["native_udp_attempt"]?["probe_result"]?.GetValue<string>()=="oracle_egress_verified","REAL_NATIVE_UDP_51820_PREPARATION_VERIFIED_BEFORE_TUN");
+            Check(prepared["transport"]?.GetValue<string>()=="wireguard-udp" && prepared["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && prepared["native_udp_attempt"]?["socket_binding"]?.GetValue<string>()=="connected_ipv4" && prepared["native_udp_attempt"]?["started_without_tun"]?.GetValue<bool>()==true && prepared["native_udp_attempt"]?["probe_result"]?.GetValue<string>()=="oracle_egress_verified","REAL_NATIVE_UDP_51820_PREPARATION_VERIFIED_BEFORE_TUN");
             if(Environment.GetEnvironmentVariable("ORACLE_REQUIRE_QUIC")=="true")Check(prepared["quic_available"]?.GetValue<bool>()==true,"REAL_QUIC_RELEASE_CONFIGURATION_AND_SERVER_METADATA_IN_SYNC");
             var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();
             var quick=await Send("Connect");long clickMs=click.ElapsedMilliseconds;

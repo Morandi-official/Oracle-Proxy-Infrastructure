@@ -30,6 +30,14 @@ internal static class CoreConfig
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="uu-direct"}),
             ["route"]=new JsonObject{["auto_detect_interface"]=true,["find_process"]=true,["rules"]=rules,["final"]="oracle-wireguard"}
         };
+        if(transport==TunnelTransport.WireGuardUdp){
+            // Use a connected UDP socket through the physical direct dialer.
+            // The default WG StdNetBind opens wildcard dual-stack listeners;
+            // the connected path selects the actual IPv4 peer before binding,
+            // as the working backup carriers already do. No encapsulation.
+            config["endpoints"]![0]!["detour"]="oracle-native-udp";
+            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="direct",["tag"]="oracle-native-udp",["connect_timeout"]="5s"});
+        }
         if(transport==TunnelTransport.WireGuardQuic){
             config["endpoints"]![0]!["detour"]="oracle-quic-relay";
             config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-quic",["tag"]="oracle-quic-relay",["token"]=secret.Token,["certificate"]=tunnel["quic"]!["certificate"]!.DeepClone()});

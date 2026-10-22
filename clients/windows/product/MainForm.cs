@@ -98,7 +98,7 @@ internal sealed class MainForm : Form
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
             foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
-            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
+            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","socket_binding","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
             Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc8");

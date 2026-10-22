@@ -146,7 +146,7 @@ internal sealed class VpnRuntime : IDisposable
             if(_transport==TunnelTransport.WireGuardUdp)_nativeUdpAttempt=new JsonObject{
                 ["endpoint_port"]=int.Parse(_state!["tunnel"]!["endpoint"]!.GetValue<string>().Split(':')[1]),
                 ["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["started_without_tun"]=standby,
-                ["probe_result"]="pending",["probe_failures"]=0,["attempt_elapsed_ms"]=0};
+                ["socket_binding"]="connected_ipv4",["probe_result"]="pending",["probe_failures"]=0,["attempt_elapsed_ms"]=0};
             await _core.Start(_state!,_secret,_transport,standby:true);
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             _runningProfile=Profile();_nextProbe=default;

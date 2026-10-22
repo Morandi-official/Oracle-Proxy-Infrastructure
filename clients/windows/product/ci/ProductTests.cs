@@ -305,7 +305,7 @@ internal static class ProductTests
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";
-        config["endpoints"]![0]!["bind_interface"]=loopback;
+        config["outbounds"]!.AsArray().Single(item=>item?["tag"]?.GetValue<string>()=="oracle-native-udp")!["bind_interface"]=loopback;
         Process? exit=null,client=null;
         try{
             exit=await Launch(server);

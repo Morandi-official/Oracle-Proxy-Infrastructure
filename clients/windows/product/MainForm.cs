@@ -82,20 +82,22 @@ internal sealed class MainForm : Form
     internal void Display(JsonObject state)
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc6");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc7");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
                 foreach(var item in uuIssues)_uuReport+=$"\r\n{UuReason(item!["code"]!.GetValue<string>())}\r\n{item["code"]} {item["detail"]}\r\n{item["path"]}\r\n";
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
+            _timer.Interval=mode=="protected" || state["preparing"]?.GetValue<bool>()==true?250:3000;
             _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 Oracle · HTTPS","wireguard-quic"=>"已连接 Oracle · QUIC",_=>"已连接 Oracle · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;
             string policy=state["account"]?["status"]?.GetValue<string>() ?? "";
             _detail.Text=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?(policy is "disabled" or "expired" or "quota" or "server_budget" or "unavailable"?$"账号状态：{PolicyName(policy)}。防泄漏保护保留。":"防泄漏规则保持启用。意外中断时不会主动恢复普通应用直连。"):"点击连接前，请先登录管理员分配的账号。";
-            if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)_detail.Text="快速连接已就绪。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
+            if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)_detail.Text="快速连接已就绪（"+(state["transport"]?.GetValue<string>() switch{"wireguard-quic"=>"QUIC 备用通道","wireguard-https"=>"HTTPS 兜底通道",_=>"WireGuard UDP 主通道"})+"）。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
             else if(mode=="disconnected" && state["preparing"]?.GetValue<bool>()==true)_detail.Text="正在预备加密通道，当前普通应用仍直连。首次连接或网络变化可能需要等待。";
             var account=state["account"]?.AsObject();
             if(account is not null){

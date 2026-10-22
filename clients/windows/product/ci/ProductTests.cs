@@ -162,6 +162,11 @@ internal static class ProductTests
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
     private static int Ui()
     {
+        var carriers=new CarrierMemory();var relayState=new JsonObject{["tunnel"]=new JsonObject{["https_relay"]=true}};
+        carriers.Observe("synthetic-network-a");carriers.Failed(TunnelTransport.WireGuardUdp);
+        if(carriers.Preferred(relayState)!=TunnelTransport.WireGuardHttps || carriers.Observe("synthetic-network-a"))return 1;
+        if(!carriers.Observe("synthetic-network-b") || carriers.Preferred(relayState)!=TunnelTransport.WireGuardUdp)return 1;
+        Console.WriteLine("NETWORK_CHANGE_RESTORES_NATIVE_UDP_PREFERENCE=PASS");
         Application.EnableVisualStyles();using var form=new MainForm();
         var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
         var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
@@ -287,7 +292,7 @@ internal static class ProductTests
             var switchTimer=Stopwatch.StartNew();NativeGuard.Apply(uuPaths);
             await client.StandardInput.WriteLineAsync("ACTIVATE");await client.StandardInput.FlushAsync();
             Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="TUN_ACTIVE","REAL_PRIVATE_CORE_ACTIVATE_ACKNOWLEDGED");
-            NativeGuard.Apply(uuPaths,NativeGuard.TunLuid(),(uint)client.Id);
+            NativeGuard.AuthorizeTun((uint)client.Id);
             Evidence.Add("REAL_ISOLATED_PREPARED_SWITCH_MS="+switchTimer.ElapsedMilliseconds);
             Require(await Tcp() && await Dns(),"REAL_PREPARED_DYNAMIC_TUN_HAS_TCP_AND_FRESH_UDP_DNS");
             NativeGuard.SuspendTun();await client.StandardInput.WriteLineAsync("DEACTIVATE");await client.StandardInput.FlushAsync();
@@ -297,6 +302,13 @@ internal static class ProductTests
             await Stop(client);client=null;await VpnRuntime.EnsureTunnelGone();
             client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();bool wrongCoreDenied=false;
+            NativeGuard.Clear();bool missingGuardDenied=false;
+            try{NativeGuard.AuthorizeTun((uint)client.Id);}catch(IOException){missingGuardDenied=true;}
+            Require(missingGuardDenied && !NativeGuard.TunPermitted,"REAL_LEASE_ONLY_AUTHORIZATION_REQUIRES_EXISTING_GUARD");
+            NativeGuard.Apply(uuPaths);
+            bool wrongLeaseDenied=false;
+            try{NativeGuard.AuthorizeTun((uint)Environment.ProcessId);}catch(IOException){wrongLeaseDenied=true;}
+            Require(wrongLeaseDenied && NativeGuard.Active && !NativeGuard.TunPermitted,"REAL_LEASE_ONLY_AUTHORIZATION_REJECTS_WRONG_SYSTEM_IMAGE");
             try{NativeGuard.Apply(uuPaths,luid,(uint)Environment.ProcessId);}catch(IOException error){wrongCoreDenied=error.Message.StartsWith("WFP_APPLY_5_",StringComparison.Ordinal);}
             Require(wrongCoreDenied && NativeGuard.Active && !NativeGuard.TunPermitted,"REAL_TUN_PERMISSION_REJECTS_WRONG_SYSTEM_PROCESS_IMAGE");
             NativeGuard.Apply(uuPaths,luid,(uint)client.Id);

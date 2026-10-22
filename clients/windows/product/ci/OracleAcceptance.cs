@@ -59,6 +59,14 @@ internal static class OracleAcceptance
         }
         throw new IOException("ORACLE_RECONNECT_TIMED_OUT");
     }
+    private static async Task ColdCore()
+    {
+        var state=await Send("Status");uint pid=state["core_pid"]!.GetValue<uint>();
+        if(pid==0)return;
+        using var process=Process.GetProcessById((int)pid);
+        if(process.SessionId!=0 || process.MainModule?.FileName!=Platform.Core)throw new IOException("FIXTURE_CORE_IDENTITY_MISMATCH");
+        process.Kill(true);await process.WaitForExitAsync();
+    }
     private static async Task<bool> CarrierDirectBlocked()
     {
         using var socket=new TcpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -111,6 +119,7 @@ internal static class OracleAcceptance
             Check(clickMs<1000,"REAL_WARM_CLICK_TO_GUARDED_PROXY_UNDER_ONE_SECOND");
             await Send("Disconnect");
             using(var loss=new InitialUdpLoss()){
+                await ColdCore();
                 var waiting=await ControlPipe.Send("Connect");
                 // Same fixed, credential-free fields as the public diagnostic
                 // report; never print the response object or exception message.
@@ -141,14 +150,27 @@ internal static class OracleAcceptance
             stage="AUTOMATIC_QUIC_FALLBACK";await Send("Disconnect");
             if(prepared["quic_available"]?.GetValue<bool>()==true){
                 using(var nativeLoss=new InitialUdpLoss()){
+                    await ColdCore();
                     await Send("Connect");var quic=await Connected();
                     Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
                     Check(await CarrierDirectBlocked(),"REAL_QUIC_CARRIER_ROUTE_HAS_NO_ORDINARY_DIRECT_ESCAPE");
+                    uint quicPid=quic["core_pid"]!.GetValue<uint>();
+                    for(int cycle=0;cycle<3;cycle++){
+                        var off=await Send("Disconnect");
+                        Check(off["quick_ready"]?.GetValue<bool>()==true && off["core_pid"]?.GetValue<uint>()==quicPid && !NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await ExitIp()!="152.67.156.100","REAL_QUIC_OFF_PRESERVES_PREPARED_CORE_AND_RESTORES_DIRECT_"+cycle);
+                        var restart=Stopwatch.StartNew();var fast=await Send("Connect");long elapsed=restart.ElapsedMilliseconds;
+                        Console.WriteLine("REAL_BLOCKED_UDP_QUIC_RECONNECT_CLICK_MS_"+cycle+"="+elapsed);
+                        Check(elapsed<1000 && fast["click_to_ready_ms"]?.GetValue<long>() is >=0 and <1000 && fast["mode"]?.GetValue<string>()=="connected" && fast["core_pid"]?.GetValue<uint>()==quicPid && fast["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_BLOCKED_UDP_REPEATED_QUIC_RECONNECT_UNDER_ONE_SECOND_"+cycle);
+                    }
                     await Send("Disconnect");
+                    await ColdCore();var learned=await Send("Connect");
+                    Check(learned["transport"]?.GetValue<string>()=="wireguard-quic","REAL_SAME_NETWORK_REMEMBERS_FAILED_UDP_AFTER_CORE_LOSS");
+                    await Connected();await Send("Disconnect");
                 }
             }else Console.WriteLine("REAL_QUIC_CARRIER=SERVER_NOT_ADVERTISED_YET");
             stage="AUTOMATIC_HTTPS_FALLBACK";await Send("Disconnect");
             using(var loss=new InitialUdpLoss(blockQuic:true)){
+                await ColdCore();
                 var pending=await ControlPipe.Send("Connect");
                 Check(pending["mode"]?.GetValue<string>()=="protected" && pending["guard"]?.GetValue<bool>()==true,"REAL_UDP_LOSS_STARTS_WITH_PROTECTED_NATIVE_ATTEMPT");
                 var carrier=await Connected();

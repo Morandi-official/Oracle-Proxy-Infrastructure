@@ -24,6 +24,7 @@ internal sealed class VpnRuntime : IDisposable
     private long _generation,_probeGeneration;
     private DateTimeOffset _nextRefresh,_nextProbe,_prepareUntil,_verified;
     private long? _connectMs;
+    private JsonObject? _switchTimings;
     private bool WarmReady=>!_secret.ConnectIntent && _core.Running && !_core.TunActive && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
     private bool Preparing=>!_secret.ConnectIntent && _secret.Token.Length>0 && DateTimeOffset.UtcNow<_prepareUntil;
     private void Failed(Exception error){_error=Code(error);_failure=ConnectionFailure.Capture(_stage,error,_core.SafeStage);if(_stage=="ORACLE_EGRESS_PROBE" && _error is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED")_probeFailures++;}
@@ -147,7 +148,7 @@ internal sealed class VpnRuntime : IDisposable
                 var login=await _api.Call("login","",new JsonObject{["username"]=username,["password"]=password,["public_key"]=_secret.PublicKey,["device_name"]=Environment.MachineName});
                 _secret.Token=login["token"]!.GetValue<string>();login.Remove("token");_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error="";break;
             case "Connect":{
-                var timer=System.Diagnostics.Stopwatch.StartNew();_connectMs=null;
+                var timer=System.Diagnostics.Stopwatch.StartNew();_connectMs=null;_switchTimings=new JsonObject();
                 if(_secret.Token.Length==0)throw new IOException("LOGIN_REQUIRED");
                 if(_secret.RecoveryRequired)throw new IOException("RECOVERY_REQUIRED");
                 if(_core.Running && _mode=="connected" && _secret.ConnectIntent)break;
@@ -155,19 +156,19 @@ internal sealed class VpnRuntime : IDisposable
                 bool warm=WarmReady;
                 if(!_secret.ConnectIntent && !warm){_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;await StopCore();}
                 using var uuMaintenance=UuAclRepair.AcquireMaintenance();
-                _stage="UU_DISCOVERY";var inventory=UuDiscovery.Discover();_uuInventory=inventory;
+                _stage="UU_DISCOVERY";var inventory=UuDiscovery.Discover();_uuInventory=inventory;_switchTimings["uu_discovery_ms"]=timer.ElapsedMilliseconds;
                 if(inventory.Candidates>0 && inventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 // Process exceptions are part of the prepared configuration.
                 if(warm && !_secret.UuPaths.SequenceEqual(inventory.Paths,StringComparer.OrdinalIgnoreCase)){await StopCore();warm=false;_transport=TunnelTransport.WireGuardUdp;}
-                _secret.UuPaths=inventory.Paths;_secret.ConnectIntent=true;_secret.Save();
-                _stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";
+                _secret.UuPaths=inventory.Paths;_secret.ConnectIntent=true;_secret.Save();_switchTimings["state_saved_ms"]=timer.ElapsedMilliseconds;
+                _stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";_switchTimings["guard_installed_ms"]=timer.ElapsedMilliseconds;
                 if(!warm){await Refresh();await StartCore();}
                 else{
-                    _stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";
+                    _stage="TUN_ACTIVATE";await _core.Activate();_switchTimings["tun_active_ms"]=timer.ElapsedMilliseconds;_stage="TUN_AUTHORIZE";
                     NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);
                     _mode="connected";_error="";_failure=null;_nextProbe=default;
                 }
-                _connectMs=timer.ElapsedMilliseconds;break;}
+                _connectMs=timer.ElapsedMilliseconds;_switchTimings["complete_ms"]=_connectMs;break;}
             case "Disconnect":await Disconnect();break;
             case "Logout":
                 await Disconnect();
@@ -206,7 +207,7 @@ internal sealed class VpnRuntime : IDisposable
     private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
         ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
-        ["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,
+        ["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["switch_timings"]=_switchTimings?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};

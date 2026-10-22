@@ -1,6 +1,7 @@
 """External QUIC TLS reachability only: no bearer, device registration or root key."""
 import asyncio
 import json
+import sys
 import urllib.request
 
 from aioquic.asyncio import connect
@@ -25,6 +26,7 @@ async def probe(info):
 
 
 def main():
+    if sys.argv[1:] not in ([],['--require-reachable']): raise ValueError('INVALID_ARGUMENTS')
     with urllib.request.urlopen('https://'+HOST+'/api/client/quic-certificate',timeout=10) as response:
         data=response.read(8193)
         if len(data)>8192: raise ValueError('QUIC_METADATA_REJECTED')
@@ -35,7 +37,7 @@ def main():
     passed=asyncio.run(probe(info))
     # Preparation releases advertise disabled until the external gate passes.
     # Once advertised, a failed public handshake is a deployment failure.
-    if info.get('enabled') is True and not passed: raise SystemExit(1)
+    if (info.get('enabled') is True or '--require-reachable' in sys.argv[1:]) and not passed: raise SystemExit(1)
 
 
 if __name__ == '__main__': main()

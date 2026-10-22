@@ -21,6 +21,7 @@ internal sealed class VpnRuntime : IDisposable
     private string _refreshToken="";
     private Task<long>? _probePending;
     private uint _probePid;
+    private long _generation,_probeGeneration;
     private DateTimeOffset _nextRefresh,_nextProbe,_prepareUntil,_verified;
     private long? _connectMs;
     private bool WarmReady=>!_secret.ConnectIntent && _core.Running && !_core.TunActive && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
@@ -62,7 +63,7 @@ internal sealed class VpnRuntime : IDisposable
                     }
                     if(_probePending?.IsCompleted==true){
                         var pending=_probePending;_probePending=null;
-                        if(_core.Running && _probePid==_core.Pid){
+                        if(_core.Running && _probePid==_core.Pid && _probeGeneration==_generation){
                             try{
                                 _latency=await pending;_verified=DateTimeOffset.UtcNow;_failure=null;_probeFailures=0;_error="";
                                 if(_secret.ConnectIntent && NativeGuard.TunPermitted)_mode="connected";
@@ -94,7 +95,7 @@ internal sealed class VpnRuntime : IDisposable
                                 await StartCore(!_secret.ConnectIntent);
                             }
                             if(_probePending is null && DateTimeOffset.UtcNow>=_nextProbe){
-                                _stage="ORACLE_EGRESS_PROBE";_probePid=_core.Pid;_probePending=_core.Probe(_verified==default?3:12);
+                                _stage="ORACLE_EGRESS_PROBE";_probePid=_core.Pid;_probeGeneration=_generation;_probePending=_core.Probe(_verified==default?3:12);
                                 _nextProbe=DateTimeOffset.UtcNow.AddSeconds(_verified==default?2:10);
                             }
                         }
@@ -107,7 +108,7 @@ internal sealed class VpnRuntime : IDisposable
             await Task.Delay(200,cancel);
         }
     }
-    private async Task StopCore(){await _core.Stop();_verified=default;_runningProfile="";_nextProbe=default;}
+    private async Task StopCore(){_generation++;await _core.Stop();_verified=default;_runningProfile="";_nextProbe=default;}
     private async Task Refresh(){_stage="ACCOUNT_STATE";_state=await _api.Call("state",_secret.Token);_received=DateTimeOffset.UtcNow;_error="";}
     private bool ActivePolicy()=>_state?["account"]?["status"]?.GetValue<string>()=="active" && _state["observed_at"]?.GetValue<long>() is long at && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
     private async Task StartCore(bool standby=false)
@@ -117,7 +118,7 @@ internal sealed class VpnRuntime : IDisposable
         _stage="TUN_CLEANUP";await EnsureTunnelGone();
         if(!standby){_stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
-            _stage="CORE_START";await _core.Start(_state!,_secret,_transport,standby:true);
+            _stage="CORE_START";_generation++;await _core.Start(_state!,_secret,_transport,standby:true);
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);}
             _runningProfile=Profile();_nextProbe=default;
         }catch{await StopCore();if(!standby)_mode="protected";throw;}

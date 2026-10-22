@@ -16,7 +16,7 @@ def quic_info():
             return None
         body = path.read_text('ascii')
         if not body.startswith('-----BEGIN CERTIFICATE-----') or 'PRIVATE KEY' in body: return None
-        return {'port':8443, 'certificate':body, 'enabled':PUBLIC_QUIC_ENABLED}
+        return {'port':8443, 'certificate':body, 'enabled':PUBLIC_QUIC_ENABLED,'http3':True}
     except (OSError, ValueError): return None
 
 

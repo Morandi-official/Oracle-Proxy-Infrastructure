@@ -85,6 +85,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y caddy python3-venv openssh-server wireguard-tools ipset iproute2 iptables
       - name: Validate HTTPS reverse proxy configuration
         run: caddy validate --config server/admin-oracle/deploy/Caddyfile --adapter caddyfile
+      - name: Real namespace UDP443 demux and admin through tunnel routing
+        run: |
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+            ORACLE_ADMIN_DISPOSABLE_CI=1 python3 ops/oracle-project/ci_transport_routes.py
       - name: Real non-root systemd lifecycle, failed startup recovery, and rollback
         env:
           ORACLE_ADMIN_DISPOSABLE_CI: '1'

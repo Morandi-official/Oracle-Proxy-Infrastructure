@@ -40,7 +40,11 @@ internal static class OracleAcceptance
     private static async Task<JsonObject> Send(string command)
     {
         var value=await ControlPipe.Send(command);
-        if(value["ok"]?.GetValue<bool>()!=true)throw new IOException("ORACLE_SERVICE_COMMAND_FAILED");
+        if(value["ok"]?.GetValue<bool>()!=true){
+            foreach(string field in new[]{"mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","quick_ready","preparing"})Console.WriteLine("FAILED_"+command.ToUpperInvariant()+"_"+field.ToUpperInvariant()+"="+value[field]);
+            if(value["failure"] is JsonObject failure)foreach(string field in new[]{"stage","category","hresult","native_error","socket_error","core_stage"})Console.WriteLine("FAILED_COMMAND_"+field.ToUpperInvariant()+"="+failure[field]);
+            throw new IOException("ORACLE_SERVICE_COMMAND_FAILED");
+        }
         return value;
     }
     private static async Task<string> ExitIp()
@@ -190,6 +194,6 @@ internal static class OracleAcceptance
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
             stage="DISCONNECT";Check((await Send("Disconnect"))["mode"]?.GetValue<string>()=="disconnected" && await ExitIp()!="152.67.156.100","REAL_EXPLICIT_DISCONNECT_RESTORES_DIRECT_EXIT");
             await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
-        }catch{Console.WriteLine("REAL_ORACLE_STAGE="+stage);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
+        }catch(Exception error){Console.WriteLine("REAL_ORACLE_STAGE="+stage);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }
 }

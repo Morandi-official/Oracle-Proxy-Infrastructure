@@ -102,9 +102,11 @@ internal static class OracleAcceptance
                 await Task.Delay(500);
             }
             Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && !NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await ExitIp()!="152.67.156.100","REAL_PREPARATION_HAS_NO_TUN_ROUTES_OR_ORDINARY_APP_PROXY");
+            if(Environment.GetEnvironmentVariable("ORACLE_REQUIRE_QUIC")=="true")Check(prepared["quic_available"]?.GetValue<bool>()==true,"REAL_QUIC_RELEASE_CONFIGURATION_AND_SERVER_METADATA_IN_SYNC");
             var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();
             var quick=await Send("Connect");long clickMs=click.ElapsedMilliseconds;
             Console.WriteLine("REAL_WARM_CONNECT_CLICK_MS="+clickMs);
+            foreach(string phase in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})Console.WriteLine("REAL_WARM_"+phase.ToUpperInvariant()+"="+quick["switch_timings"]?[phase]);
             Check(quick["mode"]?.GetValue<string>()=="connected" && quick["core_pid"]?.GetValue<uint>()==warmPid && quick["guard"]?.GetValue<bool>()==true && quick["tun_permitted"]?.GetValue<bool>()==true && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_PREPARED_CORE_SWITCH_AND_FRESH_WINDOWS_HTTP_UDP_DNS");
             Check(clickMs<1000,"REAL_WARM_CLICK_TO_GUARDED_PROXY_UNDER_ONE_SECOND");
             await Send("Disconnect");

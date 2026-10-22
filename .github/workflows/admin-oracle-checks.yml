@@ -39,6 +39,15 @@ jobs:
       - run: python -m unittest discover -s ../../ops/oracle-project -p 'test_*.py' -v
       - run: python -m unittest discover -s control -p 'test_*.py' -v
       - run: python -m unittest discover -s relay -p 'test_*.py' -v
+      - name: Require public QUIC TLS before advertising the backup
+        if: matrix.python == '3.12'
+        run: |
+          python - <<'PYQUIC'
+          import subprocess, sys
+          from relay.settings import PUBLIC_QUIC_ENABLED
+          if PUBLIC_QUIC_ENABLED:
+              subprocess.run([sys.executable, '../../ops/oracle-project/verify_quic.py', '--require-reachable'], check=True)
+          PYQUIC
       - run: node --check static/console/app.js
       - name: Package source without test-only privileged entrypoints or credentials
         if: matrix.python == '3.12'

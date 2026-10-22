@@ -46,15 +46,19 @@ func (t *NativeTun) prepareOracleAdapter() error {
 	// Scope is closed while the parent's persistent fail-close guard is still
 	// active. Remove addresses, routes and DNS before acknowledging standby.
 	if err := luid.FlushIPAddresses(windows.AF_UNSPEC); err != nil {
+		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_IP_FAILED")
 		return err
 	}
 	if err := luid.FlushRoutes(windows.AF_UNSPEC); err != nil {
+		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_ROUTE_FAILED")
 		return err
 	}
 	if err := luid.FlushDNS(windows.AF_INET); err != nil {
+		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_DNS4_FAILED")
 		return err
 	}
 	if err := luid.FlushDNS(windows.AF_INET6); err != nil {
+		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_DNS6_FAILED")
 		return err
 	}
 	oracleAdapterMutex.Lock()

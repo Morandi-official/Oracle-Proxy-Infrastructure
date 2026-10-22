@@ -33,7 +33,12 @@ internal sealed class CoreProcess : IDisposable
         var limits=new JobLimits();limits.Basic.LimitFlags=0x2000; // KILL_ON_JOB_CLOSE
         if(!SetInformationJobObject(_job,9,ref limits,(uint)Marshal.SizeOf<JobLimits>()) || !AssignProcessToJobObject(_job,_process.Handle))throw new IOException("JOB_ASSIGN_FAILED");
         Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){try{NativeGuard.SuspendTun();}catch{}}};
-        _process.ErrorDataReceived+=(_,line)=>{if(line.Data is "CORE_IDENTITY_FAILED" or "CORE_INPUT_FAILED" or "CORE_CONFIGURATION_FAILED" or "CORE_CREATE_FAILED" or "CORE_START_FAILED" or "CORE_CLOSE_FAILED")Volatile.Write(ref _safeStage,line.Data);};_process.BeginErrorReadLine();
+        _process.ErrorDataReceived+=(_,line)=>{
+            if(line.Data is "TUN_CLEANUP_IP_FAILED" or "TUN_CLEANUP_ROUTE_FAILED" or "TUN_CLEANUP_DNS4_FAILED" or "TUN_CLEANUP_DNS6_FAILED")Volatile.Write(ref _safeStage,line.Data);
+            else if(line.Data is "CORE_IDENTITY_FAILED" or "CORE_INPUT_FAILED" or "CORE_CONFIGURATION_FAILED" or "CORE_CREATE_FAILED" or "CORE_START_FAILED" or "CORE_CLOSE_FAILED"){
+                if(line.Data!="CORE_CLOSE_FAILED" || !SafeStage.StartsWith("TUN_CLEANUP_",StringComparison.Ordinal))Volatile.Write(ref _safeStage,line.Data);
+            }
+        };_process.BeginErrorReadLine();
         await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,transport).ToJsonString());await _process.StandardInput.FlushAsync();
         string? ready;
         try{ready=await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20),_stop.Token);}

@@ -21,7 +21,7 @@ internal sealed class VpnRuntime : IDisposable
     private string _refreshToken="";
     private Task<long>? _probePending;
     private uint _probePid;
-    private long _generation,_probeGeneration,_carrierStarted;
+    private long _generation,_probeGeneration,_verifiedGeneration=-1,_carrierStarted;
     private DateTimeOffset _nextRefresh,_nextProbe,_prepareUntil,_verified;
     private long? _connectMs;
     private JsonObject? _switchTimings;
@@ -30,7 +30,7 @@ internal sealed class VpnRuntime : IDisposable
     private long _clickStarted;
     private long? _readyMs;
     private void MarkConnected(){_mode="connected";if(_clickStarted!=0 && _readyMs is null)_readyMs=System.Diagnostics.Stopwatch.GetElapsedTime(_clickStarted).Ticks/TimeSpan.TicksPerMillisecond;}
-    private bool WarmReady=>!_secret.ConnectIntent && _core.Running && !_core.TunActive && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
+    private bool WarmReady=>!_secret.ConnectIntent && _core.Running && !_core.TunActive && _verifiedGeneration==_generation && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
     private bool Preparing=>!_secret.ConnectIntent && _secret.Token.Length>0 && DateTimeOffset.UtcNow<_prepareUntil;
     private void Failed(Exception error){_error=Code(error);_failure=ConnectionFailure.Capture(_stage,error,_core.SafeStage);if(_stage=="ORACLE_EGRESS_PROBE" && _error is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED")_probeFailures++;}
     private long? _latency;
@@ -79,7 +79,7 @@ internal sealed class VpnRuntime : IDisposable
                         var pending=_probePending;_probePending=null;
                         if(_core.Running && _probePid==_core.Pid && _probeGeneration==_generation){
                             try{
-                                _latency=await pending;_verified=DateTimeOffset.UtcNow;_failure=null;_probeFailures=0;_error="";
+                                _latency=await pending;_verified=DateTimeOffset.UtcNow;_verifiedGeneration=_generation;_failure=null;_probeFailures=0;_error="";
                                 if(_secret.ConnectIntent && NativeGuard.TunPermitted)MarkConnected();
                             }catch(Exception error){
                                 _verified=default;_stage="ORACLE_EGRESS_PROBE";Failed(error);
@@ -133,7 +133,7 @@ internal sealed class VpnRuntime : IDisposable
         _stage="TUN_CLEANUP";await EnsureTunnelRemoved();
         if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
-            _stage="CORE_START";_generation++;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();await _core.Start(_state!,_secret,_transport,standby:true);
+            _stage="CORE_START";_generation++;_verified=default;_verifiedGeneration=-1;_latency=null;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();await _core.Start(_state!,_secret,_transport,standby:true);
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             _runningProfile=Profile();_nextProbe=default;
         }catch{await StopCore();if(!standby)_mode="protected";throw;}
@@ -209,17 +209,21 @@ internal sealed class VpnRuntime : IDisposable
         try{
             _stage="DISCONNECT";
             bool keep=_core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
+            _stage="DISCONNECT_DEACTIVATE";
             if(keep){if(_core.TunActive)await _core.Deactivate();}
             else await StopCore();
+            _stage="DISCONNECT_AUDIT";
             if(keep)await EnsureTunnelInactive();else await EnsureTunnelRemoved();
+            _stage="DISCONNECT_STATE";
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
+            _stage="DISCONNECT_GUARD_CLEAR";
             NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_probeFailures=0;
             _prepareUntil=DateTimeOffset.UtcNow.AddSeconds(20);
             if(!keep)_transport=_state is null?TunnelTransport.WireGuardUdp:_carriers.Preferred(_state);
-        }catch{
+        }catch(Exception error){
             _secret.ConnectIntent=true;_secret.RecoveryRequired=true;_secret.Save();
             try{NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());}catch{}
-            _mode="recovery";throw new IOException("RECOVERY_REQUIRED");
+            _mode="recovery";throw new IOException("RECOVERY_REQUIRED",error);
         }
     }
     internal static async Task EnsureTunnelInactive()

@@ -40,7 +40,11 @@ internal static class OracleAcceptance
     private static async Task<JsonObject> Send(string command)
     {
         var value=await ControlPipe.Send(command);
-        if(value["ok"]?.GetValue<bool>()!=true)throw new IOException("ORACLE_SERVICE_COMMAND_FAILED");
+        if(value["ok"]?.GetValue<bool>()!=true){
+            foreach(string field in new[]{"mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","quick_ready","preparing"})Console.WriteLine("FAILED_"+command.ToUpperInvariant()+"_"+field.ToUpperInvariant()+"="+value[field]);
+            if(value["failure"] is JsonObject failure)foreach(string field in new[]{"stage","category","hresult","native_error","socket_error","core_stage"})Console.WriteLine("FAILED_COMMAND_"+field.ToUpperInvariant()+"="+failure[field]);
+            throw new IOException("ORACLE_SERVICE_COMMAND_FAILED");
+        }
         return value;
     }
     private static async Task<string> ExitIp()
@@ -59,13 +63,13 @@ internal static class OracleAcceptance
         }
         throw new IOException("ORACLE_RECONNECT_TIMED_OUT");
     }
-    private static async Task ColdCore()
+    private static async Task<uint> ColdCore()
     {
         var state=await Send("Status");uint pid=state["core_pid"]!.GetValue<uint>();
-        if(pid==0)return;
+        if(pid==0)return 0;
         using var process=Process.GetProcessById((int)pid);
         if(process.SessionId!=0 || process.MainModule?.FileName!=Platform.Core)throw new IOException("FIXTURE_CORE_IDENTITY_MISMATCH");
-        process.Kill(true);await process.WaitForExitAsync();
+        process.Kill(true);await process.WaitForExitAsync();return pid;
     }
     private static async Task<bool> CarrierDirectBlocked()
     {
@@ -150,7 +154,16 @@ internal static class OracleAcceptance
             stage="AUTOMATIC_QUIC_FALLBACK";await Send("Disconnect");
             if(prepared["quic_available"]?.GetValue<bool>()==true){
                 using(var nativeLoss=new InitialUdpLoss()){
-                    await ColdCore();
+                    uint previousPid=await ColdCore();JsonObject replacement=new();
+                    // Deliberately let the background actor replace the dead
+                    // prepared core before Connect. Its old successful probe
+                    // must not authorize the new blocked-UDP generation.
+                    for(int attempt=0;attempt<20;attempt++){
+                        replacement=await Send("Prepare");
+                        if(replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["core_pid"]!.GetValue<uint>()!=previousPid)break;
+                        await Task.Delay(200);
+                    }
+                    Check(previousPid>0 && replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["quick_ready"]?.GetValue<bool>()==false && replacement["verified_at"] is null && replacement["transport"]?.GetValue<string>()=="wireguard-udp","REAL_REPLACEMENT_CORE_CANNOT_INHERIT_OLD_EXIT_VERIFICATION");
                     await Send("Connect");var quic=await Connected();
                     Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
                     Check(await CarrierDirectBlocked(),"REAL_QUIC_CARRIER_ROUTE_HAS_NO_ORDINARY_DIRECT_ESCAPE");
@@ -190,6 +203,6 @@ internal static class OracleAcceptance
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
             stage="DISCONNECT";Check((await Send("Disconnect"))["mode"]?.GetValue<string>()=="disconnected" && await ExitIp()!="152.67.156.100","REAL_EXPLICIT_DISCONNECT_RESTORES_DIRECT_EXIT");
             await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
-        }catch{Console.WriteLine("REAL_ORACLE_STAGE="+stage);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
+        }catch(Exception error){Console.WriteLine("REAL_ORACLE_STAGE="+stage);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }
 }

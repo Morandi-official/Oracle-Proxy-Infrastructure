@@ -197,6 +197,7 @@ internal sealed class VpnRuntime : IDisposable
                 _stage="UU_DISCOVERY";var found=UuDiscovery.Discover();_uuInventory=found;
                 if(found.Candidates>0 && found.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_UU_REFRESH");
+                await StopCore();
                 _secret.UuPaths=found.Paths;_secret.Save();break;
             }
             return Snapshot();

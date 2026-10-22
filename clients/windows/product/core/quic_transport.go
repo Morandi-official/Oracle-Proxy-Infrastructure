@@ -14,6 +14,7 @@ import (
 	"time"
 
 	quic "github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
 )
 
 const quicALPN = "oracle-wireguard-quic-v1"
@@ -96,7 +97,7 @@ func quicTLS(certificate string) (*tls.Config, error) {
 	}
 	return &tls.Config{RootCAs: roots, ServerName: "vpn-admin.morandi.dpdns.org", MinVersion: tls.VersionTLS13, NextProtos: []string{quicALPN}}, nil
 }
-func dialQUIC(ctx context.Context, physical net.PacketConn, destination net.Addr, certificate, token string) (net.Conn, error) {
+func dialLegacyQUIC(ctx context.Context, physical net.PacketConn, destination net.Addr, certificate, token string) (net.Conn, error) {
 	cfg, err := quicTLS(certificate)
 	if err != nil {
 		physical.Close()
@@ -139,6 +140,8 @@ func dialQUIC(ctx context.Context, physical net.PacketConn, destination net.Addr
 type quicConn struct {
 	relayConn // shared deadline handling; Read/Write/Close are overridden below
 	session   *quic.Conn
+	h3stream  *http3.RequestStream
+	h3Packets chan []byte
 	transport *quic.Transport
 	physical  net.PacketConn
 	parts     quicAssembly
@@ -151,7 +154,23 @@ func (c *quicConn) Read(b []byte) (int, error) {
 	ctx, cancel := c.operation(true)
 	defer cancel()
 	for {
-		data, err := c.session.ReceiveDatagram(ctx)
+		var data []byte
+		var err error
+		if c.h3stream != nil {
+			select {
+			case data = <-c.h3Packets:
+			case <-ctx.Done():
+				return 0, os.ErrDeadlineExceeded
+			case <-c.session.Context().Done():
+				return 0, net.ErrClosed
+			}
+			if len(b) < len(data) {
+				return 0, io.ErrShortBuffer
+			}
+			return copy(b, data), nil
+		} else {
+			data, err = c.session.ReceiveDatagram(ctx)
+		}
 		if err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {
 				return 0, os.ErrDeadlineExceeded
@@ -184,10 +203,27 @@ func (c *quicConn) Write(b []byte) (int, error) {
 	if expired {
 		return 0, os.ErrDeadlineExceeded
 	}
+	if c.h3stream != nil {
+		if len(b) <= 1000 {
+			if err := c.h3stream.SendDatagram(append([]byte{0}, b...)); err != nil {
+				return 0, err
+			}
+		} else {
+			c.access.Lock()
+			at := c.writeAt
+			c.access.Unlock()
+			c.h3stream.SetWriteDeadline(at)
+			if _, err := c.h3stream.Write(encodeCapsule(b)); err != nil {
+				return 0, err
+			}
+		}
+		return len(b), nil
+	}
 	c.number++
 	parts, _ := quicFragments(b, c.number)
 	for _, part := range parts {
-		if err := c.session.SendDatagram(part); err != nil {
+		err := c.session.SendDatagram(part)
+		if err != nil {
 			return 0, err
 		}
 	}

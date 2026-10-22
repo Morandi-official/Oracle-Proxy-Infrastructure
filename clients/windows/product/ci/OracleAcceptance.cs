@@ -18,9 +18,10 @@ internal static class OracleAcceptance
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_begin(out IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_end(IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_all_loss_begin(out IntPtr engine);
-        internal InitialUdpLoss(bool blockQuic=false)
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_primary_loss_begin(out IntPtr engine);
+        internal InitialUdpLoss(bool blockQuic=false,bool primaryOnly=false)
         {
-            uint code=blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
+            uint code=primaryOnly?fixture_udp_primary_loss_begin(out _engine):blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
             if(code!=0){Console.WriteLine("INITIAL_UDP_NATIVE_ERROR="+code);throw new Win32Exception((int)code);}
         }
         public void Dispose()
@@ -57,9 +58,9 @@ internal static class OracleAcceptance
     }
     private static async Task<JsonObject> Connected()
     {
-        for(int i=0;i<50;i++){
+        for(int i=0;i<500;i++){
             try{var state=await Send("Status");if(state["mode"]?.GetValue<string>()=="connected" && state["guard"]?.GetValue<bool>()==true)return state;}catch{}
-            await Task.Delay(1000);
+            await Task.Delay(100);
         }
         throw new IOException("ORACLE_RECONNECT_TIMED_OUT");
     }
@@ -74,7 +75,12 @@ internal static class OracleAcceptance
     private static async Task<bool> CarrierDirectBlocked()
     {
         using var socket=new TcpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        try{await socket.ConnectAsync(IPAddress.Parse("152.67.156.100"),443,timeout.Token);return false;}catch{return true;}
+        try{socket.Client.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)NativeGuard.PhysicalIPv4Index));await socket.ConnectAsync(IPAddress.Parse("152.67.156.100"),443,timeout.Token);return false;}catch{return true;}
+    }
+    private static async Task<bool> AdminThroughVPN(){
+        using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)};
+        using var response=await client.GetAsync("https://vpn-admin.morandi.dpdns.org/login/");
+        return response.StatusCode==HttpStatusCode.OK && (await response.Content.ReadAsStringAsync()).Contains("csrfmiddlewaretoken",StringComparison.Ordinal);
     }
     private static async Task<bool> FreshDns()
     {
@@ -104,6 +110,26 @@ internal static class OracleAcceptance
                 var blocked=await ControlPipe.Send("Connect");
                 Check(blocked["ok"]?.GetValue<bool>()==false && blocked["error"]?.GetValue<string>()=="UU_MAINTENANCE_BUSY" && blocked["mode"]?.GetValue<string>()=="disconnected" && blocked["intent"]?.GetValue<bool>()==false,"REAL_CONNECT_REFUSED_DURING_ELEVATED_UU_MAINTENANCE");
             }
+            stage="FORCED_COLD_PROTOCOLS";
+            foreach(string preference in new[]{"PreferUdp","PreferQuic"}){
+                string wanted=preference=="PreferUdp"?"wireguard-udp":"wireguard-quic";
+                for(int cycle=0;cycle<3;cycle++){
+                    await Send("Disconnect");var selected=await Send(preference);
+                    Check(selected["core_pid"]?.GetValue<uint>()==0,"REAL_SELECTION_STOPS_OLD_CORE_"+wanted+"_"+cycle);
+                    using var primaryLoss=preference=="PreferUdp" && cycle==1?new InitialUdpLoss(primaryOnly:true):null;
+                    var timer=Stopwatch.StartNew();await Send("Connect");var cold=await Connected();long elapsed=timer.ElapsedMilliseconds;
+                    Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
+                    Check(cold["transport"]?.GetValue<string>()==wanted && elapsed<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
+                    Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
+                    if(preference=="PreferUdp" && cycle==1)Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_WIREGUARD_UDP443_WHILE_51820_IS_BLOCKED");
+                    if(preference=="PreferQuic"){
+                        Check(cold["carrier_stage"]?.GetValue<string>()=="CARRIER_H3_READY","REAL_STANDARD_HTTP3_AUTHENTICATED_"+cycle);
+                        timer.Restart();uint prior=await ColdCore();var restored=await Connected();
+                        Check(restored["core_pid"]?.GetValue<uint>()!=prior && restored["transport"]?.GetValue<string>()==wanted && timer.ElapsedMilliseconds<8000 && await ExitIp()=="152.67.156.100","REAL_HTTP3_HARD_CORE_LOSS_REPLACEMENT_WITHOUT_HTTPS_"+cycle);
+                    }
+                }
+            }
+            await Send("Disconnect");await Send("PreferAuto");
             stage="INITIAL_TRANSIENT_UDP_LOSS";uint initialPid;
             // The acceptance target has a fixed deployed WireGuard port. The
             // ordinary GUI IPC deliberately never exposes the tunnel profile.
@@ -114,7 +140,7 @@ internal static class OracleAcceptance
                 await Task.Delay(500);
             }
             Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && !NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await ExitIp()!="152.67.156.100","REAL_PREPARATION_HAS_NO_TUN_ROUTES_OR_ORDINARY_APP_PROXY");
-            Check(prepared["transport"]?.GetValue<string>()=="wireguard-udp" && prepared["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && prepared["native_udp_attempt"]?["socket_binding"]?.GetValue<string>()=="connected_ipv4" && prepared["native_udp_attempt"]?["started_without_tun"]?.GetValue<bool>()==true && prepared["native_udp_attempt"]?["probe_result"]?.GetValue<string>()=="oracle_egress_verified","REAL_NATIVE_UDP_51820_PREPARATION_VERIFIED_BEFORE_TUN");
+            Check(prepared["transport"]?.GetValue<string>()=="wireguard-udp" && prepared["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && prepared["native_udp_attempt"]?["socket_binding"]?.GetValue<string>()=="native_udp_dual_port" && prepared["native_udp_attempt"]?["started_without_tun"]?.GetValue<bool>()==true && prepared["native_udp_attempt"]?["probe_result"]?.GetValue<string>()=="oracle_egress_verified","REAL_NATIVE_UDP_51820_PREPARATION_VERIFIED_BEFORE_TUN");
             if(Environment.GetEnvironmentVariable("ORACLE_REQUIRE_QUIC")=="true")Check(prepared["quic_available"]?.GetValue<bool>()==true,"REAL_QUIC_RELEASE_CONFIGURATION_AND_SERVER_METADATA_IN_SYNC");
             var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();
             var quick=await Send("Connect");long clickMs=click.ElapsedMilliseconds;
@@ -168,7 +194,7 @@ internal static class OracleAcceptance
                     await Send("Connect");var quic=await Connected();
                     Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
                     Check(quic["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && quic["native_udp_attempt"]?["probe_failures"]?.GetValue<int>()>=2 && quic["native_udp_attempt"]?["probe_result"]?.GetValue<string>() is "egress_probe_timeout" or "egress_probe_http_failed","REAL_QUIC_DIAGNOSTICS_RETAIN_NATIVE_UDP_FAILURE_EVIDENCE");
-                    Check(await CarrierDirectBlocked(),"REAL_QUIC_CARRIER_ROUTE_HAS_NO_ORDINARY_DIRECT_ESCAPE");
+                    Check(await CarrierDirectBlocked() && await AdminThroughVPN(),"REAL_QUIC_ADMIN_THROUGH_VPN_AND_PHYSICAL_DIRECT_BLOCKED");
                     uint quicPid=quic["core_pid"]!.GetValue<uint>();
                     for(int cycle=0;cycle<3;cycle++){
                         var off=await Send("Disconnect");
@@ -192,7 +218,7 @@ internal static class OracleAcceptance
                 var carrier=await Connected();
                 Check(carrier["transport"]?.GetValue<string>()=="wireguard-https" && await ExitIp()=="152.67.156.100","REAL_AUTOMATIC_HTTPS_WIREGUARD_ORACLE_EXIT_WITH_NATIVE_UDP_BLOCKED");
                 Check(await FreshDns(),"REAL_HTTPS_WIREGUARD_FRESH_UDP_DNS");
-                Check(await CarrierDirectBlocked(),"REAL_ORDINARY_APP_CANNOT_USE_CARRIER_ROUTE_AS_DIRECT_ESCAPE");
+                Check(await CarrierDirectBlocked() && await AdminThroughVPN(),"REAL_HTTPS_ADMIN_THROUGH_VPN_AND_PHYSICAL_DIRECT_BLOCKED");
                 stage="HTTPS_SERVICE_CRASH_RECOVERY";
                 using(var carrierService=Process.GetProcessesByName("OracleProxy.Service").Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe)){
                     carrierService.Kill(true);await carrierService.WaitForExitAsync();

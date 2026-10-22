@@ -189,6 +189,9 @@ internal static class ProductTests
         using var idle=new MainForm((_,_,_)=>Task.FromResult((JsonObject)snapshot.DeepClone()));
         idle.Display(snapshot);idle.CreateControl();idle.PerformLayout();
         IEnumerable<Control> Descendants(Control parent){foreach(Control control in parent.Controls){yield return control;foreach(var child in Descendants(control))yield return child;}}
+        var protocolChoices=Descendants(idle).OfType<ComboBox>().Single();
+        if(protocolChoices.Items.Count!=3 || protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTPS",StringComparison.Ordinal)) || !protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTP/3",StringComparison.Ordinal)))return 1;
+        Console.WriteLine("PROTOCOL_CHOICES_ARE_AUTO_NATIVE_UDP_HTTP3_WITHOUT_HTTPS_OPTION=PASS");
         int textChanges=0,buttonChanges=0,layouts=0;
         foreach(var control in Descendants(idle)){
             control.TextChanged+=(_,_)=>textChanges++;
@@ -305,7 +308,7 @@ internal static class ProductTests
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";
-        config["outbounds"]!.AsArray().Single(item=>item?["tag"]?.GetValue<string>()=="oracle-native-udp")!["bind_interface"]=loopback;
+
         Process? exit=null,client=null;
         try{
             exit=await Launch(server);

@@ -111,6 +111,10 @@ internal sealed class DurableState
     public string PrivateKey {get;set;}="";
     public string PublicKey {get;set;}="";
     public string Token {get;set;}="";
+    public string TransportPreference {get;set;}="auto";
+    public string CarrierHint {get;set;}="";
+    public string CarrierNetworkHash {get;set;}="";
+    public long CarrierHintUntil {get;set;}
     public bool ConnectIntent {get;set;}
     public bool RecoveryRequired {get;set;}
     public string[] UuPaths {get;set;}=[];

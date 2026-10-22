@@ -237,3 +237,22 @@ API OpTunDormant(void){
  }
  FreeMibTable(table);return ok?1:0;
 }
+/* Read-only physical default route selection for the SYSTEM control channel.
+ * Keep recovery API traffic usable even when the ordinary default is the TUN. */
+API OpPhysicalIPv4Index(void){
+ if(!system_only())return 0;
+ MIB_IPFORWARD_TABLE2 *table=NULL;if(GetIpForwardTable2(AF_INET,&table)!=NO_ERROR)return 0;
+ NET_LUID owned={0};ConvertInterfaceAliasToLuid(L"OracleProxy",&owned);
+ ULONG index=0;UINT64 best=~(UINT64)0;
+ for(ULONG i=0;i<table->NumEntries;i++){
+  MIB_IPFORWARD_ROW2 *route=&table->Table[i];
+  if(route->DestinationPrefix.PrefixLength!=0||route->Loopback||(owned.Value&&route->InterfaceLuid.Value==owned.Value))continue;
+  MIB_IF_ROW2 nic={0};nic.InterfaceLuid=route->InterfaceLuid;
+  if(GetIfEntry2(&nic)!=NO_ERROR||nic.OperStatus!=IfOperStatusUp||nic.Type==IF_TYPE_SOFTWARE_LOOPBACK)continue;
+  MIB_IPINTERFACE_ROW info;InitializeIpInterfaceEntry(&info);info.Family=AF_INET;info.InterfaceLuid=route->InterfaceLuid;
+  if(GetIpInterfaceEntry(&info)!=NO_ERROR)continue;
+  UINT64 metric=(UINT64)route->Metric+info.Metric;
+  if(metric<best){best=metric;index=route->InterfaceIndex;}
+ }
+ FreeMibTable(table);return index;
+}

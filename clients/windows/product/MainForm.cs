@@ -14,7 +14,8 @@ internal sealed class MainForm : Form
     private readonly Button _connect=new(){Text="连接",Width=155,Height=48};
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
-    private bool _busy;
+    private bool _busy,_renderingTransport,_connectionIntent;
+    private readonly ComboBox _transportChoice=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=240};
     private readonly SemaphoreSlim _requests=new(1,1);
     private readonly Func<string,string?,string?,Task<JsonObject>> _send;
     private sealed class BufferedFlowPanel : FlowLayoutPanel
@@ -31,6 +32,9 @@ internal sealed class MainForm : Form
         sidebar.Controls.Add(new Label{Text="ORACLE\nPROXY\n\n连接与用量\n\nWireGuard\n\n设备与诊断",ForeColor=Color.White,AutoSize=true,Location=new Point(24,35),Font=new Font(Font.FontFamily,13,FontStyle.Bold)});Controls.Add(sidebar);
         var body=new BufferedFlowPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,Padding=new Padding(28,30,18,20)};
         foreach(var item in new Control[]{_mode,_detail,new Label{Height=12},_telemetry,new Label{Height=10},_usage,_progress,_expiry}){item.Margin=new Padding(0,0,0,14);body.Controls.Add(item);}
+        _transportChoice.Items.AddRange(["自动（UDP 优先）","WireGuard / UDP","QUIC / HTTP/3"]);_transportChoice.SelectedIndex=0;
+        var selection=new BufferedFlowPanel{AutoSize=true,Width=660};selection.Controls.Add(new Label{Text="连接方式",AutoSize=true,Margin=new Padding(0,7,12,0)});selection.Controls.Add(_transportChoice);body.Controls.Add(selection);
+        _transportChoice.SelectedIndexChanged+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(_transportChoice.SelectedIndex switch{1=>"PreferUdp",2=>"PreferQuic",_=>"PreferAuto"});};
         var buttons=new BufferedFlowPanel{AutoSize=true,Width=660,Height=60};buttons.Controls.AddRange([_connect,_disconnect]);body.Controls.Add(buttons);
         var credentials=new BufferedFlowPanel{AutoSize=true,Width=660,Height=40};credentials.Controls.AddRange([_username,_password,_login]);body.Controls.Add(credentials);
         var tools=new BufferedFlowPanel{AutoSize=true,Width=660,Height=45};
@@ -55,7 +59,7 @@ internal sealed class MainForm : Form
         bool passive=command=="Status";
         if(passive){if(!_requests.Wait(0))return;}
         else{
-            if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=false;
+            if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_transportChoice.Enabled=false;
             // A click arriving during a read waits for that read instead of
             // disappearing. Passive reads never change button enabled state.
             await _requests.WaitAsync();
@@ -68,7 +72,7 @@ internal sealed class MainForm : Form
             _mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";
             try{string path=Path.Combine(Platform.Root,"diagnostics.json");if(new FileInfo(path).Length<=4096){var d=JsonNode.Parse(File.ReadAllText(path));_detail.Text+=$" 诊断：{d?["stage"]} / {d?["code"]}。";}}catch{}
         }
-        finally{_requests.Release();if(!passive){_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;}}
+        finally{_requests.Release();if(!passive){_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;_transportChoice.Enabled=!_connectionIntent;}}
     }
     private void ShowUuReport()=>ShowReport("UU 自动识别详情",_uuReport);
     private void ShowReport(string title,string report)
@@ -97,11 +101,16 @@ internal sealed class MainForm : Form
     internal void Display(JsonObject state)
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
-            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","socket_binding","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","quic_available","native_udp_selected_port","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","carrier_stage","probe_failures","elapsed_ms"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
+            _connectionIntent=state["intent"]?.GetValue<bool>()==true;
+            _renderingTransport=true;
+            try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>() switch{"udp"=>1,"quic"=>2,_=>0};}finally{_renderingTransport=false;}
+            _transportChoice.Enabled=!_connectionIntent && !_busy;
+            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc8");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc9");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
@@ -109,11 +118,11 @@ internal sealed class MainForm : Form
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
             _timer.Interval=mode is "protected" or "connecting" || (state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:3000;
-            _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 Oracle · HTTPS","wireguard-quic"=>"已连接 Oracle · QUIC",_=>"已连接 Oracle · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
+            _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 Oracle · HTTPS","wireguard-quic"=>"已连接 Oracle · QUIC / HTTP/3",_=>"已连接 Oracle · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;
             string policy=state["account"]?["status"]?.GetValue<string>() ?? "";
             string detail=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?(policy is "disabled" or "expired" or "quota" or "server_budget" or "unavailable"?$"账号状态：{PolicyName(policy)}。防泄漏保护保留。":"防泄漏规则保持启用。意外中断时不会主动恢复普通应用直连。"):"点击连接前，请先登录管理员分配的账号。";
-            if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)detail="快速连接已就绪（"+(state["transport"]?.GetValue<string>() switch{"wireguard-quic"=>"QUIC 备用通道","wireguard-https"=>"HTTPS 兜底通道",_=>"WireGuard UDP 主通道"})+"）。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
+            if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)detail="快速连接已就绪（"+(state["transport"]?.GetValue<string>() switch{"wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS 兜底通道",_=>"WireGuard UDP 主通道"})+"）。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
             else if(mode=="disconnected" && state["preparing"]?.GetValue<bool>()==true)detail="正在预备加密通道，当前普通应用仍直连。首次连接或网络变化可能需要等待。";
             var account=state["account"]?.AsObject();
             if(account is not null){
@@ -134,6 +143,7 @@ internal sealed class MainForm : Form
     private static string PolicyName(string status)=>status switch{"disabled"=>"已停用","expired"=>"已到期","quota"=>"配额已耗尽","server_budget"=>"服务器出站额度保护中",_=>"待核对"};
     private static string FormatBytes(long bytes)=>$"{bytes/(double)(1L<<30):0.00} GiB（{bytes:N0} B）";
     private static string Message(string code)=>code switch{
+        "QUIC_NOT_AVAILABLE"=>"服务器暂未提供 QUIC / HTTP/3，请使用自动模式。", "DISCONNECT_BEFORE_TRANSPORT_CHANGE"=>"请先断开，再选择连接方式。",
         "INVALID_CREDENTIALS"=>"账号或密码错误。", "DEVICE_LIMIT_REACHED"=>"设备数量已达上限，请联系管理员撤销旧设备。", "RATE_LIMITED"=>"登录尝试过于频繁，请稍后重试。",
         "UU_TRUST_NOT_VERIFIED"=>"发现 UU 安装记录，但程序签名或目录权限尚未通过核验。保持原有网络，请勿在远控机器强行连接。",
         "SERVICE_OPERATION_FAILED"=>"连接未完成，请点击“连接诊断”查看失败阶段和错误码。",

@@ -122,7 +122,7 @@ func TestQUICRealTLSAuthenticationDatagramsAndDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
-	conn, err := dialQUIC(ctx, physical, socket.LocalAddr(), encoded, string(bytes.Repeat([]byte{'a'}, 43)))
+	conn, err := dialLegacyQUIC(ctx, physical, socket.LocalAddr(), encoded, string(bytes.Repeat([]byte{'a'}, 43)))
 	if err != nil {
 		t.Fatal(err)
 	}

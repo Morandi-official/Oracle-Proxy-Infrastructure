@@ -12,6 +12,8 @@ internal sealed class CarrierMemory
         if(network==_network)return false;
         _network=network;_failed.Clear();return true;
     }
+    internal static string NetworkHash()=>Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Network())));
+    internal void Clear()=>_failed.Clear();
     internal void Failed(TunnelTransport transport)=>_failed[transport]=System.Diagnostics.Stopwatch.GetTimestamp();
     internal TunnelTransport Preferred(System.Text.Json.Nodes.JsonObject state)
     {

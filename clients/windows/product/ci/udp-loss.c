@@ -9,7 +9,7 @@
 #pragma comment(lib,"fwpuclnt.lib")
 #pragma comment(lib,"rpcrt4.lib")
 static const GUID fault_layer={0xe195ba5f,0xb047,0x4bdb,{0xa8,0x61,0x96,0xa3,0x35,0x47,0x66,0x03}};
-static DWORD begin_loss(HANDLE *output,BOOL quic){
+static DWORD begin_loss(HANDLE *output,BOOL quic,BOOL primary_only){
  if(!output)return ERROR_INVALID_PARAMETER;*output=NULL;
  FWPM_SESSION0 session={0};session.flags=FWPM_SESSION_FLAG_DYNAMIC;
  session.displayData.name=L"Oracle Proxy disposable UDP fault";
@@ -29,11 +29,14 @@ static DWORD begin_loss(HANDLE *output,BOOL quic){
  filter.weight.type=FWP_UINT64;filter.weight.uint64=&weight;
  filter.action.type=FWP_ACTION_BLOCK;filter.numFilterConditions=4;filter.filterCondition=c;
  e=FwpmFilterAdd0(engine,&filter,NULL,NULL);if(e)goto failed;
+ if(!primary_only){c[1].conditionValue.uint16=443;e=FwpmFilterAdd0(engine,&filter,NULL,NULL);if(e)goto failed;}
  if(quic){c[1].conditionValue.uint16=8443;e=FwpmFilterAdd0(engine,&filter,NULL,NULL);if(e)goto failed;}
  *output=engine;return ERROR_SUCCESS;
 failed:
  FwpmEngineClose0(engine);return e;
 }
-__declspec(dllexport) DWORD __cdecl fixture_udp_loss_begin(HANDLE *output){return begin_loss(output,FALSE);}
-__declspec(dllexport) DWORD __cdecl fixture_udp_all_loss_begin(HANDLE *output){return begin_loss(output,TRUE);}
+__declspec(dllexport) DWORD __cdecl fixture_udp_loss_begin(HANDLE *output){return begin_loss(output,FALSE,FALSE);}
+__declspec(dllexport) DWORD __cdecl fixture_udp_all_loss_begin(HANDLE *output){return begin_loss(output,TRUE,FALSE);}
 __declspec(dllexport) DWORD __cdecl fixture_udp_loss_end(HANDLE engine){return FwpmEngineClose0(engine);}
+
+__declspec(dllexport) DWORD __cdecl fixture_udp_primary_loss_begin(HANDLE *output){return begin_loss(output,FALSE,TRUE);}

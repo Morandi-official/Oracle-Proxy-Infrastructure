@@ -40,3 +40,5 @@ ordinary app HTTP exit and fresh UDP DNS, and rejects a prepared switch taking
 1000 ms or more. Route-free standby must leave ordinary app egress direct. The
 QUIC end-to-end gate runs once the server advertises the externally tested port;
 blocking both UDP carriers must still select HTTPS and retain crash protection.
+
+rc9 adds explicit Auto / WireGuard UDP / QUIC HTTP3 preferences, native 51820→443 single-device datagram probing, standard h3 Extended CONNECT-UDP with raw HTTP Datagrams and bounded RFC9298 DATAGRAM Capsules for larger packets, a physical-interface-bound SYSTEM control/carrier path, and tunneled admin-site access. HTTPS is automatic fallback only. Fresh kernel/core verification remains mandatory after process loss; persisted carrier hints never authorize a connection.

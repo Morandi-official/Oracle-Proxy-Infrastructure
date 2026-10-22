@@ -20,6 +20,13 @@ internal static class ProductSelfTests
         if(relay["endpoints"]?[0]?["detour"]?.GetValue<string>()!="oracle-https-relay" ||
            relay["outbounds"]?[1]?["type"]?.GetValue<string>()!="oracle-https" ||
            relay["inbounds"]?[0]?["route_exclude_address"]?[0]?.GetValue<string>()!="152.67.156.100/32")return false;
+        if(TransportPolicy.Next(TunnelTransport.WireGuardUdp,state)!=TunnelTransport.WireGuardHttps)return false;
+        state["tunnel"]!["quic"]=new JsonObject{["enabled"]=true,["port"]=8443,["certificate"]="-----BEGIN CERTIFICATE-----synthetic"};
+        if(TransportPolicy.Next(TunnelTransport.WireGuardUdp,state)!=TunnelTransport.WireGuardQuic || TransportPolicy.Next(TunnelTransport.WireGuardQuic,state)!=TunnelTransport.WireGuardHttps || TransportPolicy.Next(TunnelTransport.WireGuardHttps,state) is not null)return false;
+        var quic=CoreConfig.Build(state,secret,"synthetic-only",TunnelTransport.WireGuardQuic);
+        if(quic["endpoints"]?[0]?["detour"]?.GetValue<string>()!="oracle-quic-relay" || quic["outbounds"]?[1]?["type"]?.GetValue<string>()!="oracle-quic")return false;
+        state["tunnel"]!["quic"]!["enabled"]=false;
+        try{CoreConfig.Build(state,secret,"synthetic-only",TunnelTransport.WireGuardQuic);return false;}catch(IOException){}
         state["tunnel"]!["endpoint"]="evil.invalid:443";
         try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}
         CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);return true;

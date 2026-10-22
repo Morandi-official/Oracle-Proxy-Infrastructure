@@ -1,3 +1,4 @@
+using System.Net.NetworkInformation;
 // Non-shipped integration fixture. Uses only the dedicated low-quota client
 // account from the windows-client-acceptance Environment, never SSH/OAuth keys.
 using System.Diagnostics;
@@ -16,9 +17,10 @@ internal static class OracleAcceptance
         private IntPtr _engine;
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_begin(out IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_end(IntPtr engine);
-        internal InitialUdpLoss()
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_all_loss_begin(out IntPtr engine);
+        internal InitialUdpLoss(bool blockQuic=false)
         {
-            uint code=fixture_udp_loss_begin(out _engine);
+            uint code=blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
             if(code!=0){Console.WriteLine("INITIAL_UDP_NATIVE_ERROR="+code);throw new Win32Exception((int)code);}
         }
         public void Dispose()
@@ -93,12 +95,26 @@ internal static class OracleAcceptance
             stage="INITIAL_TRANSIENT_UDP_LOSS";uint initialPid;
             // The acceptance target has a fixed deployed WireGuard port. The
             // ordinary GUI IPC deliberately never exposes the tunnel profile.
+            stage="WARM_PREPARATION";
+            await Send("Prepare");JsonObject prepared=new();
+            for(int attempt=0;attempt<60;attempt++){
+                prepared=await Send("Prepare");if(prepared["quick_ready"]?.GetValue<bool>()==true)break;
+                await Task.Delay(500);
+            }
+            Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && !NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await ExitIp()!="152.67.156.100","REAL_PREPARATION_HAS_NO_TUN_ROUTES_OR_ORDINARY_APP_PROXY");
+            var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();
+            var quick=await Send("Connect");long clickMs=click.ElapsedMilliseconds;
+            Console.WriteLine("REAL_WARM_CONNECT_CLICK_MS="+clickMs);
+            Check(quick["mode"]?.GetValue<string>()=="connected" && quick["core_pid"]?.GetValue<uint>()==warmPid && quick["guard"]?.GetValue<bool>()==true && quick["tun_permitted"]?.GetValue<bool>()==true && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_PREPARED_CORE_SWITCH_AND_FRESH_WINDOWS_HTTP_UDP_DNS");
+            Check(clickMs<1000,"REAL_WARM_CLICK_TO_GUARDED_PROXY_UNDER_ONE_SECOND");
+            await Send("Disconnect");
             using(var loss=new InitialUdpLoss()){
                 var waiting=await ControlPipe.Send("Connect");
                 // Same fixed, credential-free fields as the public diagnostic
                 // report; never print the response object or exception message.
                 foreach(string field in new[]{"mode","error","guard","tun_permitted","core_stage","core_pid","connection_stage"})Console.WriteLine("INITIAL_LOSS_"+field.ToUpperInvariant()+"="+waiting[field]);
                 if(waiting["failure"] is JsonObject failure)foreach(string field in new[]{"category","hresult","native_error","socket_error","http_error","http_status"})Console.WriteLine("INITIAL_LOSS_FAILURE_"+field.ToUpperInvariant()+"="+failure[field]);
+                for(int attempt=0;attempt<12 && waiting["error"]?.GetValue<string>() is not ("ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED");attempt++){await Task.Delay(500);waiting=await Send("Status");}
                 string code=waiting["error"]?.GetValue<string>() ?? "";
                 Check(waiting["mode"]?.GetValue<string>()=="protected" && waiting["guard"]?.GetValue<bool>()==true && waiting["tun_permitted"]?.GetValue<bool>()==true && waiting["core_stage"]?.GetValue<string>()=="READY" && code is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED","REAL_INITIAL_PROBE_FAILURE_RETAINS_LIVE_GUARDED_TUNNEL");
                 initialPid=waiting["core_pid"]!.GetValue<uint>();Check(initialPid>0,"REAL_INITIAL_HANDSHAKE_CORE_STAYS_ALIVE");
@@ -120,8 +136,17 @@ internal static class OracleAcceptance
             var recovered=await Connected();
             Check(recovered["account"]?["device_count"]?.GetValue<int>()==devices,"REAL_SCM_RECOVERY_REUSES_EXISTING_DEVICE_IDENTITY");
             Check(await ExitIp()=="152.67.156.100","REAL_SCM_RECOVERY_ORACLE_EXIT");
+            stage="AUTOMATIC_QUIC_FALLBACK";await Send("Disconnect");
+            if(prepared["quic_available"]?.GetValue<bool>()==true){
+                using(var nativeLoss=new InitialUdpLoss()){
+                    await Send("Connect");var quic=await Connected();
+                    Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
+                    Check(await CarrierDirectBlocked(),"REAL_QUIC_CARRIER_ROUTE_HAS_NO_ORDINARY_DIRECT_ESCAPE");
+                    await Send("Disconnect");
+                }
+            }else Console.WriteLine("REAL_QUIC_CARRIER=SERVER_NOT_ADVERTISED_YET");
             stage="AUTOMATIC_HTTPS_FALLBACK";await Send("Disconnect");
-            using(var loss=new InitialUdpLoss()){
+            using(var loss=new InitialUdpLoss(blockQuic:true)){
                 var pending=await ControlPipe.Send("Connect");
                 Check(pending["mode"]?.GetValue<string>()=="protected" && pending["guard"]?.GetValue<bool>()==true,"REAL_UDP_LOSS_STARTS_WITH_PROTECTED_NATIVE_ATTEMPT");
                 var carrier=await Connected();

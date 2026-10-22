@@ -92,10 +92,41 @@ internal static class UuDiscovery
                 if(!TrustedOwner(security))return new(dir.FullName,"UU_DIRECTORY_OWNER_UNTRUSTED");
                 if(UnsafeWriter(security))return new(dir.FullName,"UU_DIRECTORY_WRITABLE");
             }
-            return SignatureIssue(path);
+            return CachedSignatureIssue(path);
         }catch(IOException error) when(error.Message=="REPARSE_POINT_REJECTED"){return new(path,"UU_REPARSE_POINT");}
         catch(System.Security.Cryptography.CryptographicException){return new(path,"UU_SIGNATURE_UNREADABLE");}
         catch{return new(path,"UU_TRUST_INSPECTION_FAILED");}
+    }
+    // Cache only successful Authenticode work. Every call above still rechecks
+    // file/ancestor ownership, ACLs and reparse points before consulting this.
+    private static readonly Dictionary<string,(string Identity,long Until)> Signatures=new(StringComparer.OrdinalIgnoreCase);
+    [StructLayout(LayoutKind.Sequential)]private struct BasicInfo{public long Created,Accessed,Written,Changed;public uint Attributes;}
+    [StructLayout(LayoutKind.Sequential)]private struct IdInfo{public ulong Volume;public Guid FileId;}
+    [DllImport("kernel32.dll",SetLastError=true,EntryPoint="GetFileInformationByHandleEx")]
+    private static extern bool BasicInformation(Microsoft.Win32.SafeHandles.SafeFileHandle handle,int kind,out BasicInfo information,uint size);
+    [DllImport("kernel32.dll",SetLastError=true,EntryPoint="GetFileInformationByHandleEx")]
+    private static extern bool IdInformation(Microsoft.Win32.SafeHandles.SafeFileHandle handle,int kind,out IdInfo information,uint size);
+    private static string SignatureIdentity(string path)
+    {
+        using var file=File.OpenHandle(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
+        if(!BasicInformation(file,0,out var basic,(uint)Marshal.SizeOf<BasicInfo>()) || !IdInformation(file,18,out var id,(uint)Marshal.SizeOf<IdInfo>()))throw new IOException("FILE_IDENTITY_UNAVAILABLE");
+        return $"{id.Volume:X}:{id.FileId}:{basic.Created}:{basic.Written}:{basic.Changed}:{RandomAccess.GetLength(file)}";
+    }
+    private static UuIssue? CachedSignatureIssue(string path)
+    {
+        string identity;
+        try{identity=SignatureIdentity(path);}catch{return SignatureIssue(path);}
+        lock(Signatures){
+            if(Signatures.TryGetValue(path,out var item) && item.Identity==identity && Environment.TickCount64<item.Until)return null;
+        }
+        var issue=SignatureIssue(path);
+        if(issue is not null)return issue;
+        if(identity!=SignatureIdentity(path))return new(path,"UU_TRUST_CHANGED_REFRESH_REQUIRED");
+        lock(Signatures){
+            if(Signatures.Count>=256)Signatures.Clear();
+            Signatures[path]=(identity,Environment.TickCount64+60_000);
+        }
+        return null;
     }
     internal static UuIssue? SignatureIssue(string path)
     {

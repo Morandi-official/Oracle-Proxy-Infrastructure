@@ -18,3 +18,25 @@ License: new product integration GPL-3.0-or-later; upstream sing-box GPLv3-or-la
 
 
 Main-branch CI additionally uses only the ordinary, low-quota account in the `windows-client-acceptance` Environment to verify actual Oracle egress, automatic enrollment, usage linkage, GUI-process loss, SCM crash recovery and explicit disconnect. Pull-request jobs do not receive that Environment's credentials. This acceptance harness is excluded from the product executable and never uploads keys, bearer tokens, passwords or screenshots of a real account. A CI enrollment consumes a device slot; logging out intentionally does not erase the server's historical device record.
+
+
+Transport preference is native WireGuard UDP 51820, then authenticated QUIC
+UDP 8443, then authenticated HTTPS/TLS 443. QUIC uses a dedicated public trust
+certificate obtained through verified Oracle HTTPS, hostname and expiry checks,
+and bounded datagram fragmentation; there is no insecure TLS mode.
+
+The GUI requests route-free encrypted preparation while visible. The standby
+core exposes only a random authenticated loopback SOCKS probe, with no TUN or
+system routing changes. A recent verified Oracle exit, fresh active policy and
+unchanged profile allow the same SYSTEM core to create the TUN after persistent
+WFP protection is installed. The service grants a live TUN lease only after the
+owned core/interface are verified. Explicit Off removes the TUN before clearing
+protection. Background network probes do not hold the command gate. Readiness,
+verification time and measured switch duration are reported explicitly; cold
+connections are never represented as verified or promised to take one second.
+
+The hosted Oracle acceptance measures the actual IPC click duration, verifies
+ordinary app HTTP exit and fresh UDP DNS, and rejects a prepared switch taking
+1000 ms or more. Route-free standby must leave ordinary app egress direct. The
+QUIC end-to-end gate runs once the server advertises the externally tested port;
+blocking both UDP carriers must still select HTTPS and retain crash protection.

@@ -114,6 +114,7 @@ internal static class OracleAcceptance
                 await Task.Delay(500);
             }
             Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && !NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await ExitIp()!="152.67.156.100","REAL_PREPARATION_HAS_NO_TUN_ROUTES_OR_ORDINARY_APP_PROXY");
+            Check(prepared["transport"]?.GetValue<string>()=="wireguard-udp" && prepared["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && prepared["native_udp_attempt"]?["started_without_tun"]?.GetValue<bool>()==true && prepared["native_udp_attempt"]?["probe_result"]?.GetValue<string>()=="oracle_egress_verified","REAL_NATIVE_UDP_51820_PREPARATION_VERIFIED_BEFORE_TUN");
             if(Environment.GetEnvironmentVariable("ORACLE_REQUIRE_QUIC")=="true")Check(prepared["quic_available"]?.GetValue<bool>()==true,"REAL_QUIC_RELEASE_CONFIGURATION_AND_SERVER_METADATA_IN_SYNC");
             var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();
             var quick=await Send("Connect");long clickMs=click.ElapsedMilliseconds;
@@ -166,6 +167,7 @@ internal static class OracleAcceptance
                     Check(previousPid>0 && replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["quick_ready"]?.GetValue<bool>()==false && replacement["verified_at"] is null && replacement["transport"]?.GetValue<string>()=="wireguard-udp","REAL_REPLACEMENT_CORE_CANNOT_INHERIT_OLD_EXIT_VERIFICATION");
                     await Send("Connect");var quic=await Connected();
                     Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
+                    Check(quic["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && quic["native_udp_attempt"]?["probe_failures"]?.GetValue<int>()>=2 && quic["native_udp_attempt"]?["probe_result"]?.GetValue<string>() is "egress_probe_timeout" or "egress_probe_http_failed","REAL_QUIC_DIAGNOSTICS_RETAIN_NATIVE_UDP_FAILURE_EVIDENCE");
                     Check(await CarrierDirectBlocked(),"REAL_QUIC_CARRIER_ROUTE_HAS_NO_ORDINARY_DIRECT_ESCAPE");
                     uint quicPid=quic["core_pid"]!.GetValue<uint>();
                     for(int cycle=0;cycle<3;cycle++){

@@ -15,18 +15,25 @@ internal sealed class MainForm : Form
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _busy;
+    private readonly SemaphoreSlim _requests=new(1,1);
+    private readonly Func<string,string?,string?,Task<JsonObject>> _send;
+    private sealed class BufferedFlowPanel : FlowLayoutPanel
+    {
+        internal BufferedFlowPanel(){DoubleBuffered=true;ResizeRedraw=true;}
+    }
     private string _connectionReport="尚未读取系统服务。";
     private string _uuReport="请先在断开状态点击“重新识别 UU”。";
-    internal MainForm()
+    internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null)
     {
+        _send=send ?? ControlPipe.Send;DoubleBuffered=true;
         Text="Oracle Proxy";ClientSize=new Size(920,625);MinimumSize=new Size(850,650);BackColor=Color.FromArgb(243,246,251);Font=new Font("Microsoft YaHei UI",10);StartPosition=FormStartPosition.CenterScreen;
         var sidebar=new Panel{Dock=DockStyle.Left,Width=170,BackColor=Color.FromArgb(20,31,53)};
         sidebar.Controls.Add(new Label{Text="ORACLE\nPROXY\n\n连接与用量\n\nWireGuard\n\n设备与诊断",ForeColor=Color.White,AutoSize=true,Location=new Point(24,35),Font=new Font(Font.FontFamily,13,FontStyle.Bold)});Controls.Add(sidebar);
-        var body=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,Padding=new Padding(28,30,18,20)};
+        var body=new BufferedFlowPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.TopDown,WrapContents=false,AutoScroll=true,Padding=new Padding(28,30,18,20)};
         foreach(var item in new Control[]{_mode,_detail,new Label{Height=12},_telemetry,new Label{Height=10},_usage,_progress,_expiry}){item.Margin=new Padding(0,0,0,14);body.Controls.Add(item);}
-        var buttons=new FlowLayoutPanel{AutoSize=true,Width=660,Height=60};buttons.Controls.AddRange([_connect,_disconnect]);body.Controls.Add(buttons);
-        var credentials=new FlowLayoutPanel{AutoSize=true,Width=660,Height=40};credentials.Controls.AddRange([_username,_password,_login]);body.Controls.Add(credentials);
-        var tools=new FlowLayoutPanel{AutoSize=true,Width=660,Height=45};
+        var buttons=new BufferedFlowPanel{AutoSize=true,Width=660,Height=60};buttons.Controls.AddRange([_connect,_disconnect]);body.Controls.Add(buttons);
+        var credentials=new BufferedFlowPanel{AutoSize=true,Width=660,Height=40};credentials.Controls.AddRange([_username,_password,_login]);body.Controls.Add(credentials);
+        var tools=new BufferedFlowPanel{AutoSize=true,Width=660,Height=45};
         foreach(var (label,action) in new (string,Action)[]{("安装 / 升级服务",()=>Installer.Elevate(false)),("卸载",()=>{if(MessageBox.Show(this,"将恢复直连并卸载系统服务、删除本机密钥。服务器仍保留设备记录与用量，请联系管理员撤销旧设备以释放名额。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK)Installer.Elevate(true);})}){
             var b=new Button{Text=label,AutoSize=true};b.Click+=(_,_)=>{try{action();}catch{_detail.Text="操作未完成，请检查 UAC 提示或使用完整便携包。";}};tools.Controls.Add(b);}
         var refreshUu=new Button{Text="重新识别 UU",AutoSize=true};refreshUu.Click+=async(_,_)=>await Act("RefreshUu");tools.Controls.Add(refreshUu);
@@ -43,18 +50,25 @@ internal sealed class MainForm : Form
         _login.Click+=async(_,_)=>await Act("Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
         _timer.Tick+=async(_,_)=>{if(!_busy)await Act("Status");};Shown+=async(_,_)=>{await Act("Status");_timer.Start();};FormClosed+=(_,_)=>_timer.Dispose();
     }
-    private async Task Act(string command)
+    internal async Task Act(string command)
     {
-        if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=false;
+        bool passive=command=="Status";
+        if(passive){if(!_requests.Wait(0))return;}
+        else{
+            if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=false;
+            // A click arriving during a read waits for that read instead of
+            // disappearing. Passive reads never change button enabled state.
+            await _requests.WaitAsync();
+        }
         try{
-            var state=await ControlPipe.Send(command=="Status"?"Prepare":command,command=="Login"?_username.Text:null,command=="Login"?_password.Text:null);
+            var state=await _send(command=="Status"?"Prepare":command,command=="Login"?_username.Text:null,command=="Login"?_password.Text:null);
             if(command=="Login")_password.Clear();
             Display(state);
         }catch{
             _mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";
             try{string path=Path.Combine(Platform.Root,"diagnostics.json");if(new FileInfo(path).Length<=4096){var d=JsonNode.Parse(File.ReadAllText(path));_detail.Text+=$" 诊断：{d?["stage"]} / {d?["code"]}。";}}catch{}
         }
-        finally{_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;}
+        finally{_requests.Release();if(!passive){_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=true;}}
     }
     private void ShowUuReport()=>ShowReport("UU 自动识别详情",_uuReport);
     private void ShowReport(string title,string report)
@@ -79,26 +93,28 @@ internal sealed class MainForm : Form
     internal string ConnectionReport=>_connectionReport;
     internal int UsageProgress=>_progress.Value;
     internal bool UsageFresh=>_progress.Enabled;
+    internal int PollInterval=>_timer.Interval;
     internal void Display(JsonObject state)
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
             foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc7");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc8");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
                 foreach(var item in uuIssues)_uuReport+=$"\r\n{UuReason(item!["code"]!.GetValue<string>())}\r\n{item["code"]} {item["detail"]}\r\n{item["path"]}\r\n";
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
-            _timer.Interval=mode=="protected" || state["preparing"]?.GetValue<bool>()==true?250:3000;
+            _timer.Interval=mode is "protected" or "connecting" || (state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:3000;
             _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 Oracle · HTTPS","wireguard-quic"=>"已连接 Oracle · QUIC",_=>"已连接 Oracle · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;
             string policy=state["account"]?["status"]?.GetValue<string>() ?? "";
-            _detail.Text=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?(policy is "disabled" or "expired" or "quota" or "server_budget" or "unavailable"?$"账号状态：{PolicyName(policy)}。防泄漏保护保留。":"防泄漏规则保持启用。意外中断时不会主动恢复普通应用直连。"):"点击连接前，请先登录管理员分配的账号。";
-            if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)_detail.Text="快速连接已就绪（"+(state["transport"]?.GetValue<string>() switch{"wireguard-quic"=>"QUIC 备用通道","wireguard-https"=>"HTTPS 兜底通道",_=>"WireGuard UDP 主通道"})+"）。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
-            else if(mode=="disconnected" && state["preparing"]?.GetValue<bool>()==true)_detail.Text="正在预备加密通道，当前普通应用仍直连。首次连接或网络变化可能需要等待。";
+            string detail=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?(policy is "disabled" or "expired" or "quota" or "server_budget" or "unavailable"?$"账号状态：{PolicyName(policy)}。防泄漏保护保留。":"防泄漏规则保持启用。意外中断时不会主动恢复普通应用直连。"):"点击连接前，请先登录管理员分配的账号。";
+            if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)detail="快速连接已就绪（"+(state["transport"]?.GetValue<string>() switch{"wireguard-quic"=>"QUIC 备用通道","wireguard-https"=>"HTTPS 兜底通道",_=>"WireGuard UDP 主通道"})+"）。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
+            else if(mode=="disconnected" && state["preparing"]?.GetValue<bool>()==true)detail="正在预备加密通道，当前普通应用仍直连。首次连接或网络变化可能需要等待。";
             var account=state["account"]?.AsObject();
             if(account is not null){
                 long used=account["used_bytes"]!.GetValue<long>();long? limit=account["limit_bytes"]?.GetValue<long>();
@@ -109,7 +125,10 @@ internal sealed class MainForm : Form
             }else{_usage.Text="登录后显示本月用量与限额";_progress.Value=0;_expiry.Text="账号由管理员创建，不开放自行注册。";}
             long? latency=state["latency_ms"]?.GetValue<long>();long? at=state["observed_at"]?.GetValue<long>();
             bool fresh=at is long received && DateTimeOffset.UtcNow.ToUnixTimeSeconds()-received<=20;_progress.Enabled=fresh;
-            if(!fresh && account is not null)_detail.Text+=" 用量未刷新，显示的是上次读取值。";
+            if(!fresh && account is not null)detail+=" 用量未刷新，显示的是上次读取值。";
+            // Set the final text once: intermediate short text used to resize
+            // every AutoSize row twice on every 250 ms preparation poll.
+            if(_detail.Text!=detail)_detail.Text=detail;
             _telemetry.Text=$"隧道 HTTP 延迟：{(latency is null?"—":latency+" ms")} · 已验证 UU 程序：{state["uu_verified_programs"]} · 用量更新时间：{(at is null?"—":DateTimeOffset.FromUnixTimeSeconds(at.Value).ToLocalTime().ToString("HH:mm:ss"))}";
     }
     private static string PolicyName(string status)=>status switch{"disabled"=>"已停用","expired"=>"已到期","quota"=>"配额已耗尽","server_budget"=>"服务器出站额度保护中",_=>"待核对"};

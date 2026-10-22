@@ -92,6 +92,15 @@ jobs:
               --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
             python3 ops/oracle-project/verify_public.py
           fi
+      - name: External QUIC TLS reachability without client credentials
+        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
+        shell: bash
+        run: |
+          set -euo pipefail
+          quic_venv="$RUNNER_TEMP/oracle-quic-probe-venv"
+          python3 -m venv "$quic_venv"
+          "$quic_venv/bin/pip" install --disable-pip-version-check aioquic==1.3.0
+          "$quic_venv/bin/python" ops/oracle-project/verify_quic.py
       - name: Real Chromium and Firefox anonymous login form acceptance
         if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
         shell: bash

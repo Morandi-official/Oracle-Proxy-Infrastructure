@@ -27,7 +27,9 @@ APP_USER = 'oracle-proxy-admin'
 BUILD_USER = 'oracle-proxy-admin-build'
 SOURCE = Path(__file__).resolve().parents[1]
 UNIT_NAMES = ('oracle-proxy-admin.service', 'oracle-proxy-admin-collect.service',
-              'oracle-proxy-admin-collect.timer', 'oracle-proxy-relay.service')
+              'oracle-proxy-admin-collect.timer', 'oracle-proxy-relay.service',
+              'oracle-proxy-quic.service', 'oracle-proxy-quic-certificate.service',
+              'oracle-proxy-quic-certificate.timer')
 HOST = 'vpn-admin.morandi.dpdns.org'
 
 
@@ -166,8 +168,17 @@ def relay_expected():
     return (ROOT / 'current/relay/server.py').is_file()
 
 
+def quic_expected():
+    return (ROOT / 'current/relay/quic_server.py').is_file()
+
+
 def restart_application():
     command(['systemctl', 'restart', UNIT_NAMES[0]])
+    if quic_expected():
+        command(['systemctl', 'enable', UNIT_NAMES[4], UNIT_NAMES[6]])
+        command(['systemctl', 'restart', UNIT_NAMES[4], UNIT_NAMES[6]])
+    else:
+        command(['systemctl', 'disable', '--now', UNIT_NAMES[4], UNIT_NAMES[6]])
     if relay_expected():
         command(['systemctl', 'enable', UNIT_NAMES[3]])
         command(['systemctl', 'restart', UNIT_NAMES[3]])
@@ -185,10 +196,13 @@ def healthy():
             with opener.open(request, timeout=2) as response:
                 payload=json.load(response)
                 if response.status == 200 and isinstance(payload,dict) and payload.get('ready') is True:
-                    if not relay_expected(): return True
-                    with opener.open('http://127.0.0.1:8788/health', timeout=2) as relay:
-                        state = json.load(relay)
-                        if relay.status == 200 and isinstance(state, dict) and state.get('ready') is True: return True
+                    ready = True
+                    for expected, port in ((relay_expected(),8788),(quic_expected(),8789)):
+                        if not expected: continue
+                        with opener.open(f'http://127.0.0.1:{port}/health', timeout=2) as relay:
+                            state = json.load(relay)
+                            ready = ready and relay.status == 200 and isinstance(state, dict) and state.get('ready') is True
+                    if ready: return True
         except (OSError, ValueError):
             pass
         time.sleep(1)
@@ -219,6 +233,7 @@ def install(revision):
     create_user(APP_USER, STATE)
     create_user(BUILD_USER, '/nonexistent')
     create_user('oracle-proxy-relay', '/nonexistent')
+    create_user('oracle-proxy-quic', '/nonexistent')
     app = pwd.getpwnam(APP_USER)
     os.chown(STATE, app.pw_uid, app.pw_gid); STATE.chmod(0o700)
     release = ROOT / 'releases' / revision
@@ -248,6 +263,10 @@ def install(revision):
     subprocess.run(['/usr/bin/pkill', '-KILL', '-u', str(build.pw_uid)], check=False)
     (release / 'revision.env').write_text(f'ADMIN_SOURCE_REVISION={revision}\n')
     seal_tree(release)
+    # Execute only after the builder output is sealed root-owned. -I excludes
+    # environment and user module search paths from this fixed key operation.
+    if (release / 'relay/quic_keys.py').is_file():
+        command([release / '.venv/bin/python', '-I', release / 'relay/quic_keys.py'])
     environment['ADMIN_SOURCE_REVISION'] = revision
     previous = (ROOT / 'current').resolve() if (ROOT / 'current').is_symlink() else None
     # This release only adds application-owned tables. Never reverse migrations automatically.
@@ -273,7 +292,7 @@ def install(revision):
             switch(previous)
             restart_application()
         else:
-            subprocess.run(['systemctl', 'stop', UNIT_NAMES[0], UNIT_NAMES[3]], check=False)
+            subprocess.run(['systemctl', 'stop', UNIT_NAMES[0], UNIT_NAMES[3], UNIT_NAMES[4], UNIT_NAMES[6]], check=False)
         raise
     if previous is not None:
         (ROOT / 'previous').unlink(missing_ok=True)

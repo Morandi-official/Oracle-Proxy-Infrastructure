@@ -34,6 +34,13 @@ class HostBoundaries(unittest.TestCase):
             self.assertTrue(host.healthy())
             for body in (b'{"ready":false}',b'{}',b'{"ready":1}',b'[]'):
                 response.read.return_value=body;self.assertFalse(host.healthy())
+    def test_quic_legacy_rollback_stops_listener_and_renewal_timer(self):
+        with patch.object(host,'quic_expected',return_value=False),patch.object(host,'command') as command:
+            host.restart_application()
+            self.assertIn(unittest.mock.call(['systemctl','disable','--now',host.UNIT_NAMES[4],host.UNIT_NAMES[6]]),command.call_args_list)
+        with patch.object(host,'quic_expected',return_value=True),patch.object(host,'command') as command:
+            host.restart_application()
+            self.assertIn(unittest.mock.call(['systemctl','restart',host.UNIT_NAMES[4],host.UNIT_NAMES[6]]),command.call_args_list)
     def candidate(self, root):
         (root / 'manage.py').write_text('# synthetic application fixture\n')
         (root / 'requirements.txt').write_text('Django==5.2.18\n')

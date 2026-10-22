@@ -4,10 +4,23 @@ import json
 import sys
 import urllib.request
 
-from aioquic.asyncio import connect
+from aioquic.asyncio import connect, QuicConnectionProtocol
+from aioquic.h3.connection import H3Connection
+from aioquic.h3.events import HeadersReceived
 from aioquic.quic.configuration import QuicConfiguration
 
 HOST = 'vpn-admin.morandi.dpdns.org'
+
+
+class Http3Probe(QuicConnectionProtocol):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs);self.http=H3Connection(self._quic);self.status=asyncio.Queue()
+    def quic_event_received(self,event):
+        for item in self.http.handle_event(event):
+            if isinstance(item,HeadersReceived):self.status.put_nowait(dict(item.headers).get(b':status'))
+    async def health(self):
+        self.http.send_headers(0,[(b':method',b'GET'),(b':scheme',b'https'),(b':authority',HOST.encode()),(b':path',b'/health')],end_stream=True);self.transmit()
+        return await asyncio.wait_for(self.status.get(),3)==b'200'
 
 
 async def probe(info):
@@ -19,6 +32,10 @@ async def probe(info):
     try:
         await asyncio.wait_for(handshake(),8)
         print('PUBLIC_QUIC_TLS=PASS')
+        config.alpn_protocols=['h3']
+        async with connect('152.67.156.100',8443,configuration=config,create_protocol=Http3Probe) as client:
+            if not await client.health(): raise ConnectionError()
+        print('PUBLIC_HTTP3_HEALTH=PASS')
         return True
     except (OSError,ConnectionError,asyncio.TimeoutError):
         print('PUBLIC_QUIC_TLS=BLOCKED_OR_UNAVAILABLE')

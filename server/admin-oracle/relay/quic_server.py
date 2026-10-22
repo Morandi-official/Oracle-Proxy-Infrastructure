@@ -7,12 +7,24 @@ import signal
 from aiohttp import ClientSession, ClientTimeout, web
 from aioquic.asyncio import QuicConnectionProtocol, serve
 from aioquic.quic.configuration import QuicConfiguration
-from aioquic.quic.events import ConnectionTerminated, DatagramFrameReceived, StreamDataReceived
+from aioquic.quic.events import ConnectionTerminated, DatagramFrameReceived, StreamDataReceived, ProtocolNegotiated
 
 from .fragments import Reassembly, fragment
 from .server import PacketQueue, Rate, authenticate, wireguard_packet
 
-ALPN = 'oracle-wireguard-quic-v1'
+from aioquic.h3.connection import H3Connection, Setting
+from aioquic.h3.events import HeadersReceived, DataReceived, DatagramReceived
+
+ALPN = 'oracle-wireguard-quic-v1'  # rc6–rc8 compatibility
+H3_ALPN = 'h3'
+CONNECT_PATH = '/.well-known/masque/udp/127.0.0.1/51820/'
+
+
+class DatagramH3(H3Connection):
+    def _get_local_settings(self):
+        settings=super()._get_local_settings()
+        settings[Setting.H3_DATAGRAM]=1
+        return settings
 
 
 class RelayState:
@@ -30,6 +42,8 @@ class RelayProtocol(QuicConnectionProtocol):
         self.state = state
         self.header = bytearray()
         self.started = False
+        self.http = None
+        self.http_stream = None
         self.identity = None
         self.udp = None
         self.tasks = []
@@ -54,9 +68,15 @@ class RelayProtocol(QuicConnectionProtocol):
         self.header.clear()
 
     def quic_event_received(self, event):
+        if isinstance(event, ProtocolNegotiated) and event.alpn_protocol == H3_ALPN:
+            self.http = DatagramH3(self._quic)
         if isinstance(event, ConnectionTerminated):
             self.cleanup()
-        elif isinstance(event, StreamDataReceived):
+            return
+        if self.http is not None:
+            for item in self.http.handle_event(event): self.http_event(item)
+            return
+        if isinstance(event, StreamDataReceived):
             if event.stream_id != 0 or self.started or len(self.header) + len(event.data) > 44:
                 self.reject(); return
             self.header.extend(event.data)
@@ -80,6 +100,40 @@ class RelayProtocol(QuicConnectionProtocol):
                 if not wireguard_packet(packet): self.reject(); return
                 self.udp.sendto(packet)
 
+    def http_event(self, event):
+        if isinstance(event, HeadersReceived):
+            if len(event.headers)>16 or sum(len(k)+len(v) for k,v in event.headers)>2048:
+                self.reject(); return
+            headers=dict(event.headers)
+            if len(headers)!=len(event.headers): self.reject(); return
+            if headers.get(b':method')==b'GET' and headers.get(b':path')==b'/health' and not self.started:
+                self.http.send_headers(event.stream_id,[(b':status',b'200'),(b'content-type',b'application/json')])
+                self.http.send_data(event.stream_id,b'{"ready":true}',end_stream=True);self.transmit(); return
+            if (event.stream_id!=0 or self.started or event.stream_ended or
+                headers.get(b':method')!=b'CONNECT' or headers.get(b':protocol')!=b'connect-udp' or
+                headers.get(b':scheme')!=b'https' or headers.get(b':authority')!=b'vpn-admin.morandi.dpdns.org' or
+                headers.get(b':path')!=CONNECT_PATH.encode() or
+                headers.get(b'capsule-protocol')!=b'?1'):
+                self.reject(); return
+            bearer=headers.get(b'authorization',b'')
+            if not re.fullmatch(rb'Bearer [A-Za-z0-9_-]{43}',bearer): self.reject(); return
+            if self.state.pending>=16 or len(self.state.active)>=32 or not self.state.attempts.accept(1):
+                self.reject(); return
+            self.started=True;self.http_stream=event.stream_id;self.auth_slot=True;self.state.pending+=1
+            self.tasks.append(asyncio.create_task(self.authorize(bearer[7:].decode('ascii'))))
+        elif isinstance(event, DataReceived):
+            # This fixed CONNECT-UDP endpoint uses HTTP Datagrams, not a
+            # general stream proxy or client-supplied capsule destination.
+            if event.data or event.stream_ended: self.reject()
+        elif isinstance(event, DatagramReceived):
+            if event.stream_id!=self.http_stream or self.udp is None or not event.data or event.data[0]!=0:
+                self.reject();return
+            if not self.accept(len(event.data)): self.reject();return
+            packet=self.fragments.receive(event.data[1:])
+            if packet is not None:
+                if not wireguard_packet(packet): self.reject();return
+                self.udp.sendto(packet)
+
     def accept(self, size):
         return self.rate.accept(size) and self.state.rate.accept(size)
 
@@ -96,7 +150,8 @@ class RelayProtocol(QuicConnectionProtocol):
             if self.identity is None: transport.close(); return
             self.udp = transport
             self.deadline.cancel()
-            self._quic.send_stream_data(0, b'OK\n', end_stream=True)
+            if self.http is None: self._quic.send_stream_data(0, b'OK\n', end_stream=True)
+            else: self.http.send_headers(self.http_stream,[(b':status',b'200'),(b'capsule-protocol',b'?1')])
             self.transmit()
             self.tasks.extend([asyncio.create_task(self.outbound(queue)), asyncio.create_task(self.policy(token)),
                                asyncio.create_task(self.watch_failure(queue))])
@@ -113,7 +168,9 @@ class RelayProtocol(QuicConnectionProtocol):
                 packet = await queue.queue.get()
                 if not self.accept(len(packet)): self.reject(); return
                 self.number = (self.number + 1) & 0xffffffff
-                for part in fragment(packet, self.number): self._quic.send_datagram_frame(part)
+                for part in fragment(packet, self.number):
+                    if self.http is None: self._quic.send_datagram_frame(part)
+                    else: self.http.send_datagram(self.http_stream,b"\0"+part)
                 self.transmit()
         except asyncio.CancelledError: return
         except Exception: self.reject()
@@ -132,8 +189,8 @@ class RelayProtocol(QuicConnectionProtocol):
 
 
 async def run():
-    config = QuicConfiguration(is_client=False, alpn_protocols=[ALPN], max_datagram_frame_size=1200,
-                               idle_timeout=45, max_data=4096, max_stream_data=64)
+    config = QuicConfiguration(is_client=False, alpn_protocols=[H3_ALPN, ALPN], max_datagram_frame_size=1200,
+                               idle_timeout=45, max_data=16384, max_stream_data=4096)
     config.load_cert_chain('/etc/oracle-proxy-quic/certificate.pem', '/etc/oracle-proxy-quic/private.pem')
     async with ClientSession(timeout=ClientTimeout(total=3), trust_env=False) as session:
         state = RelayState(session)

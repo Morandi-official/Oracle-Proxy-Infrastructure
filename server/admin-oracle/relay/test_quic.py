@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from relay.fragments import CHUNK, Reassembly, fragment
 from relay.quic_keys import HOST, certificate
-from relay.quic_server import ALPN, RelayProtocol, RelayState
+from relay.quic_server import ALPN, H3_ALPN, CONNECT_PATH, RelayProtocol, RelayState
 from relay.server import Rate
 
 TOKEN = 'a' * 43
@@ -65,7 +65,7 @@ class QuicTLS(unittest.IsolatedAsyncioTestCase):
         key=ec.generate_private_key(ec.SECP256R1());cert=certificate(key)
         (root/'cert').write_bytes(cert.public_bytes(serialization.Encoding.PEM))
         (root/'key').write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
-        server=QuicConfiguration(is_client=False,alpn_protocols=[ALPN],max_datagram_frame_size=1200)
+        server=QuicConfiguration(is_client=False,alpn_protocols=[H3_ALPN,ALPN],max_datagram_frame_size=1200)
         server.load_cert_chain(str(root/'cert'),str(root/'key'))
         self.client=QuicConfiguration(is_client=True,alpn_protocols=[ALPN],server_name=HOST,max_datagram_frame_size=1200)
         self.client.load_verify_locations(cafile=str(root/'cert'))
@@ -114,3 +114,49 @@ class QuicTLS(unittest.IsolatedAsyncioTestCase):
         self.client=QuicConfiguration(is_client=True,alpn_protocols=[ALPN],server_name=HOST,max_datagram_frame_size=1200)
         with self.assertRaises(ConnectionError):
             async with self.connection(): self.fail('untrusted connection accepted')
+
+
+from aioquic.h3.connection import H3Connection
+from aioquic.h3.events import HeadersReceived, DatagramReceived
+
+class H3Client(QuicConnectionProtocol):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs);self.http=H3Connection(self._quic);self.status=asyncio.Queue();self.received=asyncio.Queue();self.parts=Reassembly()
+    def quic_event_received(self,event):
+        for item in self.http.handle_event(event):
+            if isinstance(item,HeadersReceived):self.status.put_nowait(dict(item.headers).get(b':status'))
+            elif isinstance(item,DatagramReceived) and item.data[:1]==b'\0':
+                packet=self.parts.receive(item.data[1:])
+                if packet is not None:self.received.put_nowait(packet)
+    async def auth(self,token=TOKEN,path=CONNECT_PATH):
+        self.http.send_headers(0,[(b':method',b'CONNECT'),(b':protocol',b'connect-udp'),(b':scheme',b'https'),(b':authority',HOST.encode()),(b':path',path.encode()),(b'capsule-protocol',b'?1'),(b'authorization',b'Bearer '+token.encode())]);self.transmit()
+        return await asyncio.wait_for(self.status.get(),2)
+    def send(self,packet):
+        for piece in fragment(packet,1):self.http.send_datagram(0,b'\0'+piece)
+        self.transmit()
+
+class Http3TLS(QuicTLS):
+    async def asyncSetUp(self):
+        await super().asyncSetUp();self.client.alpn_protocols=[H3_ALPN]
+    def connection(self):return connect('127.0.0.1',self.port,configuration=self.client,create_protocol=H3Client)
+    async def test_real_tls_fragmented_datagram_and_revocation(self):
+        async with self.connection() as client:
+            self.assertEqual(await client.auth(),b'200');client.send(PACKET)
+            self.assertEqual(await asyncio.wait_for(client.received.get(),2),PACKET)
+            self.allowed=False;await asyncio.wait_for(client.wait_closed(),2);self.assertFalse(self.state.active)
+    async def test_duplicate_token_cannot_open_second_session(self):
+        async with self.connection() as first:
+            self.assertEqual(await first.auth(),b'200')
+            async with self.connection() as second:
+                with contextlib.suppress(ConnectionError,asyncio.TimeoutError):await second.auth()
+                await asyncio.wait_for(second.wait_closed(),2);self.assertEqual(len(self.state.active),1)
+            first.send(PACKET);self.assertEqual(await asyncio.wait_for(first.received.get(),2),PACKET)
+    async def test_incomplete_fragments_cannot_bypass_rate_limit(self):
+        async with self.connection() as client:
+            self.assertEqual(await client.auth(),b'200');self.state.rate=Rate(10)
+            client.http.send_datagram(0,b'\0'+fragment(PACKET,123)[0]);client.transmit()
+            await asyncio.wait_for(client.wait_closed(),2);self.assertFalse(self.state.active)
+    async def test_cannot_choose_a_general_udp_destination(self):
+        async with self.connection() as client:
+            with contextlib.suppress(ConnectionError,asyncio.TimeoutError):await client.auth(path='/.well-known/masque/udp/8.8.8.8/53/')
+            await asyncio.wait_for(client.wait_closed(),2);self.assertFalse(self.state.active)

@@ -115,6 +115,9 @@ def preflight():
         host.read_environment(); value['application_configured'] = True
     except (OSError, ValueError):
         pass
+    native_spec=importlib.util.spec_from_file_location('native_udp_readiness',Path(__file__).with_name('native_udp_readiness.py'))
+    native=importlib.util.module_from_spec(native_spec);native_spec.loader.exec_module(native)
+    value['native_udp_readiness']=native.observe()
     value['ipv6_readiness'] = ipv6_readiness()
     value['official_usage'] = official_usage_status()
     print(json.dumps(value, indent=2))

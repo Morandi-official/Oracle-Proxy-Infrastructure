@@ -146,6 +146,11 @@ class H3Client(QuicConnectionProtocol):
         self.transmit()
 
 class Http3TLS(QuicTLS):
+    async def test_unauthenticated_data_rejected(self):
+        async with self.connection() as client:
+            client.send(b'\x04\0\0\0'+bytes(28))
+            await asyncio.wait_for(client.wait_closed(),2);self.assertFalse(self.state.active)
+
     async def asyncSetUp(self):
         await super().asyncSetUp();self.client.alpn_protocols=[H3_ALPN]
     def connection(self):return connect('127.0.0.1',self.port,configuration=self.client,create_protocol=H3Client)

@@ -10,6 +10,7 @@ from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import ConnectionTerminated, DatagramFrameReceived, StreamDataReceived, ProtocolNegotiated
 
 from .fragments import Reassembly, fragment
+from .capsules import Capsules, encode as capsule
 from .server import PacketQueue, Rate, authenticate, wireguard_packet
 
 from aioquic.h3.connection import H3Connection, Setting
@@ -48,6 +49,7 @@ class RelayProtocol(QuicConnectionProtocol):
         self.udp = None
         self.tasks = []
         self.fragments = Reassembly()
+        self.capsules = Capsules()
         self.number = 0
         self.rate = Rate(4 * 1024 * 1024)
         self.auth_slot = False
@@ -66,7 +68,7 @@ class RelayProtocol(QuicConnectionProtocol):
             if self.state.active.get(self.identity) is self: self.state.active.pop(self.identity,None)
             self.identity = None
         if self.auth_slot: self.state.pending -= 1; self.auth_slot = False
-        self.fragments.pending.clear()
+        self.fragments.pending.clear();self.capsules.pending.clear()
         self.header.clear()
 
     def quic_event_received(self, event):
@@ -124,17 +126,20 @@ class RelayProtocol(QuicConnectionProtocol):
             self.started=True;self.http_stream=event.stream_id;self.auth_slot=True;self.state.pending+=1
             self.tasks.append(asyncio.create_task(self.authorize(bearer[7:].decode('ascii'))))
         elif isinstance(event, DataReceived):
-            # This fixed CONNECT-UDP endpoint uses HTTP Datagrams, not a
-            # general stream proxy or client-supplied capsule destination.
-            if event.data or event.stream_ended: self.reject()
+            if event.stream_id!=self.http_stream or self.udp is None or event.stream_ended or not self.accept(len(event.data)):
+                self.reject();return
+            try:
+                for packet in self.capsules.receive(event.data):
+                    if not wireguard_packet(packet): self.reject();return
+                    self.udp.sendto(packet)
+            except ValueError:self.reject()
         elif isinstance(event, DatagramReceived):
             if event.stream_id!=self.http_stream or self.udp is None or not event.data or event.data[0]!=0:
                 self.reject();return
             if not self.accept(len(event.data)): self.reject();return
-            packet=self.fragments.receive(event.data[1:])
-            if packet is not None:
-                if not wireguard_packet(packet): self.reject();return
-                self.udp.sendto(packet)
+            packet=event.data[1:]
+            if not wireguard_packet(packet): self.reject();return
+            self.udp.sendto(packet)
 
     def accept(self, size):
         return self.rate.accept(size) and self.state.rate.accept(size)
@@ -175,9 +180,13 @@ class RelayProtocol(QuicConnectionProtocol):
                 packet = await queue.queue.get()
                 if not self.accept(len(packet)): self.reject(); return
                 self.number = (self.number + 1) & 0xffffffff
-                for part in fragment(packet, self.number):
-                    if self.http is None: self._quic.send_datagram_frame(part)
-                    else: self.http.send_datagram(self.http_stream,b"\0"+part)
+                if self.http is None:
+                    for part in fragment(packet,self.number):self._quic.send_datagram_frame(part)
+                elif len(packet)<=1000:self.http.send_datagram(self.http_stream,b"\0"+packet)
+                else:
+                    stream=self._quic._streams.get(self.http_stream)
+                    if stream is None or len(stream.sender._buffer)>16384:self.reject();return
+                    self.http.send_data(self.http_stream,capsule(packet),end_stream=False)
                 self.transmit()
         except asyncio.CancelledError: return
         except Exception: self.reject()

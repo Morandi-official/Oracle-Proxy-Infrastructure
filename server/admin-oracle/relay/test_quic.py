@@ -124,22 +124,25 @@ class QuicTLS(unittest.IsolatedAsyncioTestCase):
 
 
 from aioquic.h3.connection import H3Connection
-from aioquic.h3.events import HeadersReceived, DatagramReceived
+from aioquic.h3.events import HeadersReceived, DatagramReceived, DataReceived
+from relay.capsules import Capsules, encode as capsule
 
 class H3Client(QuicConnectionProtocol):
     def __init__(self,*args,**kwargs):
-        super().__init__(*args,**kwargs);self.http=H3Connection(self._quic);self.status=asyncio.Queue();self.received=asyncio.Queue();self.parts=Reassembly()
+        super().__init__(*args,**kwargs);self.http=H3Connection(self._quic);self.status=asyncio.Queue();self.received=asyncio.Queue();self.capsules=Capsules()
     def quic_event_received(self,event):
         for item in self.http.handle_event(event):
             if isinstance(item,HeadersReceived):self.status.put_nowait(dict(item.headers).get(b':status'))
             elif isinstance(item,DatagramReceived) and item.data[:1]==b'\0':
-                packet=self.parts.receive(item.data[1:])
-                if packet is not None:self.received.put_nowait(packet)
+                self.received.put_nowait(item.data[1:])
+            elif isinstance(item,DataReceived):
+                for packet in self.capsules.receive(item.data):self.received.put_nowait(packet)
     async def auth(self,token=TOKEN,path=CONNECT_PATH):
         self.http.send_headers(0,[(b':method',b'CONNECT'),(b':protocol',b'connect-udp'),(b':scheme',b'https'),(b':authority',HOST.encode()),(b':path',path.encode()),(b'capsule-protocol',b'?1'),(b'authorization',b'Bearer '+token.encode())]);self.transmit()
         return await asyncio.wait_for(self.status.get(),2)
     def send(self,packet):
-        for piece in fragment(packet,1):self.http.send_datagram(0,b'\0'+piece)
+        if len(packet)<=1000:self.http.send_datagram(0,b'\0'+packet)
+        else:self.http.send_data(0,capsule(packet),end_stream=False)
         self.transmit()
 
 class Http3TLS(QuicTLS):
@@ -174,3 +177,9 @@ class Http3TLS(QuicTLS):
         async with self.connection() as client:
             with contextlib.suppress(ConnectionError,asyncio.TimeoutError):await client.auth(path='/.well-known/masque/udp/8.8.8.8/53/')
             await asyncio.wait_for(client.wait_closed(),2);self.assertFalse(self.state.active)
+
+class CapsuleBounds(unittest.TestCase):
+    def test_split_capsule_and_invalid_context_or_size(self):
+        data=capsule(PACKET);parser=Capsules();self.assertEqual(parser.receive(data[:3]),[]);self.assertEqual(parser.receive(data[3:]),[PACKET])
+        for data in (b'\0\x40\0',b'\0\x40\x01\x01',b'\0\xff'+b'\xff'*7):
+            with self.assertRaises(ValueError):Capsules().receive(data)

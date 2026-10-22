@@ -3,11 +3,13 @@
  * Policy must be exercised on disposable Windows before any release. */
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <initguid.h>
 #include <fwpmu.h>
 #include <sddl.h>
 #include <iphlpapi.h>
+#include <netioapi.h>
 #include <stdint.h>
 #include <wchar.h>
 #pragma comment(lib,"fwpuclnt.lib")

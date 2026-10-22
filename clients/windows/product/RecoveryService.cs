@@ -19,7 +19,7 @@ internal sealed class RecoveryService : ServiceBase
                     process.Kill(true);await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
                 }
             }
-            await VpnRuntime.EnsureTunnelInactive();
+            await VpnRuntime.EnsureTunnelRemoved();
             DurableState state;
             try{state=DurableState.Load();}
             catch(Exception e)when(e is CryptographicException or JsonException || e is IOException && e.Message=="STATE_CORRUPT"){

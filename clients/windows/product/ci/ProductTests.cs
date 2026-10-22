@@ -305,7 +305,7 @@ internal static class ProductTests
             Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="TUN_ACTIVE" && NativeGuard.TunLuid()==preparedLuid,"REAL_REACTIVATION_REUSES_EXACT_PREPARED_ADAPTER");
             NativeGuard.AuthorizeTun((uint)client.Id);
             Require(await Tcp() && await Dns(),"REAL_REUSED_ADAPTER_HAS_FRESH_TCP_AND_UDP_DNS");
-            await Stop(client);client=null;await VpnRuntime.EnsureTunnelInactive();
+            await Stop(client);client=null;await VpnRuntime.EnsureTunnelRemoved();
             client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();bool wrongCoreDenied=false;
             NativeGuard.Clear();bool missingGuardDenied=false;

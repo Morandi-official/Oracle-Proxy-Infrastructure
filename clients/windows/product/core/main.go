@@ -92,7 +92,7 @@ func run() error {
 			if readErr != nil || len(frame) > 16 {
 				break
 			}
-			switch strings.TrimSuffix(string(frame), "\n") {
+			switch strings.TrimSuffix(strings.TrimSuffix(string(frame), "\n"), "\r") {
 			case "ACTIVATE":
 				if tunScope != nil {
 					fmt.Println("TUN_ACTIVE")

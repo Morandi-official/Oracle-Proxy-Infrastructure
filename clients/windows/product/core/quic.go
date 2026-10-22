@@ -6,9 +6,9 @@ import (
 	"errors"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
-	"github.com/sagernet/sing-box/common/dialer"
+
 	"github.com/sagernet/sing-box/log"
-	"github.com/sagernet/sing-box/option"
+
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"net"
@@ -33,7 +33,7 @@ func newQUICOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger,
 	if _, err := quicTLS(options.Certificate); err != nil {
 		return nil, err
 	}
-	physical, err := dialer.NewDefault(ctx, option.DialerOptions{})
+	physical, err := physicalDialer(ctx)
 	if err != nil {
 		return nil, err
 	}

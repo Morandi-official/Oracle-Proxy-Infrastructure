@@ -21,6 +21,7 @@ internal static class NativeGuard
         if(result!=0)throw new IOException("WFP_APPLY_"+result+"_S"+Function<ClearDelegate>("OpGuardStage")());
         if(!Active)throw new IOException("WFP_AUDIT_FAILED");
     }
+    internal static uint PhysicalIPv4Index=>Function<ClearDelegate>("OpPhysicalIPv4Index")();
     internal static uint CoreLifecycle=>Function<ClearDelegate>("OpGuardCoreState")();
     internal static void AuthorizeTun(uint pid)
     {

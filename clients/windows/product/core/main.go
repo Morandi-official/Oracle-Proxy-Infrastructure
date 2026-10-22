@@ -46,6 +46,7 @@ func run() error {
 	registry := include.OutboundRegistry()
 	outbound.Register[relayOptions](registry, relayType, newRelayOutbound)
 	outbound.Register[quicOptions](registry, quicType, newQUICOutbound)
+	outbound.Register[nativeOptions](registry, nativeType, newNativeOutbound)
 	ctx := box.Context(context.Background(), include.InboundRegistry(), registry, include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
 	ctx = pause.WithDefaultManager(service.ContextWithDefaultRegistry(ctx))
 	options, err := json.UnmarshalExtendedContext[option.Options](ctx, line)

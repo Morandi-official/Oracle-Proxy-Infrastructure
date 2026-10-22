@@ -146,7 +146,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc8-win-x64-unsigned-acceptance-candidate
+          name: OracleProxy-0.3.0-rc9-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             !dist/candidate/*-source.zip
@@ -157,7 +157,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc8-corresponding-source
+          name: OracleProxy-0.3.0-rc9-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt

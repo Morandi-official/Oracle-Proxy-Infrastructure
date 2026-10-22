@@ -15,7 +15,7 @@ internal sealed class AccountApi : IDisposable
             ConnectCallback=async (context,token)=>{
                 if(context.DnsEndPoint.Host!=Base.Host || context.DnsEndPoint.Port!=443)throw new IOException("UNTRUSTED_API_ENDPOINT");
                 var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp);
-                try{await socket.ConnectAsync(new IPEndPoint(IPAddress.Parse("152.67.156.100"),443),token);return new NetworkStream(socket,true);}
+                try{uint physical=NativeGuard.PhysicalIPv4Index;if(physical==0)throw new IOException("PHYSICAL_ROUTE_UNAVAILABLE");socket.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31 /* IP_UNICAST_IF */,IPAddress.HostToNetworkOrder((int)physical));await socket.ConnectAsync(new IPEndPoint(IPAddress.Parse("152.67.156.100"),443),token);return new NetworkStream(socket,true);}
                 catch{socket.Dispose();throw;}
             }};
         // TLS validation and SNI still use Base.Host. Only DNS is pinned to the

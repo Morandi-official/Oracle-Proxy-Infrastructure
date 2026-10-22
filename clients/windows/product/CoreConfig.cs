@@ -36,8 +36,9 @@ internal static class CoreConfig
             // the connected path selects the actual IPv4 peer before binding,
             // as the working backup carriers already do. No encapsulation.
             config["endpoints"]![0]!["detour"]="oracle-native-udp";
-            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="direct",["tag"]="oracle-native-udp",["connect_timeout"]="5s"});
+            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["tag"]="oracle-native-udp",["ports"]=new JsonArray(port)});
         }
+        if(transport==TunnelTransport.WireGuardUdp && port==51820 && tunnel["native_udp_ports"] is JsonArray ports && ports.Any(n=>n?.GetValue<int>()==443))config["outbounds"]![1]!["ports"]=new JsonArray(51820,443);
         if(transport==TunnelTransport.WireGuardQuic){
             config["endpoints"]![0]!["detour"]="oracle-quic-relay";
             config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-quic",["tag"]="oracle-quic-relay",["token"]=secret.Token,["certificate"]=tunnel["quic"]!["certificate"]!.DeepClone()});
@@ -45,11 +46,6 @@ internal static class CoreConfig
         if(transport==TunnelTransport.WireGuardHttps){
             config["endpoints"]![0]!["detour"]="oracle-https-relay";
             config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-https",["tag"]="oracle-https-relay",["token"]=secret.Token});
-        }
-        if(transport!=TunnelTransport.WireGuardUdp){
-            // Physical access remains restricted to trusted SYSTEM service/core
-            // by WFP. The fixed HTTPS carrier must not recurse into its TUN.
-            config["inbounds"]![0]!["route_exclude_address"]=new JsonArray("152.67.156.100/32");
         }
         return config;
     }

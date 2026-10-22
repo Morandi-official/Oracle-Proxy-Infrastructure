@@ -30,6 +30,7 @@ internal static class NativeGuard
         if(result!=0 || !TunPermitted)throw new IOException("TUN_AUTHORIZE_FAILED");
     }
     internal static bool TunPermitted=>Function<ClearDelegate>("OpGuardTunReady")()==1;
+    internal static bool TunDormant=>Function<ClearDelegate>("OpTunDormant")()==1;
     internal static void SuspendTun(){if(Function<ClearDelegate>("OpGuardSuspendTun")()!=0)throw new IOException("TUN_PERMIT_RELEASE_FAILED");}
     internal static bool Active{
         get{uint e=Function<CountDelegate>("OpGuardCount")(out uint persistent,out uint boot);return e==0 && persistent>=16 && boot>=8;}

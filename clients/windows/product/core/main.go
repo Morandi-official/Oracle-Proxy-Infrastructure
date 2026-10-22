@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/sagernet/sing-box/adapter"
+	oracleTun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 	"io"
@@ -36,6 +37,7 @@ func run() error {
 			return fmt.Errorf("identity")
 		}
 	}
+	defer oracleTun.ClosePreparedOracleAdapter()
 	input := bufio.NewReaderSize(os.Stdin, 65536)
 	line, err := input.ReadSlice('\n')
 	if err != nil || len(line) > 65536 {

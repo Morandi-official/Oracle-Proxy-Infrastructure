@@ -3,11 +3,13 @@
  * Policy must be exercised on disposable Windows before any release. */
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <initguid.h>
 #include <fwpmu.h>
 #include <sddl.h>
 #include <iphlpapi.h>
+#include <netioapi.h>
 #include <stdint.h>
 #include <wchar.h>
 #pragma comment(lib,"fwpuclnt.lib")
@@ -222,3 +224,16 @@ API OpGuardCount(DWORD *persistent,DWORD *boot_count){
  e=enumerate_owned(engine,FALSE,persistent,boot_count);FwpmEngineClose0(engine);return e;
 }
 API OpTunLuid(UINT64 *value){NET_LUID luid={0};DWORD e=ConvertInterfaceAliasToLuid(L"OracleProxy",&luid);if(!e)*value=luid.Value;return e;}
+API OpTunDormant(void){
+ NET_LUID luid={0};if(ConvertInterfaceAliasToLuid(L"OracleProxy",&luid)!=0)return 0;
+ MIB_IF_ROW2 row={0};row.InterfaceLuid=luid;if(GetIfEntry2(&row)!=0||row.OperStatus==IfOperStatusUp)return 0;
+ MIB_IPFORWARD_TABLE2 *table=NULL;if(GetIpForwardTable2(AF_UNSPEC,&table)!=0)return 0;
+ BOOL ok=TRUE;
+ for(ULONG i=0;i<table->NumEntries&&ok;i++)if(table->Table[i].InterfaceLuid.Value==luid.Value){
+  SOCKADDR_INET *address=&table->Table[i].DestinationPrefix.Prefix;
+  if(address->si_family==AF_INET){BYTE *ip=(BYTE*)&address->Ipv4.sin_addr.s_addr;if((ip[0]&0xf0)!=0xe0&&!(ip[0]==255&&ip[1]==255&&ip[2]==255&&ip[3]==255))ok=FALSE;}
+  else if(address->si_family==AF_INET6){BYTE *ip=address->Ipv6.sin6_addr.u.Byte;if(ip[0]!=0xff&&!(ip[0]==0xfe&&(ip[1]&0xc0)==0x80))ok=FALSE;}
+  else ok=FALSE;
+ }
+ FreeMibTable(table);return ok?1:0;
+}

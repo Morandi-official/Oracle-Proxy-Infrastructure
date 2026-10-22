@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from relay.fragments import CHUNK, Reassembly, fragment
 from relay.quic_keys import HOST, certificate
 from relay.quic_server import ALPN, RelayProtocol, RelayState
+from relay.server import Rate
 
 TOKEN = 'a' * 43
 PACKET = b'\x04\0\0\0' + bytes(range(256))*5
@@ -100,6 +101,15 @@ class QuicTLS(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(self.state.active),1)
             first.send(PACKET)
             self.assertEqual(await asyncio.wait_for(first.received.get(),2),PACKET)
+    async def test_incomplete_fragments_cannot_bypass_rate_limit(self):
+        async with self.connection() as client:
+            self.assertEqual(await client.auth(),b'OK\n')
+            self.state.rate = Rate(10)
+            first = fragment(PACKET,123)[0]
+            client._quic.send_datagram_frame(first)
+            client.transmit()
+            await asyncio.wait_for(client.wait_closed(),2)
+            self.assertFalse(self.state.active)
     async def test_untrusted_certificate_rejected(self):
         self.client=QuicConfiguration(is_client=True,alpn_protocols=[ALPN],server_name=HOST,max_datagram_frame_size=1200)
         with self.assertRaises(ConnectionError):

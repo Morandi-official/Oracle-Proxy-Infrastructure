@@ -36,3 +36,7 @@ First-ever cold startup, unavailable carriers, long WAN round trips and a failed
 network cannot have an unconditional one-second guarantee. Real MetaWise timing
 and actual UU sessions still need owner confirmation after cloud acceptance.
 This remains unsigned, IPv6 blocked, and not GA.
+
+## First main acceptance evidence and follow-up
+
+Run 39719965235 measured a 402 ms prepared native switch and passed native UDP recovery and QUIC exit/DNS/Off checks. Its first retained QUIC reconnect was 1646 ms, so the strict one-second gate failed and no candidate was published. The relay /32 exclusion expands into many prefixes; Windows route creation was serial. The follow-up build vendors the pinned dependency and applies an exact SHA256-preimage patch to create the same routes with at most four independent concurrent calls, waiting for every call before success or teardown. The full modified source ships in the corresponding-source archive. Reconnect phase measurements are printed for all three strict cycles. No change to prefixes, gateways, routing exceptions, fail-close policy, or the one-second acceptance threshold.

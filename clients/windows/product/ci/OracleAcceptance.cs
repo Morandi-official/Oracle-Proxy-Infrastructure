@@ -160,6 +160,7 @@ internal static class OracleAcceptance
                         Check(off["quick_ready"]?.GetValue<bool>()==true && off["core_pid"]?.GetValue<uint>()==quicPid && !NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await ExitIp()!="152.67.156.100","REAL_QUIC_OFF_PRESERVES_PREPARED_CORE_AND_RESTORES_DIRECT_"+cycle);
                         var restart=Stopwatch.StartNew();var fast=await Send("Connect");long elapsed=restart.ElapsedMilliseconds;
                         Console.WriteLine("REAL_BLOCKED_UDP_QUIC_RECONNECT_CLICK_MS_"+cycle+"="+elapsed);
+                        foreach(string phase in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})Console.WriteLine("REAL_QUIC_RECONNECT_"+cycle+"_"+phase.ToUpperInvariant()+"="+fast["switch_timings"]?[phase]);
                         Check(elapsed<1000 && fast["click_to_ready_ms"]?.GetValue<long>() is >=0 and <1000 && fast["mode"]?.GetValue<string>()=="connected" && fast["core_pid"]?.GetValue<uint>()==quicPid && fast["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_BLOCKED_UDP_REPEATED_QUIC_RECONNECT_UNDER_ONE_SECOND_"+cycle);
                     }
                     await Send("Disconnect");

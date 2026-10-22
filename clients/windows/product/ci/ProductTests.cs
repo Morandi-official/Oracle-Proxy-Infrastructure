@@ -81,6 +81,14 @@ internal static class ProductTests
         new FileInfo(path).SetAccessControl(acl);
         try{
             if(!UuDiscovery.Trusted(path))return 1;
+            DateTime originalWrite=File.GetLastWriteTimeUtc(path);int originalByte;
+            using(var file=new FileStream(path,FileMode.Open,FileAccess.ReadWrite,FileShare.Read)){file.Position=1024;originalByte=file.ReadByte();file.Position=1024;file.WriteByte((byte)(originalByte^1));file.Flush(true);}
+            File.SetLastWriteTimeUtc(path,originalWrite);
+            bool tamperedTrusted=UuDiscovery.Trusted(path);
+            using(var file=new FileStream(path,FileMode.Open,FileAccess.ReadWrite,FileShare.Read)){file.Position=1024;file.WriteByte((byte)originalByte);file.Flush(true);}
+            File.SetLastWriteTimeUtc(path,originalWrite);
+            if(tamperedTrusted || !UuDiscovery.Trusted(path))return 1;
+            Console.WriteLine("REAL_SIGNATURE_CACHE_REJECTS_MODIFIED_FILE_WITH_RESTORED_LENGTH_AND_WRITE_TIME=PASS");
             acl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-1-0"),System.Security.AccessControl.FileSystemRights.WriteData,System.Security.AccessControl.AccessControlType.Allow));
             new FileInfo(path).SetAccessControl(acl);
             if(UuDiscovery.Trusted(path) || UuDiscovery.Inspect(path)?.Code!="UU_EXECUTABLE_WRITABLE")return 1;
@@ -220,9 +228,10 @@ internal static class ProductTests
         try{await client.SendAsync(query,new IPEndPoint(IPAddress.Parse("1.1.1.1"),53));var r=await client.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(3));return r.Buffer.Length>12&&r.Buffer[0]==id[0]&&r.Buffer[1]==id[1];}catch{return false;}
     }
     private static (string Private,string Public) KeyPair(){byte[] k=RandomNumberGenerator.GetBytes(32),p=new byte[32];k[0]&=248;k[31]&=127;k[31]|=64;try{X25519.GeneratePublicKey(k,0,p,0);return(Convert.ToBase64String(k),Convert.ToBase64String(p));}finally{CryptographicOperations.ZeroMemory(k);CryptographicOperations.ZeroMemory(p);}}
-    private static async Task<Process> Launch(JsonObject config)
+    private static async Task<Process> Launch(JsonObject config,bool standby=false)
     {
         var start=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=Platform.Root};
+        if(standby)start.ArgumentList.Add("--standby");
         config["log"]=new JsonObject{["level"]="debug",["timestamp"]=false};
         var p=Process.Start(start)!;p.ErrorDataReceived+=(_,line)=>{
             string value=(line.Data ?? "").ToLowerInvariant();
@@ -267,6 +276,25 @@ internal static class ProductTests
         try{
             exit=await Launch(server);
             Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
+            NativeGuard.Clear();
+            client=await Launch(config,standby:true);
+            Require(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await Tcp() && await Dns(),"REAL_STANDBY_CORE_HAS_NO_TUN_AND_ORDINARY_TRAFFIC_REMAINS_DIRECT");
+            var warmProxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service","synthetic-probe-only")};
+            using(var probe=new HttpClient(new SocketsHttpHandler{Proxy=warmProxy,UseProxy=true,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)}){
+                using var response=await probe.GetAsync("https://1.1.1.1/cdn-cgi/trace");
+                Require(response.IsSuccessStatusCode,"REAL_STANDBY_AUTHENTICATED_SOCKS_ESTABLISHES_ENCRYPTED_WIREGUARD");
+            }
+            var switchTimer=Stopwatch.StartNew();NativeGuard.Apply(uuPaths);
+            await client.StandardInput.WriteLineAsync("ACTIVATE");await client.StandardInput.FlushAsync();
+            Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="TUN_ACTIVE","REAL_PRIVATE_CORE_ACTIVATE_ACKNOWLEDGED");
+            NativeGuard.Apply(uuPaths,NativeGuard.TunLuid(),(uint)client.Id);
+            Evidence.Add("REAL_ISOLATED_PREPARED_SWITCH_MS="+switchTimer.ElapsedMilliseconds);
+            Require(await Tcp() && await Dns(),"REAL_PREPARED_DYNAMIC_TUN_HAS_TCP_AND_FRESH_UDP_DNS");
+            NativeGuard.SuspendTun();await client.StandardInput.WriteLineAsync("DEACTIVATE");await client.StandardInput.FlushAsync();
+            Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="STANDBY_READY","REAL_PRIVATE_CORE_DEACTIVATE_ACKNOWLEDGED");
+            await VpnRuntime.EnsureTunnelGone();
+            Require(!await Tcp() && NativeGuard.Active,"REAL_DEACTIVATION_REMOVES_TUN_AND_RETAINS_GUARD");
+            await Stop(client);client=null;await VpnRuntime.EnsureTunnelGone();
             client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();bool wrongCoreDenied=false;
             try{NativeGuard.Apply(uuPaths,luid,(uint)Environment.ProcessId);}catch(IOException error){wrongCoreDenied=error.Message.StartsWith("WFP_APPLY_5_",StringComparison.Ordinal);}

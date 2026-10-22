@@ -10,17 +10,22 @@ internal sealed class CoreProcess : IDisposable
     private readonly CancellationTokenSource _stop=new();
     private IntPtr _job;
     private string _probeSecret="";
+    private HttpClient? _probeClient;
+    internal bool StandbyCapable{get;private set;}
+    internal bool TunActive{get;private set;}
     private string _safeStage="NOT_STARTED";
     internal string SafeStage=>Volatile.Read(ref _safeStage);
     internal uint Pid=>Running?(uint)_process!.Id:0;
     internal bool Running=>_process is not null && !_process.HasExited;
-    internal async Task Start(JsonObject state,DurableState secret,bool httpsRelay=false)
+    internal async Task Start(JsonObject state,DurableState secret,TunnelTransport transport=TunnelTransport.WireGuardUdp,bool standby=false)
     {
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
         if(_process is not null)await Stop();
         Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        if(standby)info.ArgumentList.Add("--standby");
+        StandbyCapable=standby;TunActive=!standby;
         // A suspended native launch + job assignment would narrow the creation
         // race further. Persistent WFP already blocks direct user traffic.
         _process=Process.Start(info) ?? throw new IOException("CORE_START_FAILED");
@@ -29,7 +34,7 @@ internal sealed class CoreProcess : IDisposable
         if(!SetInformationJobObject(_job,9,ref limits,(uint)Marshal.SizeOf<JobLimits>()) || !AssignProcessToJobObject(_job,_process.Handle))throw new IOException("JOB_ASSIGN_FAILED");
         Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){try{NativeGuard.SuspendTun();}catch{}}};
         _process.ErrorDataReceived+=(_,line)=>{if(line.Data is "CORE_IDENTITY_FAILED" or "CORE_INPUT_FAILED" or "CORE_CONFIGURATION_FAILED" or "CORE_CREATE_FAILED" or "CORE_START_FAILED" or "CORE_CLOSE_FAILED")Volatile.Write(ref _safeStage,line.Data);};_process.BeginErrorReadLine();
-        await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,httpsRelay).ToJsonString());await _process.StandardInput.FlushAsync();
+        await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,transport).ToJsonString());await _process.StandardInput.FlushAsync();
         string? ready;
         try{ready=await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20),_stop.Token);}
         catch(TimeoutException error){throw new IOException("CORE_READY_TIMEOUT",error);}
@@ -39,16 +44,33 @@ internal sealed class CoreProcess : IDisposable
         }
         Volatile.Write(ref _safeStage,"READY");
     }
-    internal async Task<long> Probe()
+    private async Task CoreCommand(string command,string expected)
+    {
+        if(!Running || !StandbyCapable)throw new IOException("CORE_NOT_READY");
+        await _process!.StandardInput.WriteLineAsync(command);await _process.StandardInput.FlushAsync();
+        if(await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5),_stop.Token)!=expected)throw new IOException("CORE_TRANSITION_FAILED");
+    }
+    internal async Task Activate(){await CoreCommand("ACTIVATE","TUN_ACTIVE");TunActive=true;}
+    internal async Task Deactivate(){NativeGuard.SuspendTun();await CoreCommand("DEACTIVATE","STANDBY_READY");TunActive=false;}
+    internal async Task<long> Probe(int timeoutSeconds=12)
     {
         if(!Running)throw new IOException("CORE_NOT_RUNNING");
-        var proxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service",_probeSecret)};
-        using var client=new HttpClient(new SocketsHttpHandler{Proxy=proxy,UseProxy=true,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(12)};
+        if(_probeClient is null){
+            var proxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service",_probeSecret)};
+            _probeClient=new HttpClient(new SocketsHttpHandler{Proxy=proxy,UseProxy=true,UseCookies=false,AllowAutoRedirect=false}){Timeout=Timeout.InfiniteTimeSpan};
+        }
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);deadline.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         var timer=Stopwatch.StartNew();string body;
-        try{body=await client.GetStringAsync("https://www.cloudflare.com/cdn-cgi/trace",_stop.Token);}
+        try{
+            using var response=await _probeClient.GetAsync("https://www.cloudflare.com/cdn-cgi/trace",HttpCompletionOption.ResponseHeadersRead,deadline.Token);
+            response.EnsureSuccessStatusCode();await using var stream=await response.Content.ReadAsStreamAsync(deadline.Token);
+            using var memory=new MemoryStream();var buffer=new byte[1024];int read;
+            while((read=await stream.ReadAsync(buffer,deadline.Token))>0){if(memory.Length+read>8192)throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");memory.Write(buffer,0,read);}
+            body=System.Text.Encoding.UTF8.GetString(memory.ToArray());
+        }
         catch(OperationCanceledException error) when(!_stop.IsCancellationRequested){throw new IOException("ORACLE_PROBE_TIMEOUT",error);}
         catch(HttpRequestException error){throw new IOException("ORACLE_PROBE_HTTP_FAILED",error);}
-        if(body.Length>8192 || !body.Split('\n').Any(line=>line=="ip=152.67.156.100"))throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");
+        if(!body.Split('\n').Any(line=>line=="ip=152.67.156.100"))throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");
         return timer.ElapsedMilliseconds;
     }
     internal async Task Stop()
@@ -61,6 +83,7 @@ internal sealed class CoreProcess : IDisposable
             catch{_process.Kill(true);await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));}
         }
         _process.Dispose();_process=null;
+        _probeClient?.Dispose();_probeClient=null;StandbyCapable=false;TunActive=false;
         if(_job!=IntPtr.Zero){CloseHandle(_job);_job=IntPtr.Zero;}
         _probeSecret="";
     }

@@ -63,13 +63,13 @@ internal static class OracleAcceptance
         }
         throw new IOException("ORACLE_RECONNECT_TIMED_OUT");
     }
-    private static async Task ColdCore()
+    private static async Task<uint> ColdCore()
     {
         var state=await Send("Status");uint pid=state["core_pid"]!.GetValue<uint>();
-        if(pid==0)return;
+        if(pid==0)return 0;
         using var process=Process.GetProcessById((int)pid);
         if(process.SessionId!=0 || process.MainModule?.FileName!=Platform.Core)throw new IOException("FIXTURE_CORE_IDENTITY_MISMATCH");
-        process.Kill(true);await process.WaitForExitAsync();
+        process.Kill(true);await process.WaitForExitAsync();return pid;
     }
     private static async Task<bool> CarrierDirectBlocked()
     {
@@ -154,7 +154,16 @@ internal static class OracleAcceptance
             stage="AUTOMATIC_QUIC_FALLBACK";await Send("Disconnect");
             if(prepared["quic_available"]?.GetValue<bool>()==true){
                 using(var nativeLoss=new InitialUdpLoss()){
-                    await ColdCore();
+                    uint previousPid=await ColdCore();JsonObject replacement=new();
+                    // Deliberately let the background actor replace the dead
+                    // prepared core before Connect. Its old successful probe
+                    // must not authorize the new blocked-UDP generation.
+                    for(int attempt=0;attempt<20;attempt++){
+                        replacement=await Send("Prepare");
+                        if(replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["core_pid"]!.GetValue<uint>()!=previousPid)break;
+                        await Task.Delay(200);
+                    }
+                    Check(previousPid>0 && replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["quick_ready"]?.GetValue<bool>()==false && replacement["verified_at"] is null && replacement["transport"]?.GetValue<string>()=="wireguard-udp","REAL_REPLACEMENT_CORE_CANNOT_INHERIT_OLD_EXIT_VERIFICATION");
                     await Send("Connect");var quic=await Connected();
                     Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
                     Check(await CarrierDirectBlocked(),"REAL_QUIC_CARRIER_ROUTE_HAS_NO_ORDINARY_DIRECT_ESCAPE");

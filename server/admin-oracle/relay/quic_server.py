@@ -185,7 +185,12 @@ class RelayProtocol(QuicConnectionProtocol):
                 elif len(packet)<=1000:self.http.send_datagram(self.http_stream,b"\0"+packet)
                 else:
                     stream=self._quic._streams.get(self.http_stream)
-                    if stream is None or len(stream.sender._buffer)>16384:self.reject();return
+                    if stream is None:self.reject();return
+                    # Bound queued reliable fallback while allowing normal TCP
+                    # receive windows. Backpressure rather than closing a
+                    # healthy tunnel after a small burst of large UDP frames.
+                    while len(stream.sender._buffer)>256*1024:
+                        await asyncio.sleep(0.01)
                     self.http.send_data(self.http_stream,capsule(packet),end_stream=False)
                 self.transmit()
         except asyncio.CancelledError: return

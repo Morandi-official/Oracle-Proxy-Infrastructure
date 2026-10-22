@@ -146,6 +146,14 @@ class H3Client(QuicConnectionProtocol):
         self.transmit()
 
 class Http3TLS(QuicTLS):
+    async def test_large_udp_burst_respects_flow_control_without_session_loss(self):
+        async with self.connection() as client:
+            self.assertEqual(await client.auth(),b'200')
+            packets=[b'\x04\0\0\0'+bytes([i])*1376 for i in range(48)]
+            for packet in packets:client.send(packet)
+            received=[await asyncio.wait_for(client.received.get(),3) for _ in packets]
+            self.assertEqual(received,packets);self.assertEqual(len(self.state.active),1)
+
     async def test_unauthenticated_data_rejected(self):
         async with self.connection() as client:
             client.send(b'\x04\0\0\0'+bytes(28))

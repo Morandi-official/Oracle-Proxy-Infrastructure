@@ -72,9 +72,12 @@ class RelayProtocol(QuicConnectionProtocol):
                 self.tasks.append(asyncio.create_task(self.authorize(token)))
         elif isinstance(event, DatagramFrameReceived):
             if self.udp is None: self.reject(); return
+            # Charge every authenticated fragment, including malformed or
+            # incomplete ones, before reassembly work or forwarding.
+            if not self.accept(len(event.data)): self.reject(); return
             packet = self.fragments.receive(event.data)
             if packet is not None:
-                if not wireguard_packet(packet) or not self.accept(len(packet)): self.reject(); return
+                if not wireguard_packet(packet): self.reject(); return
                 self.udp.sendto(packet)
 
     def accept(self, size):

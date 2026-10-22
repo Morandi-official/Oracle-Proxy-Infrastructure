@@ -51,7 +51,7 @@ internal sealed class VpnRuntime : IDisposable
             _mode="recovery";_error="STATE_MISSING_RECOVERY_REQUIRED";return;
         }
         if(_secret.ConnectIntent){NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());_mode="protected";}
-        else{await EnsureTunnelInactive();NativeGuard.Clear();_mode="disconnected";}
+        else{await EnsureTunnelRemoved();NativeGuard.Clear();_mode="disconnected";}
     }
     internal async Task Run(CancellationToken cancel)
     {
@@ -130,7 +130,7 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
         if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
-        _stage="TUN_CLEANUP";await EnsureTunnelInactive();
+        _stage="TUN_CLEANUP";await EnsureTunnelRemoved();
         if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
             _stage="CORE_START";_generation++;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();await _core.Start(_state!,_secret,_transport,standby:true);
@@ -211,7 +211,7 @@ internal sealed class VpnRuntime : IDisposable
             bool keep=_core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
             if(keep){if(_core.TunActive)await _core.Deactivate();}
             else await StopCore();
-            await EnsureTunnelInactive();
+            if(keep)await EnsureTunnelInactive();else await EnsureTunnelRemoved();
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
             NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_probeFailures=0;
             _prepareUntil=DateTimeOffset.UtcNow.AddSeconds(20);
@@ -229,6 +229,16 @@ internal sealed class VpnRuntime : IDisposable
             await Task.Delay(100);
         }
         throw new IOException("OWNED_TUNNEL_CLEANUP_NOT_VERIFIED");
+    }
+    // Only the already-running private core can retain a dormant adapter. A new
+    // core must never adopt an unrelated/stale adapter merely by its name.
+    internal static async Task EnsureTunnelRemoved()
+    {
+        for(int i=0;i<30;i++){
+            if(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"))return;
+            await Task.Delay(100);
+        }
+        throw new IOException("OWNED_TUNNEL_REMOVAL_NOT_VERIFIED");
     }
     internal static bool TunnelInactive()=>!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy" &&
         (n.OperationalStatus==OperationalStatus.Up || n.GetIPProperties().UnicastAddresses.Any(a=>!a.Address.IsIPv6LinkLocal)));

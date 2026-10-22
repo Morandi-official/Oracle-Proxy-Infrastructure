@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from .transports import quic_info
 from . import control
 from .models import Audit, ClientAccount, ClientSession, ClientLoginThrottle
 
@@ -76,7 +77,8 @@ def client_state(snapshot, account, key):
             'tunnel':{'endpoint':f"152.67.156.100:{snapshot['listen_port']}",
                       'server_public_key':snapshot['server_public_key'], 'addresses':peer['allowed_ips'],
                       'allowed_ips':['0.0.0.0/0'], 'dns':['1.1.1.1'], 'ipv6_policy':'block',
-                      'https_relay':snapshot['listen_port']==51820}}
+                      'https_relay':snapshot['listen_port']==51820,
+                      'quic':quic_info() if snapshot['listen_port']==51820 else None}}
 
 
 @csrf_exempt

@@ -63,6 +63,12 @@ def main():
     assert (host.STATE / 'admin.sqlite3').is_file()
     assert run(['runuser', '-u', 'oracle-proxy-relay', '--', 'test', '!', '-r', host.STATE / 'admin.sqlite3']).returncode == 0
     print('REAL_RELAY_LOOPBACK_HEALTH_AND_NO_ADMIN_CREDENTIAL_ACCESS=PASS')
+    assert subprocess.check_output(['systemctl','show','-p','User','--value',host.UNIT_NAMES[4]],text=True).strip() == 'oracle-proxy-quic'
+    for private in (host.CONFIG,host.STATE/'admin.sqlite3'):
+        assert run(['runuser','-u','oracle-proxy-quic','--','test','!','-r',private]).returncode == 0
+    assert run(['runuser','-u',host.APP_USER,'--','test','!','-r','/etc/oracle-proxy-quic/private.pem']).returncode == 0
+    assert run(['runuser','-u','oracle-proxy-relay','--','test','!','-r','/etc/oracle-proxy-quic/private.pem']).returncode == 0
+    print('REAL_QUIC_DISTINCT_UID_HEALTH_AND_PRIVATE_KEY_ISOLATION=PASS')
     request = urllib.request.Request(f'http://127.0.0.1:8787/api/status', headers={
         'Host': host.HOST, 'X-Forwarded-Proto': 'https'})
     try:
@@ -94,12 +100,18 @@ def main():
     relay_source = host.ROOT / 'current/relay/server.py'
     relay_saved = relay_source.with_suffix('.py.legacy-test')
     relay_source.rename(relay_saved)
+    quic_source=host.ROOT/'current/relay/quic_server.py'
+    quic_saved=quic_source.with_suffix('.py.legacy-test')
+    quic_source.rename(quic_saved)
     try:
         host.restart_application()
         assert host.healthy()
         assert subprocess.run(['systemctl', 'is-enabled', '--quiet', host.UNIT_NAMES[3]], check=False).returncode != 0
         assert subprocess.run(['systemctl', 'is-active', '--quiet', host.UNIT_NAMES[3]], check=False).returncode != 0
+        for index in (4,6):
+            assert subprocess.run(['systemctl','is-active','--quiet',host.UNIT_NAMES[index]],check=False).returncode != 0
     finally:
+        quic_saved.rename(quic_source)
         relay_saved.rename(relay_source)
         host.restart_application()
     assert host.healthy()

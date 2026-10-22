@@ -171,3 +171,24 @@ GitHub OAuth HTTP 回包在自动化测试中被模拟；仍需真实 OAuth App�
 端口变更、设备单独撤销/删除、OCI 官方账单 API、签名客户端配置与 Windows 正式版接入尚未交付。
 用户/Peer/预算的固定权限执行器不提供 SSH 或任意命令能力。
 已授权 GitHub 管理通道可部署网页和独立控制服务；网页版本回滚保留控制服务、策略与账本。
+
+
+### QUIC preparation (UDP 8443)
+
+Native WireGuard UDP 51820 remains the primary carrier. The dedicated unprivileged
+`oracle-proxy-quic` service forwards authenticated QUIC datagrams to loopback wg0;
+HTTPS 443 remains the last carrier. The service has no admin credentials/database
+access and cannot access OCI instance metadata. It validates device policy every
+5 seconds; kernel WireGuard quotas and leases still apply.
+
+A root-owned, dedicated P-256 certificate is generated after source sealing, renewed
+before expiry, and exposed only as a **public** certificate through existing verified
+HTTPS at `/api/client/quic-certificate`. Clients validate hostname, expiry and that
+trust certificate. No private key is returned or copied to GitHub.
+
+The host firewall adds only the fixed IPv4 UDP 8443 rule. OCI security lists/NSGs
+must also allow ingress UDP 8443. `verify_quic.py` independently checks the public
+QUIC TLS handshake without registering a device or using any account password.
+`relay/settings.py` deliberately advertises QUIC disabled until this external gate
+passes; existing clients and the working HTTPS fallback retain their behavior.
+Rollback to a release without QUIC stops its listener and renewal timer.

@@ -1,5 +1,5 @@
 from django.urls import include, path
-from console import views, client_api
+from console import views, client_api, transports
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
@@ -7,6 +7,7 @@ urlpatterns = [
     path('accounts/', include('allauth.urls')),
     path('api/client/login', client_api.login),
     path('api/client/state', client_api.state),
+    path('api/client/quic-certificate', transports.public_certificate),
     path('api/client/logout', client_api.logout),
     path('api/status', views.status),
     path('api/audit', views.audit),

@@ -1,0 +1,27 @@
+[Unit]
+Description=Oracle Proxy fixed-host QUIC certificate renewal
+ConditionPathExists=/opt/oracle-proxy-admin/current/relay/quic_keys.py
+
+[Service]
+Type=oneshot
+User=root
+Group=oracle-proxy-quic
+ExecStart=/opt/oracle-proxy-admin/current/.venv/bin/python -I /opt/oracle-proxy-admin/current/relay/quic_keys.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ReadWritePaths=/etc/oracle-proxy-quic
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+MemoryMax=128M
+TasksMax=8

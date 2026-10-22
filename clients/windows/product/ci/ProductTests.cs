@@ -173,16 +173,45 @@ internal static class ProductTests
         snapshot["uu_candidates"]=1;snapshot["uu_rejected"]=1;
         snapshot["uu_diagnostics"]=new JsonArray(new JsonObject{["path"]=@"E:\Apps\GameViewer",["code"]="UU_DIRECTORY_WRITABLE",["detail"]=""});
         snapshot["password"]="SYNTHETIC_PASSWORD_DO_NOT_COPY";snapshot["token"]="SYNTHETIC_TOKEN_DO_NOT_COPY";
+        snapshot["native_udp_attempt"]=new JsonObject{["endpoint_port"]=51820,["probe_result"]="egress_probe_timeout",["password"]="SYNTHETIC_NATIVE_SECRET_DO_NOT_COPY"};
         snapshot["failure"]=ConnectionFailure.Capture("ORACLE_EGRESS_PROBE",new HttpRequestException(HttpRequestError.ProxyTunnelError,"SYNTHETIC_SECRET_URL_PASSWORD",new SocketException((int)SocketError.ConnectionRefused)),"READY");
         if(snapshot["failure"]!["socket_error"]?.GetValue<string>()!="ConnectionRefused" || snapshot["failure"]!.ToJsonString().Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
-        if(!form.ConnectionReport.Contains("ORACLE_EGRESS_PROBE") || !form.ConnectionReport.Contains("ConnectionRefused") || form.ConnectionReport.Contains("synthetic-user") || form.ConnectionReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
+        if(!form.ConnectionReport.Contains("native_udp.endpoint_port: 51820") || !form.ConnectionReport.Contains("egress_probe_timeout") || form.ConnectionReport.Contains("SYNTHETIC_NATIVE_SECRET_DO_NOT_COPY") || !form.ConnectionReport.Contains("ORACLE_EGRESS_PROBE") || !form.ConnectionReport.Contains("ConnectionRefused") || form.ConnectionReport.Contains("synthetic-user") || form.ConnectionReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         Console.WriteLine("CONNECTION_FAILURE_STAGE_AND_ENUMS_EXPORTED_WITHOUT_MESSAGES_OR_CREDENTIALS=PASS");
         if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
            form.UuReport.Contains("synthetic-user") || form.UuReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.UuReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY"))return 1;
         Console.WriteLine("UU_DIAGNOSTIC_ACTIONABLE_WITHOUT_ACCOUNT_OR_CREDENTIALS=PASS");
         using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,form.ClientRectangle);Directory.CreateDirectory("dist/review");image.Save("dist/review/windows-client-synthetic.png");}
         snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
+        snapshot["mode"]="disconnected";snapshot["guard"]=false;snapshot["preparing"]=true;snapshot["quick_ready"]=true;
+        snapshot["error"]="";snapshot["transport"]="wireguard-quic";
+        using var idle=new MainForm((_,_,_)=>Task.FromResult((JsonObject)snapshot.DeepClone()));
+        idle.Display(snapshot);idle.CreateControl();idle.PerformLayout();
+        IEnumerable<Control> Descendants(Control parent){foreach(Control control in parent.Controls){yield return control;foreach(var child in Descendants(control))yield return child;}}
+        int textChanges=0,buttonChanges=0,layouts=0;
+        foreach(var control in Descendants(idle)){
+            control.TextChanged+=(_,_)=>textChanges++;
+            control.Layout+=(_,_)=>layouts++;
+            if(control is Button)control.EnabledChanged+=(_,_)=>buttonChanges++;
+        }
+        for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
+        if(textChanges!=0 || buttonChanges!=0 || layouts!=0 || idle.PollInterval!=3000)return 1;
+        snapshot["quick_ready"]=false;idle.Display(snapshot);if(idle.PollInterval!=250)return 1;
+        int preparingChanges=textChanges;
+        for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
+        if(textChanges!=preparingChanges || buttonChanges!=0)return 1;
+        Console.WriteLine("IDLE_AND_PREPARING_POLLS_DO_NOT_REWRITE_TEXT_OR_TOGGLE_BUTTONS=PASS");
+        var pendingRead=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls=new List<string>();
+        using var queued=new MainForm((command,_,_)=>{calls.Add(command);return command=="Prepare"?pendingRead.Task:Task.FromResult((JsonObject)snapshot.DeepClone());});
+        Task read=queued.Act("Status"),click=queued.Act("Connect");
+        if(calls.Count!=1 || click.IsCompleted)return 1;
+        pendingRead.SetResult((JsonObject)snapshot.DeepClone());
+        var deadline=Stopwatch.StartNew();
+        while((!read.IsCompleted || !click.IsCompleted) && deadline.Elapsed<TimeSpan.FromSeconds(5)){Application.DoEvents();Thread.Sleep(5);}
+        if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Prepare","Connect"}))return 1;
+        Console.WriteLine("CONNECT_CLICK_DURING_PASSIVE_READ_IS_QUEUED_AND_EXECUTED=PASS");
         return 0;
     }
     private static async Task<int> RoguePipe()
@@ -276,7 +305,7 @@ internal static class ProductTests
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";
-        config["endpoints"]![0]!["bind_interface"]=loopback;
+        config["outbounds"]!.AsArray().Single(item=>item?["tag"]?.GetValue<string>()=="oracle-native-udp")!["bind_interface"]=loopback;
         Process? exit=null,client=null;
         try{
             exit=await Launch(server);

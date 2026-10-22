@@ -17,6 +17,15 @@ internal sealed class VpnRuntime : IDisposable
     private JsonObject? _failure;
     private TunnelTransport _transport;
     private int _probeFailures;
+    private JsonObject? _nativeUdpAttempt;
+    private void RecordNativeProbe(bool verified)
+    {
+        if(_transport!=TunnelTransport.WireGuardUdp || _nativeUdpAttempt is null)return;
+        _nativeUdpAttempt["probe_result"]=verified?"oracle_egress_verified":CodeForNativeProbe();
+        if(!verified)_nativeUdpAttempt["probe_failures"]=_nativeUdpAttempt["probe_failures"]!.GetValue<int>()+1;
+        _nativeUdpAttempt["attempt_elapsed_ms"]=System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted).Ticks/TimeSpan.TicksPerMillisecond;
+    }
+    private string CodeForNativeProbe()=>_error switch{"ORACLE_PROBE_TIMEOUT"=>"egress_probe_timeout","ORACLE_PROBE_HTTP_FAILED"=>"egress_probe_http_failed",_=>"egress_not_verified"};
     private Task<JsonObject>? _refreshPending;
     private string _refreshToken="";
     private Task<long>? _probePending;
@@ -66,7 +75,7 @@ internal sealed class VpnRuntime : IDisposable
                     if(DateTimeOffset.UtcNow>=_nextNetworkCheck){
                         _nextNetworkCheck=DateTimeOffset.UtcNow.AddSeconds(1);
                         if(_carriers.Observe(CarrierMemory.Network())){
-                            await StopCore();_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;
+                            _nativeUdpAttempt=null;await StopCore();_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;
                             if(_secret.ConnectIntent)_mode="protected";
                         }
                     }
@@ -79,10 +88,10 @@ internal sealed class VpnRuntime : IDisposable
                         var pending=_probePending;_probePending=null;
                         if(_core.Running && _probePid==_core.Pid && _probeGeneration==_generation){
                             try{
-                                _latency=await pending;_verified=DateTimeOffset.UtcNow;_verifiedGeneration=_generation;_failure=null;_probeFailures=0;_error="";
+                                _latency=await pending;RecordNativeProbe(true);_verified=DateTimeOffset.UtcNow;_verifiedGeneration=_generation;_failure=null;_probeFailures=0;_error="";
                                 if(_secret.ConnectIntent && NativeGuard.TunPermitted)MarkConnected();
                             }catch(Exception error){
-                                _verified=default;_stage="ORACLE_EGRESS_PROBE";Failed(error);
+                                _verified=default;_stage="ORACLE_EGRESS_PROBE";Failed(error);RecordNativeProbe(false);
                                 if(_secret.ConnectIntent){_mode="protected";_latency=null;}
                                 if(_error is not ("ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED"))await StopCore();
                             }
@@ -133,7 +142,12 @@ internal sealed class VpnRuntime : IDisposable
         _stage="TUN_CLEANUP";await EnsureTunnelRemoved();
         if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
-            _stage="CORE_START";_generation++;_verified=default;_verifiedGeneration=-1;_latency=null;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();await _core.Start(_state!,_secret,_transport,standby:true);
+            _stage="CORE_START";_generation++;_verified=default;_verifiedGeneration=-1;_latency=null;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+            if(_transport==TunnelTransport.WireGuardUdp)_nativeUdpAttempt=new JsonObject{
+                ["endpoint_port"]=int.Parse(_state!["tunnel"]!["endpoint"]!.GetValue<string>().Split(':')[1]),
+                ["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["started_without_tun"]=standby,
+                ["socket_binding"]="connected_ipv4",["probe_result"]="pending",["probe_failures"]=0,["attempt_elapsed_ms"]=0};
+            await _core.Start(_state!,_secret,_transport,standby:true);
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             _runningProfile=Profile();_nextProbe=default;
         }catch{await StopCore();if(!standby)_mode="protected";throw;}
@@ -151,7 +165,7 @@ internal sealed class VpnRuntime : IDisposable
             case "Prepare":_prepareUntil=DateTimeOffset.UtcNow.AddSeconds(20);break;
             case "Login":
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_LOGIN");
-                await StopCore();_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;
+                await StopCore();_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;_nativeUdpAttempt=null;
                 _stage="ACCOUNT_LOGIN";string username=value["username"]!.GetValue<string>(),password=value["password"]!.GetValue<string>();
                 if(username.Length is <3 or >64 || password.Length is <1 or >128)throw new IOException("INVALID_CREDENTIALS");
                 if(_secret.PrivateKey.Length==0){
@@ -249,7 +263,7 @@ internal sealed class VpnRuntime : IDisposable
     private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
         ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
-        ["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),
+        ["native_udp_attempt"]=_nativeUdpAttempt?.DeepClone(),["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};

@@ -51,7 +51,7 @@ internal sealed class VpnRuntime : IDisposable
             _mode="recovery";_error="STATE_MISSING_RECOVERY_REQUIRED";return;
         }
         if(_secret.ConnectIntent){NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());_mode="protected";}
-        else{await EnsureTunnelGone();NativeGuard.Clear();_mode="disconnected";}
+        else{await EnsureTunnelInactive();NativeGuard.Clear();_mode="disconnected";}
     }
     internal async Task Run(CancellationToken cancel)
     {
@@ -130,7 +130,7 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
         if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
-        _stage="TUN_CLEANUP";await EnsureTunnelGone();
+        _stage="TUN_CLEANUP";await EnsureTunnelInactive();
         if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
             _stage="CORE_START";_generation++;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();await _core.Start(_state!,_secret,_transport,standby:true);
@@ -211,7 +211,7 @@ internal sealed class VpnRuntime : IDisposable
             bool keep=_core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
             if(keep){if(_core.TunActive)await _core.Deactivate();}
             else await StopCore();
-            await EnsureTunnelGone();
+            await EnsureTunnelInactive();
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
             NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_probeFailures=0;
             _prepareUntil=DateTimeOffset.UtcNow.AddSeconds(20);
@@ -222,14 +222,16 @@ internal sealed class VpnRuntime : IDisposable
             _mode="recovery";throw new IOException("RECOVERY_REQUIRED");
         }
     }
-    internal static async Task EnsureTunnelGone()
+    internal static async Task EnsureTunnelInactive()
     {
         for(int i=0;i<30;i++){
-            if(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"))return;
+            if(TunnelInactive() && (!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") || NativeGuard.TunDormant))return;
             await Task.Delay(100);
         }
         throw new IOException("OWNED_TUNNEL_CLEANUP_NOT_VERIFIED");
     }
+    internal static bool TunnelInactive()=>!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy" &&
+        (n.OperationalStatus==OperationalStatus.Up || n.GetIPProperties().UnicastAddresses.Any(a=>!a.Address.IsIPv6LinkLocal)));
     private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
         ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),

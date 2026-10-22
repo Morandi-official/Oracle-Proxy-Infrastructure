@@ -21,7 +21,7 @@ internal sealed class VpnRuntime : IDisposable
     private string _refreshToken="";
     private Task<long>? _probePending;
     private uint _probePid;
-    private long _generation,_probeGeneration;
+    private long _generation,_probeGeneration,_carrierStarted;
     private DateTimeOffset _nextRefresh,_nextProbe,_prepareUntil,_verified;
     private long? _connectMs;
     private JsonObject? _switchTimings;
@@ -83,7 +83,7 @@ internal sealed class VpnRuntime : IDisposable
                             await StopCore();_latency=null;
                             if(_secret.ConnectIntent)_mode="protected";
                         }else{
-                            if(_probeFailures>=2 && TransportPolicy.Next(_transport,_state!) is TunnelTransport next){
+                            if(_probeFailures>=2 && System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted)>=TimeSpan.FromSeconds(12) && TransportPolicy.Next(_transport,_state!) is TunnelTransport next){
                                 _transport=next;_probeFailures=0;_stage=next==TunnelTransport.WireGuardQuic?"QUIC_FALLBACK":"HTTPS_FALLBACK";await StopCore();
                             }
                             if(_core.Running && (_runningProfile!=Profile() || (_secret.ConnectIntent && !NativeGuard.TunPermitted)))await StopCore();
@@ -119,7 +119,7 @@ internal sealed class VpnRuntime : IDisposable
         _stage="TUN_CLEANUP";await EnsureTunnelGone();
         if(!standby){_stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
-            _stage="CORE_START";_generation++;await _core.Start(_state!,_secret,_transport,standby:true);
+            _stage="CORE_START";_generation++;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();await _core.Start(_state!,_secret,_transport,standby:true);
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);}
             _runningProfile=Profile();_nextProbe=default;
         }catch{await StopCore();if(!standby)_mode="protected";throw;}

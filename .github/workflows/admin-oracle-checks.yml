@@ -42,9 +42,12 @@ jobs:
       - name: Require public QUIC TLS before advertising the backup
         if: matrix.python == '3.12'
         run: |
-          if rg -q '^PUBLIC_QUIC_ENABLED = True$' relay/settings.py; then
-            python ../../ops/oracle-project/verify_quic.py --require-reachable
-          fi
+          python - <<'PYQUIC'
+          import subprocess, sys
+          from relay.settings import PUBLIC_QUIC_ENABLED
+          if PUBLIC_QUIC_ENABLED:
+              subprocess.run([sys.executable, '../../ops/oracle-project/verify_quic.py', '--require-reachable'], check=True)
+          PYQUIC
       - run: node --check static/console/app.js
       - name: Package source without test-only privileged entrypoints or credentials
         if: matrix.python == '3.12'

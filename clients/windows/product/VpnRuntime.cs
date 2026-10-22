@@ -209,17 +209,21 @@ internal sealed class VpnRuntime : IDisposable
         try{
             _stage="DISCONNECT";
             bool keep=_core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
+            _stage="DISCONNECT_DEACTIVATE";
             if(keep){if(_core.TunActive)await _core.Deactivate();}
             else await StopCore();
+            _stage="DISCONNECT_AUDIT";
             if(keep)await EnsureTunnelInactive();else await EnsureTunnelRemoved();
+            _stage="DISCONNECT_STATE";
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
+            _stage="DISCONNECT_GUARD_CLEAR";
             NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_probeFailures=0;
             _prepareUntil=DateTimeOffset.UtcNow.AddSeconds(20);
             if(!keep)_transport=_state is null?TunnelTransport.WireGuardUdp:_carriers.Preferred(_state);
-        }catch{
+        }catch(Exception error){
             _secret.ConnectIntent=true;_secret.RecoveryRequired=true;_secret.Save();
             try{NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());}catch{}
-            _mode="recovery";throw new IOException("RECOVERY_REQUIRED");
+            _mode="recovery";throw new IOException("RECOVERY_REQUIRED",error);
         }
     }
     internal static async Task EnsureTunnelInactive()

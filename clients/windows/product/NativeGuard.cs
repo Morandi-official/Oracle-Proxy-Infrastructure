@@ -7,6 +7,7 @@ internal static class NativeGuard
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint ClearDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint CountDelegate(out uint persistent,out uint boot);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint LuidDelegate(out ulong value);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl,CharSet=CharSet.Unicode)]private delegate uint AuthorizeDelegate(string core,ulong luid,uint pid);
     private static T Function<T>(string name)where T:Delegate
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();
@@ -21,6 +22,13 @@ internal static class NativeGuard
         if(!Active)throw new IOException("WFP_AUDIT_FAILED");
     }
     internal static uint CoreLifecycle=>Function<ClearDelegate>("OpGuardCoreState")();
+    internal static void AuthorizeTun(uint pid)
+    {
+        // Persistent policy was installed before TUN activation. Only grant
+        // the live, attested SYSTEM core's actual interface lease here.
+        uint result=Function<AuthorizeDelegate>("OpGuardAuthorizeTun")(Platform.Core,TunLuid(),pid);
+        if(result!=0 || !TunPermitted)throw new IOException("TUN_AUTHORIZE_FAILED");
+    }
     internal static bool TunPermitted=>Function<ClearDelegate>("OpGuardTunReady")()==1;
     internal static void SuspendTun(){if(Function<ClearDelegate>("OpGuardSuspendTun")()!=0)throw new IOException("TUN_PERMIT_RELEASE_FAILED");}
     internal static bool Active{

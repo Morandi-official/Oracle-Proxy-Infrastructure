@@ -187,6 +187,15 @@ static DWORD apply_internal(const wchar_t *service_path,const wchar_t *core_path
  FwpmEngineClose0(engine);if(!e&&tun_luid)e=live_tun(tun_luid,core_path,core_pid);return e;
 }
 API OpGuardApply(const wchar_t *service_path,const wchar_t *core_path,const wchar_t *uu_paths,UINT64 value,DWORD core_pid){AcquireSRWLockExclusive(&policy_lock);DWORD e=apply_internal(service_path,core_path,uu_paths,value,core_pid);ReleaseSRWLockExclusive(&policy_lock);return e;}
+API OpGuardAuthorizeTun(const wchar_t *core_path,UINT64 value,DWORD core_pid){
+ if(!system_only())return ERROR_ACCESS_DENIED;
+ AcquireSRWLockExclusive(&policy_lock);close_tun();
+ HANDLE engine=NULL;DWORD persistent=0,boot_count=0;DWORD e=open_engine(&engine);
+ if(!e){e=enumerate_owned(engine,FALSE,&persistent,&boot_count);FwpmEngineClose0(engine);}
+ if(!e&&(persistent<16||boot_count<8))e=ERROR_ACCESS_DENIED;
+ if(!e)e=live_tun(value,core_path,core_pid);
+ ReleaseSRWLockExclusive(&policy_lock);return e;
+}
 API OpGuardSuspendTun(void){if(!system_only())return ERROR_ACCESS_DENIED;AcquireSRWLockExclusive(&policy_lock);close_tun();ReleaseSRWLockExclusive(&policy_lock);return 0;}
 API OpGuardCoreState(void){AcquireSRWLockShared(&policy_lock);DWORD state=core_state();ReleaseSRWLockShared(&policy_lock);return state;}
 API OpGuardTunReady(void){

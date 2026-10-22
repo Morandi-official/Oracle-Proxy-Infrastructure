@@ -25,6 +25,11 @@ internal sealed class VpnRuntime : IDisposable
     private DateTimeOffset _nextRefresh,_nextProbe,_prepareUntil,_verified;
     private long? _connectMs;
     private JsonObject? _switchTimings;
+    private readonly CarrierMemory _carriers=new();
+    private DateTimeOffset _nextNetworkCheck;
+    private long _clickStarted;
+    private long? _readyMs;
+    private void MarkConnected(){_mode="connected";if(_clickStarted!=0 && _readyMs is null)_readyMs=System.Diagnostics.Stopwatch.GetElapsedTime(_clickStarted).Ticks/TimeSpan.TicksPerMillisecond;}
     private bool WarmReady=>!_secret.ConnectIntent && _core.Running && !_core.TunActive && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
     private bool Preparing=>!_secret.ConnectIntent && _secret.Token.Length>0 && DateTimeOffset.UtcNow<_prepareUntil;
     private void Failed(Exception error){_error=Code(error);_failure=ConnectionFailure.Capture(_stage,error,_core.SafeStage);if(_stage=="ORACLE_EGRESS_PROBE" && _error is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED")_probeFailures++;}
@@ -37,6 +42,7 @@ internal sealed class VpnRuntime : IDisposable
         Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);Platform.VerifyBundle(Platform.Root);
         bool missing=!File.Exists(Path.Combine(Platform.StateRoot,"state.dpapi"));
         _secret=DurableState.Load();
+        _carriers.Observe(CarrierMemory.Network());
         if(missing && NativeGuard.Active){
             // A lost state file is not an explicit Off request. Keep the last
             // persistent policy (including existing UU exceptions) and require
@@ -57,6 +63,13 @@ internal sealed class VpnRuntime : IDisposable
                     await StopCore();NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());
                 }
                 try{
+                    if(DateTimeOffset.UtcNow>=_nextNetworkCheck){
+                        _nextNetworkCheck=DateTimeOffset.UtcNow.AddSeconds(1);
+                        if(_carriers.Observe(CarrierMemory.Network())){
+                            await StopCore();_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;
+                            if(_secret.ConnectIntent)_mode="protected";
+                        }
+                    }
                     if(_refreshPending?.IsCompleted==true){
                         var pending=_refreshPending;_refreshPending=null;
                         if(_refreshToken==_secret.Token){_state=await pending;_received=DateTimeOffset.UtcNow;}
@@ -67,7 +80,7 @@ internal sealed class VpnRuntime : IDisposable
                         if(_core.Running && _probePid==_core.Pid && _probeGeneration==_generation){
                             try{
                                 _latency=await pending;_verified=DateTimeOffset.UtcNow;_failure=null;_probeFailures=0;_error="";
-                                if(_secret.ConnectIntent && NativeGuard.TunPermitted)_mode="connected";
+                                if(_secret.ConnectIntent && NativeGuard.TunPermitted)MarkConnected();
                             }catch(Exception error){
                                 _verified=default;_stage="ORACLE_EGRESS_PROBE";Failed(error);
                                 if(_secret.ConnectIntent){_mode="protected";_latency=null;}
@@ -84,6 +97,7 @@ internal sealed class VpnRuntime : IDisposable
                             if(_secret.ConnectIntent)_mode="protected";
                         }else{
                             if(_probeFailures>=2 && System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted)>=TimeSpan.FromSeconds(12) && TransportPolicy.Next(_transport,_state!) is TunnelTransport next){
+                                _carriers.Failed(_transport);
                                 _transport=next;_probeFailures=0;_stage=next==TunnelTransport.WireGuardQuic?"QUIC_FALLBACK":"HTTPS_FALLBACK";await StopCore();
                             }
                             if(_core.Running && (_runningProfile!=Profile() || (_secret.ConnectIntent && !NativeGuard.TunPermitted)))await StopCore();
@@ -100,7 +114,7 @@ internal sealed class VpnRuntime : IDisposable
                                 _nextProbe=DateTimeOffset.UtcNow.AddSeconds(_verified==default?2:10);
                             }
                         }
-                    }else if(!_secret.ConnectIntent && _core.Running){await StopCore();_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;}
+                    }else if(!_secret.ConnectIntent && _core.Running){await StopCore();_transport=_state is null?TunnelTransport.WireGuardUdp:_carriers.Preferred(_state);_probeFailures=0;}
                 }catch(Exception error){
                     Failed(error);
                     if(_secret.ConnectIntent){if(!NativeGuard.Active)await StopCore();_mode="protected";_latency=null;}
@@ -112,15 +126,15 @@ internal sealed class VpnRuntime : IDisposable
     private async Task StopCore(){_generation++;await _core.Stop();_verified=default;_runningProfile="";_nextProbe=default;}
     private async Task Refresh(){_stage="ACCOUNT_STATE";_state=await _api.Call("state",_secret.Token);_received=DateTimeOffset.UtcNow;_error="";}
     private bool ActivePolicy()=>_state?["account"]?["status"]?.GetValue<string>()=="active" && _state["observed_at"]?.GetValue<long>() is long at && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
-    private async Task StartCore(bool standby=false)
+    private async Task StartCore(bool standby=false,bool guardInstalled=false)
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
         if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
         _stage="TUN_CLEANUP";await EnsureTunnelGone();
-        if(!standby){_stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
+        if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
             _stage="CORE_START";_generation++;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();await _core.Start(_state!,_secret,_transport,standby:true);
-            if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);}
+            if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             _runningProfile=Profile();_nextProbe=default;
         }catch{await StopCore();if(!standby)_mode="protected";throw;}
     }
@@ -153,25 +167,30 @@ internal sealed class VpnRuntime : IDisposable
                 if(_secret.RecoveryRequired)throw new IOException("RECOVERY_REQUIRED");
                 if(_core.Running && _mode=="connected" && _secret.ConnectIntent)break;
                 if(_secret.ConnectIntent && _core.Running && NativeGuard.TunPermitted){_nextProbe=default;break;}
+                _clickStarted=System.Diagnostics.Stopwatch.GetTimestamp();_readyMs=null;
                 bool warm=WarmReady;
-                if(!_secret.ConnectIntent && !warm){_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;await StopCore();}
+                bool reusable=_core.Running && !_core.TunActive && ActivePolicy() && _runningProfile==Profile();
+                if(!_secret.ConnectIntent && !reusable){await StopCore();_transport=_state is null?TunnelTransport.WireGuardUdp:_carriers.Preferred(_state);_probeFailures=0;}
                 using var uuMaintenance=UuAclRepair.AcquireMaintenance();
+                if(_carriers.Observe(CarrierMemory.Network())){await StopCore();_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;warm=false;reusable=false;}
                 _stage="UU_DISCOVERY";var inventory=UuDiscovery.Discover();_uuInventory=inventory;_switchTimings["uu_discovery_ms"]=timer.ElapsedMilliseconds;
                 if(inventory.Candidates>0 && inventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 // Process exceptions are part of the prepared configuration.
-                if(warm && !_secret.UuPaths.SequenceEqual(inventory.Paths,StringComparer.OrdinalIgnoreCase)){await StopCore();warm=false;_transport=TunnelTransport.WireGuardUdp;}
+                if(reusable && !_secret.UuPaths.SequenceEqual(inventory.Paths,StringComparer.OrdinalIgnoreCase)){await StopCore();warm=false;reusable=false;_transport=_carriers.Preferred(_state!);}
                 _secret.UuPaths=inventory.Paths;_secret.ConnectIntent=true;_secret.Save();_switchTimings["state_saved_ms"]=timer.ElapsedMilliseconds;
                 _stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";_switchTimings["guard_installed_ms"]=timer.ElapsedMilliseconds;
-                if(!warm){await Refresh();await StartCore();}
+                if(!warm && !reusable){await Refresh();await StartCore(guardInstalled:true);}
                 else{
                     _stage="TUN_ACTIVATE";await _core.Activate();_switchTimings["tun_active_ms"]=timer.ElapsedMilliseconds;_stage="TUN_AUTHORIZE";
-                    NativeGuard.Apply(_secret.UuPaths,NativeGuard.TunLuid(),_core.Pid);
-                    _mode="connected";_error="";_failure=null;_nextProbe=default;
+                    NativeGuard.AuthorizeTun(_core.Pid);
+                    if(warm){MarkConnected();_error="";_failure=null;}
+                    _nextProbe=default;
                 }
                 _connectMs=timer.ElapsedMilliseconds;_switchTimings["complete_ms"]=_connectMs;break;}
             case "Disconnect":await Disconnect();break;
             case "Logout":
                 await Disconnect();
+                _prepareUntil=default;await StopCore();
                 if(_secret.Token.Length>0){try{await _api.Call("logout",_secret.Token,new JsonObject());}catch{ /* expire remotely; locally erase bearer regardless */ }}
                 _secret.Token="";_secret.Save();_state=null;break;
             case "RefreshUu":
@@ -187,9 +206,15 @@ internal sealed class VpnRuntime : IDisposable
     private async Task Disconnect()
     {
         try{
-            _prepareUntil=default;_stage="DISCONNECT";await StopCore();await EnsureTunnelGone();
+            _stage="DISCONNECT";
+            bool keep=_core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
+            if(keep){if(_core.TunActive)await _core.Deactivate();}
+            else await StopCore();
+            await EnsureTunnelGone();
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
-            NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_transport=TunnelTransport.WireGuardUdp;_probeFailures=0;
+            NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_probeFailures=0;
+            _prepareUntil=DateTimeOffset.UtcNow.AddSeconds(20);
+            if(!keep)_transport=_state is null?TunnelTransport.WireGuardUdp:_carriers.Preferred(_state);
         }catch{
             _secret.ConnectIntent=true;_secret.RecoveryRequired=true;_secret.Save();
             try{NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());}catch{}
@@ -207,7 +232,7 @@ internal sealed class VpnRuntime : IDisposable
     private JsonObject Snapshot(bool ok=true)=>new(){["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
         ["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
-        ["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["switch_timings"]=_switchTimings?.DeepClone(),
+        ["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};

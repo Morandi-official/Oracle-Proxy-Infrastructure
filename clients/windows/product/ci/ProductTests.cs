@@ -34,6 +34,7 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--udp-loss-self-test"}))return OracleAcceptance.VerifyUdpFaultSession();
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
+        if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--native-denial"})){
             IntPtr module=NativeLibrary.Load(Platform.Guard);return Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))()==5?0:1;
         }
@@ -67,6 +68,24 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--rescue"})){Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
         return 2;
+    }
+    private sealed class SlowTrace(bool correct) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+            await Task.Delay(4200,token);
+            return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(correct?"ip=152.67.156.100\n":"ip=192.0.2.1\n")};
+        }
+    }
+    private static async Task<int> ProbeDeadlines()
+    {
+        using var client=new HttpClient(new SlowTrace(true)){Timeout=Timeout.InfiniteTimeSpan};
+        bool reply=false;var ready=Task.Run(async()=>{await Task.Delay(500);Volatile.Write(ref reply,true);});
+        long elapsed=await EgressProbe.Verify(client,3,()=>Volatile.Read(ref reply),CancellationToken.None);await ready;
+        if(elapsed<4000 || elapsed>12000)return 1;
+        try{await EgressProbe.Verify(client,3,()=>false,CancellationToken.None);return 1;}catch(IOException error) when(error.Message=="ORACLE_PROBE_TIMEOUT"){}
+        using var wrong=new HttpClient(new SlowTrace(false)){Timeout=Timeout.InfiniteTimeSpan};
+        try{await EgressProbe.Verify(wrong,3,()=>true,CancellationToken.None);return 1;}catch(IOException error) when(error.Message=="ORACLE_EGRESS_NOT_VERIFIED"){}
+        Console.WriteLine("REAL_ASYNC_SLOW_EXIT_PROBE_RETAINED_ONLY_AFTER_WG_REPLY_AND_REJECTS_WRONG_EXIT=PASS");return 0;
     }
     private static int UuTrustSigned()
     {

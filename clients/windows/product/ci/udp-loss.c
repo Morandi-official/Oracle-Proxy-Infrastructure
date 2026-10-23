@@ -9,7 +9,7 @@
 #pragma comment(lib,"fwpuclnt.lib")
 #pragma comment(lib,"rpcrt4.lib")
 static const GUID fault_layer={0xe195ba5f,0xb047,0x4bdb,{0xa8,0x61,0x96,0xa3,0x35,0x47,0x66,0x03}};
-static DWORD begin_loss(HANDLE *output,BOOL quic,BOOL primary_only){
+static DWORD begin_loss(HANDLE *output,BOOL quic,BOOL primary_only,BOOL replies_only){
  if(!output)return ERROR_INVALID_PARAMETER;*output=NULL;
  FWPM_SESSION0 session={0};session.flags=FWPM_SESSION_FLAG_DYNAMIC;
  session.displayData.name=L"Oracle Proxy disposable UDP fault";
@@ -21,7 +21,7 @@ static DWORD begin_loss(HANDLE *output,BOOL quic,BOOL primary_only){
  c[0].fieldKey=FWPM_CONDITION_IP_REMOTE_ADDRESS;c[0].conditionValue.type=FWP_UINT32;c[0].conditionValue.uint32=0x98439c64;
  c[1].fieldKey=FWPM_CONDITION_IP_REMOTE_PORT;c[1].conditionValue.type=FWP_UINT16;c[1].conditionValue.uint16=51820;
  c[2].fieldKey=FWPM_CONDITION_IP_PROTOCOL;c[2].conditionValue.type=FWP_UINT8;c[2].conditionValue.uint8=IPPROTO_UDP;
- c[3].fieldKey=FWPM_CONDITION_DIRECTION;c[3].conditionValue.type=FWP_UINT32;c[3].conditionValue.uint32=FWP_DIRECTION_OUTBOUND;
+ c[3].fieldKey=FWPM_CONDITION_DIRECTION;c[3].conditionValue.type=FWP_UINT32;c[3].conditionValue.uint32=replies_only?FWP_DIRECTION_INBOUND:FWP_DIRECTION_OUTBOUND;
  for(int i=0;i<4;i++)c[i].matchType=FWP_MATCH_EQUAL;
  FWPM_FILTER0 filter={0};UINT64 weight=0xffffffffffffffffULL;
  filter.layerKey=FWPM_LAYER_DATAGRAM_DATA_V4;filter.subLayerKey=fault_layer;
@@ -35,8 +35,9 @@ static DWORD begin_loss(HANDLE *output,BOOL quic,BOOL primary_only){
 failed:
  FwpmEngineClose0(engine);return e;
 }
-__declspec(dllexport) DWORD __cdecl fixture_udp_loss_begin(HANDLE *output){return begin_loss(output,FALSE,FALSE);}
-__declspec(dllexport) DWORD __cdecl fixture_udp_all_loss_begin(HANDLE *output){return begin_loss(output,TRUE,FALSE);}
+__declspec(dllexport) DWORD __cdecl fixture_udp_loss_begin(HANDLE *output){return begin_loss(output,FALSE,FALSE,FALSE);}
+__declspec(dllexport) DWORD __cdecl fixture_udp_all_loss_begin(HANDLE *output){return begin_loss(output,TRUE,FALSE,FALSE);}
 __declspec(dllexport) DWORD __cdecl fixture_udp_loss_end(HANDLE engine){return FwpmEngineClose0(engine);}
 
-__declspec(dllexport) DWORD __cdecl fixture_udp_primary_loss_begin(HANDLE *output){return begin_loss(output,FALSE,TRUE);}
+__declspec(dllexport) DWORD __cdecl fixture_udp_primary_loss_begin(HANDLE *output){return begin_loss(output,FALSE,TRUE,FALSE);}
+__declspec(dllexport) DWORD __cdecl fixture_udp_primary_reply_loss_begin(HANDLE *output){return begin_loss(output,FALSE,TRUE,TRUE);}

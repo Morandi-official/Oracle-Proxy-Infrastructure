@@ -19,9 +19,10 @@ internal static class OracleAcceptance
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_end(IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_all_loss_begin(out IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_primary_loss_begin(out IntPtr engine);
-        internal InitialUdpLoss(bool blockQuic=false,bool primaryOnly=false)
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_primary_reply_loss_begin(out IntPtr engine);
+        internal InitialUdpLoss(bool blockQuic=false,bool primaryOnly=false,bool primaryRepliesOnly=false)
         {
-            uint code=primaryOnly?fixture_udp_primary_loss_begin(out _engine):blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
+            uint code=primaryRepliesOnly?fixture_udp_primary_reply_loss_begin(out _engine):primaryOnly?fixture_udp_primary_loss_begin(out _engine):blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
             if(code!=0){Console.WriteLine("INITIAL_UDP_NATIVE_ERROR="+code);throw new Win32Exception((int)code);}
         }
         public void Dispose()
@@ -65,7 +66,7 @@ internal static class OracleAcceptance
     private static async Task<JsonObject> Connected()
     {
         for(int i=0;i<500;i++){
-            try{var state=await Send("Status");if(state["mode"]?.GetValue<string>()=="connected" && state["guard"]?.GetValue<bool>()==true)return state;}catch{}
+            try{var state=await Send("Status");if(state["mode"]?.GetValue<string>()=="connected" && state["guard"]?.GetValue<bool>()==true && state["core_pid"]?.GetValue<uint>()>0 && state["tun_permitted"]?.GetValue<bool>()==true)return state;}catch{}
             await Task.Delay(100);
         }
         throw new IOException("ORACLE_RECONNECT_TIMED_OUT");
@@ -134,13 +135,23 @@ internal static class OracleAcceptance
                     await Send("Disconnect");var selected=await Send(preference);
                     Check(selected["core_pid"]?.GetValue<uint>()==0,"REAL_SELECTION_STOPS_OLD_CORE_"+wanted+"_"+cycle);
                     using var primaryLoss=preference=="PreferUdp" && cycle==1?new InitialUdpLoss(primaryOnly:true):null;
+                    using var returnLoss=preference=="PreferUdp" && cycle==2?new InitialUdpLoss(primaryRepliesOnly:true):null;
                     var timer=Stopwatch.StartNew();await Send("Connect");var cold=await Connected();long elapsed=timer.ElapsedMilliseconds;
                     Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
-                    Check(cold["transport"]?.GetValue<string>()==wanted && elapsed<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
+                    Check(cold["transport"]?.GetValue<string>()==wanted && elapsed<(preference=="PreferUdp" && cycle>0?12000:6000) && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
                     Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
                     var metered=await Send("Status");
                     Check(metered["verified_exit_ip"]?.GetValue<string>()=="152.67.156.100" && metered["traffic"]?["sample_ms"]?.GetValue<long>()>0 && metered["traffic"]?["rx_bytes"]?.GetValue<long>()>0 && metered["traffic"]?["tx_bytes"]?.GetValue<long>()>0,"REAL_LOCAL_TUN_UPLOAD_DOWNLOAD_COUNTERS_AND_VERIFIED_EXIT_"+wanted+"_"+cycle);
                     if(preference=="PreferUdp" && cycle==1)Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_WIREGUARD_UDP443_WHILE_51820_IS_BLOCKED");
+                    if(preference=="PreferUdp" && cycle==2){
+                        Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_UDP443_FRESH_HANDSHAKE_WHILE_ONLY_51820_REPLIES_ARE_DROPPED");
+                        await Send("Disconnect");var portMemory=Stopwatch.StartNew();await Send("Connect");var reused=await Connected();
+                        Console.WriteLine("REAL_RETURN_LOSS_CACHED_UDP443_RECONNECT_MS="+portMemory.ElapsedMilliseconds);
+                        Check(reused["transport"]?.GetValue<string>()==wanted && reused["native_udp_selected_port"]?.GetValue<int>()==443 && portMemory.ElapsedMilliseconds<1500 && await ExitIp()=="152.67.156.100","REAL_CACHED_NATIVE_443_RECONNECT_WITHOUT_PRIMARY_TIMEOUT");
+                        portMemory.Restart();uint oldCore=await ColdCore();var newCore=await Connected();
+                        Console.WriteLine("REAL_RETURN_LOSS_CACHED_UDP443_NEW_CORE_MS="+portMemory.ElapsedMilliseconds);
+                        Check(newCore["core_pid"]?.GetValue<uint>()!=oldCore && newCore["native_udp_selected_port"]?.GetValue<int>()==443 && newCore["transport"]?.GetValue<string>()==wanted && portMemory.ElapsedMilliseconds<4500 && await ExitIp()=="152.67.156.100","REAL_NEW_CORE_STARTS_WITH_VERIFIED_NATIVE_PORT_MEMORY");
+                    }
                     if(preference=="PreferQuic"){
                         Check(cold["carrier_stage"]?.GetValue<string>()=="CARRIER_H3_READY","REAL_STANDARD_HTTP3_AUTHENTICATED_"+cycle);
                         timer.Restart();uint prior=await ColdCore();var restored=await Connected();

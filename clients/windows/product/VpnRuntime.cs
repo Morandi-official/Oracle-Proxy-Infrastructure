@@ -29,8 +29,9 @@ internal sealed class VpnRuntime : IDisposable
     }
     private void RememberVerifiedCarrier(){
         string name=TransportPolicy.Name(_transport),network=CarrierMemory.NetworkHash();
-        if(_secret.CarrierHint!=name || _secret.CarrierNetworkHash!=network || _secret.CarrierHintUntil<DateTimeOffset.UtcNow.ToUnixTimeSeconds()+60){
-            _secret.CarrierHint=name;_secret.CarrierNetworkHash=network;_secret.CarrierHintUntil=DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds();_secret.Save();
+        int port=_transport==TunnelTransport.WireGuardUdp?_core.NativePort??0:0;
+        if(_secret.CarrierHint!=name || _secret.NativeUdpPortHint!=port || _secret.CarrierNetworkHash!=network || _secret.CarrierHintUntil<DateTimeOffset.UtcNow.ToUnixTimeSeconds()+60){
+            _secret.CarrierHint=name;_secret.NativeUdpPortHint=port;_secret.CarrierNetworkHash=network;_secret.CarrierHintUntil=DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds();_secret.Save();
         }
     }
     private JsonObject? _nativeUdpAttempt;
@@ -301,7 +302,7 @@ internal sealed class VpnRuntime : IDisposable
         return new(){["traffic"]=traffic,["verified_exit_ip"]=_mode=="connected" && _verifiedGeneration==_generation && NativeGuard.TunPermitted?"152.67.156.100":null,["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
         ["transport_preference"]=_secret.TransportPreference,["carrier_stage"]=_core.CarrierStage,["carrier_failures"]=_carrierFailures.DeepClone(),["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
-        ["native_udp_attempt"]=_nativeUdpAttempt?.DeepClone(),["native_udp_selected_port"]=_core.NativePort,["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),
+        ["native_udp_attempt"]=_nativeUdpAttempt?.DeepClone(),["native_udp_selected_port"]=_core.NativePort,["client_handshake_reply"]=_core.HandshakeReplyReceived,["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};

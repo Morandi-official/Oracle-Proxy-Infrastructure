@@ -167,6 +167,9 @@ func (c *quicConn) Read(b []byte) (int, error) {
 			if len(b) < len(data) {
 				return 0, io.ErrShortBuffer
 			}
+			if len(data) == 92 && data[0] == 2 {
+				carrierStage("WIREGUARD_REPLY_RECEIVED")
+			}
 			return copy(b, data), nil
 		} else {
 			data, err = c.session.ReceiveDatagram(ctx)

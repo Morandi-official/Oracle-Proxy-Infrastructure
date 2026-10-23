@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc9 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc10 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -6,6 +6,7 @@ No Oracle credentials are needed. Publishing is restricted to this repo's main.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -13,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc9.json')
+MANIFEST = Path(__file__).with_name('windows-rc10.json')
 
 
 def gh(*args, output=None):
@@ -22,6 +23,22 @@ def gh(*args, output=None):
 
 
 def api(path): return json.loads(gh('api',f'repos/{REPO}/{path}'))
+
+
+def validate_manifest(manifest):
+    artifacts=manifest.get('artifacts')
+    if (manifest.get('version')!='0.3.0-rc10' or
+        type(manifest.get('run_id')) is not int or manifest['run_id']<=0 or
+        not re.fullmatch(r'[a-f0-9]{40}',str(manifest.get('source_revision',''))) or
+        not isinstance(artifacts,list) or len(artifacts)!=2):
+        raise ValueError('COMPLETE_PINNED_RC10_MANIFEST_REQUIRED')
+    ids=[]
+    for item in artifacts:
+        if (not isinstance(item,dict) or type(item.get('id')) is not int or item['id']<=0 or
+            not re.fullmatch(r'[a-f0-9]{64}',str(item.get('sha256','')))):
+            raise ValueError('EXACT_ARTIFACT_ID_AND_DIGEST_REQUIRED')
+        ids.append(item['id'])
+    if len(set(ids))!=2: raise ValueError('DISTINCT_SOURCE_AND_CLIENT_ARTIFACTS_REQUIRED')
 
 
 def validate_run(run, manifest):
@@ -59,7 +76,7 @@ def read_archive(archive, output, expected_prefix):
 def main():
     if sys.argv[1:] not in (['--check'],['--publish']): raise ValueError('INVALID_ARGUMENTS')
     manifest=json.loads(MANIFEST.read_text())
-    if manifest['version']!='0.3.0-rc9': raise ValueError('ONLY_RC9_PRERELEASE_SUPPORTED')
+    validate_manifest(manifest)
     validate_run(api(f"actions/runs/{manifest['run_id']}"),manifest)
     for artifact in manifest['artifacts']:
         value=api(f"actions/artifacts/{artifact['id']}")
@@ -91,15 +108,8 @@ def main():
         for name,value in sums.items():
             if digest(assets/name)!=value: raise ValueError('PAYLOAD_OR_SOURCE_DIGEST_MISMATCH')
         notes=root/'notes.md'
-        notes.write_text('Windows 10/11 x64 便携验收版；完整解压后打开 OracleProxy.exe，首次安装或升级服务需要 UAC。\n\n'
-                         '连接方式可选：自动、WireGuard UDP、QUIC / HTTP3。自动优先原生 UDP；HTTPS/TLS 仅自动兜底。实际使用的通道单独显示。\n\n'
-                         '界面重新划分为连接、账号与用量、诊断与测试三个对齐区块，加入本次已验证出口 IP 及本机 VPN 实时上下行速率。账号登录与退出、用量进度、到期日和已登记设备数集中展示。\n\n'
-                         '原生 UDP 在同一个 WireGuard 实例内优先 51820，必要时尝试 443；QUIC 使用真实 HTTP3 CONNECT-UDP。修复核心被强制结束后旧会话阻挡新连接的问题。\n\n'
-                         '修复 VPN 内访问管理网站：仅 SYSTEM 控制及载体连接绑定物理网卡，普通浏览器通过加密隧道访问管理网站，普通程序物理绕行继续被阻断。\n\n'
-                         '验收要求强制选择 UDP 和 HTTP3 各三次冷启动，屏蔽 51820 时验证原生 UDP443，HTTP3 核心被结束后的三次恢复，并核对 Oracle 出口、TCP/UDP DNS、管理网站及物理绕行阻断。实际结果见下方完整记录；云端耗时不能代表 MetaWise 实机表现。\n\n'
-                         '本轮云端冷启动：UDP 3383 / 1851 / 1783 ms；HTTP3 1757 / 2763 / 2758 ms。预备后的 UDP 连接 572 ms；屏蔽原生 UDP 时预备后的 HTTP3 重连 326 / 285 / 299 ms。冷启动尚未达到一秒，也不能据此承诺 MetaWise 实机时延。\n\n'
-                         '**仍为未签名候选版：IPv6 当前阻断；真实 UU 会话的故障与重启连续性仍待实机验收。**\n\n'
-                         f"构建提交：`{manifest['source_revision']}`；[完整验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
+        notes.write_text(Path(__file__).with_name('windows-rc10-notes.md').read_text(encoding='utf-8')+
+                         f"\n构建提交：`{manifest['source_revision']}`；[完整云端验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']
         if api('git/matching-refs/tags/'+tag): raise ValueError('EXISTING_RC_TAG_REQUIRES_REVIEW')
         request=root/'draft.json'

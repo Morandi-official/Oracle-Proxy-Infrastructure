@@ -1,4 +1,5 @@
 from django.http import HttpResponseNotFound
+from django.conf import settings
 
 
 class AuthSurfaceMiddleware:
@@ -6,6 +7,8 @@ class AuthSurfaceMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        if settings.ADMIN_AUTH_MODE == 'local' and request.path.startswith('/accounts/'):
+            return HttpResponseNotFound()
         if request.path.startswith(('/accounts/password/', '/accounts/signup/',
                                     '/accounts/email/', '/accounts/social/connections/',
                                     '/accounts/login/code/')):

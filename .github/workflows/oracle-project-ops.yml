@@ -47,6 +47,8 @@ jobs:
           AUTODEPLOY: ${{ vars.ORACLE_PROJECT_AUTODEPLOY }}
           CLIENT_ID: ${{ vars.ORACLE_ADMIN_GITHUB_CLIENT_ID || 'Ov23liYD7HIQdS5nDjpS' }}
           CLIENT_SECRET: ${{ secrets.ORACLE_ADMIN_GITHUB_CLIENT_SECRET }}
+          LOCAL_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
+          LOCAL_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
           OPERATION: ${{ steps.request.outputs.operation }}
           REVISION: ${{ github.sha }}
         run: |
@@ -72,6 +74,11 @@ jobs:
             -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2
             oracle-project-ci@152.67.156.100)
           configure() {
+            if [[ -n "$LOCAL_USERNAME" || -n "$LOCAL_PASSWORD" ]]; then
+              [[ -n "$LOCAL_USERNAME" && -n "$LOCAL_PASSWORD" ]] || { echo 'Both local admin secrets are required' >&2; return 2; }
+              python3 -c 'import json,os; print(json.dumps({"admin_username":os.environ["LOCAL_USERNAME"],"admin_password":os.environ["LOCAL_PASSWORD"]}))' | "${SSH[@]}" "configure $REVISION"
+              return
+            fi
             [[ -n "$CLIENT_SECRET" ]] || { echo 'Set ORACLE_ADMIN_GITHUB_CLIENT_SECRET in oracle-ops' >&2; return 2; }
             python3 -c 'import json,os; print(json.dumps({"client_id":os.environ["CLIENT_ID"],"client_secret":os.environ["CLIENT_SECRET"]}))' \
               | "${SSH[@]}" "configure $REVISION"
@@ -79,7 +86,7 @@ jobs:
           if [[ "$OPERATION" == deploy ]]; then
             "${SSH[@]}" "preflight $REVISION"
             "${SSH[@]}" "install-runtime $REVISION"
-            if [[ -n "$CLIENT_SECRET" ]]; then configure; fi
+            if [[ -n "$CLIENT_SECRET" || -n "$LOCAL_USERNAME" || -n "$LOCAL_PASSWORD" ]]; then configure; fi
             "${SSH[@]}" "deploy $REVISION"
             "${SSH[@]}" "enable-https $REVISION"
           elif [[ "$OPERATION" == configure ]]; then
@@ -101,9 +108,12 @@ jobs:
           python3 -m venv "$quic_venv"
           "$quic_venv/bin/pip" install --disable-pip-version-check aioquic==1.3.0
           "$quic_venv/bin/python" ops/oracle-project/verify_quic.py
-      - name: Real Chromium and Firefox anonymous login form acceptance
+      - name: Real Chromium and Firefox administrator login acceptance
         if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
         shell: bash
+        env:
+          ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
+          ADMIN_LOCAL_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
         run: |
           set -euo pipefail
           browser_venv="$RUNNER_TEMP/oracle-admin-browser-venv"

@@ -1,10 +1,11 @@
 from django.urls import include, path
+from django.conf import settings
 from console import views, client_api, transports
 
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_page, name='login'),
-    path('accounts/', include('allauth.urls')),
+    path('logout/', views.logout_page, name='logout'),
     path('api/client/login', client_api.login),
     path('api/client/state', client_api.state),
     path('api/client/quic-certificate', transports.public_certificate),
@@ -16,3 +17,6 @@ urlpatterns = [
     path('app.js', views.asset, {'name': 'app.js'}),
     path('style.css', views.asset, {'name': 'style.css'}),
 ]
+
+if settings.ADMIN_AUTH_MODE != 'local':
+    urlpatterns.append(path('accounts/',include('allauth.urls')))

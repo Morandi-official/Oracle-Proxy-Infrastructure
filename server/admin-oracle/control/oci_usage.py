@@ -14,8 +14,38 @@ import signal
 import tempfile
 import time
 import urllib.request
+from decimal import Decimal
 
 CACHE=Path('/var/lib/oracle-proxy-control/oci-usage.json')
+# Oracle public USD catalog, checked 2026-10-23: these exact networking SKUs
+# have metric "Gigabyte Outbound Data Transfer Per Month", zero price from
+# rangeMin=0 through rangeMax=10240, then a positive per-GB rate. Keep the
+# original API GB unit; never silently equate this with local VNIC bytes.
+TRANSFER_SKUS={'B88327','B93455','B93456'}
+PRICE_REFERENCE='https://apexapps.oracle.com/pls/apex/cetools/api/v1/products/?currencyCode=USD'
+
+
+def free_tier(rows,complete):
+    result={'free_tier_status':'REVIEW_REQUIRED','free_tier_limit_gb':None,
+            'free_tier_used_gb':None,'free_tier_remaining_gb':None,
+            'free_tier_policy_checked':'2026-10-23','free_tier_price_reference':PRICE_REFERENCE,
+            'free_tier_basis':'official-usage-plus-public-price-tier-not-live-balance-api'}
+    if not complete:
+        result['free_tier_status']='PAGINATED_INCOMPLETE'; return result
+    if not rows:
+        result['free_tier_status']='NO_EGRESS_ROWS'; return result
+    selected=[]
+    for row in rows:
+        part=row.get('part_number','')
+        if part not in TRANSFER_SKUS or row['unit'] not in ('GB Months','GB','Gigabyte Months'):
+            return result
+        selected.append(part)
+    if len(set(selected))!=1:
+        result['free_tier_status']='MULTIPLE_ZONES_REQUIRE_REVIEW'; return result
+    used=sum((Decimal(str(row['quantity'])) for row in rows),Decimal(0))
+    result.update(free_tier_status='VERIFIED_USAGE_AND_PRICE_TIER',free_tier_limit_gb=10240,
+                  free_tier_used_gb=float(used),free_tier_remaining_gb=float(max(Decimal(0),Decimal(10240)-used)))
+    return result
 
 
 def metadata(resource):
@@ -123,16 +153,24 @@ def collect():
             result['billing_status']='NO_COMPLETED_DAYS'
             return result
         details=RequestSummarizedUsagesDetails(tenant_id=signer.tenancy_id,time_usage_started=billing_start,time_usage_ended=billing_end,
-                    granularity='DAILY',query_type='USAGE',group_by=['service','skuName','unit'],is_aggregate_by_time=True)
-        response=client.request_summarized_usages(details,retry_strategy=retry)
-        rows=[]
-        for row in response.data.items:
-            # Do not infer billable internet egress from arbitrary quantities or a
-            # zero-cost/free-tier row. Preserve the official SKU/unit for review.
-            label=row.sku_name or ''
-            if re.search(r'outbound|outgoing|data transfer',label,re.I):
-                rows.append({'sku':label[:160],'unit':(row.unit or '')[:40],'quantity':finite(row.computed_quantity)})
-        result.update(billing_status='PAGINATED_INCOMPLETE' if response.headers.get('opc-next-page') else 'ROWS_REQUIRE_SKU_REVIEW' if rows else 'NO_EGRESS_ROWS',billing_rows=rows[:32])
+                    granularity='DAILY',query_type='USAGE',group_by=['service','skuName','skuPartNumber','unit'],is_aggregate_by_time=True)
+        rows=[]; page=None; seen=set(); complete=False
+        for _ in range(8):
+            response=client.request_summarized_usages(details,page=page,limit=1000,retry_strategy=retry)
+            for row in response.data.items:
+                label=row.sku_name or ''
+                if re.search(r'outbound|outgoing|data transfer',label,re.I):
+                    part=getattr(row,'sku_part_number','') or ''
+                    if part and not re.fullmatch(r'B[0-9]{5,8}',part):raise ValueError('INVALID_TRANSFER_SKU')
+                    rows.append({'sku':label[:160],'part_number':part,'unit':(row.unit or '')[:40],'quantity':finite(row.computed_quantity)})
+            page=response.headers.get('opc-next-page')
+            if not page:complete=True;break
+            if page in seen:break
+            seen.add(page)
+        if len(rows)>32:complete=False
+        result.update(billing_status='PAGINATED_INCOMPLETE' if not complete else 'ROWS_REQUIRE_SKU_REVIEW' if rows else 'NO_EGRESS_ROWS',billing_rows=rows[:32])
+        result.update(free_tier(rows,complete))
+        if result['free_tier_status']=='VERIFIED_USAGE_AND_PRICE_TIER':result['billing_status']='VERIFIED_USAGE_AND_PRICE_TIER'
     except Exception as error:
         result['billing_status']=error_code(error)
         for key,value in error_details(error).items():result['billing_error_'+key]=value

@@ -82,9 +82,10 @@ def official_usage_status():
         fields = ('checked_at', 'period', 'status', 'monitoring_status', 'billing_status',
                   'vnic_count', 'vnic_outbound_bytes', 'metric_points', 'metric_from', 'metric_through',
                   'metric_query_from', 'metric_query_to', 'instance_created_at', 'billing_through',
-                  'billing_error_http_status', 'billing_error_category', 'billing_error_service_code')
+                  'billing_error_http_status', 'billing_error_category', 'billing_error_service_code',
+                  'free_tier_status','free_tier_limit_gb','free_tier_used_gb','free_tier_remaining_gb','free_tier_policy_checked')
         result = {name: value.get(name) for name in fields}
-        if any(not (item is None or type(item) is int or isinstance(item, str) and len(item) <= 96)
+        if any(not (item is None or type(item) in (int,float) and math.isfinite(item) and 0<=item<=10**18 or isinstance(item, str) and len(item) <= 96)
                for item in result.values()):
             raise ValueError('INVALID_USAGE_SUMMARY')
         rows = value.get('billing_rows', [])
@@ -97,7 +98,11 @@ def official_usage_status():
             if (not isinstance(sku, str) or len(sku) > 160 or not isinstance(unit, str) or len(unit) > 40 or
                 type(quantity) not in (int, float) or not math.isfinite(quantity) or not 0 <= quantity <= 10**18):
                 raise ValueError('INVALID_BILLING_SUMMARY')
-            result['billing_rows'].append({'sku': sku, 'unit': unit, 'quantity': quantity})
+            entry={'sku':sku,'unit':unit,'quantity':quantity}
+            if row.get('part_number'):
+                if not re.fullmatch(r'B[0-9]{5,8}',row['part_number']):raise ValueError('INVALID_BILLING_SKU')
+                entry['part_number']=row['part_number']
+            result['billing_rows'].append(entry)
         result['remaining_bytes'] = None
         return result
     except (OSError, ValueError):
@@ -147,42 +152,50 @@ def install_runtime():
 
 
 def parse_configuration(body):
-    if len(body) > 4096:
-        raise ValueError('CONFIGURATION_REJECTED')
-    try:
-        value = json.loads(body)
-    except (ValueError, UnicodeError):
-        raise ValueError('CONFIGURATION_REJECTED') from None
-    if not isinstance(value, dict) or set(value) != {'client_id', 'client_secret'}:
-        raise ValueError('CONFIGURATION_REJECTED')
-    if (not isinstance(value['client_id'], str) or not re.fullmatch(r'[A-Za-z0-9]{8,100}', value['client_id']) or
-        not isinstance(value['client_secret'], str) or not re.fullmatch(r'[A-Za-z0-9_=-]{16,256}', value['client_secret'])):
-        raise ValueError('CONFIGURATION_REJECTED')
+    if len(body)>4096: raise ValueError('CONFIGURATION_REJECTED')
+    try: value=json.loads(body)
+    except (ValueError,UnicodeError): raise ValueError('CONFIGURATION_REJECTED') from None
+    if not isinstance(value,dict): raise ValueError('CONFIGURATION_REJECTED')
+    fields=set(value)
+    if fields=={'admin_username','admin_password'}:
+        if (not isinstance(value['admin_username'],str) or not re.fullmatch(r'[\w.@+-]{1,64}',value['admin_username']) or
+                not isinstance(value['admin_password'],str) or not 12<=len(value['admin_password'])<=128):
+            raise ValueError('CONFIGURATION_REJECTED')
+    elif fields=={'client_id','client_secret'}:
+        if (not isinstance(value['client_id'],str) or not re.fullmatch(r'[A-Za-z0-9]{8,100}',value['client_id']) or
+                not isinstance(value['client_secret'],str) or not re.fullmatch(r'[A-Za-z0-9_=-]{16,256}',value['client_secret'])):
+            raise ValueError('CONFIGURATION_REJECTED')
+    else: raise ValueError('CONFIGURATION_REJECTED')
     return value
 
 
+def password_hash(password):
+    import base64,hashlib,secrets
+    salt=secrets.token_urlsafe(18)
+    digest=hashlib.pbkdf2_hmac('sha256',password.encode(),salt.encode(),1200000)
+    return 'pbkdf2_sha256$1200000$'+salt+'$'+base64.b64encode(digest).decode()
+
+
 def configure(body):
-    value = parse_configuration(body)
-    try:
-        host.prepare_configuration()
-    except ValueError:
-        # First creation intentionally writes a protected placeholder config.
-        # Validate ownership independently before changing only OAuth fields.
-        pass
-    info = host.regular(host.CONFIG)
-    if info.st_uid != 0 or info.st_mode & 0o077:
-        raise ValueError('UNTRUSTED_HOST_CONFIGURATION')
-    old = host.CONFIG.read_bytes()
-    text = old.decode()
-    for name, key in (('ADMIN_GITHUB_CLIENT_ID', 'client_id'), ('ADMIN_GITHUB_CLIENT_SECRET', 'client_secret')):
-        text, count = re.subn(r'^' + name + r'=.*$', name + '=' + value[key], text, flags=re.MULTILINE)
-        if count != 1: raise ValueError('HOST_CONFIGURATION_FIELD_MISSING')
-    atomic(host.CONFIG, text.encode(), 0o600)
-    try: host.read_environment()
+    value=parse_configuration(body)
+    try:host.prepare_configuration()
+    except ValueError:pass
+    info=host.regular(host.CONFIG)
+    if info.st_uid!=0 or info.st_mode & 0o077:raise ValueError('UNTRUSTED_HOST_CONFIGURATION')
+    old=host.CONFIG.read_bytes(); text=old.decode()
+    if 'admin_username' in value:
+        updates={'ADMIN_AUTH_MODE':'local','ADMIN_LOCAL_USERNAME':value['admin_username'],
+                 'ADMIN_LOCAL_PASSWORD_HASH':password_hash(value['admin_password'])}
+    else:updates={'ADMIN_GITHUB_CLIENT_ID':value['client_id'],'ADMIN_GITHUB_CLIENT_SECRET':value['client_secret']}
+    for name,entry in updates.items():
+        text,count=re.subn(r'^'+name+r'=.*$',lambda _:name+'='+entry,text,flags=re.MULTILINE)
+        if count>1:raise ValueError('DUPLICATE_CONFIGURATION_FIELD')
+        if count==0:text=text.rstrip('\n')+'\n'+name+'='+entry+'\n'
+    atomic(host.CONFIG,text.encode(),0o600)
+    try:host.read_environment()
     except Exception:
-        atomic(host.CONFIG, old, 0o600)
-        raise
-    print('PROJECT_OAUTH_CONFIGURATION=UPDATED; existing session and MFA keys retained')
+        atomic(host.CONFIG,old,0o600);raise
+    print('PROJECT_ADMIN_CONFIGURATION=UPDATED; stored password hash only')
 
 
 def atomic(path, body, mode):
@@ -264,7 +277,8 @@ def install_usage_probe():
         value=json.loads(cache.read_text())
         print('OCI_READ_ONLY_API_PROBE='+json.dumps({k:value.get(k) for k in ('status','monitoring_status','billing_status','vnic_count','vnic_outbound_bytes','metric_through',
                  'instance_created_at','metric_from','metric_points','billing_through',
-                 'billing_error_http_status','billing_error_category','billing_error_service_code')},sort_keys=True))
+                 'billing_error_http_status','billing_error_category','billing_error_service_code',
+                 'free_tier_status','free_tier_limit_gb','free_tier_used_gb','free_tier_remaining_gb')},sort_keys=True))
     else: print('OCI_READ_ONLY_API_PROBE=UNAVAILABLE; budget remains unknown')
 
 
@@ -383,7 +397,7 @@ def logs():
     text = result.stdout
     try:
         for key, value in host.read_environment().items():
-            if 'SECRET' in key or 'KEY' in key:
+            if any(part in key for part in ('SECRET','KEY','PASSWORD')):
                 text = text.replace(value, '[REDACTED]')
     except (OSError, ValueError):
         # No raw diagnostic log is exported when redaction keys are unavailable.

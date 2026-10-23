@@ -25,7 +25,12 @@ from .models import Audit, ClientAccount, ClientSession, ClientLoginThrottle
 DUMMY_PASSWORD = make_password(secrets.token_urlsafe(32))
 
 
-def actor():
+def actor(request=None):
+    if settings.ADMIN_AUTH_MODE == 'local':
+        if request is not None and getattr(request,'user',None) is not None and request.user.is_authenticated:
+            from .views import audit_actor
+            return audit_actor(request)
+        return 'system:client-api'
     return f'github:{next(iter(settings.ADMIN_GITHUB_IDS))}'
 
 
@@ -98,7 +103,7 @@ def login(request):
         key, name = value['public_key'], value['device_name']
         if not isinstance(key,str) or not re.fullmatch(r'[A-Za-z0-9+/]{43}=',key): raise ValueError('INVALID_PUBLIC_KEY')
         if not isinstance(name,str) or not 1 <= len(name.strip()) <= 80 or any(ord(c)<32 for c in name): raise ValueError('INVALID_NAME')
-        snapshot = control.call('state',actor(),{})
+        snapshot = control.call('state',actor(request),{})
         user = next((u for u in snapshot['users'] if u['id']==str(account.user_id)),None)
         if not user or user['status'] != 'active': return response({'error':'ACCOUNT_UNAVAILABLE'},403)
         peer = next((p for p in snapshot['peers'] if p['public_key']==key),None)
@@ -107,7 +112,7 @@ def login(request):
         else:
             # Root controller serializes cap check + durable registration; concurrent
             # logins from multiple web workers cannot exceed the device allowance.
-            snapshot = control.call('peer.create',actor(),{'public_key':key,'user_id':str(account.user_id),'name':name.strip()})
+            snapshot = control.call('peer.create',actor(request),{'public_key':key,'user_id':str(account.user_id),'name':name.strip()})
             Audit.objects.create(actor=f'client:{account.user_id}',action='device.enroll',resource=hashlib.sha256(key.encode()).hexdigest()[:12])
         data = client_state(snapshot,account,key)
         token = secrets.token_urlsafe(32); expiry = timezone.now()+timedelta(days=30)
@@ -141,7 +146,7 @@ def state(request):
     credential = session(request)
     if not credential: return response({'error':'LOGIN_REQUIRED'},401)
     try:
-        return response(client_state(control.call('state',actor(),{}),credential.account,credential.public_key))
+        return response(client_state(control.call('state',actor(request),{}),credential.account,credential.public_key))
     except ValueError: return response({'error':'DEVICE_REVOKED'},403)
     except (OSError,TimeoutError,KeyError): return response({'error':'CONTROL_SERVICE_UNAVAILABLE'},503)
 
@@ -163,11 +168,11 @@ def set_account(request, value):
     if not isinstance(password,str) or not 12 <= len(password) <= 128: raise ValueError('PASSWORD_LENGTH_12_TO_128_REQUIRED')
     if ClientAccount.objects.filter(username=username).exclude(user_id=user_id).exists(): raise ValueError('USERNAME_ALREADY_EXISTS')
     encoded = make_password(password)
-    snapshot = control.call('user.limit',actor(),{'user_id':user_id,'device_limit':value['device_limit']})
+    snapshot = control.call('user.limit',actor(request),{'user_id':user_id,'device_limit':value['device_limit']})
     with transaction.atomic():
         account,_ = ClientAccount.objects.update_or_create(user_id=user_id, defaults={'username':username,'password':encoded})
         ClientSession.objects.filter(account=account).delete()
-    Audit.objects.create(actor=actor(),action='account.credentials.reset',resource=user_id)
+    Audit.objects.create(actor=actor(request),action='account.credentials.reset',resource=user_id)
     return snapshot
 
 
@@ -196,14 +201,14 @@ def save_account(request, value):
         policy = {k:value[k] for k in ('id','name','device_limit','quota_bytes','expires_at','enabled')}
         # Across the separate root and web databases, stage access disabled first.
         # A partial write leaves the account blocked, never with mismatched access.
-        staged = control.call('user.save',actor(),{**policy,'enabled':False})
+        staged = control.call('user.save',actor(request),{**policy,'enabled':False})
         user_id = staged['saved_user_id']; policy['id'] = user_id
         with transaction.atomic():
             current,_ = ClientAccount.objects.update_or_create(user_id=user_id,defaults={'username':username,'password':encoded})
             if password or (account and account.username != username):
                 ClientSession.objects.filter(account=current).delete()
-            Audit.objects.create(actor=actor(),action='account.saved',resource=user_id)
-        return control.call('user.save',actor(),policy)
+            Audit.objects.create(actor=actor(request),action='account.saved',resource=user_id)
+        return control.call('user.save',actor(request),policy)
 
 
 def delete_account(request, value):
@@ -213,8 +218,8 @@ def delete_account(request, value):
     with management_lock():
         # Root tombstones/revokes every device before deleting bearer credentials.
         # Retrying is idempotent if the web database write was interrupted.
-        snapshot = control.call('user.delete',actor(),{'user_id':user_id})
+        snapshot = control.call('user.delete',actor(request),{'user_id':user_id})
         with transaction.atomic():
             ClientAccount.objects.filter(user_id=user_id).delete()
-            Audit.objects.create(actor=actor(),action='account.deleted',resource=user_id)
+            Audit.objects.create(actor=actor(request),action='account.deleted',resource=user_id)
         return snapshot

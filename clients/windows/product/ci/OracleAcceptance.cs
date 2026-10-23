@@ -242,6 +242,12 @@ internal static class OracleAcceptance
                     await ColdCore();var learned=await Send("Connect");
                     Check(learned["transport"]?.GetValue<string>()=="wireguard-quic","REAL_SAME_NETWORK_REMEMBERS_FAILED_UDP_AFTER_CORE_LOSS");
                     await Connected();await Send("Disconnect");
+                    await Send("PreferUdp");await Send("Connect");var explicitFallback=await Connected();
+                    Check(explicitFallback["transport"]?.GetValue<string>()=="wireguard-quic","REAL_EXPLICIT_UDP_STILL_HAS_AUTHENTICATED_QUIC_FALLBACK");
+                    uint fallbackPid=explicitFallback["core_pid"]!.GetValue<uint>();await Send("Disconnect");
+                    var retry=await Send("Connect");
+                    Check(retry["transport"]?.GetValue<string>()=="wireguard-udp" && retry["core_pid"]?.GetValue<uint>() is >0 && retry["core_pid"]!.GetValue<uint>()!=fallbackPid && retry["mode"]?.GetValue<string>()!="connected" && retry["verified_at"] is null,"REAL_EXPLICIT_UDP_RECONNECT_RETRIES_NATIVE_INSTEAD_OF_REUSING_WARM_QUIC");
+                    await Send("Disconnect");await Send("PreferAuto");
                 }
             }else Console.WriteLine("REAL_QUIC_CARRIER=SERVER_NOT_ADVERTISED_YET");
             stage="AUTOMATIC_HTTPS_FALLBACK";await Send("Disconnect");

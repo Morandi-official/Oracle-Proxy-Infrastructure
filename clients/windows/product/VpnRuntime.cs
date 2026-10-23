@@ -212,6 +212,12 @@ internal sealed class VpnRuntime : IDisposable
                 if(_core.Running && _mode=="connected" && _secret.ConnectIntent)break;
                 if(_secret.ConnectIntent && _core.Running && NativeGuard.TunPermitted){_nextProbe=default;break;}
                 _clickStarted=System.Diagnostics.Stopwatch.GetTimestamp();_readyMs=null;
+                // A new explicit-protocol connection must try that protocol,
+                // even when a previous fallback is still warm. Auto alone may
+                // reuse the learned fallback without another primary timeout.
+                if(!_secret.ConnectIntent && _secret.TransportPreference!="auto" && _transport!=TransportPolicy.First(_secret.TransportPreference,_state)){
+                    await StopCore();_transport=Preferred();_probeFailures=0;_carrierFailures.Clear();_nativeUdpAttempt=null;
+                }
                 bool warm=WarmReady;
                 bool reusable=_core.Running && !_core.TunActive && ActivePolicy() && _runningProfile==Profile();
                 if(!_secret.ConnectIntent && !reusable){await StopCore();_transport=Preferred();_probeFailures=0;}

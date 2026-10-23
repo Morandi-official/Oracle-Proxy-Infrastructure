@@ -59,7 +59,7 @@ internal sealed class MainForm : Form
         for(int i=0;i<values.Length;i++)metrics.Controls.Add(values[i],i%3,i/3);Row(connection,metrics);
         _transportChoice.Items.AddRange(["自动（UDP 优先）","WireGuard / UDP","QUIC / HTTP/3"]);_transportChoice.SelectedIndex=0;
         var selection=Actions();selection.Controls.Add(new Label{Text="首选连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_transportChoice);Row(connection,selection);
-        _transportChoice.SelectedIndexChanged+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(_transportChoice.SelectedIndex switch{1=>"PreferUdp",2=>"PreferQuic",_=>"PreferAuto"});};
+        _transportChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(_transportChoice.SelectedIndex switch{1=>"PreferUdp",2=>"PreferQuic",_=>"PreferAuto"});};
         var buttons=Actions();_connect.BackColor=Color.FromArgb(11,137,108);_connect.ForeColor=Color.White;_connect.FlatStyle=FlatStyle.Flat;_connect.FlatAppearance.BorderSize=0;_connect.UseVisualStyleBackColor=false;_connect.Margin=new Padding(0,0,10,0);_disconnect.Margin=new Padding(0);buttons.Controls.AddRange([_connect,_disconnect]);Row(connection,buttons);
         var quit=new Button{Text="断开并退出",AutoSize=true,Height=48,Margin=new Padding(10,0,0,0)};quit.Click+=async(_,_)=>await QuitClient();buttons.Controls.Add(quit);
         Row(connection,new Label{Text="关闭窗口将断开 VPN 并退出；仅断开可保留快速重连。系统服务空闲待命。",AutoSize=true,ForeColor=Color.FromArgb(100,113,134),Margin=new Padding(0,8,0,0)});

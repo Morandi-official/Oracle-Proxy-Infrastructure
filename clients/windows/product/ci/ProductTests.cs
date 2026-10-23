@@ -261,6 +261,14 @@ internal static class ProductTests
         while((!read.IsCompleted || !click.IsCompleted) && deadline.Elapsed<TimeSpan.FromSeconds(5)){Application.DoEvents();Thread.Sleep(5);}
         if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Prepare","Connect"}))return 1;
         Console.WriteLine("CONNECT_CLICK_DURING_PASSIVE_READ_IS_QUEUED_AND_EXECUTED=PASS");
+        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";
+        var preferenceCalls=new List<string>();
+        using var reselect=new MainForm((command,_,_)=>{preferenceCalls.Add(command);return Task.FromResult((JsonObject)preferenceState.DeepClone());});
+        reselect.Display(preferenceState);
+        var sameChoice=Descendants(reselect).OfType<ComboBox>().Single();
+        typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp"}))return 1;
+        Console.WriteLine("RESELECTING_SAME_UDP_CHOICE_EXPLICITLY_RESTARTS_PRIMARY_DISCOVERY=PASS");
         var quitState=new JsonObject{["ok"]=true,["intent"]=false,["core_pid"]=0U,["mode"]="disconnected"};
         var exitCalls=new List<string>();
         using var exitForm=new MainForm((command,_,_)=>{exitCalls.Add(command);return Task.FromResult((JsonObject)quitState.DeepClone());});

@@ -39,7 +39,7 @@ internal sealed class MainForm : Form
     internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null)
     {
         _send=send ?? ControlPipe.Send;DoubleBuffered=true;
-        Text="Oracle Proxy";ClientSize=new Size(1120,860);MinimumSize=new Size(960,740);BackColor=Color.FromArgb(243,246,251);Font=new Font("Microsoft YaHei UI",10);StartPosition=FormStartPosition.CenterScreen;
+        Text="Oracle Proxy";ClientSize=new Size(1120,860);MinimumSize=new Size(900,600);BackColor=Color.FromArgb(243,246,251);Font=new Font("Microsoft YaHei UI",10);StartPosition=FormStartPosition.CenterScreen;
         var shell=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=new Padding(0)};
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,174));shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         shell.RowStyles.Add(new RowStyle(SizeType.Percent,100));Controls.Add(shell);

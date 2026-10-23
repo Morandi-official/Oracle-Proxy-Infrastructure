@@ -191,7 +191,7 @@ internal static class ProductTests
         if(form.DownloadRate!="采样中…" || form.UploadRate!="采样中…")return 1;
         snapshot["mode"]="protected";form.Display(snapshot);if(form.DownloadRate!="—" || form.UploadRate!="—")return 1;
         Console.WriteLine("LOCAL_TUN_RATES_USE_MONOTONIC_DELTAS_RESET_ON_COUNTER_RESTART_AND_NEVER_USE_BILLING_TOTALS=PASS");
-        foreach(var size in new[]{new Size(1120,860),new Size(960,740)}){
+        foreach(var size in new[]{new Size(1120,860),new Size(900,620)}){
             form.ClientSize=size;form.Show();Application.DoEvents();form.PerformLayout();
             using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,form.ClientRectangle);
             var viewport=Descendants(form).Single(c=>c.Name=="viewport");

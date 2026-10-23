@@ -149,7 +149,7 @@ internal sealed class VpnRuntime : IDisposable
                     }else if(!_secret.ConnectIntent && _core.Running){await StopCore();_transport=Preferred();_probeFailures=0;}
                 }catch(Exception error){
                     Failed(error);
-                    if(_secret.ConnectIntent){if(!NativeGuard.Active)await StopCore();_mode="protected";_latency=null;}
+                    if(_secret.ConnectIntent){if(!NativeGuard.Active)await StopCore();_mode=_secret.RecoveryRequired?"recovery":"protected";_latency=null;}
                 }
             }finally{_gate.Release();}
             await Task.Delay(200,cancel);
@@ -192,7 +192,7 @@ internal sealed class VpnRuntime : IDisposable
                 await StopCore();_carriers.Clear();_carrierFailures.Clear();_nativeUdpAttempt=null;_probeFailures=0;
                 _secret.TransportPreference=command=="PreferUdp"?"udp":command=="PreferQuic"?"quic":"auto";
                 _secret.CarrierHintUntil=0;_secret.Save();_transport=Preferred();_initialCarrierSelected=true;
-                _prepareUntil=default;_error="";_failure=null;break;
+                _prepareUntil=default;_error="";_failure=null;_connectMs=null;_switchTimings=null;_clickStarted=0;_readyMs=null;break;
             case "Login":
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_LOGIN");
                 await StopCore();_transport=TransportPolicy.First(_secret.TransportPreference,_state);_initialCarrierSelected=false;_probeFailures=0;_nativeUdpAttempt=null;
@@ -264,7 +264,7 @@ internal sealed class VpnRuntime : IDisposable
             if(keep){if(_core.TunActive)await _core.Deactivate();}
             else await StopCore();
             _stage="DISCONNECT_AUDIT";
-            if(keep)await EnsureTunnelInactive();else await EnsureTunnelRemoved();
+            keep=await AuditDisconnectedTunnel(keep,StopCore);
             _stage="DISCONNECT_STATE";
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
             _stage="DISCONNECT_GUARD_CLEAR";
@@ -276,6 +276,19 @@ internal sealed class VpnRuntime : IDisposable
             try{NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());}catch{}
             _mode="recovery";throw new IOException("RECOVERY_REQUIRED",error);
         }
+    }
+    // A dormant core is a reconnect optimization, not a prerequisite for Off.
+    // If its adapter fails the full inactivity audit, close our core and require
+    // complete adapter removal before committing Off or clearing any guard.
+    internal static async Task<bool> AuditDisconnectedTunnel(bool keep,Func<Task> stopCore)
+    {
+        if(keep){
+            try{await EnsureTunnelInactive();return true;}
+            catch(IOException error)when(error.Message=="OWNED_TUNNEL_CLEANUP_NOT_VERIFIED"){
+                await stopCore();
+            }
+        }
+        await EnsureTunnelRemoved();return false;
     }
     internal static async Task EnsureTunnelInactive()
     {
@@ -308,7 +321,7 @@ internal sealed class VpnRuntime : IDisposable
                 if(nic is not null){var stats=nic.GetIPv4Statistics();traffic=new(){["sample_ms"]=Environment.TickCount64,["rx_bytes"]=stats.BytesReceived,["tx_bytes"]=stats.BytesSent};}
             }catch(NetworkInformationException){}catch(System.Net.Sockets.SocketException){}
         }
-        return new(){["traffic"]=traffic,["verified_exit_ip"]=_mode=="connected" && _verifiedGeneration==_generation && NativeGuard.TunPermitted?"152.67.156.100":null,["ok"]=ok,["schema"]=1,["mode"]=_secret.ConnectIntent && !NativeGuard.Active?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
+        return new(){["traffic"]=traffic,["verified_exit_ip"]=_mode=="connected" && _verifiedGeneration==_generation && NativeGuard.TunPermitted?"152.67.156.100":null,["ok"]=ok,["schema"]=1,["mode"]=_secret.RecoveryRequired || (_secret.ConnectIntent && !NativeGuard.Active)?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
         ["transport_preference"]=_secret.TransportPreference,["carrier_stage"]=_core.CarrierStage,["carrier_failures"]=_carrierFailures.DeepClone(),["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
         ["native_udp_attempt"]=_nativeUdpAttempt?.DeepClone(),["native_udp_selected_port"]=_core.NativePort,["client_handshake_reply"]=_core.HandshakeReplyReceived,["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),

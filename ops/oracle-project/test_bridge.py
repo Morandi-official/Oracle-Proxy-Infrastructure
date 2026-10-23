@@ -121,7 +121,7 @@ class BridgeTests(unittest.TestCase):
             snippets.mkdir(); snippet = snippets / 'admin.caddy'
             main.write_bytes(b'example.com { respond "existing site" }\n'); main.chmod(0o640)
             snippet.write_bytes(b'previous owned configuration\n')
-            with patch.object(operations, 'CADDY_MAIN', main), patch.object(operations, 'CADDY_DIRECTORY', snippets), patch.object(operations, 'WEB_BACKUPS', root / 'backups'), patch.object(operations, 'run', side_effect=RuntimeError('synthetic validation failure')), patch.object(operations.subprocess, 'run'):
+            with patch.object(operations, 'install_downloads'), patch.object(operations, 'CADDY_MAIN', main), patch.object(operations, 'CADDY_DIRECTORY', snippets), patch.object(operations, 'WEB_BACKUPS', root / 'backups'), patch.object(operations, 'run', side_effect=RuntimeError('synthetic validation failure')), patch.object(operations.subprocess, 'run'):
                 with self.assertRaises(RuntimeError): operations.enable_https()
             self.assertEqual(main.read_bytes(), b'example.com { respond "existing site" }\n')
             self.assertEqual(main.stat().st_mode & 0o777, 0o640)

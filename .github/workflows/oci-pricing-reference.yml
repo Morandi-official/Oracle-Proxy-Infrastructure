@@ -1,0 +1,38 @@
+name: Read public Oracle transfer pricing references
+on:
+  pull_request:
+    paths: ['.github/workflows/oci-pricing-reference.yml']
+permissions:
+  contents: read
+jobs:
+  public-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Read bounded public policy and pricing catalog without credentials
+        shell: python
+        run: |
+          import urllib.request,json,re,html
+          urls=[
+            'https://www.oracle.com/cloud/networking/pricing/',
+            'https://apexapps.oracle.com/pls/apex/cetools/api/v1/products/?currencyCode=USD'
+          ]
+          for url in urls:
+            try:
+              req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 OracleProxyPolicyReview'})
+              with urllib.request.urlopen(req,timeout=30) as r:body=r.read(4*1024*1024+1)
+              if len(body)>4*1024*1024:raise ValueError('REFERENCE_TOO_LARGE')
+              if 'apexapps' in url:
+                d=json.loads(body)
+                items=d.get('items',d.get('products',[])) if isinstance(d,dict) else d
+                rows=[x for x in items if re.search(r'outbound.*data.*transfer|data.*transfer.*zone',str(x.get('displayName','')),re.I)]
+                print('ORACLE_PUBLIC_PRICE_ROWS='+json.dumps(rows)[:16000])
+              else:
+                t=body.decode('utf-8','replace')
+                t=re.sub(r'<(script|style)\b[^>]*>.*?</\1>',' ',t,flags=re.S|re.I)
+                t=html.unescape(re.sub(r'<[^>]+>',' ',t))
+                t=re.sub(r'\s+',' ',t)
+                rows=re.findall(r'.{0,180}(?:10\s*(?:TB|terabytes)|1,024|1024|10,000|10,240).{0,240}',t,re.I)
+                print('ORACLE_PUBLIC_FREE_TRANSFER_POLICY='+json.dumps(rows[:15]))
+            except Exception as e:
+              print('ORACLE_PUBLIC_REFERENCE_UNAVAILABLE='+type(e).__name__)

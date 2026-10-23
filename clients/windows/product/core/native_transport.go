@@ -136,7 +136,16 @@ func (c *nativeConn) Write(b []byte) (int, error) {
 	if i < 0 {
 		i = 0
 	}
-	return c.sockets[i%len(c.sockets)].Write(b)
+	n, err := c.sockets[i%len(c.sockets)].Write(b)
+	if err != nil && n == 0 && b[0] == 1 && len(c.sockets) > 1 {
+		// A synchronous failure sent none of THIS initiation. Try the
+		// other socket now: returning the first error would make ClientBind
+		// close both sockets and restart forever on the same blocked port.
+		c.attempt = i + 1
+		fmt.Fprintf(os.Stderr, "CARRIER_NATIVE_TRY_%d\n", c.ports[c.attempt%len(c.sockets)])
+		return c.sockets[c.attempt%len(c.sockets)].Write(b)
+	}
+	return n, err
 }
 func (c *nativeConn) Close() error {
 	c.once.Do(func() {

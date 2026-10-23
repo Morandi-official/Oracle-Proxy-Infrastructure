@@ -3,15 +3,20 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"net"
 	"sync"
 	"testing"
 	"time"
 )
 
+type deniedNativeWrite struct{ net.Conn }
+
+func (c deniedNativeWrite) Write([]byte) (int, error) { return 0, errors.New("SYNTHETIC_SEND_DENIED") }
+
 func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
-	for _, loss := range []int{0, 1, 2, 3} {
-		t.Run([]string{"primary", "primary_request_lost", "primary_reply_lost_shared_replay_guard", "late_obsolete_primary_reply"}[loss], func(t *testing.T) {
+	for _, loss := range []int{0, 1, 2, 3, 4} {
+		t.Run([]string{"primary", "primary_request_lost", "primary_reply_lost_shared_replay_guard", "late_obsolete_primary_reply", "synchronous_primary_send_denied"}[loss], func(t *testing.T) {
 			var replay sync.Mutex
 			seen := make(map[string]bool)
 			var sockets []net.Conn
@@ -26,7 +31,11 @@ func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				sockets = append(sockets, c)
+				if i == 0 && loss == 4 {
+					sockets = append(sockets, deniedNativeWrite{c})
+				} else {
+					sockets = append(sockets, c)
+				}
 				go func(i int, s *net.UDPConn) {
 					b := make([]byte, 4096)
 					for {
@@ -73,7 +82,7 @@ func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
 			if _, e := c.Write(packet); e != nil {
 				t.Fatal(e)
 			}
-			if loss > 0 {
+			if loss > 0 && loss < 4 {
 				// Model a fresh retry from WG, without changing its real
 				// five-second retry timer in the product.
 				go func() {

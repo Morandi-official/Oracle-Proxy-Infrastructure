@@ -85,6 +85,12 @@ func run() error {
 	if err = instance.Start(); err != nil {
 		return fmt.Errorf("start")
 	}
+	if standby {
+		if err = oracleTun.PrepareOracleAdapter(); err != nil {
+			instance.Close()
+			return fmt.Errorf("create")
+		}
+	}
 	fmt.Println("READY")
 	var tunScope *adapter.Scope
 	if standby {

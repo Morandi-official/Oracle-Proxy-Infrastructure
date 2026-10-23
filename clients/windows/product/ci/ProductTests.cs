@@ -356,7 +356,7 @@ internal static class ProductTests
             Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
             NativeGuard.Clear();
             client=await Launch(config,standby:true);
-            Require(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy") && await Tcp() && await Dns(),"REAL_STANDBY_CORE_HAS_NO_TUN_AND_ORDINARY_TRAFFIC_REMAINS_DIRECT");
+            Require(VpnRuntime.TunnelInactive() && NativeGuard.TunDormant && !NativeGuard.TunPermitted && await Tcp() && await Dns(),"REAL_STANDBY_DORMANT_ADAPTER_HAS_NO_FORWARDING_ROUTES_OR_ROUTABLE_ADDRESSES_AND_ORDINARY_TRAFFIC_REMAINS_DIRECT");
             var warmProxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service","synthetic-probe-only")};
             using(var probe=new HttpClient(new SocketsHttpHandler{Proxy=warmProxy,UseProxy=true,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)}){
                 using var response=await probe.GetAsync("https://1.1.1.1/cdn-cgi/trace");

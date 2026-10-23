@@ -78,6 +78,13 @@ func (c *nativeConn) Read(b []byte) (int, error) {
 				c.mu.Unlock()
 				continue
 			}
+			// A reply to the previous initiation can arrive after WG has
+			// generated a fresh one on the other port. It must not pin the
+			// socket to an obsolete handshake and discard the current reply.
+			if winner < 0 && (c.attempt < 0 || p.index != c.attempt%len(c.sockets)) {
+				c.mu.Unlock()
+				continue
+			}
 			if winner < 0 {
 				c.winner = p.index
 				fmt.Fprintln(os.Stderr, fmt.Sprintf("CARRIER_NATIVE_%d", c.ports[p.index]))

@@ -10,8 +10,8 @@ import (
 )
 
 func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
-	for _, loss := range []int{0, 1, 2} {
-		t.Run([]string{"primary", "primary_request_lost", "primary_reply_lost_shared_replay_guard"}[loss], func(t *testing.T) {
+	for _, loss := range []int{0, 1, 2, 3} {
+		t.Run([]string{"primary", "primary_request_lost", "primary_reply_lost_shared_replay_guard", "late_obsolete_primary_reply"}[loss], func(t *testing.T) {
 			var replay sync.Mutex
 			seen := make(map[string]bool)
 			var sockets []net.Conn
@@ -48,7 +48,15 @@ func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
 						}
 						response := make([]byte, 92)
 						response[0] = 2
-						s.WriteToUDP(response, a)
+						if loss == 3 {
+							delay := 100 * time.Millisecond
+							if i == 0 {
+								delay = 250 * time.Millisecond
+							}
+							go func() { time.Sleep(delay); s.WriteToUDP(response, a) }()
+						} else {
+							s.WriteToUDP(response, a)
+						}
 					}
 				}(i, s)
 			}

@@ -31,6 +31,12 @@ ADMIN_GITHUB_IDS = frozenset(os.environ.get('ADMIN_GITHUB_IDS', '204281968').spl
 if not ADMIN_GITHUB_IDS or any(not uid.isdigit() for uid in ADMIN_GITHUB_IDS):
     raise ImproperlyConfigured('Explicit numeric GitHub user IDs are required')
 NODE_ID = 'oracle-primary'
+ADMIN_AUTH_MODE = os.environ.get('ADMIN_AUTH_MODE', 'github')
+if ADMIN_AUTH_MODE not in ('github','local'): raise ImproperlyConfigured('Invalid ADMIN_AUTH_MODE')
+ADMIN_LOCAL_USERNAME = os.environ.get('ADMIN_LOCAL_USERNAME','')
+ADMIN_LOCAL_PASSWORD_HASH = os.environ.get('ADMIN_LOCAL_PASSWORD_HASH','')
+if ADMIN_AUTH_MODE == 'local' and (not re.fullmatch(r'[\w.@+-]{1,64}',ADMIN_LOCAL_USERNAME) or not ADMIN_LOCAL_PASSWORD_HASH):
+    raise ImproperlyConfigured('Provisioned local administrator is required')
 SOURCE_REVISION = os.environ.get('ADMIN_SOURCE_REVISION', 'unversioned')
 STATE_DIR = Path(os.environ.get('ADMIN_STATE_DIR', '/var/lib/oracle-proxy-admin'))
 DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3',
@@ -64,7 +70,7 @@ TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates',
                   'django.template.context_processors.request',
                   'django.contrib.auth.context_processors.auth',
                   'django.contrib.messages.context_processors.messages']}}]
-AUTHENTICATION_BACKENDS = ['console.adapters.GitHubSessionBackend']
+AUTHENTICATION_BACKENDS = ['console.local_auth.LocalAdminBackend'] if ADMIN_AUTH_MODE == 'local' else ['console.adapters.GitHubSessionBackend']
 SOCIALACCOUNT_ADAPTER = 'console.adapters.GitHubAllowlistAdapter'
 ACCOUNT_ADAPTER = 'console.adapters.ClosedAccountAdapter'
 SOCIALACCOUNT_AUTO_SIGNUP = True
@@ -73,8 +79,8 @@ SOCIALACCOUNT_EMAIL_AUTHENTICATION = False
 SOCIALACCOUNT_STORE_TOKENS = False
 SOCIALACCOUNT_LOGIN_ON_GET = False
 SOCIALACCOUNT_PROVIDERS = {'github': {
-    'APP': {'client_id': required('ADMIN_GITHUB_CLIENT_ID'),
-            'secret': required('ADMIN_GITHUB_CLIENT_SECRET'), 'key': ''},
+    'APP': {'client_id': os.environ.get('ADMIN_GITHUB_CLIENT_ID','') if ADMIN_AUTH_MODE == 'local' else required('ADMIN_GITHUB_CLIENT_ID'),
+            'secret': os.environ.get('ADMIN_GITHUB_CLIENT_SECRET','') if ADMIN_AUTH_MODE == 'local' else required('ADMIN_GITHUB_CLIENT_SECRET'), 'key': ''},
     'SCOPE': ['read:user'], 'OAUTH_PKCE_ENABLED': True,
 }}
 SOCIALACCOUNT_REQUESTS_TIMEOUT = 10

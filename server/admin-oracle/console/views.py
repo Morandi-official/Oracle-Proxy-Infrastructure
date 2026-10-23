@@ -4,12 +4,13 @@ from allauth.account.authentication import get_authentication_records
 from allauth.mfa.models import Authenticator
 from allauth.socialaccount.models import SocialAccount
 from django.conf import settings
+from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
 from django.http import FileResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 import json
-from . import control, client_api
+from . import control, client_api, local_auth
 
 from .models import Audit, Snapshot, ClientAccount
 
@@ -23,6 +24,13 @@ def github_identity(request):
 
 
 def assurance(request):
+    if local_auth.enabled():
+        user=request.user
+        if not local_auth.permitted(user): return None, 'LOGIN_REQUIRED'
+        at=request.session.get('admin_password_at')
+        valid=(request.session.get('_auth_user_backend')=='console.local_auth.LocalAdminBackend' and
+               isinstance(at,(int,float)) and 0 <= time()-at < settings.SESSION_COOKIE_AGE)
+        return str(user.pk), None if valid else 'LOGIN_REQUIRED'
     uid = github_identity(request)
     if not uid:
         return None, 'LOGIN_REQUIRED'
@@ -47,9 +55,35 @@ def deny(request):
     return None
 
 
-@require_GET
+def audit_actor(request):
+    return f'local:{request.user.pk}' if local_auth.enabled() else f'github:{github_identity(request)}'
+
+
+@require_http_methods(['GET','POST'])
 def login_page(request):
-    return render(request, 'login.html')
+    if not local_auth.enabled():
+        if request.method != 'GET': return JsonResponse({'error':'METHOD_NOT_ALLOWED'},status=405)
+        return render(request,'login.html')
+    if request.method == 'GET':
+        if assurance(request)[1] is None: return redirect('dashboard')
+        return render(request,'local_login.html')
+    username=request.POST.get('username',''); password=request.POST.get('password','')
+    if len(username)>64 or len(password)>256 or not local_auth.throttle(username[:64]):
+        return render(request,'local_login.html',{'error':'登录暂不可用，请稍后再试。'},status=429)
+    user=authenticate(request,username=username,password=password)
+    if user is None:
+        Audit.objects.create(actor='system:admin-login',action='admin.login.failed')
+        return render(request,'local_login.html',{'error':'账号或密码不正确。'},status=401)
+    auth_login(request,user,backend='console.local_auth.LocalAdminBackend')
+    request.session['admin_password_at']=time()
+    Audit.objects.create(actor=f'local:{user.pk}',action='admin.login')
+    return redirect('dashboard')
+
+
+@require_http_methods(['POST'])
+def logout_page(request):
+    auth_logout(request)
+    return redirect('login')
 
 
 @require_GET
@@ -61,7 +95,7 @@ def dashboard(request):
         return redirect('mfa_activate_totp')
     if reason:
         return render(request, 'finish_mfa.html', status=403)
-    return render(request, 'dashboard.html')
+    return render(request, 'dashboard.html', {'local_auth':local_auth.enabled()})
 
 
 @require_GET
@@ -71,8 +105,7 @@ def status(request):
         return rejected
     row = Snapshot.objects.order_by('-observed_at').first()
     age = max(0, int((timezone.now() - row.observed_at).total_seconds())) if row else None
-    uid = github_identity(request)
-    Audit.objects.create(actor=f'github:{uid}', action='status.read')
+    Audit.objects.create(actor=audit_actor(request), action='status.read')
     return JsonResponse({'node_id': settings.NODE_ID, 'actor': request.user.username,
                          'snapshot': row.payload if row else None, 'age_seconds': age,
                          'freshness': 'unknown' if row is None else ('fresh' if age <= 180 else 'stale'),
@@ -109,13 +142,13 @@ def management(request):
     try:
         if operation == 'account.save': result = client_api.save_account(request,data)
         elif operation == 'account.delete': result = client_api.delete_account(request,data)
-        else: result = control.call(operation, f'github:{github_identity(request)}', data)
+        else: result = control.call(operation, audit_actor(request), data)
     except (OSError,TimeoutError,json.JSONDecodeError):
         return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
     except ValueError as error:
         return JsonResponse({'error':str(error)},status=400)
     if operation!='state':
-        Audit.objects.create(actor=f'github:{github_identity(request)}',action=operation,resource='policy-control')
+        Audit.objects.create(actor=audit_actor(request),action=operation,resource='policy-control')
     accounts = {str(a.user_id):a.username for a in ClientAccount.objects.all()}
     for user in result.get('users',[]): user['username'] = accounts.get(user['id'])
     return JsonResponse(result)
@@ -138,7 +171,7 @@ def health(request):
     Snapshot.objects.exists()  # Include database/migration readiness.
     summary = {'ready':False}
     try:
-        data=control.call('state',f'github:{next(iter(settings.ADMIN_GITHUB_IDS))}',{})
+        data=control.call('state','system:health' if local_auth.enabled() else f'github:{next(iter(settings.ADMIN_GITHUB_IDS))}',{})
         summary={'ready':bool(data.get('observed_at') and not data.get('error')),
                  'observed_at':data.get('observed_at'),'error':data.get('error'),
                  'user_count':len(data['users']),'peer_count':len(data['peers']),

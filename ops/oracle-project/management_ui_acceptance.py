@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright, expect
@@ -18,7 +19,7 @@ def main():
    with tempfile.TemporaryDirectory() as temporary:
     driver=fixture.FakeDriver();engine=fixture.agent.Engine(Path(temporary)/'fixture.sqlite3',driver);engine.tick()
     browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='UTC');page=context.new_page()
-    accounts={}
+    accounts={};official_fixture=[None]
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
     def serve(route):
      path=urlsplit(route.request.url).path
@@ -42,6 +43,7 @@ def main():
         else:data=engine.dispatch({'actor':'github:204281968',**value})
        else:data=engine.snapshot()
        for u in data['users']:u['username']=accounts.get(u['id'])
+       if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':None}
       elif path=='/api/audit':data={'entries':[]}
       else:route.fulfill(status=404);return
@@ -82,6 +84,14 @@ def main():
      row.get_by_role('button',name='删除',exact=True).click();expect(page.locator('#user-rows')).to_contain_text('尚无用户')
      assert not engine.snapshot()['users'] and not driver.allowed
      assert all(p['revoked'] for p in engine.snapshot()['peers'] if p['managed'])
+     official_fixture[0]={'status':'INSTANCE_PRINCIPAL_READY','free_tier_status':'VERIFIED_USAGE_AND_PRICE_TIER','free_tier_limit_gb':10240,'free_tier_used_gb':1.25,'free_tier_remaining_gb':10238.75,'period':engine.snapshot()['period'],'checked_at':int(time.time()),'billing_through':int(time.time())-86400,'free_tier_policy_checked':'2026-10-23'}
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
+     expect(page.locator('#official-remaining')).to_have_text('10,238.75 GB')
+     expect(page.locator('#remaining')).to_have_text('10,238.75 GB')
+     assert page.locator('#official-progress').evaluate('(el)=>el.max===10240 && el.value===1.25')
+     official_fixture[0]['free_tier_status']='PAGINATED_INCOMPLETE'
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
+     expect(page.locator('#official-remaining')).to_have_text('未知')
      assert not errors, 'Synthetic management UI raised JavaScript errors'
      print(f'SYNTHETIC_{name.upper()}_UI_USER_PEER_QUOTA_EXPIRY_BUDGET_CSRF_HEADER_AND_TEXT_ESCAPE=PASS',flush=True)
     finally:context.close();browser.close();engine.db.close()

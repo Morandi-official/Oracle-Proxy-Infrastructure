@@ -1,5 +1,6 @@
 """Anonymous browser acceptance only; never authenticate or export browser state."""
 from urllib.parse import urlsplit
+import os
 
 from playwright.sync_api import sync_playwright, TimeoutError as BrowserTimeout
 
@@ -24,6 +25,26 @@ def main():
                 assert response.headers['referrer-policy'] == 'same-origin'
                 assert any(cookie['name'] == '__Host-oracle_csrf' and cookie['secure']
                            for cookie in context.cookies())
+                if page.locator('input[name="password"]').count():
+                    username=os.environ.get('ADMIN_LOCAL_ACCEPTANCE_USERNAME','')
+                    password=os.environ.get('ADMIN_LOCAL_ACCEPTANCE_PASSWORD','')
+                    if not username or not password:raise RuntimeError('LOCAL_ADMIN_ACCEPTANCE_CREDENTIALS_REQUIRED')
+                    try:
+                        page.locator('input[name="username"]').fill(username)
+                        page.locator('input[name="password"]').fill(password)
+                        page.get_by_role('button',name='登录',exact=True).click()
+                        page.wait_for_url(BASE+'/',timeout=15000)
+                        status=context.request.get(BASE+'/api/status')
+                        control=context.request.get(BASE+'/api/control')
+                        assert status.status==200 and control.status==200
+                        assert status.json()['actor']==username and 'users' in control.json()
+                        page.get_by_role('button',name='退出登录',exact=True).click()
+                        page.wait_for_url(BASE+'/login/',timeout=15000)
+                        assert context.request.get(BASE+'/api/control').status==401
+                    except Exception:
+                        raise RuntimeError('LOCAL_ADMIN_BROWSER_ACCEPTANCE_FAILED') from None
+                    print(f'BROWSER_{name.upper()}_REAL_LOCAL_PASSWORD_LOGIN_CONTROL_AND_LOGOUT=PASS',flush=True)
+                    continue
                 with page.expect_request(lambda request:
                         (urlsplit(request.url).netloc, urlsplit(request.url).path) ==
                         ('github.com', '/login/oauth/authorize'), timeout=15000):

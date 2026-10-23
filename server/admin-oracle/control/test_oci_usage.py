@@ -44,14 +44,15 @@ class ReadOnlyUsageTests(unittest.TestCase):
   error.code='SECRET_SESSION_TOKEN';self.assertEqual(probe.error_details(error)['service_code'],'OTHER')
   self.assertEqual(probe.error_details(AttributeError('SECRET'))['category'],'SDK_RESPONSE_ERROR')
 
- def fake_collect(self,quantity):
+ def fake_collect(self,quantity,part="",pages=1):
   class Frozen(dt.datetime):
    @classmethod
    def now(cls,tz=None):return cls(2026,10,21,10,13,tzinfo=dt.timezone.utc)
   key='ocid1.vnic.oc1..fixture';calls=[]
-  def billing(details,**_):
+  def billing(details,**kwargs):
    calls.append(details)
-   return NS(data=NS(items=[NS(sku_name='Outbound Data Transfer',unit='GB',computed_quantity=quantity)]),headers={})
+   next_page='second' if pages==2 and not kwargs.get('page') else 'repeat' if pages==-1 else None
+   return NS(data=NS(items=[NS(sku_name='Outbound Data Transfer Zone 1',sku_part_number=part,unit='GB Months',computed_quantity=quantity)]),headers={'opc-next-page':next_page} if next_page else {})
   monitor=NS(summarize_metrics_data=lambda *a,**k:NS(data=[NS(name='VnicToNetworkBytes',dimensions={'resourceId':key},aggregated_datapoints=[NS(value=100,timestamp=Frozen(2026,10,20,tzinfo=dt.timezone.utc))])]))
   modules={
    'oci.auth.signers':NS(InstancePrincipalsSecurityTokenSigner=lambda **k:NS(tenancy_id='ocid1.tenancy.fixture')),
@@ -79,3 +80,23 @@ class ReadOnlyUsageTests(unittest.TestCase):
   self.assertEqual(result['billing_error_category'],'SDK_VALIDATION_ERROR')
   self.assertEqual(result['vnic_outbound_bytes'],100)
   self.assertIsNone(result['remaining_bytes'])
+
+ def test_known_official_sku_and_original_api_unit_produce_delayed_free_balance(self):
+  result,calls=self.fake_collect(1.25,'B88327')
+  self.assertEqual(result['billing_status'],'VERIFIED_USAGE_AND_PRICE_TIER')
+  self.assertEqual(result['free_tier_limit_gb'],10240)
+  self.assertEqual(result['free_tier_used_gb'],1.25)
+  self.assertEqual(result['free_tier_remaining_gb'],10238.75)
+  self.assertIsNone(result['remaining_bytes'])
+  self.assertIn('skuPartNumber',calls[0].group_by)
+ def test_all_billing_pages_are_aggregated_and_repeated_page_never_becomes_balance(self):
+  result,calls=self.fake_collect(1.25,'B88327',pages=2)
+  self.assertEqual(len(calls),2);self.assertEqual(result['free_tier_used_gb'],2.5)
+  result,calls=self.fake_collect(1.25,'B88327',pages=-1)
+  self.assertEqual(result['free_tier_status'],'PAGINATED_INCOMPLETE')
+  self.assertIsNone(result['free_tier_remaining_gb'])
+ def test_missing_unknown_mixed_zone_or_wrong_unit_does_not_invent_free_balance(self):
+  row={'sku':'Outbound Data Transfer Zone 1','part_number':'B88327','unit':'GB Months','quantity':1.25}
+  for rows in ([],[dict(row,part_number='UNKNOWN')],[dict(row,unit='OCPU Hours')],[row,dict(row,part_number='B93455')]):
+   self.assertIsNone(probe.free_tier(rows,True)['free_tier_remaining_gb'])
+  self.assertEqual(probe.free_tier([dict(row,quantity=10241)],True)['free_tier_remaining_gb'],0)

@@ -15,10 +15,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def main():
     opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     csrf = None
+    with opener.open(BASE+'/login/',timeout=10) as probe:
+        local_login=b'name="password"' in probe.read(65536)
     for path, expected in (('/login/', 200), ('/static/console/style.css', 200),
                            ('/static/console/app.js', 200), ('/style.css', 401), ('/app.js', 401),
                            ('/', 302), ('/api/status', 401), ('/api/audit', 401), ('/api/control',401),
-                           ('/api/health', 404), ('/accounts/login/', 200),
+                           ('/api/health', 404), ('/accounts/login/', 404 if local_login else 200),
                            ('/accounts/password/reset/', 404), ('/accounts/password/set/', 404),
                            ('/accounts/signup/', 404)):
         try:
@@ -33,13 +35,24 @@ def main():
                 assert response.headers.get('X-Frame-Options') == 'DENY'
                 assert response.headers.get('X-Content-Type-Options') == 'nosniff'
                 assert response.headers.get('Referrer-Policy') == 'same-origin'
-                assert "form-action 'self' https://github.com" in response.headers.get('Content-Security-Policy', '')
-            if path in ('/login/', '/accounts/login/'):
+                assert "form-action 'self'" in response.headers.get('Content-Security-Policy', '')
+            if path in ('/login/', '/accounts/login/') and expected==200:
                 body = response.read(65536)
-                assert b'github/login/' in body
-                assert b'type="password"' not in body
+                if local_login:
+                    assert b'name="username"' in body and b'type="password"' in body and b'github/login/' not in body
+                else:
+                    assert b'github/login/' in body
+                    assert b'type="password"' not in body
                 csrf = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', body).group(1).decode()
         print(f'PUBLIC_CHECK={path} HTTP_{expected}_PASS')
+    if local_login:
+        for path in ('/accounts/github/login/','/accounts/2fa/'):
+            try: opener.open(BASE+path,timeout=10)
+            except urllib.error.HTTPError as error: assert error.code==404
+            else: raise ValueError('EXTERNAL_AUTH_SURFACE_OPEN')
+        print('PUBLIC_LOCAL_ADMIN_ONLY_LOGIN_SURFACE=PASS')
+        print('PUBLIC_HTTPS_AND_UNAUTHENTICATED_BOUNDARIES=PASS')
+        return
     request = urllib.request.Request(BASE + '/accounts/github/login/',
         data=urllib.parse.urlencode({'csrfmiddlewaretoken': csrf}).encode(),
         # Exercise Django's HTTPS Referer fallback rather than always supplying Origin.

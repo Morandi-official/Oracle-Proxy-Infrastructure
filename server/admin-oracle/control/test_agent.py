@@ -38,6 +38,11 @@ class PolicyTests(unittest.TestCase):
  def bind(self,key,user): self.request('peer.assign',{'public_key':key,'user_id':user['id'],'name':'Test PC'})
  def budget(self,**kwargs):
   data={'limit_bytes':10000,'reserve_bytes':1000,'guard_enabled':True,'prior_usage_bytes':100,'confirm_current_period':True};data.update(kwargs);return self.request('budget.set',data)['budget']
+ def test_local_administrator_and_fixed_system_actors_are_accepted_only(self):
+  for actor in ('local:1','system:client-api','system:health'):
+   self.assertIn('users',self.engine.dispatch({'operation':'state','actor':actor,'data':{}}))
+  for actor in ('local:owner','system:shell','local:1;id'):
+   with self.assertRaises(ValueError):self.engine.dispatch({'operation':'state','actor':actor,'data':{}})
  def test_unmanaged_peers_not_enrolled_or_restricted_by_installation(self):
   self.assertEqual(self.driver.managed,set());self.assertFalse(self.engine.get('budget')['guard_enabled'])
   self.assertEqual(len(self.engine.snapshot()['peers']),2)

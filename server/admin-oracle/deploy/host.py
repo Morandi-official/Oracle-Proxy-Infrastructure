@@ -66,9 +66,9 @@ def read_environment():
         if not separator or not re.fullmatch(r'ADMIN_[A-Z_]+', key) or not value or any(c.isspace() for c in value):
             raise ValueError('Invalid admin.env; use unquoted KEY=value with no whitespace')
         values[key] = value
-    if any(values.get(k, '').startswith('REPLACE_') or not values.get(k) for k in
-           ('ADMIN_GITHUB_CLIENT_ID', 'ADMIN_GITHUB_CLIENT_SECRET')):
-        raise ValueError('Fill GitHub OAuth credentials in /etc/oracle-proxy-admin/admin.env first')
+    fields=('ADMIN_LOCAL_USERNAME','ADMIN_LOCAL_PASSWORD_HASH') if values.get('ADMIN_AUTH_MODE')=='local' else ('ADMIN_GITHUB_CLIENT_ID','ADMIN_GITHUB_CLIENT_SECRET')
+    if any(values.get(k,'').startswith('REPLACE_') or not values.get(k) for k in fields):
+        raise ValueError('Fill administrator configuration before deployment')
     return values
 
 
@@ -272,6 +272,8 @@ def install(revision):
     # This release only adds application-owned tables. Never reverse migrations automatically.
     as_user(APP_USER, [release / '.venv/bin/python', 'manage.py', 'migrate', '--noinput'],
             cwd=release, env=environment)
+    if environment.get('ADMIN_AUTH_MODE')=='local':
+        as_user(APP_USER,[release / '.venv/bin/python','manage.py','provision_local_admin'],cwd=release,env=environment)
     as_user(APP_USER, [release / '.venv/bin/python', 'manage.py', 'check', '--deploy', '--fail-level', 'WARNING'],
             cwd=release, env=environment)
     for name in UNIT_NAMES:

@@ -352,7 +352,7 @@ class Engine:
     def dispatch(self, request):
         if not isinstance(request, dict) or set(request) != {'operation','actor','data'}: raise ValueError('INVALID_REQUEST')
         operation, actor, data = request['operation'], request['actor'], request['data']
-        if not isinstance(actor, str) or not re.fullmatch(r'github:[0-9]{1,20}', actor): raise ValueError('INVALID_ACTOR')
+        if not isinstance(actor, str) or not re.fullmatch(r'(?:(?:github|local):[0-9]{1,20}|system:(?:client-api|health))', actor): raise ValueError('INVALID_ACTOR')
         if not isinstance(data, dict): raise ValueError('INVALID_DATA')
         if operation == 'state' and not data: return self.snapshot()
         # Account all current counters under the old ownership before any binding/config mutation.

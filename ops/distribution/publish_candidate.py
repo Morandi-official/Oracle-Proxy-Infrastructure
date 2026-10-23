@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc8 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc9 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc8.json')
+MANIFEST = Path(__file__).with_name('windows-rc9.json')
 
 
 def gh(*args, output=None):
@@ -59,7 +59,7 @@ def read_archive(archive, output, expected_prefix):
 def main():
     if sys.argv[1:] not in (['--check'],['--publish']): raise ValueError('INVALID_ARGUMENTS')
     manifest=json.loads(MANIFEST.read_text())
-    if manifest['version']!='0.3.0-rc8': raise ValueError('ONLY_RC8_PRERELEASE_SUPPORTED')
+    if manifest['version']!='0.3.0-rc9': raise ValueError('ONLY_RC9_PRERELEASE_SUPPORTED')
     validate_run(api(f"actions/runs/{manifest['run_id']}"),manifest)
     for artifact in manifest['artifacts']:
         value=api(f"actions/artifacts/{artifact['id']}")
@@ -92,10 +92,12 @@ def main():
             if digest(assets/name)!=value: raise ValueError('PAYLOAD_OR_SOURCE_DIGEST_MISMATCH')
         notes=root/'notes.md'
         notes.write_text('Windows 10/11 x64 便携验收版；完整解压后打开 OracleProxy.exe，首次安装或升级服务需要 UAC。\n\n'
-                         '通道顺序：WireGuard UDP 51820 → QUIC UDP 8443 → HTTPS/TLS 443。断开后保留已验证的预备通道以加速重连；同一物理网络短暂记住失败通道，换网重新首选 UDP。首次使用和网络变化仍需实际握手与出口核验。\n\n'
-                         '修复未连接时文字与按钮闪烁，预备就绪后降低轮询频率；读取状态时点击连接会排队执行。\n\n'
-                         '原生 WireGuard UDP 使用面向实际 IPv4 Peer 的已连接 socket，保留 UDP 出口探测记录供排障。云端通过不代表 MetaWise 网络已验证，仍需实机确认。\n\n'
-                         '云端已验证三通道出口、TCP/UDP DNS、防泄漏、服务崩溃恢复与账号用量联动，并拒绝新核心继承旧核心的出口核验。预备后的原生 UDP 点击切换为 398 ms；持续屏蔽原生 UDP 时，QUIC 连续重连为 281、302、273 ms。这不是冷启动或 MetaWise 实机时延承诺。\n\n'
+                         '连接方式可选：自动、WireGuard UDP、QUIC / HTTP3。自动优先原生 UDP；HTTPS/TLS 仅自动兜底。实际使用的通道单独显示。\n\n'
+                         '界面重新划分为连接、账号与用量、诊断与测试三个对齐区块，加入本次已验证出口 IP 及本机 VPN 实时上下行速率。账号登录与退出、用量进度、到期日和已登记设备数集中展示。\n\n'
+                         '原生 UDP 在同一个 WireGuard 实例内优先 51820，必要时尝试 443；QUIC 使用真实 HTTP3 CONNECT-UDP。修复核心被强制结束后旧会话阻挡新连接的问题。\n\n'
+                         '修复 VPN 内访问管理网站：仅 SYSTEM 控制及载体连接绑定物理网卡，普通浏览器通过加密隧道访问管理网站，普通程序物理绕行继续被阻断。\n\n'
+                         '验收要求强制选择 UDP 和 HTTP3 各三次冷启动，屏蔽 51820 时验证原生 UDP443，HTTP3 核心被结束后的三次恢复，并核对 Oracle 出口、TCP/UDP DNS、管理网站及物理绕行阻断。实际结果见下方完整记录；云端耗时不能代表 MetaWise 实机表现。\n\n'
+                         '本轮云端冷启动：UDP 3383 / 1851 / 1783 ms；HTTP3 1757 / 2763 / 2758 ms。预备后的 UDP 连接 572 ms；屏蔽原生 UDP 时预备后的 HTTP3 重连 326 / 285 / 299 ms。冷启动尚未达到一秒，也不能据此承诺 MetaWise 实机时延。\n\n'
                          '**仍为未签名候选版：IPv6 当前阻断；真实 UU 会话的故障与重启连续性仍待实机验收。**\n\n'
                          f"构建提交：`{manifest['source_revision']}`；[完整验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']

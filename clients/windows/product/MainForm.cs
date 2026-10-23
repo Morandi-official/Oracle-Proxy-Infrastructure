@@ -31,11 +31,11 @@ internal sealed class MainForm : Form
     private long? _sampleAt,_sampleRx,_sampleTx;
     private uint _samplePid;
     private static Label MetricValue()=>new(){Text="—",Dock=DockStyle.Fill,AutoEllipsis=true,Height=30,TextAlign=ContentAlignment.MiddleLeft,Font=new Font("Microsoft YaHei UI",13,FontStyle.Bold),Margin=new Padding(0)};
-    private static TableLayoutPanel Stack(string name)=>new(){Name=name,Dock=DockStyle.Top,AutoSize=true,ColumnCount=1,Margin=new Padding(0),Padding=new Padding(0)};
+    private static TableLayoutPanel Stack(string name)=>new(){Name=name,Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,Margin=new Padding(0),Padding=new Padding(0)};
     private static void Row(TableLayoutPanel panel,Control item){int row=panel.RowCount++;panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));item.Dock=DockStyle.Fill;panel.Controls.Add(item,0,row);}
     private static Control Metric(string title,Label value){var cell=Stack("metric"+title);cell.Margin=new Padding(0,0,18,12);Row(cell,new Label{Text=title,AutoSize=true,ForeColor=Color.FromArgb(100,113,134),Margin=new Padding(0,0,0,3)});Row(cell,value);return cell;}
-    private static GroupBox Card(string name,string title,TableLayoutPanel content){var card=new GroupBox{Name=name,Text=title,Dock=DockStyle.Top,AutoSize=true,Padding=new Padding(18,24,18,14),Margin=new Padding(0,0,0,16),BackColor=Color.White};card.Controls.Add(content);return card;}
-    private static BufferedFlowPanel Actions()=>new(){AutoSize=true,Dock=DockStyle.Fill,WrapContents=true,Margin=new Padding(0,6,0,6),Padding=new Padding(0)};
+    private static GroupBox Card(string name,string title,TableLayoutPanel content){var card=new GroupBox{Name=name,Text=title,Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Padding=new Padding(18,24,18,14),Margin=new Padding(0,0,0,16),BackColor=Color.White};card.Controls.Add(content);return card;}
+    private static BufferedFlowPanel Actions()=>new(){AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,WrapContents=true,Margin=new Padding(0,6,0,6),Padding=new Padding(0)};
     internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null)
     {
         _send=send ?? ControlPipe.Send;DoubleBuffered=true;

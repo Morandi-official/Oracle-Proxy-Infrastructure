@@ -42,3 +42,22 @@ QUIC end-to-end gate runs once the server advertises the externally tested port;
 blocking both UDP carriers must still select HTTPS and retain crash protection.
 
 rc9 adds explicit Auto / WireGuard UDP / QUIC HTTP3 preferences, native 51820→443 single-device datagram probing, standard h3 Extended CONNECT-UDP with raw HTTP Datagrams and bounded RFC9298 DATAGRAM Capsules for larger packets, a physical-interface-bound SYSTEM control/carrier path, and tunneled admin-site access. HTTPS is automatic fallback only. Fresh kernel/core verification remains mandatory after process loss; persisted carrier hints never authorize a connection.
+
+
+Normal window close and “断开并退出” use the fixed authenticated Quit operation:
+stop the core, verify the owned TUN is removed, persist disconnected intent,
+then clear owned protection. The account stays signed in and the SYSTEM service
+remains idle without a core or preparation lease. Disconnect alone retains the
+dormant core for fast reconnect. GUI termination/crash and OS shutdown do not
+manufacture an explicit disconnect. A failed safe-exit acknowledgement keeps
+the window open with recovery guidance. An installation without a registered
+service can close immediately.
+
+rc11 adds bounded native per-port initiation/response/cookie/invalid/obsolete
+counters and numeric socket errors. Failed native evidence survives fallback;
+client_handshake_reply still describes only the current carrier/core. A shaped
+response is diagnostic progress, not proof of cryptographic authentication or
+a verified Oracle exit. No raw stderr, packet bytes, IP addresses or keys are
+exported in these counters. Intended socket closure is not a read failure.
+
+rc11协议重试：显式选择UDP或HTTP/3后，新的连接会重新尝试所选协议，不复用上次回退至其他协议的预备核心；在下拉框再次选择相同项目也会触发重新探测。自动模式保留已验证备用通道的快速重连。协议选择仍有受限网络下的自动兜底，实际协议继续明确显示。

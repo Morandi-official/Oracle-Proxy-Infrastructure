@@ -242,6 +242,12 @@ internal static class OracleAcceptance
                     await ColdCore();var learned=await Send("Connect");
                     Check(learned["transport"]?.GetValue<string>()=="wireguard-quic","REAL_SAME_NETWORK_REMEMBERS_FAILED_UDP_AFTER_CORE_LOSS");
                     await Connected();await Send("Disconnect");
+                    await Send("PreferUdp");await Send("Connect");var explicitFallback=await Connected();
+                    Check(explicitFallback["transport"]?.GetValue<string>()=="wireguard-quic","REAL_EXPLICIT_UDP_STILL_HAS_AUTHENTICATED_QUIC_FALLBACK");
+                    uint fallbackPid=explicitFallback["core_pid"]!.GetValue<uint>();await Send("Disconnect");
+                    var retry=await Send("Connect");
+                    Check(retry["transport"]?.GetValue<string>()=="wireguard-udp" && retry["core_pid"]?.GetValue<uint>() is >0 && retry["core_pid"]!.GetValue<uint>()!=fallbackPid && retry["mode"]?.GetValue<string>()!="connected" && retry["verified_at"] is null,"REAL_EXPLICIT_UDP_RECONNECT_RETRIES_NATIVE_INSTEAD_OF_REUSING_WARM_QUIC");
+                    await Send("Disconnect");await Send("PreferAuto");
                 }
             }else Console.WriteLine("REAL_QUIC_CARRIER=SERVER_NOT_ADVERTISED_YET");
             stage="AUTOMATIC_HTTPS_FALLBACK";await Send("Disconnect");
@@ -264,6 +270,13 @@ internal static class OracleAcceptance
             stage="USAGE_LINKAGE";await Task.Delay(6000);var after=await Send("Status");
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
             stage="DISCONNECT";Check((await Send("Disconnect"))["mode"]?.GetValue<string>()=="disconnected" && await ExitIp()!="152.67.156.100","REAL_EXPLICIT_DISCONNECT_RESTORES_DIRECT_EXIT");
+            stage="EXPLICIT_QUIT";
+            var quit=await Send("Quit");
+            Check(quit["intent"]?.GetValue<bool>()==false && quit["core_pid"]?.GetValue<uint>()==0 && quit["preparing"]?.GetValue<bool>()==false && quit["mode"]?.GetValue<string>()=="disconnected","REAL_QUIT_STOPS_PREPARED_CORE_AND_RETAINS_ACCOUNT");
+            await Task.Delay(1000);var idle=await Send("Status");
+            Check(idle["core_pid"]?.GetValue<uint>()==0 && idle["preparing"]?.GetValue<bool>()==false && idle["account"]?["device_count"]?.GetValue<int>()==devices && await ExitIp()!="152.67.156.100","REAL_QUIT_LEAVES_AUTHENTICATED_SERVICE_IDLE_WITHOUT_CORE_RESTART");
+            await Send("Connect");await Connected();
+            Check((await Send("Quit"))["core_pid"]?.GetValue<uint>()==0 && await ExitIp()!="152.67.156.100","REAL_QUIT_WHILE_CONNECTED_STOPS_CORE_AND_RESTORES_DIRECT");
             await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
         }catch(Exception error){try{await ControlPipe.Send("Disconnect");}catch{}Console.WriteLine("REAL_ORACLE_STAGE="+stage);if(_lastAssertion.Length>0)Console.WriteLine("REAL_ORACLE_ASSERTION="+_lastAssertion);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }

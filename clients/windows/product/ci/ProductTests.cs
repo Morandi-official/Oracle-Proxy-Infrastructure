@@ -181,6 +181,11 @@ internal static class ProductTests
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
     private static int Ui()
     {
+        var nativeEvents=new NativeUdpEvidence();
+        if(!nativeEvents.Record("NATIVE_UDP_443_SEND_INIT") || !nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_10054") || nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_9999999999") || nativeEvents.Record("NATIVE_UDP_443_RECV_REPLY SYNTHETIC_SECRET") || nativeEvents.Record("NATIVE_UDP_22_SEND_INIT") || nativeEvents.Record("NATIVE_UDP_443_SEND_INIT\n"))return 1;
+        var savedNative=nativeEvents.Snapshot();nativeEvents.Clear();
+        if(savedNative["443"]?["tx_initiations"]?.GetValue<int>()!=1 || savedNative["443"]?["last_read_error"]?.GetValue<uint>()!=10054 || nativeEvents.Snapshot().Count!=0)return 1;
+        Console.WriteLine("NATIVE_UDP_PORT_COUNTERS_STRICT_NUMERIC_VOCABULARY_AND_IMMUTABLE_SNAPSHOT=PASS");
         var carriers=new CarrierMemory();var relayState=new JsonObject{["tunnel"]=new JsonObject{["https_relay"]=true}};
         carriers.Observe("synthetic-network-a");carriers.Failed(TunnelTransport.WireGuardUdp);
         if(carriers.Preferred(relayState)!=TunnelTransport.WireGuardHttps || carriers.Observe("synthetic-network-a"))return 1;
@@ -256,6 +261,21 @@ internal static class ProductTests
         while((!read.IsCompleted || !click.IsCompleted) && deadline.Elapsed<TimeSpan.FromSeconds(5)){Application.DoEvents();Thread.Sleep(5);}
         if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Prepare","Connect"}))return 1;
         Console.WriteLine("CONNECT_CLICK_DURING_PASSIVE_READ_IS_QUEUED_AND_EXECUTED=PASS");
+        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";
+        var preferenceCalls=new List<string>();
+        using var reselect=new MainForm((command,_,_)=>{preferenceCalls.Add(command);return Task.FromResult((JsonObject)preferenceState.DeepClone());});
+        reselect.Display(preferenceState);
+        var sameChoice=Descendants(reselect).OfType<ComboBox>().Single();
+        typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp"}))return 1;
+        Console.WriteLine("RESELECTING_SAME_UDP_CHOICE_EXPLICITLY_RESTARTS_PRIMARY_DISCOVERY=PASS");
+        var quitState=new JsonObject{["ok"]=true,["intent"]=false,["core_pid"]=0U,["mode"]="disconnected"};
+        var exitCalls=new List<string>();
+        using var exitForm=new MainForm((command,_,_)=>{exitCalls.Add(command);return Task.FromResult((JsonObject)quitState.DeepClone());});
+        if(!exitForm.QuitClient().GetAwaiter().GetResult() || !exitForm.IsDisposed || !exitCalls.SequenceEqual(new[]{"Quit"}))return 1;
+        using var refusedExit=new MainForm((_,_,_)=>Task.FromResult(new JsonObject{["ok"]=false,["intent"]=true,["core_pid"]=123U,["mode"]="protected"}));
+        if(refusedExit.QuitClient().GetAwaiter().GetResult() || refusedExit.IsDisposed)return 1;
+        Console.WriteLine("EXPLICIT_UI_QUIT_REQUESTS_FIXED_SERVICE_OPERATION_AND_REFUSES_UNVERIFIED_DISCONNECT=PASS");
         return 0;
     }
     private static async Task<int> RoguePipe()

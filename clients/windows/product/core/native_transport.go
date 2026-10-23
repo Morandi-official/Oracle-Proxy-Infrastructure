@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -28,6 +29,29 @@ type nativeConn struct {
 	attempt  int
 	lastInit []byte
 	once     sync.Once
+	eventMu  sync.Mutex
+	events   map[string]int
+}
+
+// Fixed, bounded diagnostic events only: no addresses, packet bytes or keys.
+func (c *nativeConn) event(index int, event string) {
+	c.eventMu.Lock()
+	defer c.eventMu.Unlock()
+	if c.events == nil {
+		c.events = make(map[string]int)
+	}
+	key := fmt.Sprintf("NATIVE_UDP_%d_%s", c.ports[index], event)
+	if c.events[key] < 32 {
+		c.events[key]++
+		fmt.Fprintln(os.Stderr, key)
+	}
+}
+func nativeError(err error) uint32 {
+	var code syscall.Errno
+	if errors.As(err, &code) {
+		return uint32(code)
+	}
+	return 0
 }
 
 func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
@@ -37,8 +61,29 @@ func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
 			for {
 				b := make([]byte, 4096)
 				n, e := s.Read(b)
+				if e != nil {
+					select {
+					case <-c.done:
+						return
+					default:
+					}
+					c.mu.Lock()
+					retired := c.winner >= 0 && c.winner != i
+					c.mu.Unlock()
+					if retired {
+						return
+					}
+					c.event(i, fmt.Sprintf("READ_ERROR_%d", nativeError(e)))
+				}
 				if e == nil && !validPacket(b[:n]) {
+					c.event(i, "RECV_INVALID")
 					continue
+				}
+				if e == nil && b[0] == 2 {
+					c.event(i, "RECV_REPLY")
+				}
+				if e == nil && b[0] == 3 {
+					c.event(i, "RECV_COOKIE")
 				}
 				select {
 				case c.incoming <- nativeRead{b[:n], i, e}:
@@ -82,6 +127,7 @@ func (c *nativeConn) Read(b []byte) (int, error) {
 			// generated a fresh one on the other port. It must not pin the
 			// socket to an obsolete handshake and discard the current reply.
 			if winner < 0 && (c.attempt < 0 || p.index != c.attempt%len(c.sockets)) {
+				c.event(p.index, "RECV_OBSOLETE")
 				c.mu.Unlock()
 				continue
 			}
@@ -136,14 +182,24 @@ func (c *nativeConn) Write(b []byte) (int, error) {
 	if i < 0 {
 		i = 0
 	}
-	n, err := c.sockets[i%len(c.sockets)].Write(b)
+	write := func(index int) (int, error) {
+		n, err := c.sockets[index].Write(b)
+		if err != nil {
+			c.event(index, fmt.Sprintf("WRITE_ERROR_%d", nativeError(err)))
+		}
+		if n == len(b) && b[0] == 1 {
+			c.event(index, "SEND_INIT")
+		}
+		return n, err
+	}
+	n, err := write(i % len(c.sockets))
 	if err != nil && n == 0 && b[0] == 1 && len(c.sockets) > 1 {
 		// A synchronous failure sent none of THIS initiation. Try the
 		// other socket now: returning the first error would make ClientBind
 		// close both sockets and restart forever on the same blocked port.
 		c.attempt = i + 1
 		fmt.Fprintf(os.Stderr, "CARRIER_NATIVE_TRY_%d\n", c.ports[c.attempt%len(c.sockets)])
-		return c.sockets[c.attempt%len(c.sockets)].Write(b)
+		return write(c.attempt % len(c.sockets))
 	}
 	return n, err
 }

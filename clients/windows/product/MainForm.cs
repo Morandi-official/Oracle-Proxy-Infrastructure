@@ -110,7 +110,7 @@ internal sealed class MainForm : Form
             if(command=="Login")_password.Clear();
             Display(state);
         }catch{
-            _mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";
+            _mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_protocol.Text=_exitIp.Text=_latency.Text=_uu.Text="—";UpdateRates(new JsonObject(),false);_progress.Enabled=false;_usageUpdated.Text="用量更新暂不可用，显示上次读取值。";_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";
             try{string path=Path.Combine(Platform.Root,"diagnostics.json");if(new FileInfo(path).Length<=4096){var d=JsonNode.Parse(File.ReadAllText(path));_detail.Text+=$" 诊断：{d?["stage"]} / {d?["code"]}。";}}catch{}
         }
         finally{_requests.Release();if(!passive){_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=true;_transportChoice.Enabled=!_connectionIntent;}}

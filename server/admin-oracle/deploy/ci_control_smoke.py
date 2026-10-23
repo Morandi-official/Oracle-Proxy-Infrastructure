@@ -113,17 +113,19 @@ def main():
  operations_path=ROOT.parents[1]/'ops/oracle-project/project_operations.py'
  spec=importlib.util.spec_from_file_location('operations',operations_path);operations=importlib.util.module_from_spec(spec);spec.loader.exec_module(operations)
  operations.install_control()
+ # A rejected UID may be closed before sendall as well as during recv.
+ # Retain any response bytes: the denied-user assertion must still reject them.
  socket_test='''import json,socket,struct
 s=socket.socket(socket.AF_UNIX);s.connect('/run/oracle-proxy-control/control.sock')
 assert struct.unpack('3i',s.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))[1]==0
-s.sendall(b'{"operation":"state","actor":"github:204281968","data":{}}\\n')
 body=b''
 try:
+ s.sendall(b'{"operation":"state","actor":"github:204281968","data":{}}\\n')
  while b'\\n' not in body:
   chunk=s.recv(65536)
   if not chunk:break
   body+=chunk
-except ConnectionResetError:pass
+except (BrokenPipeError,ConnectionResetError):pass
 '''
  run(['runuser','-u','oracle-proxy-admin','--',sys.executable,'-c',socket_test+"\nassert json.loads(body)['ok']\n"])
  run(['runuser','-u','nobody','-g','oracle-proxy-admin','--',sys.executable,'-c',socket_test+"\nassert not body\n"])

@@ -41,6 +41,24 @@ func ClosePreparedOracleAdapter() {
 	}
 }
 
+// Create only this process's private, sessionless adapter before READY. No
+// addresses, routes, DNS or packet session may be retained in standby. Do not
+// adopt a preexisting adapter: the authenticated parent verifies removal first.
+func PrepareOracleAdapter() error {
+	oracleAdapterMutex.Lock()
+	prepared := oraclePreparedAdapter != nil
+	oracleAdapterMutex.Unlock()
+	if prepared { return nil }
+	adapter, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
+	if err != nil { return err }
+	owned := &NativeTun{adapter: adapter, options: Options{Name: "OracleProxy"}}
+	if err = owned.prepareOracleAdapter(); err != nil {
+		adapter.Close()
+		return err
+	}
+	return nil
+}
+
 func (t *NativeTun) prepareOracleAdapter() error {
 	luid := winipcfg.LUID(t.adapter.LUID())
 	// Scope is closed while the parent's persistent fail-close guard is still

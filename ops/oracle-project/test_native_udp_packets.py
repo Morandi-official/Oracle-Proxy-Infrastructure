@@ -23,7 +23,8 @@ class PacketCounts(unittest.TestCase):
         self.assertEqual(module.classify(packet(), False), ('51820', 'in_initiation'))
         self.assertEqual(module.classify(packet(destination=443), False), ('443', 'in_initiation'))
         self.assertEqual(module.classify(packet(source=443, destination=35000, kind=2, length=100), True), ('443', 'out_response'))
-        self.assertEqual(module.classify(packet(destination=8443), False), ('8443', 'in_other'))
+        self.assertEqual(module.classify(packet(destination=8443), False), ('8443', 'in_initiation'))
+        self.assertEqual(module.classify(packet(destination=8443,kind=0xc3), False), ('8443', 'in_other'))
 
     def test_rejects_truncation_fragments_unknown_ports_and_wrong_protocol(self):
         for length in range(32): self.assertIsNone(module.classify(packet()[:length], False))

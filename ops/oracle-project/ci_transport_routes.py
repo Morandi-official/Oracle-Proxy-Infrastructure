@@ -20,9 +20,9 @@ def main():
             run('ip','-n',name,'address','add',address,'dev',interface)
             run('ip','-n',name,'link','set',interface,'up');run('ip','-n',name,'link','set','lo','up')
         run('ip','-n',names[0],'route','add','152.67.156.100/32','via','192.0.2.2')
-        for rule in (rules.UDP443_RULE,rules.ADMIN_TUN_RULE):run('ip','netns','exec',names[1],'iptables','-t','nat','-A','PREROUTING',*rule)
+        for rule in (rules.UDP443_RULE,rules.UDP8443_RULE,rules.ADMIN_TUN_RULE):run('ip','netns','exec',names[1],'iptables','-t','nat','-A','PREROUTING',*rule)
         server="""import socket,threading
-for port in (443,51820):
+for port in (443,8443,51820):
  s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind(('0.0.0.0',port))
  def echo(s=s,port=port):
   while True:
@@ -35,12 +35,13 @@ while True:
         proc=subprocess.Popen(['ip','netns','exec',names[1],'python3','-u','-c',server],stdout=subprocess.PIPE,text=True)
         assert proc.stdout.readline().strip()=='READY'
         client="""import socket
-for packet,expected in [(b'\\x01\\0\\0\\0'+bytes(144),b'51820'),(b'\\xc3HTTP3',b'443')]:
- s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(3);s.connect(('192.0.2.2',443));s.send(packet);assert s.recv(100)==expected;s.close()
+for port in (443,8443):
+ for packet,expected in [(b'\\x01\\0\\0\\0'+bytes(144),b'51820'),(b'\\xc3HTTP3',str(port).encode())]:
+  s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(3);s.connect(('192.0.2.2',port));s.send(packet);assert s.recv(100)==expected;s.close()
 s=socket.create_connection(('152.67.156.100',443),3);assert s.recv(100)==b'admin-tunnel';s.close()
 """
         run('ip','netns','exec',names[0],'python3','-c',client)
-        print('REAL_UDP443_NATIVE_DEMUX_PRESERVES_QUIC_AND_ADMIN_TUNNEL_HAIRPIN=PASS')
+        print('REAL_UDP443_8443_NATIVE_DEMUX_PRESERVES_QUIC_AND_ADMIN_TUNNEL_HAIRPIN=PASS')
     finally:
         if proc is not None:proc.terminate();proc.wait(timeout=5)
         for name in reversed(names):subprocess.run(['ip','netns','delete',name],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

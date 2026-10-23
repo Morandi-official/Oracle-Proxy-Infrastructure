@@ -70,7 +70,7 @@ internal sealed class MainForm : Form
         credentials.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));credentials.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
         credentials.Controls.Add(new Label{Text="登录账号",AutoSize=true,Margin=new Padding(0,0,12,6)},0,0);credentials.Controls.Add(new Label{Text="密码",AutoSize=true,Margin=new Padding(0,0,0,6)},1,0);
         _username.Dock=_password.Dock=DockStyle.Fill;_username.Margin=new Padding(0,0,12,0);_password.Margin=new Padding(0);credentials.Controls.Add(_username,0,1);credentials.Controls.Add(_password,1,1);Row(account,credentials);
-        var accountActions=Actions();_login.MinimumSize=_logout.MinimumSize=new Size(100,36);_login.Margin=new Padding(0,0,10,0);accountActions.Controls.AddRange([_login,_logout]);Row(account,accountActions);
+        var accountActions=Actions();_login.MinimumSize=_logout.MinimumSize=new Size(100,36);_login.Margin=new Padding(0,0,10,0);_logout.Margin=new Padding(0);accountActions.Controls.AddRange([_login,_logout]);Row(account,accountActions);
         _logout.Click+=async(_,_)=>await Act("Logout");var accountCard=Card("accountSection","02   账号与用量",account);Row(body,accountCard);
         var tools=Stack("toolsContent");
         var diagnostics=Actions();

@@ -4,6 +4,7 @@ if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted
 $parseErrors=$null;$parseTokens=$null
 $null=[Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1'),[ref]$parseTokens,[ref]$parseErrors)
 if($parseErrors.Count){throw 'PUBLIC_COLLECTOR_POWERSHELL_PARSE_FAILED'}
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1') -DefinitionsOnly
 function Run-Pktmon([string[]]$Arguments){
   $text=(& "$env:WINDIR\System32\pktmon.exe" @Arguments 2>&1 | Out-String)
   if($LASTEXITCODE -ne 0){throw ('PKTMON_COMMAND_FAILED: '+($Arguments -join ' ')+': '+$text)}
@@ -38,14 +39,14 @@ try{
   if(@($flows | Where-Object {$_.Inbound.Packets -gt 0 -and $_.Outbound.Packets -gt 0}).Count -lt 1){throw 'REAL_TX_RX_COUNTERS_NOT_POSITIVE'}
   Write-Host 'COUNTERS_ONLY_JSON_BEGIN';Write-Host $counters;Write-Host 'COUNTERS_ONLY_JSON_END'
   Run-Pktmon @('stop') | Out-Null;$started=$false
-  Run-Pktmon @('filter','remove',$own) | Out-Null;$added=@($other)
+  $before=Run-Pktmon @('filter','list');$refused=$false
+  try{Clear-OPOwnedFilters @($own)}catch{if($_.Exception.Message -ne 'FILTERS_CHANGED_REFUSE_CLEAR'){throw};$refused=$true}
   $remaining=Run-Pktmon @('filter','list')
-  Write-Host $remaining
-  if($remaining -notmatch [regex]::Escape($other) -or $remaining -match [regex]::Escape($own)){throw 'NAMED_REMOVAL_DID_NOT_PRESERVE_OTHER_FILTER'}
-  Write-Host 'NAMED_FILTER_REMOVAL_PRESERVES_INDEPENDENT_FILTER=PASS'
+  if(-not $refused -or $before -ne $remaining){throw 'FOREIGN_FILTER_WAS_NOT_PRESERVED'}
+  Write-Host 'FOREIGN_FILTER_CAUSES_REFUSAL_WITHOUT_CHANGES=PASS'
 }finally{
   if($started){Run-Pktmon @('stop') | Out-Null}
-  foreach($name in $added){Run-Pktmon @('filter','remove',$name) | Out-Null}
+  Clear-OPOwnedFilters $added
 }
 Write-Host (Run-Pktmon @('status'));Write-Host (Run-Pktmon @('filter','list'))
 if(Get-ChildItem -Path . -Filter '*.etl' -ErrorAction SilentlyContinue){throw 'COUNTERS_ONLY_UNEXPECTED_ETL_FILE'}

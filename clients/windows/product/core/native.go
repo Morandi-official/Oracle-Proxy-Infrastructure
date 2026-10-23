@@ -29,7 +29,7 @@ func newNativeOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogge
 	if len(o.Ports) < 1 || len(o.Ports) > 2 || o.Ports[0] == 0 {
 		return nil, errors.New("NATIVE_PORTS_REJECTED")
 	}
-	if len(o.Ports) == 2 && (o.Ports[0] != 51820 || o.Ports[1] != 443) {
+	if len(o.Ports) == 2 && !((o.Ports[0] == 51820 && o.Ports[1] == 443) || (o.Ports[0] == 443 && o.Ports[1] == 51820)) {
 		return nil, errors.New("NATIVE_PORTS_REJECTED")
 	}
 	physical, e := physicalDialer(ctx)
@@ -39,7 +39,7 @@ func newNativeOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogge
 	return &nativeOutbound{outbound.NewAdapter(nativeType, tag, []string{N.NetworkUDP}, nil), physical, o.Ports}, nil
 }
 func (r *nativeOutbound) DialContext(ctx context.Context, network string, dest M.Socksaddr) (net.Conn, error) {
-	if N.NetworkName(network) != N.NetworkUDP || dest.Port != r.ports[0] {
+	if N.NetworkName(network) != N.NetworkUDP || (dest.Port != 51820 && dest.Port != r.ports[0]) {
 		return nil, errors.New("NATIVE_DESTINATION_REJECTED")
 	}
 	var sockets []net.Conn

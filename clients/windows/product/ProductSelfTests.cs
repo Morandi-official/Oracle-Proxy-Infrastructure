@@ -14,6 +14,13 @@ internal static class ProductSelfTests
         var config=CoreConfig.Build(state,secret,"synthetic-only");
         if(config["route"]?["final"]?.GetValue<string>()!="oracle-wireguard" || !System.Text.RegularExpressions.Regex.IsMatch(secret.UuPaths[0].ToLowerInvariant(),config["route"]!["rules"]![0]!["process_path_regex"]![0]!.GetValue<string>()))return false;
         if(config["endpoints"]?[0]?["peers"]?[0]?["port"]?.GetValue<int>()!=51820)return false;
+        state["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443);
+        secret.CarrierHint="wireguard-udp";secret.NativeUdpPortHint=443;secret.CarrierHintUntil=DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeSeconds();secret.CarrierNetworkHash=CarrierMemory.NetworkHash();
+        if(CoreConfig.Build(state,secret,"synthetic-only")["outbounds"]?[1]?["ports"]?[0]?.GetValue<int>()!=443)return false;
+        secret.CarrierNetworkHash="different-network";
+        if(CoreConfig.Build(state,secret,"synthetic-only")["outbounds"]?[1]?["ports"]?[0]?.GetValue<int>()!=51820)return false;
+        secret.CarrierNetworkHash=CarrierMemory.NetworkHash();secret.CarrierHintUntil=0;
+        if(CoreConfig.Build(state,secret,"synthetic-only")["outbounds"]?[1]?["ports"]?[0]?.GetValue<int>()!=51820)return false;
         try{CoreConfig.Build(state,secret,"synthetic-only",true);return false;}catch(IOException){}
         state["tunnel"]!["https_relay"]=true;secret.Token=new string('A',43);
         var relay=CoreConfig.Build(state,secret,"synthetic-only",true);

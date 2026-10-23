@@ -1,0 +1,99 @@
+name: R84 OS-owned scheduled safe-stop of NON-NETWORK mock SCM field service
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/lab/r84-no-network-mock/**'
+      - 'clients/windows/lab/Register-R84MockSafeStop.ps1'
+      - 'clients/windows/lab/Invoke-R84SystemMockSafeStop.ps1'
+      - 'clients/windows/lab/Observe-R84MockSafeStop.ps1'
+      - 'clients/windows/lab/Cleanup-R84MockSafeStop.ps1'
+      - '.github/workflows/r84-mock-scm-system-safestop.yml'
+      - 'docs/r84-system-safestop-nonnetwork-scm-mock.md'
+
+permissions:
+  contents: read
+
+jobs:
+  os-system-safestop-no-vpn:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r84-system-safestop-mock-field-20261017'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      ORACLE_R81: CI_ONLY
+      ORACLE_R84: CI_ONLY
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Preserve OS default routes DNS firewall baseline, refuse preexisting field
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (Test-Path (Join-Path $env:ProgramData 'OracleProxyLab')) {
+            throw 'R84 must not touch existing user files'
+          }
+          if (Get-Service -Name 'WireGuardTunnel$lab-field' -ErrorAction SilentlyContinue) {
+            throw 'R84 must not touch existing native service'
+          }
+          $routes=@(Get-NetRoute -ErrorAction Stop | Where-Object DestinationPrefix -in @('0.0.0.0/0','::/0') |
+            Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric | Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric)
+          $dns=@(Get-DnsClientServerAddress -ErrorAction Stop |
+            Select-Object InterfaceIndex,AddressFamily,ServerAddresses | Sort-Object InterfaceIndex,AddressFamily)
+          $before=([ordered]@{routes=$routes;dns=$dns;firewall_count=@(Get-NetFirewallRule -ErrorAction Stop).Count}|ConvertTo-Json -Compress -Depth 7)
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'r84-os-baseline.json'),$before)
+          Write-Host 'R84_NO_EXISTING_NATIVE_OR_NETWORK_MUTATION_BASELINE_PASS'
+      - name: Build self-contained SCM service with no network calls or native driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/lab/r84-no-network-mock/OracleProxy.R84.NoNetworkMock.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/r84-mock
+          if ($LASTEXITCODE -ne 0) { throw 'R84 zero-network service compile failed' }
+          & ./dist/r84-mock/OracleProxy.R84.NoNetworkMock.exe --ci-r84-no-network-service
+          if ($LASTEXITCODE -ne 3) { throw 'R84 mock unexpectedly started outside SYSTEM' }
+          Write-Host 'R84_NO_NETWORK_SERVICE_BUILD_OS_TOKEN_REFUSED_PASS'
+          exit 0
+      - name: Stage only existing R81 protected synthetic offline field lease
+        shell: pwsh
+        run: ./clients/windows/lab/Test-R81FieldLeaseStaging.ps1
+      - name: Schedule SYSTEM safe stop BEFORE starting owned mock service; exit
+        shell: pwsh
+        run: ./clients/windows/lab/Register-R84MockSafeStop.ps1
+      - name: Separate later job step observes OS automatically stop RUNNING mock
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./clients/windows/lab/Observe-R84MockSafeStop.ps1
+      - name: ALWAYS remove exact task, mock service and mock executable
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/Cleanup-R84MockSafeStop.ps1
+      - name: ALWAYS remove exact protected synthetic field lease
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/Invoke-R81CleanupOwnedLease.ps1
+      - name: ALWAYS compare OS routes DNS firewall and reject residual field service
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $path=Join-Path $env:RUNNER_TEMP 'r84-os-baseline.json'
+          if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw 'R84 baseline missing' }
+          $routes=@(Get-NetRoute -ErrorAction Stop | Where-Object DestinationPrefix -in @('0.0.0.0/0','::/0') |
+            Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric | Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric)
+          $dns=@(Get-DnsClientServerAddress -ErrorAction Stop |
+            Select-Object InterfaceIndex,AddressFamily,ServerAddresses | Sort-Object InterfaceIndex,AddressFamily)
+          $after=([ordered]@{routes=$routes;dns=$dns;firewall_count=@(Get-NetFirewallRule -ErrorAction Stop).Count}|ConvertTo-Json -Compress -Depth 7)
+          if ($after -cne [IO.File]::ReadAllText($path)) {
+            throw 'R84 changed Windows default route DNS or firewall baseline'
+          }
+          if (Test-Path (Join-Path $env:ProgramData 'OracleProxyLab')) { throw 'R84 owned root residual' }
+          if (Get-Service -Name 'WireGuardTunnel$lab-field' -ErrorAction SilentlyContinue) {
+            throw 'R84 mock native-name service residual'
+          }
+          if (Get-ScheduledTask -TaskName 'OracleProxy-R84-CI-MockSafeStop' -ErrorAction SilentlyContinue) {
+            throw 'R84 task residual'
+          }
+          Write-Host 'R84_NO_NETWORK_ROUTE_DNS_FIREWALL_SERVICE_OR_TASK_RESIDUAL_PASS'

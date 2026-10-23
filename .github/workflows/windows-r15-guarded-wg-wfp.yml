@@ -1,0 +1,93 @@
+name: R15 real WireGuard SCM tunnel with scoped WFP guard and rollback
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-r15-guarded-wg-wfp.yml'
+      - 'lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1'
+      - 'clients/windows/service-host/**'
+      - 'clients/windows/manager/**'
+      - 'clients/windows/app/**'
+      - 'clients/windows/lab/build-scm-components.ps1'
+      - 'clients/windows/lab/stage-scm-lab.ps1'
+      - 'clients/windows/lab/generate_service_pair.py'
+      - 'clients/windows/lab/run-admin-controlled-scm.ps1'
+      - 'clients/windows/lab/cleanup-scm-lab.ps1'
+      - 'clients/windows/lab/wgnt-service-observe.c'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r15-wfp-guarded-wg-scm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scm-controlled-by-gui:
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'test/r15-wfp-wireguard-scm-transaction')
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: WireGuard/wireguard-windows
+          ref: 6ece77bc487c8aa697e3c092197621c4f3e5ccb8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preflight disposable VM and preserve IPv4/IPv6 default routes
+        shell: pwsh
+        run: ./clients/windows/lab/preflight.ps1
+      - name: Verify signed official WireGuardNT and pinned source toolchain
+        shell: pwsh
+        run: ./clients/windows/lab/prepare-toolchain.ps1
+      - name: Compile genuine upstream tunnel.dll plus independent service host
+        shell: pwsh
+        run: ./clients/windows/lab/build-scm-components.ps1
+      - name: Generate two ephemeral test X25519 keypairs
+        shell: pwsh
+        run: ./clients/windows/lab/generate-keys.ps1
+      - name: Stage narrow-route lab configurations and NTFS protected DLLs
+        shell: pwsh
+        run: ./clients/windows/lab/stage-scm-lab.ps1
+      - name: 'Negative: guard cannot run outside an authorized disposable environment'
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'forbidden'
+          $rejected = $false
+          try { ./lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1 } catch { $rejected = $true }
+          if (-not $rejected) { throw 'R15 CI guard was bypassed' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R15-CI-*').Count -ne 0) {
+            throw 'R15 refusal left WFP policies'
+          }
+      - name: GUI->SYSTEM real WireGuard SCM peers with WFP-backed TCP deny/restore
+        shell: pwsh
+        timeout-minutes: 8
+        run: ./lab/wfp-scoped/Test-R15-GuardedScmTunnel.ps1
+      - name: ALWAYS ensure no R15 WFP guard survives test execution
+        if: always()
+        shell: pwsh
+        run: |
+          $left = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R15-CI-*')
+          if ($left.Count -ne 0) { throw 'R15 WFP filter was not removed; discard hosted runner' }
+          Write-Host 'R15_FINAL_WFP_CLEAN: no test guard remains'
+      - name: ALWAYS remove only disposable SCM services, native DLLs and secrets
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup-scm-lab.ps1
+      - name: ALWAYS verify IPv4/IPv6 default routes were not changed
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup.ps1

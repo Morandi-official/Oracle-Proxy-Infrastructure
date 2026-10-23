@@ -1,0 +1,73 @@
+name: Windows official WireGuard host compile checks
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/service-host/**'
+      - '.github/workflows/windows-wireguard-host.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wg-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  safe-host-build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile standalone service host (NO driver binary)
+        shell: pwsh
+        run: |
+          dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/wg-host
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+          if (Test-Path ./dist/wg-host/tunnel.dll) { throw 'Tunnel library was inadvertently bundled' }
+          if (Test-Path ./dist/wg-host/wireguard.dll) { throw 'Native driver library inadvertently bundled' }
+      - name: Run offline integrity and fail-closed tests
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/wg-host/OracleProxy.WireGuardHost.exe').Path
+          & $exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle and control gate tests failed' }
+          Write-Host 'PASS: offline hash, config and manifest checks'
+      - name: Verify ordinary user cannot activate service
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/wg-host/OracleProxy.WireGuardHost.exe').Path
+          & $exe --wireguard-service
+          if ($LASTEXITCODE -ne 3) { throw "Unsafe service mode returned $LASTEXITCODE" }
+          Write-Host 'PASS: non-SYSTEM process cannot activate WireGuard export'
+          # The expected nonzero exit is a successful *negative* assertion.
+          $global:LASTEXITCODE = 0
+      - name: Query actual Windows SCM service state read-only
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/wg-host/OracleProxy.WireGuardHost.exe').Path
+          $response = & $exe --service-status
+          if ($LASTEXITCODE -ne 0) { throw 'SCM status command failed' }
+          $status = $response | ConvertFrom-Json
+          if ($status.service_name -ne 'WireGuardTunnel$OracleProxyLab' -or
+              $status.query_mode -ne 'read_only_scm' -or
+              $status.tunnel_handshake_verified -ne $false -or
+              $status.actual_fail_closed_verified -ne $false -or
+              $status.service_status -notin @('absent', 'stopped', 'running',
+              'start_pending', 'stop_pending', 'continue_pending', 'pause_pending',
+              'paused', 'unknown', 'unavailable')) {
+            throw 'Unexpected or unsafe SCM query output'
+          }
+          Write-Host "PASS: actual Windows SCM status queried, state=$($status.service_status)"
+      - name: Upload lab-only host binary for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-proxy-windows-wireguard-host-lab-only
+          path: ./dist/wg-host/**
+          if-no-files-found: error
+          retention-days: 7

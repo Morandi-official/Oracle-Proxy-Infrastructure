@@ -1,0 +1,256 @@
+name: R114 one-extraction Artifact packaging, offline WireGuard keys Windows Alpha
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/wg-alpha/**'
+      - 'docs/r114-integrated-local-wireguard-keys-alpha.md'
+      - 'docs/r114-bouncycastle-license.md'
+      - '.github/workflows/r114-offline-keygen-alpha.yml'
+      - '.github/workflows/r112-embedded-wireguard-alpha.yml'
+permissions:
+  contents: read
+
+concurrency:
+  group: r114-offline-keygen-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  native-bundled-alpha:
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r114-single-layer-artifact-20261019'
+    runs-on: windows-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: WireGuard/wireguard-windows
+          ref: 6ece77bc487c8aa697e3c092197621c4f3e5ccb8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Static negative checks, official EXE not required or linked
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $main=Get-Content './clients/windows/wg-alpha/Program.cs' -Raw
+          $project=Get-Content './clients/windows/wg-alpha/OracleProxy.WgAlpha.csproj' -Raw
+          $bridge=Get-Content './clients/windows/wg-alpha/EmbeddedWireGuardBridge.cs' -Raw
+          if ($main -notlike '*EmbeddedWireGuardBridge.RunWindowsService()*' -or
+              $main -match 'OfficialWireGuardBridge\.' -or
+              $project -notlike '*Compile Remove="OfficialWireGuardBridge.cs"*' -or
+              $bridge -notlike '*WireGuardTunnelService*' -or
+              $bridge -notlike '*R112_BUILDER_MUST_EMBED_TUNNEL_SHA256*' -or
+              $bridge -notlike '*IsTrustedLocalSignature*') {
+            throw 'R112 external WireGuard app not removed or embedded native trust gate missing'
+          }
+          if (Get-Service -Name 'WireGuardTunnel$OracleProxyAlphaTest' -ErrorAction SilentlyContinue) {
+            throw 'R112 preexisting foreign tunnel on CI; refuse'
+          }
+          Write-Host 'R112_NO_EXTERNAL_WIREGUARD_EXE_NO_UNSAFE_GA_BYPASS'
+      - name: Download pinned official signed WireGuardNT binary and compiler
+        shell: pwsh
+        run: ./clients/windows/lab/prepare-toolchain.ps1
+      - name: Compile official MIT source embeddable service library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force -Path './dist/r114/native' | Out-Null
+          $env:GOOS='windows'
+          $env:GOARCH='amd64'
+          $env:CGO_ENABLED='1'
+          $env:CC=$env:WG_LAB_GCC
+          $env:CGO_CFLAGS='-O3 -Wall -Wno-unused-function -Wno-switch -std=gnu11 -DWINVER=0x0A00'
+          go -C ./upstream build -overlay .overlay/overlay.json -buildmode c-shared -ldflags="-w -s" -trimpath -o ../dist/r114/native/tunnel.dll ./embeddable-dll-service
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path './dist/r114/native/tunnel.dll')) {
+            throw 'R112 upstream tunnel.dll build failed'
+          }
+          $native=(Get-Item './dist/r114/native/tunnel.dll')
+          if ($native.Length -lt 100000 -or $native.Length -gt 20000000) { throw 'R112 tunnel.dll unexpected size' }
+          Copy-Item -LiteralPath $env:WG_LAB_DLL -Destination './dist/r114/native/wireguard.dll'
+          if ((Get-FileHash './dist/r114/native/wireguard.dll' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b1b85e072c45d81358be29d94c599dc76652f912be8c0f0a41e2d5d89a6461d3') {
+            throw 'R112 signed upstream driver hash changed'
+          }
+          if ((Get-AuthenticodeSignature './dist/r114/native/wireguard.dll').Status -ne 'Valid') {
+            throw 'R112 upstream signed driver is untrusted'
+          }
+          Write-Host 'R112_PROJECT_BUILT_UPSTREAM_TUNNEL_AND_SIGNED_DRIVER_VERIFIED'
+      - name: Embed actual upstream tunnel DLL hash into native-service executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash './dist/r114/native/tunnel.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $file='./clients/windows/wg-alpha/EmbeddedWireGuardBridge.cs'
+          $raw=Get-Content -LiteralPath $file -Raw
+          $literal='R112_BUILDER_MUST_EMBED_TUNNEL_SHA256'
+          if ($raw.Split(@($literal),[StringSplitOptions]::None).Count -ne 2) {
+            throw 'R112 compile-time native DLL pin placeholder not unique'
+          }
+          $raw=$raw.Replace($literal,$sha)
+          [IO.File]::WriteAllText((Resolve-Path $file).Path,$raw,[Text.UTF8Encoding]::new($false))
+          if ($raw -notlike "*PinnedTunnelSha256 = `"$sha`"*") { throw 'R112 immutable pin injection failed' }
+          Write-Host 'R112_DLL_PIN_COMPILED_INTO_GUI_SERVICE_BINARY_NOT_MUTABLE_MANIFEST'
+      - name: Build single product GUI and embedded SCM service executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/wg-alpha/OracleProxy.WgAlpha.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o ./dist/r114/exe
+          if ($LASTEXITCODE -ne 0) { throw 'R112 native embedded GUI+service build failed' }
+          $items=@(Get-ChildItem './dist/r114/exe' -File)
+          if($items.Count -ne 1 -or $items[0].Name -ne 'OracleProxy.WgAlpha.exe') {
+            throw 'R112 self-contained executable allowlist failed'
+          }
+          if((Get-AuthenticodeSignature $items[0].FullName).Status -ne 'NotSigned') {
+            throw 'R112 dev preview must not be mistaken for signed published vendor release'
+          }
+          Write-Host 'R112_ONE_CUSTOM_GUI_PLUS_SCM_SERVICE_NO_OFFICIAL_APP'
+      - name: Verify actual Windows executable refuses unapproved CLI and non-System native service invocation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe=(Resolve-Path './dist/r114/exe/OracleProxy.WgAlpha.exe').Path
+          foreach($case in @(@('--offline-self-test',0),@('--service',3),@('--unexpected-tunnel-start',2))) {
+            $p=Start-Process -FilePath $exe -ArgumentList $case[0] -Wait -PassThru
+            if($p.ExitCode -ne [int]$case[1]) {
+              throw "R112 negative native binary test refused: $($case[0]) exit=$($p.ExitCode)"
+            }
+          }
+          if(Get-Service -Name 'WireGuardTunnel$OracleProxyAlphaTest' -ErrorAction SilentlyContinue){
+            throw 'R112 offline self-test touched SCM'
+          }
+          Write-Host 'R112_LOCAL_WINDOWS_SERVICE_SYSTEM_IDENTITY_REFUSAL_PASS'
+          Write-Host 'R112_REAL_INTERNET_PEER_LEAK_FAILCLOSE_RECOVERY_UU_NOT_TESTED'
+      - name: Assert public GUI has no hidden key-creation CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe=(Resolve-Path './dist/r114/exe/OracleProxy.WgAlpha.exe').Path
+          $p=Start-Process -FilePath $exe -ArgumentList '--ci-r114-key-file-self-test' -PassThru -Wait
+          if ($p.ExitCode -ne 2) { throw 'R114 distribution unexpectedly contains CI-only file-writing keygen CLI' }
+          Write-Host 'R114_PUBLIC_GUI_TEST_COMMAND_NOT_DISTRIBUTED'
+      - name: Test local key files, exact Windows ACL and no SCM network changes on disposable runner
+        shell: pwsh
+        env:
+          ORACLE_R114_EXPLICIT_CI: CI_ONLY
+        run: |
+          $ErrorActionPreference='Stop'
+          $beforeRoutes=@(Get-NetRoute -ErrorAction Stop |
+            Where-Object { $_.DestinationPrefix -in @('0.0.0.0/0','::/0') } |
+            Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            ConvertTo-Json -Compress -Depth 5) -join ''
+          $beforeDns=@(Get-DnsClientServerAddress -ErrorAction Stop |
+            Select-Object InterfaceIndex,AddressFamily,ServerAddresses |
+            Sort-Object InterfaceIndex,AddressFamily |
+            ConvertTo-Json -Compress -Depth 6) -join ''
+          $beforeFirewall=@(Get-NetFirewallRule -ErrorAction Stop).Count
+          if(Get-Service -Name 'WireGuardTunnel$OracleProxyAlphaTest' -ErrorAction SilentlyContinue){
+            throw 'R114 native service unexpectedly already exists in CI'
+          }
+          dotnet publish ./clients/windows/wg-alpha/OracleProxy.WgAlpha.csproj -c Release -r win-x64 --self-contained true -p:EnableR114KeyCiTrial=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o ./dist/r114/ci-keygen-only
+          if($LASTEXITCODE -ne 0){throw 'R114 separate CI-only keyfile ACL harness build failed'}
+          $exe=(Resolve-Path './dist/r114/ci-keygen-only/OracleProxy.WgAlpha.exe').Path
+          $p=Start-Process -FilePath $exe -ArgumentList '--ci-r114-key-file-self-test' -PassThru -Wait
+          if($p.ExitCode -ne 0){throw "R114 local keyfile test failed: $($p.ExitCode)"}
+          if(@(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Directory |
+            Where-Object {$_.Name -like 'OracleProxyAlphaKeys-*'}).Count -ne 0){
+            throw 'R114 ephemeral test key folder not fully removed'
+          }
+          if(Get-Service -Name 'WireGuardTunnel$OracleProxyAlphaTest' -ErrorAction SilentlyContinue){
+            throw 'R114 key generation created native WireGuard service: fail'
+          }
+          $afterRoutes=@(Get-NetRoute -ErrorAction Stop |
+            Where-Object { $_.DestinationPrefix -in @('0.0.0.0/0','::/0') } |
+            Select-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            Sort-Object DestinationPrefix,InterfaceIndex,NextHop,RouteMetric |
+            ConvertTo-Json -Compress -Depth 5) -join ''
+          $afterDns=@(Get-DnsClientServerAddress -ErrorAction Stop |
+            Select-Object InterfaceIndex,AddressFamily,ServerAddresses |
+            Sort-Object InterfaceIndex,AddressFamily |
+            ConvertTo-Json -Compress -Depth 6) -join ''
+          if($beforeRoutes -ne $afterRoutes -or $beforeDns -ne $afterDns -or
+              $beforeFirewall -ne @(Get-NetFirewallRule -ErrorAction Stop).Count){
+            throw 'R114 offline local keys unexpectedly changed network baseline'
+          }
+          Write-Host 'R114_REAL_WINDOWS_CSPRNG_X25519_RFC7748_PRIVATE_FILE_ACL_PUBLIC_DERIVATION_PASS'
+          Write-Host 'R114_OFFLINE_NO_DRIVER_NO_SCMSERVICE_NO_ROUTE_DNS_FIREWALL_CHANGE_PASS'
+      - name: Create vetted README-first standalone native package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dist=(Resolve-Path './dist/r114').Path
+          $d=Join-Path $dist 'portable'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          Copy-Item -LiteralPath './dist/r114/exe/OracleProxy.WgAlpha.exe' -Destination $d
+          Copy-Item -LiteralPath './dist/r114/native/tunnel.dll' -Destination $d
+          Copy-Item -LiteralPath './dist/r114/native/wireguard.dll' -Destination $d
+          Copy-Item -LiteralPath './docs/r114-integrated-local-wireguard-keys-alpha.md' -Destination (Join-Path $d 'READ_ME_FIRST.md')
+          # The upstream v1.1 SDK extraction contains only the binary/API
+          # payload here; the prebuilt-binaries-license is maintained in
+          # WireGuard/wireguard-nt official mirror as a separate tracked file.
+          # Bundle its exact reviewed text from upstream blob 5f837755,
+          # rather than silently omitting vendor terms.
+          $licenseSource='./docs/r112-wireguardnt-prebuilt-binaries-license.txt'
+          $licenseText=Get-Content -LiteralPath $licenseSource -Raw
+          if($licenseText.Length -lt 5000 -or
+             !$licenseText.Contains('Permitted API') -or
+             !$licenseText.Contains('Prebuilt Binaries License')) {
+            throw 'R112 official WireGuardNT binary license text absent or altered'
+          }
+          Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $d 'WIREGUARDNT_BINARY_LICENSE.txt')
+          Copy-Item -LiteralPath './docs/r112-wireguard-embedding-mit-license.txt' -Destination (Join-Path $d 'EMBEDDABLE_TUNNEL_MIT_LICENSE.txt')
+          Copy-Item -LiteralPath './docs/r114-bouncycastle-license.md' -Destination (Join-Path $d 'BOUNCYCASTLE_MIT_LICENSE.md')
+          $notices=@(
+            'Oracle Proxy R112 unofficial experimental developer package; not endorsed by WireGuard LLC.',
+            'tunnel.dll: compiled by this CI from pinned WireGuard/wireguard-windows MIT-licensed embeddable-dll-service source.',
+            'BouncyCastle.Cryptography 2.7.0: MIT-licensed X25519 implementation, official NuGet package; LICENSE included.',
+            'wireguard.dll: officially signed WireGuardNT v1.1 AMD64 from the official WireGuardNT SDK ZIP.',
+            'WireGuard Windows: https://git.zx2c4.com/wireguard-windows/',
+            'WireGuardNT binary terms and original archive: https://download.wireguard.com/wireguard-nt/',
+            'Retain upstream notices and licenses; this artifact is NOT a signed production release.',
+            'This test package has never demonstrated a real public-server handshake, safe off, WFP fail-close or UU compatibility.'
+          )
+          $notices | Set-Content -LiteralPath (Join-Path $d 'UPSTREAM_NOTICES.md') -Encoding utf8
+          $names=@('OracleProxy.WgAlpha.exe','tunnel.dll','wireguard.dll','READ_ME_FIRST.md','UPSTREAM_NOTICES.md','WIREGUARDNT_BINARY_LICENSE.txt','EMBEDDABLE_TUNNEL_MIT_LICENSE.txt','BOUNCYCASTLE_MIT_LICENSE.md')
+          $items=@(Get-ChildItem -LiteralPath $d -File)
+          if($items.Count -ne $names.Count -or @($items|Where-Object { $_.Name -notin $names }).Count -ne 0){
+            throw 'R112 unexpected native artifact payload'
+          }
+          $sum=@('R112 SHA256 manifest, NOT a publisher signature')
+          foreach($name in $names){
+            $sha=(Get-FileHash -LiteralPath (Join-Path $d $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            $sum+=("$sha  $name")
+          }
+          $sum | Set-Content -LiteralPath (Join-Path $d 'SHA256SUMS.txt') -Encoding utf8
+          $zip=Join-Path $dist 'OracleProxy-R114-Standalone-WireGuard-OfflineKeys-UNSIGNED-Alpha.zip'
+          Compress-Archive -Path (Join-Path $d '*') -DestinationPath $zip -CompressionLevel Optimal
+          $check=Join-Path $env:RUNNER_TEMP 'r114-artifact-verify'
+          Expand-Archive -LiteralPath $zip -DestinationPath $check
+          $actual=@(Get-ChildItem -LiteralPath $check -File)
+          if($actual.Count -ne 9){throw 'R112 archive file allowlist changed'}
+          foreach($name in $names) {
+            if((Get-FileHash -LiteralPath (Join-Path $d $name) -Algorithm SHA256).Hash -ne
+               (Get-FileHash -LiteralPath (Join-Path $check $name) -Algorithm SHA256).Hash) {
+               throw 'R112 ZIP hash mismatch'
+            }
+          }
+          Write-Host 'R112_BUNDLED_WINDOWS_APP_WITH_OFFICIAL_PINNED_NATIVE_ENGINE_PACKAGE_PASS'
+          Write-Host 'R112_UNSIGNED_NOT_A_WIRESOCK_REPLACEMENT_AND_NO_REAL_TUNNEL_TEST'
+      # GitHub Actions wraps uploaded files in an Artifact ZIP automatically.
+      # Upload vetted payload FILES directly: only ONE unzip by the user.
+      # The inner ZIP above is created exclusively for CI checksum/roundtrip
+      # verification and is NOT uploaded.
+      - name: Upload direct portable files, exactly one extraction
+        uses: actions/upload-artifact@v4
+        with:
+          name: OracleProxy-R114-Offline-Keys-Single-Extraction-UNSIGNED
+          path: ./dist/r114/portable/*
+          retention-days: 7
+          if-no-files-found: error

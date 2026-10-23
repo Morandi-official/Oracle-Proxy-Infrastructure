@@ -1,0 +1,50 @@
+name: G13 disposable Linux multihop WireGuard IPv4 IPv6 DNS
+
+on:
+  pull_request:
+    paths:
+      - 'lab/netns-multihop/**'
+      - '.github/workflows/linux-g13-netns-wireguard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: g13-disposable-netns-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  genuine-isolated-multihop:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Static parse; network isolation is never attempted during unit lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n lab/netns-multihop/run-lab.sh
+          python3 -m py_compile lab/netns-multihop/dns_probe.py
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0,'lab/netns-multihop')
+          from dns_probe import query_packet, expected_response, A, AAAA
+          for typ, value in [(1,A),(28,AAAA)]:
+              p=query_packet(typ,0x1234)
+              r=expected_response(p)
+              assert r[0:2]==p[0:2] and r.endswith(value)
+          print('DNS fixture self-test PASS')
+          PY
+      - name: Install disposable-network test dependencies
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iproute2 iputils-ping wireguard-tools tcpdump
+      - name: Test true kernel encrypted multihop transport inside throwaway namespaces
+        shell: bash
+        timeout-minutes: 5
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS bash lab/netns-multihop/run-lab.sh --ci-disposable-netns-only

@@ -1,0 +1,38 @@
+name: R97 FREE standard-runner Windows evaluation QEMU boot attempt
+
+on:
+  pull_request:
+    paths:
+      - 'lab/cloud-windows-r97/**'
+      - 'docs/r97-free-guest-first-boot.md'
+      - '.github/workflows/r97-free-windows-guest.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r97-free-only-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  first-boot-and-rollback-isolated-no-fee:
+    if: github.event.repository.private == false && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r97-free-qemu-windows-evaluation-boot-20261018'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 34
+    steps:
+      - name: No-cost design policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'R97_PUBLIC_STANDARD_RUNNER_FREE_ONLY'
+          echo 'R97_PAID_LARGER_RUNNERS=false'
+          echo 'R97_NO_AZURE_OR_NEW_CLOUD_ACCOUNT=true'
+          echo 'R97_NO_WINDOWS_LICENSE_PURCHASE=true'
+          echo 'R97_NO_ARTIFACT_CACHE_PACKAGES_OR_CUSTOM_IMAGE_STORAGE=true'
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Official evaluation VHD isolated QEMU first boot and host rollback
+        shell: bash
+        timeout-minutes: 31
+        run: bash lab/cloud-windows-r97/run_disposable_guest.sh

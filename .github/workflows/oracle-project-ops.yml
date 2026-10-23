@@ -1,0 +1,113 @@
+name: Oracle authorized project operations
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Authorized project operation
+        required: true
+        default: preflight
+        type: choice
+        options: [preflight, install-runtime, configure, deploy, enable-https, status, logs, start, stop, restart, rollback]
+  push:
+    branches: [main]
+    paths:
+      - 'server/admin-oracle/**'
+      - 'ops/oracle-project/**'
+      - '.github/workflows/oracle-project-ops.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-project-root-operations
+  cancel-in-progress: false
+
+jobs:
+  operations:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    environment: oracle-ops
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: request
+        env:
+          REQUESTED_OPERATION: ${{ inputs.operation }}
+          BEFORE_REVISION: ${{ github.event.before }}
+        run: python3 ops/oracle-project/ci_request.py
+      - name: Execute the authorized project operation over pinned SSH
+        shell: bash
+        env:
+          CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_CI_KNOWN_HOSTS }}
+          AUTODEPLOY: ${{ vars.ORACLE_PROJECT_AUTODEPLOY }}
+          CLIENT_ID: ${{ vars.ORACLE_ADMIN_GITHUB_CLIENT_ID || 'Ov23liYD7HIQdS5nDjpS' }}
+          CLIENT_SECRET: ${{ secrets.ORACLE_ADMIN_GITHUB_CLIENT_SECRET }}
+          OPERATION: ${{ steps.request.outputs.operation }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch && "$AUTODEPLOY" != true ]]; then
+            echo 'PROJECT_AUTOMATION=NOT_ACTIVATED'; exit 0
+          fi
+          [[ -n "$CI_KEY" && -n "$KNOWN_HOSTS" ]] || { echo 'Missing oracle-ops SSH bindings' >&2; exit 2; }
+          [[ "$REVISION" =~ ^[a-f0-9]{40}$ ]] || exit 2
+          case "$OPERATION" in
+            preflight|install-runtime|configure|deploy|enable-https|status|logs|start|stop|restart|rollback) ;;
+            *) exit 2 ;;
+          esac
+          credential_dir=$(mktemp -d "$RUNNER_TEMP/oracle-project-XXXXXX")
+          chmod 700 "$credential_dir"
+          trap 'rm -rf -- "$credential_dir"' EXIT
+          umask 077
+          printf '%s\n' "$CI_KEY" > "$credential_dir/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$credential_dir/known_hosts"
+          unset CI_KEY KNOWN_HOSTS
+          SSH=(ssh -T -i "$credential_dir/key" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$credential_dir/known_hosts"
+            -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2
+            oracle-project-ci@152.67.156.100)
+          configure() {
+            [[ -n "$CLIENT_SECRET" ]] || { echo 'Set ORACLE_ADMIN_GITHUB_CLIENT_SECRET in oracle-ops' >&2; return 2; }
+            python3 -c 'import json,os; print(json.dumps({"client_id":os.environ["CLIENT_ID"],"client_secret":os.environ["CLIENT_SECRET"]}))' \
+              | "${SSH[@]}" "configure $REVISION"
+          }
+          if [[ "$OPERATION" == deploy ]]; then
+            "${SSH[@]}" "preflight $REVISION"
+            "${SSH[@]}" "install-runtime $REVISION"
+            if [[ -n "$CLIENT_SECRET" ]]; then configure; fi
+            "${SSH[@]}" "deploy $REVISION"
+            "${SSH[@]}" "enable-https $REVISION"
+          elif [[ "$OPERATION" == configure ]]; then
+            configure
+          else
+            "${SSH[@]}" "$OPERATION $REVISION"
+          fi
+          if [[ "$OPERATION" == deploy || "$OPERATION" == enable-https ]]; then
+            curl --fail --silent --show-error --connect-timeout 8 --max-time 10 --retry 12 --retry-delay 5 --retry-all-errors \
+              --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
+            python3 ops/oracle-project/verify_public.py
+          fi
+      - name: External QUIC TLS reachability without client credentials
+        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
+        shell: bash
+        run: |
+          set -euo pipefail
+          quic_venv="$RUNNER_TEMP/oracle-quic-probe-venv"
+          python3 -m venv "$quic_venv"
+          "$quic_venv/bin/pip" install --disable-pip-version-check aioquic==1.3.0
+          "$quic_venv/bin/python" ops/oracle-project/verify_quic.py
+      - name: Real Chromium and Firefox anonymous login form acceptance
+        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser_venv="$RUNNER_TEMP/oracle-admin-browser-venv"
+          python3 -m venv "$browser_venv"
+          "$browser_venv/bin/pip" install --disable-pip-version-check playwright==1.56.0
+          "$browser_venv/bin/python" -m playwright install --with-deps chromium firefox
+          "$browser_venv/bin/python" ops/oracle-project/browser_acceptance.py

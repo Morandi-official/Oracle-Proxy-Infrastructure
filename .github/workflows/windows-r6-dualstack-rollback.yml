@@ -1,0 +1,79 @@
+name: R6 reversible Windows WireGuardNT dual-stack tunnel with DNS and WFP-free rollback
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-r6-dualstack-rollback.yml'
+      - 'clients/windows/service-host/**'
+      - 'clients/windows/manager/**'
+      - 'clients/windows/app/**'
+      - 'clients/windows/lab/build-scm-components.ps1'
+      - 'clients/windows/lab/stage-scm-lab.ps1'
+      - 'clients/windows/lab/generate_service_pair.py'
+      - 'clients/windows/lab/run-admin-controlled-scm.ps1'
+      - 'clients/windows/lab/cleanup-scm-lab.ps1'
+      - 'clients/windows/lab/wgnt-service-observe.c'
+      - 'clients/windows/lab/wgnt-data-plane.c'
+      - 'clients/windows/lab/wgnt-app-dns.c'
+      - 'docs/windows-g17-ipv6-app-dns.md'
+      - 'clients/windows/lab/preflight.ps1'
+      - 'clients/windows/lab/cleanup.ps1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-tunnel-r6-rollback-disposable-lab
+  cancel-in-progress: true
+
+jobs:
+  scm-controlled-by-gui:
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'test/r6-windows-dualstack-revoke-postconditions' || github.event.pull_request.head.ref == 'integration/windows-safe-alpha' || github.event.pull_request.head.ref == 'feat/manager-compiletime-lab-isolation')
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: WireGuard/wireguard-windows
+          ref: 6ece77bc487c8aa697e3c092197621c4f3e5ccb8
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preflight disposable VM and preserve IPv4/IPv6 default routes
+        shell: pwsh
+        run: ./clients/windows/lab/preflight.ps1
+      - name: Verify signed official WireGuardNT and pinned source toolchain
+        shell: pwsh
+        run: ./clients/windows/lab/prepare-toolchain.ps1
+      - name: Compile genuine upstream tunnel.dll plus independent service host
+        shell: pwsh
+        run: ./clients/windows/lab/build-scm-components.ps1
+      - name: Generate two ephemeral test X25519 keypairs
+        shell: pwsh
+        run: ./clients/windows/lab/generate-keys.ps1
+      - name: Stage narrow-route lab configurations and NTFS protected DLLs
+        shell: pwsh
+        run: ./clients/windows/lab/stage-scm-lab.ps1
+      - name: Verify IPv4+IPv6 Winsock app delivery and DNS AAAA via true SCM tunnels
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./clients/windows/lab/run-admin-controlled-scm.ps1
+      - name: ALWAYS uninstall owned tunnel SCM services and assert IPv4 IPv6 peer routes/adapters gone
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup-scm-lab.ps1
+      - name: ALWAYS verify IPv4/IPv6 routes, DNS and firewall returned to baseline
+        if: always()
+        shell: pwsh
+        run: ./clients/windows/lab/cleanup.ps1

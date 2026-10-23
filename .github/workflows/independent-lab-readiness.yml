@@ -1,0 +1,34 @@
+name: Independent VPN lab configuration and recovery gating
+
+on:
+  pull_request:
+    paths:
+      - 'lab/independent-peer/**'
+      - 'lab/recovery/**'
+      - '.github/workflows/independent-lab-readiness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  independent-peer-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Lab endpoint, key privacy, configuration and disaster recovery regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s lab/independent-peer -p 'test_*.py' -v
+          python -m unittest discover -s lab/recovery -p 'test_*.py' -v
+      - name: Prove sample evidence is intentionally blocked
+        shell: bash
+        run: |
+          set -euo pipefail
+          python lab/recovery/assess_readiness.py lab/recovery/unverified-example.json | grep '^BLOCKED_UNVERIFIED:'
+          echo 'PASS: actual external WireGuard VM and out-of-band WFP recovery are NOT claimed verified'

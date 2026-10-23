@@ -1,0 +1,43 @@
+name: R7 Windows WFP-backed synthetic outbound filter lifecycle (NO no-leak claim)
+
+on:
+  pull_request:
+    paths:
+      - 'lab/wfp-scoped/**'
+      - '.github/workflows/windows-r7-scoped-wfp-lifecycle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  narrow-policy-lifecycle:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Refuse non-CI invocation without touching firewall
+        shell: pwsh
+        run: |
+          $env:RUNNER_ENVIRONMENT = 'invalid'
+          $refused=$false
+          try { ./lab/wfp-scoped/Test-SyntheticRuleLifecycle.ps1 } catch { $refused=$true }
+          if (-not $refused) { throw 'R7 guard did not refuse unsafe environment' }
+          $env:RUNNER_ENVIRONMENT = 'github-hosted'
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R7-CI-*').Count -ne 0) {
+            throw 'R7 refusal left unexpected firewall rules'
+          }
+      - name: Add two WFP-backed narrow synthetic rules, inspect effective store and remove
+        shell: pwsh
+        run: ./lab/wfp-scoped/Test-SyntheticRuleLifecycle.ps1
+      - name: ALWAYS flag residual R7 Windows Firewall rules
+        if: always()
+        shell: pwsh
+        run: |
+          if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object Name -like 'OracleProxy-R7-CI-*').Count -ne 0) {
+            throw 'R7 Firewall rules remain on disposable runner; discard the VM'
+          }
+          Write-Host 'R7_FINAL_CLEAN: no synthetic rule remains'

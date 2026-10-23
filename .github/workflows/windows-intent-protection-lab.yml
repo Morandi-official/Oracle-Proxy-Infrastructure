@@ -1,0 +1,52 @@
+name: R1 offline Windows DPAPI user-intent persistence
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/intent-lab/**'
+      - '.github/workflows/windows-intent-protection-lab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  genuine-win32-dpapi-offline:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile standalone OFFLINE DPAPI state prototype
+        shell: pwsh
+        run: |
+          dotnet publish './clients/windows/intent-lab/OracleProxy.IntentLab.csproj' -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o ./dist/intent-selftest
+          if ($LASTEXITCODE -ne 0) { throw 'Offline DPAPI prototype build failed' }
+      - name: Prove fail-closed intent semantics across tamper, deletion and explicit off
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path './dist/intent-selftest/OracleProxy.IntentLab.exe').Path
+          & $exe --offline-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Real Windows DPAPI intent tests failed' }
+          Write-Host 'PASS: DPAPI + offline choice persistence, no OS network mutations'
+      - name: R29 real DPAPI key lease normal and exceptional cleanup
+        shell: pwsh
+        env:
+          RUNNER_ENVIRONMENT: github-hosted
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path './dist/intent-selftest/OracleProxy.IntentLab.exe').Path
+          & $exe --peer-secret-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R29 protected 32-byte key lifecycle failed' }
+          Write-Host 'R29_DPAPI_KEY_LEASE_CI_PASS: no native tunnel or production secrets'
+      - name: No implicit production deployment or driver files
+        shell: pwsh
+        run: |
+          if (Test-Path './dist/intent-selftest/wireguard.dll') { throw 'Unexpected native driver' }
+          if (Test-Path './dist/intent-selftest/tunnel.dll') { throw 'Unexpected WireGuard tunnel' }
+          if (Test-Path './dist/intent-selftest/OracleProxy.LabManager.exe') { throw 'Unexpected privileged Windows service' }
+          Write-Host 'PASS: persistence experiment does not package privileged network software'

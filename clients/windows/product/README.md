@@ -1,0 +1,63 @@
+# Oracle Proxy integrated Windows candidate
+
+This is the product integration under development, separate from the historic deny-only LabManager. **It has not passed release acceptance and is not a GA distribution.** Main-branch CI publishes an unsigned acceptance bundle only after real Oracle egress, account linkage and isolated Windows fault tests pass. Pull-request builds validate packaging but upload only review evidence. The client download includes explicit payload hashes and notices. The separately downloadable corresponding source archive contains the actual vendored Go dependency sources and the exact build pins; its filename and hash accompany the client download. Both artifacts are retained together for the same period.
+
+Target: Windows 10/11 x64. The WinForms desktop and SYSTEM service use one self-contained .NET executable. First setup requires UAC to install the fixed, auto-start SCM service and protected files; everyday login/connect/disconnect uses an owner-authenticated local pipe. No WireSock, official WireGuard GUI, FlClash or daily SSH is required. Backend: administrator-issued accounts only; native HTTPS automatic public-key enrollment and per-account telemetry.
+
+The separate userspace WireGuard/TUN core is built from pinned sing-box v1.14.3 source with `with_gvisor,with_wireguard`. Its child-process interface accepts one configuration frame on anonymous stdin and closes gracefully on EOF. It has no exposed configuration server, shell, user-selected path or client-supplied endpoint. Application payload routing ends at the WireGuard endpoint; identified GameViewer program paths use the direct outbound. Upstream embeds Wintun; CI compares its exact bytes against the official signed x64 0.14.1 release before privileged tests. This is a custom application embedding an open-source core, not an independently invented VPN cryptographic protocol.
+
+The native Windows SDK WFP component owns one provider/sublayer and persistent ALE filters plus boot transport filters. It blocks other application egress, permits loopback, DHCP/NDP, SYSTEM-only service/core identities, and verified UU paths. TUN packet-path permits live in a separate dynamic WFP session; process exit releases them while the persistent base blocks remain. Transactions replace/remove only this provider's filters. A process/GUI crash must leave persistent filters in place. Presence/count inspection is only an invariant, not sufficient proof of every traffic path: actual packet and fault tests are required before release.
+
+Keys/tokens are DPAPI CurrentUser encrypted **under LocalSystem** in protected ProgramData storage; the UI never receives the private key/token. Passwords are forwarded through the authenticated pipe only for login and not persisted. The service generates X25519 locally; the backend receives only its public key. Managed string copies cannot be reliably erased; memory-only configuration and zeroed byte buffers reduce exposure, not defeat a malicious SYSTEM administrator.
+
+UU discovery reads local machine and loaded user installation records plus running processes, independent of drive letter. Only validated NetEase-signed executables under protected directories become process-path exceptions. Signature/publisher changes require refresh/review, not a broad filename bypass. The exact publisher identity and helpers have been statically verified against official, SHA-256-pinned 4.39.2.1561 and 4.41.1.2335 installers in CI; this does not prove logged-in remote-control continuity. User-specific/writable installations must not silently receive SYSTEM path exceptions.
+
+Cloud Windows evidence now covers compilation, non-admin owner/unauthorized IPC boundaries, SYSTEM DPAPI, real service setup/failed-upgrade rollback/uninstall, isolated WireGuard TCP/fresh UDP DNS, peer loss, GUI/service/core failures, stale permit removal and missing-state recovery. Remaining acceptance gaps include physical IPv6, BFE restart and actual Windows boot, and real logged-in UU controller/controlled-device continuity for the user's versions. Current Oracle client descriptor explicitly blocks IPv6 pending server-side IPv6 provisioning and dual-stack acceptance. No real restart/UU/IPv6 success may be inferred from a same-boot unit test.
+
+License: new product integration GPL-3.0-or-later; upstream sing-box GPLv3-or-later (see LICENSE and pinned source). Bouncy Castle is MIT; Wintun and other linked upstream licenses must accompany any eventual binary distribution with corresponding build source/dependency versions. No proprietary signed publisher certificate is present. Build hashes are not an Authenticode publisher signature.
+
+
+Main-branch CI additionally uses only the ordinary, low-quota account in the `windows-client-acceptance` Environment to verify actual Oracle egress, automatic enrollment, usage linkage, GUI-process loss, SCM crash recovery and explicit disconnect. Pull-request jobs do not receive that Environment's credentials. This acceptance harness is excluded from the product executable and never uploads keys, bearer tokens, passwords or screenshots of a real account. A CI enrollment consumes a device slot; logging out intentionally does not erase the server's historical device record.
+
+
+Transport preference is native WireGuard UDP 51820, then authenticated QUIC
+UDP 8443, then authenticated HTTPS/TLS 443. QUIC uses a dedicated public trust
+certificate obtained through verified Oracle HTTPS, hostname and expiry checks,
+and bounded datagram fragmentation; there is no insecure TLS mode.
+
+The GUI requests route-free encrypted preparation while visible. The standby
+core exposes only a random authenticated loopback SOCKS probe, with no TUN or
+system routing changes. A recent verified Oracle exit, fresh active policy and
+unchanged profile allow the same SYSTEM core to create the TUN after persistent
+WFP protection is installed. The service grants a live TUN lease only after the
+owned core/interface are verified. Explicit Off removes the TUN before clearing
+protection. Background network probes do not hold the command gate. Readiness,
+verification time and measured switch duration are reported explicitly; cold
+connections are never represented as verified or promised to take one second.
+
+The hosted Oracle acceptance measures the actual IPC click duration, verifies
+ordinary app HTTP exit and fresh UDP DNS, and rejects a prepared switch taking
+1000 ms or more. Route-free standby must leave ordinary app egress direct. The
+QUIC end-to-end gate runs once the server advertises the externally tested port;
+blocking both UDP carriers must still select HTTPS and retain crash protection.
+
+rc9 adds explicit Auto / WireGuard UDP / QUIC HTTP3 preferences, native 51820→443 single-device datagram probing, standard h3 Extended CONNECT-UDP with raw HTTP Datagrams and bounded RFC9298 DATAGRAM Capsules for larger packets, a physical-interface-bound SYSTEM control/carrier path, and tunneled admin-site access. HTTPS is automatic fallback only. Fresh kernel/core verification remains mandatory after process loss; persisted carrier hints never authorize a connection.
+
+
+Normal window close and “断开并退出” use the fixed authenticated Quit operation:
+stop the core, verify the owned TUN is removed, persist disconnected intent,
+then clear owned protection. The account stays signed in and the SYSTEM service
+remains idle without a core or preparation lease. Disconnect alone retains the
+dormant core for fast reconnect. GUI termination/crash and OS shutdown do not
+manufacture an explicit disconnect. A failed safe-exit acknowledgement keeps
+the window open with recovery guidance. An installation without a registered
+service can close immediately.
+
+rc11 adds bounded native per-port initiation/response/cookie/invalid/obsolete
+counters and numeric socket errors. Failed native evidence survives fallback;
+client_handshake_reply still describes only the current carrier/core. A shaped
+response is diagnostic progress, not proof of cryptographic authentication or
+a verified Oracle exit. No raw stderr, packet bytes, IP addresses or keys are
+exported in these counters. Intended socket closure is not a read failure.
+
+rc11协议重试：显式选择UDP或HTTP/3后，新的连接会重新尝试所选协议，不复用上次回退至其他协议的预备核心；在下拉框再次选择相同项目也会触发重新探测。自动模式保留已验证备用通道的快速重连。协议选择仍有受限网络下的自动兜底，实际协议继续明确显示。

@@ -1,0 +1,20 @@
+vpn-admin.morandi.dpdns.org {
+    encode zstd gzip
+    request_body {
+        max_size 16KB
+    }
+    # Only the local deployment checker may use the application health route.
+    handle /api/health {
+        respond 404
+    }
+    handle /api/client/relay {
+        reverse_proxy 127.0.0.1:8788
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8787 {
+            header_up Host {host}
+            header_up X-Forwarded-Proto https
+            header_up -Forwarded
+        }
+    }
+}

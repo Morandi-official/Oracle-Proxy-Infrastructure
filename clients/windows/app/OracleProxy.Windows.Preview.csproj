@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>OracleProxy.Windows.Preview</AssemblyName>
+    <RootNamespace>OracleProxy.Windows.Preview</RootNamespace>
+    <Version>0.2.0-test</Version>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Lab-only native control must be intentionally enabled by the CI test build. -->
+    <EnableDisposableLabControls Condition="'$(EnableDisposableLabControls)' == ''">false</EnableDisposableLabControls>
+    <DefineConstants Condition="'$(EnableDisposableLabControls)' == 'true'">$(DefineConstants);ORACLE_DISPOSABLE_LAB</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Not even compiled into default end-user preview builds. -->
+    <Compile Remove="LabAdminControlClient.cs" Condition="'$(EnableDisposableLabControls)' != 'true'" />
+
+  </ItemGroup>
+</Project>

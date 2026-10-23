@@ -1,0 +1,106 @@
+name: R81 field diagnostic compile separation and lease refusal (no VPN)
+
+on:
+  pull_request:
+    paths:
+      - 'clients/windows/service-host/**'
+      - 'clients/windows/lab/Test-R81FieldLeaseStaging.ps1'
+      - 'clients/windows/lab/Invoke-R81CleanupOwnedLease.ps1'
+      - '.github/workflows/r81-field-compiled-lease.yml'
+      - 'docs/r81-field-compiletime-expiring-lease.md'
+
+permissions:
+  contents: read
+
+jobs:
+  field-diagnostic-deny-only:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'test/r81-compiled-field-lease-scope-20261017'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      ORACLE_R81: CI_ONLY
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build ordinary release service host with field code ABSENT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableAttendedFieldTrial=false -o ./dist/r81-default
+          if ($LASTEXITCODE -ne 0) { throw 'R81 default service host compile failed' }
+          $default=(Resolve-Path './dist/r81-default/OracleProxy.WireGuardHost.exe').Path
+          & $default --ci-r81-field-self-test
+          if ($LASTEXITCODE -ne 2) { throw 'R81 field test exposed in default build' }
+          & $default --wireguard-service lab-field
+          if ($LASTEXITCODE -ne 2) { throw 'R81 ordinary production accepted field profile' }
+          Write-Host 'R81_PRODUCTION_FIELD_MODE_COMPILED_OUT_PASS'
+          exit 0
+      - name: Compile isolated attended-field-capable TEST service host
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          dotnet clean ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 -p:EnableAttendedFieldTrial=false
+          if ($LASTEXITCODE -ne 0) { throw 'R81 isolate build cleanup failed' }
+          dotnet publish ./clients/windows/service-host/OracleProxy.WireGuardHost.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -p:EnableAttendedFieldTrial=true -o ./dist/r81-field-review
+          if ($LASTEXITCODE -ne 0) { throw 'R81 field diagnostics compile failed' }
+          $exe=(Resolve-Path './dist/r81-field-review/OracleProxy.WireGuardHost.exe').Path
+          & $exe --ci-r81-field-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'R81 synthetic lease and CIDR regression failed' }
+          & $exe --ci-r81-field-readonly-review
+          if ($LASTEXITCODE -ne 3) { throw 'R81 accepted missing lease before protected staging' }
+          & $exe --wireguard-service lab-field
+          if ($LASTEXITCODE -ne 3) { throw 'R81 allowed non-SYSTEM field service start' }
+          Write-Host 'R81_DIAGNOSTIC_BUILD_NO_SERVICE_START_PASS'
+          exit 0
+      - name: Verify protected short-lease field config, expiry rejection, NO native activation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          ./clients/windows/lab/Test-R81FieldLeaseStaging.ps1
+          $exe=(Resolve-Path './dist/r81-field-review/OracleProxy.WireGuardHost.exe').Path
+          & $exe --ci-r81-field-readonly-review
+          if ($LASTEXITCODE -ne 0) { throw 'R81 protected synthetic lease denied unexpectedly' }
+          $path=Join-Path $env:ProgramData 'OracleProxyLab/config/lab-field-lease.json'
+          $saved=[IO.File]::ReadAllBytes($path)
+          try {
+            $lease=[IO.File]::ReadAllText($path) | ConvertFrom-Json -ErrorAction Stop
+            $lease.expires_utc='2026-01-01T00:00:00Z'
+            [IO.File]::WriteAllText($path,($lease | ConvertTo-Json -Compress -Depth 4),[Text.Encoding]::ASCII)
+            & $exe --ci-r81-field-readonly-review
+            if ($LASTEXITCODE -ne 3) { throw 'R81 expired lease unexpectedly passed' }
+            Write-Host 'R81_EXPIRED_FIELD_LEASE_REFUSED_PASS'
+          }
+          finally { [IO.File]::WriteAllBytes($path,$saved); [Array]::Clear($saved,0,$saved.Length) }
+          & $exe --ci-r81-field-readonly-review
+          if ($LASTEXITCODE -ne 0) { throw 'R81 pristine lease not restored' }
+          $env:ORACLE_R81='forbidden'
+          & $exe --ci-r81-field-readonly-review
+          if ($LASTEXITCODE -ne 3) { throw 'R81 unauthorized environment accepted' }
+          Write-Host 'R81_FIELD_PROTECTED_LEASE_NO_NETWORK_REVIEW_PASS'
+          exit 0
+      - name: ALWAYS cleanup only the exact disposable lease and plaintext config
+        if: always()
+        shell: pwsh
+        run: |
+          $env:ORACLE_R81='CI_ONLY'
+          ./clients/windows/lab/Invoke-R81CleanupOwnedLease.ps1
+      - name: ALWAYS no real service, default route or residual field files
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if (Test-Path (Join-Path $env:ProgramData 'OracleProxyLab')) {
+            throw 'R81 field files remain'
+          }
+          if (Get-Service -Name 'WireGuardTunnel$lab-field' -ErrorAction SilentlyContinue) {
+            throw 'R81 created forbidden native service'
+          }
+          if (@(Get-NetRoute -ErrorAction Stop |
+                Where-Object DestinationPrefix -in @('10.77.72.1/32','10.77.72.2/32')).Count -ne 0) {
+            throw 'R81 produced unexpected native route'
+          }
+          Write-Host 'R81_NO_NATIVE_FIELD_SERVICE_ROUTE_OR_FILES_PASS'

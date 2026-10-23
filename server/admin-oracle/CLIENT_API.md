@@ -1,0 +1,18 @@
+# Windows account API v1
+
+The website remains administrator-only: fixed GitHub numeric identity, recent OAuth + MFA, CSRF for every management mutation. VPN accounts are a separate table and cannot authenticate Django, GitHub sessions or administrator APIs. There is no signup/reset API for ordinary users.
+
+Administrator flow: save a user policy, select that user in the account form, assign a lowercase username (3–64 ASCII letters/digits/`_.-`), password (12–128 characters), and device limit (default 3, range 1–32). Password hashes use Django's production PBKDF2 hasher. Password resets invalidate all bearer sessions; disable the user or revoke a device to stop existing tunnel traffic. Reducing the device limit requires revoking surplus devices first. Revoked key/address tombstones and usage remain durable; create a new key to replace a revoked identity.
+
+Native clients use HTTPS at `https://vpn-admin.morandi.dpdns.org`, with redirects, cookies and cross-host redirects disabled. No certificate validation bypass. Origin/cookie-bearing requests to the native API are rejected. No CORS policy is supplied.
+
+- `POST /api/client/login`, JSON containing exactly `username`, `password`, `public_key`, `device_name`. Public key is locally generated canonical WireGuard base64, never a private key. Correct credentials automatically enroll the device through the root controller, which serializes cap validation and durable ownership. Existing device login is idempotent; another user's key or a revoked key is rejected. Disabled/expired/over-quota accounts cannot enroll. At most five password checks per account per UTC minute and 30 globally, persistent across web workers; rejected guesses do not create peers.
+- Response: random 256-bit `token` (only SHA256 retained), `token_expires_at` (30 days), and the state below. A new login for one device invalidates its previous token. Store tokens using the Windows service's protected storage; never logs, clipboard or diagnostics.
+- `GET /api/client/state`, `Authorization: Bearer <token>`. Returns only this account/device: byte usage + limit + remaining, UTC monthly period, expiry, device count + cap, policy status, observed timestamp, handshake, public tunnel settings. It never includes other accounts, administrator audit or Oracle total budget. `account.status` is `active`, `disabled`, `expired`, `quota`, `server_budget` or `unavailable`. The service must keep its local guard when status is not active, API access fails, or observations expire; server enforcement is independent of client polling.
+- `POST /api/client/logout`, bearer header. Deletes the token. It does not revoke the device or erase usage. There is no ordinary-user device-management operation.
+
+State `tunnel` includes `endpoint`, `server_public_key`, `addresses`, `allowed_ips`, `dns`, and `ipv6_policy`. Currently the server allocates IPv4 and explicitly requires IPv6 blocking until native dual-stack routing is verified. That is a deployment limitation, not a claim that the Windows final IPv6 requirement has passed. Readiness/usage must not be inferred from HTTP success or a stale snapshot alone.
+
+Errors: 401 invalid login/token, 403 browser credentials/account unavailable/revoked device, 429 throttled, 400 malformed input or device cap, 503 local controller unavailable. Error responses contain codes only, never submitted credentials. All native API responses are `Cache-Control: no-store`.
+
+Validation includes the real Django credential/token boundary against the persistent root policy engine with a synthetic OS driver, plus real Linux WireGuard IPv4/IPv6/DNS/established TCP kernel enforcement and restart/revocation fixtures. Those tests do not establish Windows WFP or UU acceptance.

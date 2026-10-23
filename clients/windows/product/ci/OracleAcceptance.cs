@@ -78,8 +78,11 @@ internal static class OracleAcceptance
         .Select(n=>n.GetIPProperties().GetIPv4Properties().Index).First();
     private static async Task<bool> CarrierDirectBlocked()
     {
-        using var socket=new TcpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        try{socket.Client.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder(PhysicalIndex()));await socket.ConnectAsync(IPAddress.Parse("152.67.156.100"),443,timeout.Token);return false;}catch{return true;}
+        using var socket=new TcpClient(AddressFamily.InterNetwork);using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        int index=PhysicalIndex();socket.Client.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder(index));
+        try{await socket.ConnectAsync(IPAddress.Parse("152.67.156.100"),443,timeout.Token);return false;}
+        catch(SocketException error)when(error.SocketErrorCode is SocketError.AccessDenied or SocketError.TimedOut){return true;}
+        catch(OperationCanceledException)when(timeout.IsCancellationRequested){return true;}
     }
     private static async Task<bool> AdminThroughVPN(){
         using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)};

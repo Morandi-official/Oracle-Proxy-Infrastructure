@@ -7,7 +7,7 @@ internal sealed class NativeUdpEvidence
 {
     private readonly object _gate=new();
     private readonly JsonObject _ports=new();
-    private static readonly Regex Event=new(@"\ANATIVE_UDP_(51820|443)_(SEND_INIT|RECV_REPLY|RECV_COOKIE|RECV_INVALID|RECV_OBSOLETE|READ_ERROR_[0-9]{1,10}|WRITE_ERROR_[0-9]{1,10})\z",RegexOptions.CultureInvariant);
+    private static readonly Regex Event=new(@"\ANATIVE_UDP_(51820|443|8443)_(SEND_INIT|RECV_REPLY|RECV_COOKIE|RECV_INVALID|RECV_OBSOLETE|READ_ERROR_[0-9]{1,10}|WRITE_ERROR_[0-9]{1,10})\z",RegexOptions.CultureInvariant);
     internal void Clear(){lock(_gate)_ports.Clear();}
     internal bool Record(string? line)
     {

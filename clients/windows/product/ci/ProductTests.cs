@@ -76,6 +76,13 @@ internal static class ProductTests
             return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(correct?"ip=152.67.156.100\n":"ip=192.0.2.1\n")};
         }
     }
+    private sealed class IgnoringCancellationTrace : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+            await Task.Delay(8000);
+            return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("ip=152.67.156.100\n")};
+        }
+    }
     private static async Task<int> ProbeDeadlines()
     {
         using var client=new HttpClient(new SlowTrace(true)){Timeout=Timeout.InfiniteTimeSpan};
@@ -85,6 +92,14 @@ internal static class ProductTests
         try{await EgressProbe.Verify(client,3,()=>false,CancellationToken.None);return 1;}catch(IOException error) when(error.Message=="ORACLE_PROBE_TIMEOUT"){}
         using var wrong=new HttpClient(new SlowTrace(false)){Timeout=Timeout.InfiniteTimeSpan};
         try{await EgressProbe.Verify(wrong,3,()=>true,CancellationToken.None);return 1;}catch(IOException error) when(error.Message=="ORACLE_EGRESS_NOT_VERIFIED"){}
+        using var ignoring=new HttpClient(new IgnoringCancellationTrace()){Timeout=Timeout.InfiniteTimeSpan};
+        var bound=Stopwatch.StartNew();
+        try{await EgressProbe.Verify(ignoring,3,()=>false,CancellationToken.None);return 1;}catch(IOException error) when(error.Message=="ORACLE_PROBE_TIMEOUT"){}
+        if(bound.Elapsed>TimeSpan.FromSeconds(4))return 1;
+        using var stopping=new CancellationTokenSource(100);bound.Restart();
+        try{await EgressProbe.Verify(ignoring,3,()=>true,stopping.Token);return 1;}catch(OperationCanceledException)when(stopping.IsCancellationRequested){}
+        if(bound.Elapsed>TimeSpan.FromSeconds(1))return 1;
+        Console.WriteLine("PROBE_IGNORING_HTTP_CANCELLATION_CANNOT_EXCEED_DEADLINE_OR_DELAY_STOP=PASS");
         Console.WriteLine("REAL_ASYNC_SLOW_EXIT_PROBE_RETAINED_ONLY_AFTER_WG_REPLY_AND_REJECTS_WRONG_EXIT=PASS");return 0;
     }
     private static int UuTrustSigned()
@@ -183,8 +198,9 @@ internal static class ProductTests
     {
         var nativeEvents=new NativeUdpEvidence();
         if(!nativeEvents.Record("NATIVE_UDP_443_SEND_INIT") || !nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_10054") || nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_9999999999") || nativeEvents.Record("NATIVE_UDP_443_RECV_REPLY SYNTHETIC_SECRET") || nativeEvents.Record("NATIVE_UDP_22_SEND_INIT") || nativeEvents.Record("NATIVE_UDP_443_SEND_INIT\n"))return 1;
+        if(!nativeEvents.Record("NATIVE_UDP_8443_RECV_REPLY"))return 1;
         var savedNative=nativeEvents.Snapshot();nativeEvents.Clear();
-        if(savedNative["443"]?["tx_initiations"]?.GetValue<int>()!=1 || savedNative["443"]?["last_read_error"]?.GetValue<uint>()!=10054 || nativeEvents.Snapshot().Count!=0)return 1;
+        if(savedNative["8443"]?["rx_responses"]?.GetValue<int>()!=1 || savedNative["443"]?["tx_initiations"]?.GetValue<int>()!=1 || savedNative["443"]?["last_read_error"]?.GetValue<uint>()!=10054 || nativeEvents.Snapshot().Count!=0)return 1;
         Console.WriteLine("NATIVE_UDP_PORT_COUNTERS_STRICT_NUMERIC_VOCABULARY_AND_IMMUTABLE_SNAPSHOT=PASS");
         var carriers=new CarrierMemory();var relayState=new JsonObject{["tunnel"]=new JsonObject{["https_relay"]=true}};
         carriers.Observe("synthetic-network-a");carriers.Failed(TunnelTransport.WireGuardUdp);
@@ -269,6 +285,9 @@ internal static class ProductTests
         typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
         if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp"}))return 1;
         Console.WriteLine("RESELECTING_SAME_UDP_CHOICE_EXPLICITLY_RESTARTS_PRIMARY_DISCOVERY=PASS");
+        typeof(Button).GetMethod("OnClick",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(Descendants(reselect).OfType<Button>().Single(b=>b.Text=="原生 UDP 8443 测试"),[EventArgs.Empty]);
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp","PreferUdp8443"}))return 1;
+        Console.WriteLine("NATIVE_UDP8443_DIAGNOSTIC_BUTTON_USES_FIXED_AUTHENTICATED_COMMAND=PASS");
         var quitState=new JsonObject{["ok"]=true,["intent"]=false,["core_pid"]=0U,["mode"]="disconnected"};
         var exitCalls=new List<string>();
         using var exitForm=new MainForm((command,_,_)=>{exitCalls.Add(command);return Task.FromResult((JsonObject)quitState.DeepClone());});
@@ -366,6 +385,13 @@ internal static class ProductTests
         };
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:59999",["server_public_key"]=serverKey.Public,["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
         var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private,UuPaths=uuPaths},"synthetic-probe-only");
+        var diagnosticState=(JsonObject)state.DeepClone();diagnosticState["tunnel"]!["endpoint"]="152.67.156.100:51820";
+        var diagnosticSecret=new DurableState{PrivateKey=clientKey.Private,NativeUdpPortPreference=8443};
+        bool diagnosticRefused=false;try{CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");}catch(IOException error)when(error.Message=="NATIVE_UDP8443_NOT_AVAILABLE"){diagnosticRefused=true;}
+        Require(diagnosticRefused,"UNADVERTISED_NATIVE_8443_REFUSED");
+        diagnosticState["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443,8443);
+        var diagnosticConfig=CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");
+        Require(diagnosticConfig["outbounds"]![1]!["ports"]!.ToJsonString()=="[8443]" && diagnosticConfig["endpoints"]![0]!["peers"]![0]!["port"]!.GetValue<int>()==51820,"FIXED_NATIVE_8443_HAS_SINGLE_UNWRAPPED_PORT_AND_UNCHANGED_WG_PEER");
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";

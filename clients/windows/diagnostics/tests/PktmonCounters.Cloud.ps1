@@ -49,5 +49,21 @@ try{
   Clear-OPOwnedFilters $added
 }
 Write-Host (Run-Pktmon @('status'));Write-Host (Run-Pktmon @('filter','list'))
+$probe=Start-Job -ScriptBlock {
+  Start-Sleep -Seconds 5
+  $udp=New-Object Net.Sockets.UdpClient
+  try{
+    $udp.Connect('152.67.156.100',51820)
+    # One invalid synthetic initiation tests counting only, never authentication.
+    $packet=New-Object byte[] 148;$packet[0]=1
+    [void]$udp.Send($packet,$packet.Length)
+  }finally{$udp.Dispose()}
+}
+try{
+  & (Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1') -Seconds 20 -Port 51820
+  $null=Wait-Job $probe -Timeout 10
+  if($probe.State -ne 'Completed'){throw 'SYNTHETIC_NATIVE_COUNTER_PROBE_FAILED'}
+  Receive-Job $probe -ErrorAction Stop | Out-Null
+}finally{Remove-Job $probe -Force}
 if(Get-ChildItem -Path . -Filter '*.etl' -ErrorAction SilentlyContinue){throw 'COUNTERS_ONLY_UNEXPECTED_ETL_FILE'}
 Write-Host 'REAL_WINDOWS_COUNTERS_ONLY_NO_PACKET_LOG_AND_OWNED_CLEANUP=PASS'

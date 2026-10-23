@@ -1,7 +1,7 @@
 ﻿#requires -RunAsAdministrator
 # Bounded counters only. No packet logging, firewall, route or adapter changes.
 [CmdletBinding()]
-param([ValidateRange(20,45)][int]$Seconds=40,[switch]$DefinitionsOnly)
+param([ValidateRange(20,45)][int]$Seconds=40,[ValidateSet(51820,443)][int]$Port=51820,[switch]$DefinitionsOnly)
 $ErrorActionPreference='Stop'
 function Invoke-OPPktmon([string[]]$Arguments){
     $result=(& "$env:WINDIR\System32\pktmon.exe" @Arguments 2>&1 | Out-String)
@@ -36,13 +36,13 @@ $empty=Test-OPNoFilters $filters
 if(-not $idle -or -not $empty){throw 'Existing or unknown Packet Monitor state; nothing changed.'}
 $owned=@();$started=$false
 try{
-    foreach($port in @(51820,443)){
-        $name='OPNative'+$port
-        Invoke-OPPktmon @('filter','add',$name,'-i','152.67.156.100','-t','UDP','-p',[string]$port) | Out-Null
+    foreach($selectedPort in @($Port)){
+        $name='OPNative'+$selectedPort
+        Invoke-OPPktmon @('filter','add',$name,'-i','152.67.156.100','-t','UDP','-p',[string]$selectedPort) | Out-Null
         $owned+=,$name
     }
     Write-Host (Invoke-OPPktmon @('start','--capture','--counters-only','--comp','all'));$started=$true
-    Write-Host "计数已开始：现在在 rc11 选择 UDP 并连接。请保持此窗口打开，$Seconds 秒内自动结束。"
+    Write-Host "计数已开始（UDP/$Port）：现在在 rc11 选择 UDP 并连接。请保持此窗口打开，$Seconds 秒内自动结束。"
     Start-Sleep -Seconds $Seconds
     Write-Host '=== ORACLE_NATIVE_UDP_COUNTERS_BEGIN ==='
     Write-Host (Invoke-OPPktmon @('counters','--include-hidden','--drop-reason'))

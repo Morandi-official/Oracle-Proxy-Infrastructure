@@ -1,0 +1,26 @@
+{
+  "version": "v0.3.0-rc13",
+  "source_revision": "9999d16c7d94b673593ce58c47649a1b01aa331b",
+  "assets": [
+    {
+      "name": "BUILD.json",
+      "size": 5126,
+      "sha256": "b3c18c7581ac8f6986b1e25c654586c97e5591c9c16ce038a09b99c70adb6e61"
+    },
+    {
+      "name": "OracleProxy-0.3.0-rc13-win-x64-9999d16c7d94-source.zip",
+      "size": 457760071,
+      "sha256": "2cf7058d600a7458811e0a70ed83090a3868c3190157581bf57aa71953fa12e4"
+    },
+    {
+      "name": "OracleProxy-0.3.0-rc13-win-x64-9999d16c7d94.zip",
+      "size": 83291191,
+      "sha256": "065c987aa8ce05ac42ae002d3c534d4ea06290d56d73bf325dacbe6967b068f8"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "size": 237,
+      "sha256": "18c5d00ba00c763aae26318abc8212215e6f4b273a1e49a8e12622015acae9ac"
+    }
+  ]
+}

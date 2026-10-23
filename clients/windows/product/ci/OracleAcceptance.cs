@@ -138,6 +138,8 @@ internal static class OracleAcceptance
                     Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
                     Check(cold["transport"]?.GetValue<string>()==wanted && elapsed<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
                     Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
+                    var metered=await Send("Status");
+                    Check(metered["verified_exit_ip"]?.GetValue<string>()=="152.67.156.100" && metered["traffic"]?["sample_ms"]?.GetValue<long>()>0 && metered["traffic"]?["rx_bytes"]?.GetValue<long>()>0 && metered["traffic"]?["tx_bytes"]?.GetValue<long>()>0,"REAL_LOCAL_TUN_UPLOAD_DOWNLOAD_COUNTERS_AND_VERIFIED_EXIT_"+wanted+"_"+cycle);
                     if(preference=="PreferUdp" && cycle==1)Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_WIREGUARD_UDP443_WHILE_51820_IS_BLOCKED");
                     if(preference=="PreferQuic"){
                         Check(cold["carrier_stage"]?.GetValue<string>()=="CARRIER_H3_READY","REAL_STANDARD_HTTP3_AUTHENTICATED_"+cycle);

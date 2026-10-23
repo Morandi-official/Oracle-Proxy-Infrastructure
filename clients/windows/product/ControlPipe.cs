@@ -55,6 +55,15 @@ internal static class ControlPipe
         var result=JsonNode.Parse(await ReadFrame(pipe,16384,timeout.Token))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");return result;
     }
+    internal static bool ServiceAbsent()
+    {
+        IntPtr manager=OpenSCManager(null,null,1);if(manager==IntPtr.Zero)return false;
+        try{
+            IntPtr service=OpenService(manager,Platform.Service,4);
+            if(service==IntPtr.Zero)return Marshal.GetLastWin32Error()==1060;
+            CloseServiceHandle(service);return false;
+        }finally{CloseServiceHandle(manager);}
+    }
     private static bool BoundToService(NamedPipeClientStream pipe)
     {
         if(!GetNamedPipeServerProcessId(pipe.SafePipeHandle,out uint pid)||pid==0)return false;
@@ -67,7 +76,7 @@ internal static class ControlPipe
     [StructLayout(LayoutKind.Sequential)]private struct ServiceStatus{public uint Type,State,Accepted,Exit,Specific,Checkpoint,Wait,Pid,Flags;}
     [DllImport("kernel32.dll")]private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe,out uint pid);
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode)]private static extern IntPtr OpenSCManager(string? machine,string? database,uint access);
-    [DllImport("advapi32.dll",CharSet=CharSet.Unicode)]private static extern IntPtr OpenService(IntPtr manager,string name,uint access);
+    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern IntPtr OpenService(IntPtr manager,string name,uint access);
     [DllImport("advapi32.dll")]private static extern bool QueryServiceStatusEx(IntPtr service,int kind,out ServiceStatus status,uint size,out uint needed);
     [DllImport("advapi32.dll")]private static extern bool CloseServiceHandle(IntPtr handle);
 }

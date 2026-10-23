@@ -15,6 +15,8 @@ internal sealed class CoreProcess : IDisposable
     internal bool TunActive{get;private set;}
     private string _carrierStage="NOT_STARTED";
     private int _wireGuardReply;
+    private readonly NativeUdpEvidence _nativeEvidence=new();
+    internal JsonObject NativeEvidence=>_nativeEvidence.Snapshot();
     internal string CarrierStage=>Volatile.Read(ref _carrierStage);
     internal int? NativePort=>CarrierStage=="CARRIER_NATIVE_443"?443:CarrierStage=="CARRIER_NATIVE_51820"?51820:null;
     internal bool HandshakeReplyReceived=>NativePort is not null || Volatile.Read(ref _wireGuardReply)==1;
@@ -27,7 +29,7 @@ internal sealed class CoreProcess : IDisposable
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
         if(_process is not null)await Stop();
-        Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
         if(standby)info.ArgumentList.Add("--standby");
         StandbyCapable=standby;TunActive=!standby;
@@ -40,6 +42,7 @@ internal sealed class CoreProcess : IDisposable
         Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){try{NativeGuard.SuspendTun();}catch{}}};
         _process.ErrorDataReceived+=(_,line)=>{
             if(!ReferenceEquals(_process,owned))return;
+            if(_nativeEvidence.Record(line.Data))return;
             if(line.Data is "CARRIER_H3_TLS" or "CARRIER_H3_SETTINGS" or "CARRIER_H3_AUTH" or "CARRIER_H3_READY" or "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data=="WIREGUARD_REPLY_RECEIVED")Volatile.Write(ref _wireGuardReply,1);
             else if(line.Data is "CARRIER_NATIVE_TRY_51820" or "CARRIER_NATIVE_TRY_443")Volatile.Write(ref _carrierStage,line.Data);

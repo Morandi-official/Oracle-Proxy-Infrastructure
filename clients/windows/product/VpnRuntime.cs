@@ -39,6 +39,7 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(_transport!=TunnelTransport.WireGuardUdp || _nativeUdpAttempt is null)return;
         _nativeUdpAttempt["selected_port"]=_core.NativePort;
+        _nativeUdpAttempt["ports"]=_core.NativeEvidence;
         _nativeUdpAttempt["server_handshake_at_observed"]=_state?["device"]?["handshake_at"]?.DeepClone();
         _nativeUdpAttempt["probe_result"]=verified?"oracle_egress_verified":CodeForNativeProbe();
         if(!verified)_nativeUdpAttempt["probe_failures"]=_nativeUdpAttempt["probe_failures"]!.GetValue<int>()+1;
@@ -126,6 +127,7 @@ internal sealed class VpnRuntime : IDisposable
                         }else{
                             if(!_initialCarrierSelected){_transport=Preferred();_initialCarrierSelected=true;}
                             if(_probeFailures>=2 && System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted)>=TimeSpan.FromSeconds(_transport==TunnelTransport.WireGuardUdp?8:6) && TransportPolicy.Next(_transport,_state!) is TunnelTransport next){
+                                if(_transport==TunnelTransport.WireGuardUdp && _nativeUdpAttempt is not null)_nativeUdpAttempt["ports"]=_core.NativeEvidence;
                                 _carrierFailures[TransportPolicy.Name(_transport)]=new JsonObject{["error"]=_error,["carrier_stage"]=_core.CarrierStage,["probe_failures"]=_probeFailures,["elapsed_ms"]=(long)System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted).TotalMilliseconds};
                                 _carriers.Failed(_transport);
                                 _transport=next;_probeFailures=0;_stage=next==TunnelTransport.WireGuardQuic?"QUIC_FALLBACK":"HTTPS_FALLBACK";await StopCore();
@@ -179,7 +181,7 @@ internal sealed class VpnRuntime : IDisposable
         string command=value["command"]?.GetValue<string>() ?? "";
         var fields=command=="Login"?new[]{"version","command","username","password"}:new[]{"version","command"};
         if(value.Count!=fields.Length || fields.Any(field=>!value.ContainsKey(field)))throw new IOException("INVALID_FIELDS");
-        if(command is not ("Status" or "Login" or "Connect" or "Disconnect" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferQuic"))throw new IOException("UNKNOWN_COMMAND");
+        if(command is not ("Status" or "Login" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferQuic"))throw new IOException("UNKNOWN_COMMAND");
         await _gate.WaitAsync();
         try{
             switch(command){
@@ -230,6 +232,7 @@ internal sealed class VpnRuntime : IDisposable
                 }
                 _connectMs=timer.ElapsedMilliseconds;_switchTimings["complete_ms"]=_connectMs;break;}
             case "Disconnect":await Disconnect();break;
+            case "Quit":await Disconnect(keepPrepared:false);break;
             case "Logout":
                 await Disconnect();
                 _prepareUntil=default;await StopCore();
@@ -246,11 +249,11 @@ internal sealed class VpnRuntime : IDisposable
         }catch(Exception e){Failed(e);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
         finally{_gate.Release();}
     }
-    private async Task Disconnect()
+    private async Task Disconnect(bool keepPrepared=true)
     {
         try{
             _stage="DISCONNECT";
-            bool keep=_core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
+            bool keep=keepPrepared && _core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
             _stage="DISCONNECT_DEACTIVATE";
             if(keep){if(_core.TunActive)await _core.Deactivate();}
             else await StopCore();
@@ -260,7 +263,7 @@ internal sealed class VpnRuntime : IDisposable
             _secret.ConnectIntent=false;_secret.RecoveryRequired=false;_secret.Save();
             _stage="DISCONNECT_GUARD_CLEAR";
             NativeGuard.Clear();_mode="disconnected";_error="";_latency=null;_failure=null;_stage="IDLE";_probeFailures=0;
-            _prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);
+            _prepareUntil=keepPrepared?DateTimeOffset.UtcNow.AddMinutes(5):default;
             if(!keep)_transport=Preferred();
         }catch(Exception error){
             _secret.ConnectIntent=true;_secret.RecoveryRequired=true;_secret.Save();

@@ -14,10 +14,11 @@ internal sealed class MainForm : Form
     private readonly Button _connect=new(){Text="连接",Width=155,Height=48};
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
-    private bool _busy,_renderingTransport,_connectionIntent;
+    private bool _busy,_renderingTransport,_connectionIntent,_closing,_allowClose;
     private readonly ComboBox _transportChoice=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=240};
     private readonly SemaphoreSlim _requests=new(1,1);
     private readonly Func<string,string?,string?,Task<JsonObject>> _send;
+    private readonly bool _realService;
     private sealed class BufferedFlowPanel : FlowLayoutPanel
     {
         internal BufferedFlowPanel(){DoubleBuffered=true;ResizeRedraw=true;}
@@ -38,7 +39,7 @@ internal sealed class MainForm : Form
     private static BufferedFlowPanel Actions()=>new(){AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,WrapContents=true,Margin=new Padding(0,6,0,6),Padding=new Padding(0)};
     internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null)
     {
-        _send=send ?? ControlPipe.Send;DoubleBuffered=true;
+        _send=send ?? ControlPipe.Send;_realService=send is null;DoubleBuffered=true;
         Text="Oracle Proxy";ClientSize=new Size(1120,860);MinimumSize=new Size(900,600);BackColor=Color.FromArgb(243,246,251);Font=new Font("Microsoft YaHei UI",10);StartPosition=FormStartPosition.CenterScreen;
         var shell=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=new Padding(0)};
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,174));shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
@@ -60,6 +61,8 @@ internal sealed class MainForm : Form
         var selection=Actions();selection.Controls.Add(new Label{Text="首选连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_transportChoice);Row(connection,selection);
         _transportChoice.SelectedIndexChanged+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(_transportChoice.SelectedIndex switch{1=>"PreferUdp",2=>"PreferQuic",_=>"PreferAuto"});};
         var buttons=Actions();_connect.BackColor=Color.FromArgb(11,137,108);_connect.ForeColor=Color.White;_connect.FlatStyle=FlatStyle.Flat;_connect.FlatAppearance.BorderSize=0;_connect.UseVisualStyleBackColor=false;_connect.Margin=new Padding(0,0,10,0);_disconnect.Margin=new Padding(0);buttons.Controls.AddRange([_connect,_disconnect]);Row(connection,buttons);
+        var quit=new Button{Text="断开并退出",AutoSize=true,Height=48,Margin=new Padding(10,0,0,0)};quit.Click+=async(_,_)=>await QuitClient();buttons.Controls.Add(quit);
+        Row(connection,new Label{Text="关闭窗口将断开 VPN 并退出；仅断开可保留快速重连。系统服务空闲待命。",AutoSize=true,ForeColor=Color.FromArgb(100,113,134),Margin=new Padding(0,8,0,0)});
         _telemetry.AutoSize=false;_telemetry.Height=28;_telemetry.AutoEllipsis=true;_telemetry.ForeColor=Color.FromArgb(100,113,134);_telemetry.Margin=new Padding(0,8,0,0);Row(connection,_telemetry);
         var connectionCard=Card("connectionSection","01   当前连接",connection);Row(body,connectionCard);
         var account=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,12);Row(account,_accountName);
@@ -94,9 +97,34 @@ internal sealed class MainForm : Form
         }
         _login.Click+=async(_,_)=>await Act("Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
         _timer.Tick+=async(_,_)=>{if(!_busy)await Act("Status");};Shown+=async(_,_)=>{await Act("Status");_timer.Start();};FormClosed+=(_,_)=>_timer.Dispose();
+        FormClosing+=async(_,e)=>{
+            // Only a deliberate user close changes connection intent. Windows
+            // shutdown, forced termination and GUI crashes retain fail-close.
+            if(e.CloseReason==CloseReason.UserClosing && !_allowClose){e.Cancel=true;await QuitClient();}
+        };
+    }
+    internal async Task<bool> QuitClient()
+    {
+        if(_closing)return false;
+        _closing=true;_timer.Stop();Enabled=false;
+        await _requests.WaitAsync();
+        try{
+            if(_realService && ControlPipe.ServiceAbsent()){_allowClose=true;Close();return true;}
+            var state=await _send("Quit",null,null);
+            Display(state);
+            if(state["ok"]?.GetValue<bool>()!=true || state["intent"]?.GetValue<bool>()!=false || state["core_pid"]?.GetValue<uint>()!=0 || state["mode"]?.GetValue<string>()!="disconnected")throw new IOException("SAFE_EXIT_NOT_VERIFIED");
+            _allowClose=true;Close();return true;
+        }catch{
+            _detail.Text="退出未完成：尚未确认核心停止及直连恢复，窗口保持打开。请复制连接诊断；必要时使用“恢复直连（UAC）”。";
+            return false;
+        }finally{
+            _requests.Release();
+            if(!_allowClose){_closing=false;Enabled=true;_timer.Start();}
+        }
     }
     internal async Task Act(string command)
     {
+        if(_closing)return;
         bool passive=command=="Status";
         if(passive){if(!_requests.Wait(0))return;}
         else{
@@ -149,9 +177,10 @@ internal sealed class MainForm : Form
             try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>() switch{"udp"=>1,"quic"=>2,_=>0};}finally{_renderingTransport=false;}
             _transportChoice.Enabled=!_connectionIntent && !_busy;
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
+            if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc10");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc11");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){

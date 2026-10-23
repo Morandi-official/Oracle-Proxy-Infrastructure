@@ -169,7 +169,11 @@ internal static class OracleAcceptance
                 prepared=await Send("Prepare");if(prepared["quick_ready"]?.GetValue<bool>()==true)break;
                 await Task.Delay(500);
             }
-            Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && prepared["tun_permitted"]?.GetValue<bool>()==false && VpnRuntime.TunnelInactive() && NativeGuard.TunDormant && await ExitIp()!="152.67.156.100","REAL_PREPARATION_HAS_DORMANT_TUN_WITHOUT_ADDRESSES_ROUTES_SESSION_OR_ORDINARY_APP_PROXY");
+            // This owner process must not call the SYSTEM-only guard DLL.
+            // ProductTests independently audits dormant kernel routes as SYSTEM;
+            // here observe interface/IP inactivity, denied TUN permission from
+            // authenticated service IPC, and an actual ordinary direct exit.
+            Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && prepared["tun_permitted"]?.GetValue<bool>()==false && VpnRuntime.TunnelInactive() && await ExitIp()!="152.67.156.100","REAL_PREPARATION_INACTIVE_TUN_AND_ORDINARY_DIRECT_EXIT_WITHOUT_PRIVILEGED_OWNER_CALLS");
             Check(prepared["transport"]?.GetValue<string>()=="wireguard-udp" && prepared["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && prepared["native_udp_attempt"]?["socket_binding"]?.GetValue<string>()=="native_udp_dual_port" && prepared["native_udp_attempt"]?["started_without_tun"]?.GetValue<bool>()==true && prepared["native_udp_attempt"]?["probe_result"]?.GetValue<string>()=="oracle_egress_verified","REAL_NATIVE_UDP_51820_PREPARATION_VERIFIED_BEFORE_TUN");
             if(Environment.GetEnvironmentVariable("ORACLE_REQUIRE_QUIC")=="true")Check(prepared["quic_available"]?.GetValue<bool>()==true,"REAL_QUIC_RELEASE_CONFIGURATION_AND_SERVER_METADATA_IN_SYNC");
             var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();

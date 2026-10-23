@@ -37,13 +37,19 @@ internal static class OracleAcceptance
         using(var loss=new InitialUdpLoss())Check(true,"REAL_DISPOSABLE_PACKET_LAYER_UDP_FAULT_SESSION");
         return 0;
     }
-    private static void Check(bool condition,string code){if(!condition)throw new IOException(code);Console.WriteLine(code+"=PASS");}
+    private const long RunBudgetBytes=16L*1024*1024;
+    private static long? _runUsageStart;
+    private static string _lastAssertion="";
+    private static void Check(bool condition,string code){if(!condition){_lastAssertion=code;throw new IOException("ORACLE_ASSERTION_FAILED");}Console.WriteLine(code+"=PASS");}
     private static JsonObject RequireSuccess(string command,JsonObject value)
     {
         if(value["ok"]?.GetValue<bool>()!=true){
             foreach(string field in new[]{"mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","quick_ready","preparing"})Console.WriteLine("FAILED_"+command.ToUpperInvariant()+"_"+field.ToUpperInvariant()+"="+value[field]);
             if(value["failure"] is JsonObject failure)foreach(string field in new[]{"stage","category","hresult","native_error","socket_error","core_stage"})Console.WriteLine("FAILED_COMMAND_"+field.ToUpperInvariant()+"="+failure[field]);
             throw new IOException("ORACLE_SERVICE_COMMAND_FAILED");
+        }
+        if(_runUsageStart is long start && value["account"]?["used_bytes"]?.GetValue<long>() is long used){
+            if(used<start || used-start>RunBudgetBytes){_lastAssertion="REAL_ORACLE_RUN_USAGE_WITHIN_16_MIB";throw new IOException("ORACLE_ASSERTION_FAILED");}
         }
         return value;
     }
@@ -111,7 +117,11 @@ internal static class OracleAcceptance
             stage="LOGIN";var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
             Check(login["ok"]?.GetValue<bool>()==true && login["account"]?["username"]?.GetValue<string>()==username,"REAL_ORACLE_CLIENT_LOGIN_AND_AUTOMATIC_ENROLLMENT");
             var account=login["account"]!;long used=account["used_bytes"]!.GetValue<long>();int devices=account["device_count"]!.GetValue<int>();
-            Check(account["status"]?.GetValue<string>()=="active" && account["limit_bytes"]?.GetValue<long>() is long limit && limit<=128*1024*1024 && limit-used>=4*1024*1024,"REAL_ACCOUNT_HAS_BOUNDED_TEST_BUDGET");
+            long? limit=account["limit_bytes"]?.GetValue<long>();
+            Console.WriteLine("REAL_ACCOUNT_TEST_LIMIT_BYTES="+(limit?.ToString() ?? "unlimited"));
+            Console.WriteLine("REAL_ACCOUNT_TEST_REMAINING_BYTES="+(limit is null?"unlimited":Math.Max(0,limit.Value-used).ToString()));
+            Check(account["status"]?.GetValue<string>()=="active" && used>=0 && (limit is null || limit.Value-used>=4*1024*1024),"REAL_ACCOUNT_HAS_AVAILABLE_TEST_BUDGET");
+            _runUsageStart=used;
             stage="UU_MAINTENANCE_CONCURRENCY";
             using(UuAclRepair.AcquireMaintenance()){
                 var blocked=await ControlPipe.Send("Connect");
@@ -128,6 +138,8 @@ internal static class OracleAcceptance
                     Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
                     Check(cold["transport"]?.GetValue<string>()==wanted && elapsed<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
                     Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
+                    var metered=await Send("Status");
+                    Check(metered["verified_exit_ip"]?.GetValue<string>()=="152.67.156.100" && metered["traffic"]?["sample_ms"]?.GetValue<long>()>0 && metered["traffic"]?["rx_bytes"]?.GetValue<long>()>0 && metered["traffic"]?["tx_bytes"]?.GetValue<long>()>0,"REAL_LOCAL_TUN_UPLOAD_DOWNLOAD_COUNTERS_AND_VERIFIED_EXIT_"+wanted+"_"+cycle);
                     if(preference=="PreferUdp" && cycle==1)Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_WIREGUARD_UDP443_WHILE_51820_IS_BLOCKED");
                     if(preference=="PreferQuic"){
                         Check(cold["carrier_stage"]?.GetValue<string>()=="CARRIER_H3_READY","REAL_STANDARD_HTTP3_AUTHENTICATED_"+cycle);
@@ -238,6 +250,6 @@ internal static class OracleAcceptance
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
             stage="DISCONNECT";Check((await Send("Disconnect"))["mode"]?.GetValue<string>()=="disconnected" && await ExitIp()!="152.67.156.100","REAL_EXPLICIT_DISCONNECT_RESTORES_DIRECT_EXIT");
             await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
-        }catch(Exception error){Console.WriteLine("REAL_ORACLE_STAGE="+stage);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
+        }catch(Exception error){try{await ControlPipe.Send("Disconnect");}catch{}Console.WriteLine("REAL_ORACLE_STAGE="+stage);if(_lastAssertion.Length>0)Console.WriteLine("REAL_ORACLE_ASSERTION="+_lastAssertion);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }
 }

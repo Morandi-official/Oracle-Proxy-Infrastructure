@@ -167,7 +167,7 @@ internal static class ProductTests
         if(carriers.Preferred(relayState)!=TunnelTransport.WireGuardHttps || carriers.Observe("synthetic-network-a"))return 1;
         if(!carriers.Observe("synthetic-network-b") || carriers.Preferred(relayState)!=TunnelTransport.WireGuardUdp)return 1;
         Console.WriteLine("NETWORK_CHANGE_RESTORES_NATIVE_UDP_PREFERENCE=PASS");
-        Application.EnableVisualStyles();using var form=new MainForm();
+        Application.EnableVisualStyles();
         var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
         var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
         snapshot["uu_candidates"]=1;snapshot["uu_rejected"]=1;
@@ -176,13 +176,35 @@ internal static class ProductTests
         snapshot["native_udp_attempt"]=new JsonObject{["endpoint_port"]=51820,["probe_result"]="egress_probe_timeout",["password"]="SYNTHETIC_NATIVE_SECRET_DO_NOT_COPY"};
         snapshot["failure"]=ConnectionFailure.Capture("ORACLE_EGRESS_PROBE",new HttpRequestException(HttpRequestError.ProxyTunnelError,"SYNTHETIC_SECRET_URL_PASSWORD",new SocketException((int)SocketError.ConnectionRefused)),"READY");
         if(snapshot["failure"]!["socket_error"]?.GetValue<string>()!="ConnectionRefused" || snapshot["failure"]!.ToJsonString().Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
+        using var form=new MainForm((_,_,_)=>Task.FromResult((JsonObject)snapshot.DeepClone()));
         form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
         if(!form.ConnectionReport.Contains("native_udp.endpoint_port: 51820") || !form.ConnectionReport.Contains("egress_probe_timeout") || form.ConnectionReport.Contains("SYNTHETIC_NATIVE_SECRET_DO_NOT_COPY") || !form.ConnectionReport.Contains("ORACLE_EGRESS_PROBE") || !form.ConnectionReport.Contains("ConnectionRefused") || form.ConnectionReport.Contains("synthetic-user") || form.ConnectionReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         Console.WriteLine("CONNECTION_FAILURE_STAGE_AND_ENUMS_EXPORTED_WITHOUT_MESSAGES_OR_CREDENTIALS=PASS");
         if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
            form.UuReport.Contains("synthetic-user") || form.UuReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.UuReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY"))return 1;
         Console.WriteLine("UU_DIAGNOSTIC_ACTIONABLE_WITHOUT_ACCOUNT_OR_CREDENTIALS=PASS");
-        using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,form.ClientRectangle);Directory.CreateDirectory("dist/review");image.Save("dist/review/windows-client-synthetic.png");}
+        snapshot["mode"]="connected";snapshot["transport"]="wireguard-quic";snapshot["verified_exit_ip"]="152.67.156.100";snapshot["latency_ms"]=186L;snapshot["core_pid"]=123U;
+        snapshot["traffic"]=new JsonObject{["sample_ms"]=1000L,["rx_bytes"]=10000L,["tx_bytes"]=20000L};form.Display(snapshot);
+        snapshot["traffic"]=new JsonObject{["sample_ms"]=2000L,["rx_bytes"]=12048L,["tx_bytes"]=21024L};form.Display(snapshot);
+        if(form.DownloadRate!="2.0 KiB/s" || form.UploadRate!="1.0 KiB/s")return 1;
+        snapshot["traffic"]=new JsonObject{["sample_ms"]=3000L,["rx_bytes"]=0L,["tx_bytes"]=0L};form.Display(snapshot);
+        if(form.DownloadRate!="采样中…" || form.UploadRate!="采样中…")return 1;
+        snapshot["mode"]="protected";form.Display(snapshot);if(form.DownloadRate!="—" || form.UploadRate!="—")return 1;
+        Console.WriteLine("LOCAL_TUN_RATES_USE_MONOTONIC_DELTAS_RESET_ON_COUNTER_RESTART_AND_NEVER_USE_BILLING_TOTALS=PASS");
+        foreach(var size in new[]{new Size(1120,860),new Size(900,620)}){
+            form.ClientSize=size;form.Show();Application.DoEvents();form.PerformLayout();
+            using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));
+            var viewport=Descendants(form).Single(c=>c.Name=="viewport");
+            var sections=Descendants(form).OfType<GroupBox>().Where(c=>c.Name.EndsWith("Section",StringComparison.Ordinal)).OrderBy(c=>c.Top).ToArray();
+            if(sections.Length!=3 || !viewport.Visible || sections.Any(c=>!c.Visible || c.Width>viewport.ClientSize.Width || c.Left!=sections[0].Left) || sections.Zip(sections.Skip(1)).Any(pair=>pair.First.Bottom>pair.Second.Top))return 1;
+            if(viewport is ScrollableControl scroller && scroller.HorizontalScroll.Visible)return 1;
+            Directory.CreateDirectory("dist/review");image.Save($"dist/review/windows-client-{size.Width}x{size.Height}-synthetic.png");
+        }
+        Console.WriteLine("THREE_ALIGNED_SECTIONS_FIT_NORMAL_AND_MINIMUM_WINDOW_WITHOUT_HORIZONTAL_SCROLL=PASS");
+        var toolsViewport=(ScrollableControl)Descendants(form).Single(c=>c.Name=="viewport");
+        toolsViewport.ScrollControlIntoView(Descendants(form).Single(c=>c.Name=="toolsSection"));Application.DoEvents();
+        using(var toolImage=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(toolImage,new Rectangle(Point.Empty,form.Size));toolImage.Save("dist/review/windows-client-tools-synthetic.png");}
+        form.Hide();
         snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
         snapshot["mode"]="disconnected";snapshot["guard"]=false;snapshot["preparing"]=true;snapshot["quick_ready"]=true;
         snapshot["error"]="";snapshot["transport"]="wireguard-quic";

@@ -1,9 +1,0 @@
-# R98 — prevent malformed UDP traffic being misclassified as tunnel underlay
-
-R94's passive offline PCAP analyzer deliberately cannot prove WireGuard decryption, completeness of WFP capture, actual UU process continuity, or release readiness. On code review, its transport shape check originally required only the first **four bytes** of a UDP header (source/destination ports). A truncated malicious payload matching the pinned peer:port could therefore have been counted as an eligible outer packet, despite not containing the required eight-byte UDP header. Similarly, a fake UDP length inconsistent with the IP payload was not rejected.
-
-R98 corrects the source code: bounded IPv4/IPv6 packets must have a full eight-byte UDP header with an exact declared UDP datagram length; ordinary IPv6 underlay UDP with a zero checksum is refused; TCP must contain a complete minimum header with a valid data-offset. Forged port-only packets, undersized or inconsistent UDP lengths, truncated/invalid TCP packets, direct IPv4/IPv6 DNS, wrong peers, VLAN, fragmented IPv4 and bad capture metadata are covered by non-network unit tests.
-
-Even after the fixes, a packet resembling encrypted WireGuard underlay is only an **eligible external-header shape**. No actual Windows WFP leak test, packet integrity verification, cryptographic authenticated tunnel proof, live UU coexistence or production release is asserted. All parser output keeps `authorizes_release=False`, `proves_wfp_failclosed=False` and `proves_real_uu_continuity=False`.
-
-R83 native field activation and production UnavailableProductionKernel remain hard-blocked; GA #34 OPEN. R98 changes no Oracle networking, real device WFP/filter/route/DNS, Windows execution policy, WireSock/UU, or signing status. It neither starts a guest nor publishes any installer.

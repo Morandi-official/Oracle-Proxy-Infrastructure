@@ -9,7 +9,7 @@ function Run-Pktmon([string[]]$Arguments){
 $state=Run-Pktmon @('status');Write-Host $state
 $filters=Run-Pktmon @('filter','list');Write-Host $filters
 Write-Host (Run-Pktmon @('start','help'))
-if($state -notmatch '(?i)not (started|running)|stopped' -or $filters -notmatch '(?i)no (packet )?filters'){throw 'PREEXISTING_OR_UNKNOWN_MONITOR_STATE_REFUSED'}
+if($state -notmatch '\A\s*Packet Monitor is not running\.\s*\z' -or $filters -notmatch '\A\s*Packet Filters:\s*None\s*\z'){throw 'PREEXISTING_OR_UNKNOWN_MONITOR_STATE_REFUSED'}
 $nonce=[Guid]::NewGuid().ToString('N').Substring(0,12)
 $own='OPCounterProof_'+$nonce
 $other='OPIndependentProof_'+$nonce

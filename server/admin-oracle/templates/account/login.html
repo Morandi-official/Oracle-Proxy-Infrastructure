@@ -1,3 +1,0 @@
-{% load static %}
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · Oracle Proxy</title><link rel="stylesheet" href="{% static 'console/style.css' %}"></head>
-<body><main class="auth-page"><section class="panel"><p class="eyebrow">ORACLE PROXY / ADMIN</p><h1>登录管理后台</h1><p class="muted">使用已授权的 GitHub 账号登录，再验证动态码。</p><form method="post" action="{% url 'github_login' %}">{% csrf_token %}<button type="submit">使用 GitHub 登录</button></form><p class="muted">首次登录需要绑定验证器。后台登录与 Windows VPN 连接相互独立。</p></section></main></body></html>

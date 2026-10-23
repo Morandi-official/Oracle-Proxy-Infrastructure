@@ -392,13 +392,28 @@ internal static class ProductTests
             NativeGuard.SuspendTun();await client.StandardInput.WriteLineAsync("DEACTIVATE");await client.StandardInput.FlushAsync();
             Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="STANDBY_READY","REAL_PRIVATE_CORE_DEACTIVATE_ACKNOWLEDGED");
             await VpnRuntime.EnsureTunnelInactive();
+            Require(await VpnRuntime.AuditDisconnectedTunnel(true,()=>throw new IOException("UNEXPECTED_COLD_CLEANUP")),"REAL_CLEAN_DORMANT_DISCONNECT_PRESERVES_WARM_CORE");
             Require(NativeGuard.TunDormant && !NativeGuard.TunPermitted,"REAL_DORMANT_ADAPTER_HAS_NO_LIVE_LEASE_OR_NONLOCAL_ROUTES");
             Require(!await Tcp() && NativeGuard.Active,"REAL_DEACTIVATION_REMOVES_TUN_AND_RETAINS_GUARD");
             await client.StandardInput.WriteLineAsync("ACTIVATE");await client.StandardInput.FlushAsync();
             Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="TUN_ACTIVE" && NativeGuard.TunLuid()==preparedLuid,"REAL_REACTIVATION_REUSES_EXACT_PREPARED_ADAPTER");
             NativeGuard.AuthorizeTun((uint)client.Id);
             Require(await Tcp() && await Dns(),"REAL_REUSED_ADAPTER_HAS_FRESH_TCP_AND_UDP_DNS");
-            await Stop(client);client=null;await VpnRuntime.EnsureTunnelRemoved();
+            // Reproduce a retained adapter acquiring an unexpected address.
+            // Only this fixture-owned dormant TUN is changed, never a physical NIC.
+            NativeGuard.SuspendTun();await client.StandardInput.WriteLineAsync("DEACTIVATE");await client.StandardInput.FlushAsync();
+            Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="STANDBY_READY","REAL_DIRTY_DORMANT_FIXTURE_DEACTIVATE_ACKNOWLEDGED");
+            var dirtyAddress=new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"netsh.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+            foreach(string arg in new[]{"interface","ipv4","add","address","name=OracleProxy","address=198.18.0.2","mask=255.255.255.255","store=active"})dirtyAddress.ArgumentList.Add(arg);
+            using(var fault=Process.Start(dirtyAddress)!){await fault.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));Require(fault.ExitCode==0,"REAL_OWNED_DORMANT_ADDRESS_FAULT_INSTALLED");}
+            Require(!VpnRuntime.TunnelInactive() && NativeGuard.Active && !NativeGuard.TunPermitted,"REAL_DIRTY_DORMANT_ADAPTER_IS_REJECTED_WITH_GUARD_RETAINED");
+            bool refused=false;
+            try{await VpnRuntime.AuditDisconnectedTunnel(true,()=>throw new IOException("SYNTHETIC_STOP_FAILED"));}
+            catch(IOException error)when(error.Message=="SYNTHETIC_STOP_FAILED"){refused=true;}
+            Require(refused && NativeGuard.Active && !await Tcp(),"REAL_FAILED_COLD_CLEANUP_CANNOT_CLEAR_GUARD");
+            bool retained=await VpnRuntime.AuditDisconnectedTunnel(true,async()=>{await Stop(client);client=null;});
+            Require(!retained && client is null && NativeGuard.Active && !await Tcp(),"REAL_DIRTY_DORMANT_COLD_CLEANUP_REMOVES_ADAPTER_BEFORE_CLEARING_GUARD");
+            NativeGuard.Clear();Require(await Tcp() && await Dns(),"REAL_VERIFIED_COLD_DISCONNECT_RESTORES_DIRECT_TCP_AND_DNS");NativeGuard.Apply(uuPaths);
             client=await Launch(config);
             ulong luid=NativeGuard.TunLuid();bool wrongCoreDenied=false;
             NativeGuard.Clear();bool missingGuardDenied=false;

@@ -80,7 +80,7 @@ def main():
     vendor = PRODUCT / 'core/vendor'
     if not (vendor / 'modules.txt').is_file() or not licenses(vendor):
         raise RuntimeError('Complete vendored core sources and notices required')
-    metadata = {'channel': 'unsigned-acceptance-candidate', 'version': '0.3.0-rc11',
+    metadata = {'channel': 'unsigned-acceptance-candidate', 'version': '0.3.0-rc12',
                 'source_revision': revision, 'architecture': 'win-x64',
                 'real_oracle_acceptance_passed': args.acceptance_passed,
                 'workflow_run': os.environ['GITHUB_RUN_ID'], 'workflow_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -89,7 +89,7 @@ def main():
                 'remaining_gates': ['live logged-in UU session continuity', 'physical Windows reboot',
                                     'Oracle IPv6 provisioning and forwarding', 'application publisher signing'],
                 'nuget_packages': packages}
-    tag = 'OracleProxy-0.3.0-rc11-win-x64-' + revision[:12]
+    tag = 'OracleProxy-0.3.0-rc12-win-x64-' + revision[:12]
     source_name = tag + '-source.zip'
     metadata['corresponding_source_archive'] = source_name
     tracked = run('git', 'ls-files', 'clients/windows/product', 'clients/windows/service-host/NativeDriverTrust.cs',

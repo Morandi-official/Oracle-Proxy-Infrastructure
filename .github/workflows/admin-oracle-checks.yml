@@ -85,6 +85,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y caddy python3-venv openssh-server wireguard-tools ipset iproute2 iptables
       - name: Validate HTTPS reverse proxy configuration
         run: caddy validate --config server/admin-oracle/deploy/Caddyfile --adapter caddyfile
+      - name: Real kernel header-only passive UDP observation in isolated namespace
+        run: sudo unshare -n python3 ops/oracle-project/ci_native_packet_filter.py
       - name: Real namespace UDP443 demux and admin through tunnel routing
         run: |
           sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \

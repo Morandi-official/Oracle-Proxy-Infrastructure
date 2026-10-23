@@ -38,6 +38,7 @@ func dialQUIC(ctx context.Context, physical net.PacketConn, destination net.Addr
 		return nil, errors.New("HTTP3_CONNECT_FAILED")
 	}
 	if err != nil {
+		carrierStage(quicTLSFailure(err))
 		return fail()
 	}
 	carrierStage("CARRIER_H3_SETTINGS")

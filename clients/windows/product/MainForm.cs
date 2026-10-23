@@ -81,6 +81,7 @@ internal sealed class MainForm : Form
         diagnostics.Controls.Add(Tool("连接诊断",()=>ShowReport("连接诊断",_connectionReport)));
         diagnostics.Controls.Add(Tool("UU 检查详情",ShowUuReport));
         diagnostics.Controls.Add(Tool("重新识别 UU",async()=>await Act("RefreshUu")));
+        diagnostics.Controls.Add(Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443")));
         void Open(string url){try{System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url){UseShellExecute=true});}catch{_detail.Text="未能打开默认浏览器。";}}
         diagnostics.Controls.Add(Tool("打开出口检查",()=>Open("https://www.cloudflare.com/cdn-cgi/trace")));
         diagnostics.Controls.Add(Tool("打开管理后台",()=>Open("https://vpn-admin.morandi.dpdns.org/")));Row(tools,diagnostics);
@@ -176,11 +177,11 @@ internal sealed class MainForm : Form
             _renderingTransport=true;
             try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>() switch{"udp"=>1,"quic"=>2,_=>0};}finally{_renderingTransport=false;}
             _transportChoice.Enabled=!_connectionIntent && !_busy;
-            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
-            if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
+            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
+            if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc12");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc13");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
@@ -208,6 +209,7 @@ internal sealed class MainForm : Form
             if(!fresh && account is not null)detail+=" 用量未刷新，显示的是上次读取值。";
             // Set the final text once: intermediate short text used to resize
             // every AutoSize row twice on every 250 ms preparation poll.
+            if(state["native_udp_port_preference"]?.GetValue<int>()==8443)detail+=" 当前为原生 UDP 8443 测试；重新选择正常协议可退出测试。";
             if(_detail.Text!=detail)_detail.Text=detail;
             _protocol.Text=mode=="connected"?state["transport"]?.GetValue<string>() switch{"wireguard-udp"=>"WireGuard / UDP","wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS / TLS 兜底",_=>"—"}:"—";
             _exitIp.Text=mode=="connected"?state["verified_exit_ip"]?.GetValue<string>() ?? "待验证":"—";

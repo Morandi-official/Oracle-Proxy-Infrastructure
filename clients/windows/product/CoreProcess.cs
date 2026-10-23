@@ -18,7 +18,7 @@ internal sealed class CoreProcess : IDisposable
     private readonly NativeUdpEvidence _nativeEvidence=new();
     internal JsonObject NativeEvidence=>_nativeEvidence.Snapshot();
     internal string CarrierStage=>Volatile.Read(ref _carrierStage);
-    internal int? NativePort=>CarrierStage=="CARRIER_NATIVE_443"?443:CarrierStage=="CARRIER_NATIVE_51820"?51820:null;
+    internal int? NativePort=>CarrierStage=="CARRIER_NATIVE_8443"?8443:CarrierStage=="CARRIER_NATIVE_443"?443:CarrierStage=="CARRIER_NATIVE_51820"?51820:null;
     internal bool HandshakeReplyReceived=>NativePort is not null || Volatile.Read(ref _wireGuardReply)==1;
     private string _safeStage="NOT_STARTED";
     internal string SafeStage=>Volatile.Read(ref _safeStage);
@@ -43,9 +43,9 @@ internal sealed class CoreProcess : IDisposable
         _process.ErrorDataReceived+=(_,line)=>{
             if(!ReferenceEquals(_process,owned))return;
             if(_nativeEvidence.Record(line.Data))return;
-            if(line.Data is "CARRIER_H3_TLS" or "CARRIER_H3_SETTINGS" or "CARRIER_H3_AUTH" or "CARRIER_H3_READY" or "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443")Volatile.Write(ref _carrierStage,line.Data);
+            if(line.Data is "CARRIER_H3_TLS" or "CARRIER_H3_SETTINGS" or "CARRIER_H3_AUTH" or "CARRIER_H3_READY" or "CARRIER_H3_TLS_TIMEOUT" or "CARRIER_H3_TLS_CERTIFICATE" or "CARRIER_H3_TLS_FAILED" or "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443" or "CARRIER_NATIVE_8443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data=="WIREGUARD_REPLY_RECEIVED")Volatile.Write(ref _wireGuardReply,1);
-            else if(line.Data is "CARRIER_NATIVE_TRY_51820" or "CARRIER_NATIVE_TRY_443")Volatile.Write(ref _carrierStage,line.Data);
+            else if(line.Data is "CARRIER_NATIVE_TRY_51820" or "CARRIER_NATIVE_TRY_443" or "CARRIER_NATIVE_TRY_8443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data is "TUN_CLEANUP_IP_FAILED" or "TUN_CLEANUP_ROUTE_FAILED" or "TUN_CLEANUP_DNS4_FAILED" or "TUN_CLEANUP_DNS6_FAILED")Volatile.Write(ref _safeStage,line.Data);
             else if(line.Data is "CORE_IDENTITY_FAILED" or "CORE_INPUT_FAILED" or "CORE_CONFIGURATION_FAILED" or "CORE_CREATE_FAILED" or "CORE_START_FAILED" or "CORE_CLOSE_FAILED"){
                 if(line.Data!="CORE_CLOSE_FAILED" || !SafeStage.StartsWith("TUN_CLEANUP_",StringComparison.Ordinal))Volatile.Write(ref _safeStage,line.Data);
@@ -76,7 +76,12 @@ internal sealed class CoreProcess : IDisposable
             var proxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service",_probeSecret)};
             _probeClient=new HttpClient(new SocketsHttpHandler{Proxy=proxy,UseProxy=true,UseCookies=false,AllowAutoRedirect=false}){Timeout=Timeout.InfiniteTimeSpan};
         }
-        return await EgressProbe.Verify(_probeClient,timeoutSeconds,()=>HandshakeReplyReceived,_stop.Token);
+        var client=_probeClient;
+        try{return await EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,_stop.Token);}
+        catch(IOException error)when(error.Message=="ORACLE_PROBE_TIMEOUT"){
+            if(ReferenceEquals(Interlocked.CompareExchange(ref _probeClient,null,client),client))client.Dispose();
+            throw;
+        }
     }
     internal async Task Stop()
     {

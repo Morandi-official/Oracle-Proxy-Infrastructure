@@ -116,6 +116,7 @@ internal sealed class DurableState
     public string CarrierNetworkHash {get;set;}="";
     public long CarrierHintUntil {get;set;}
     public int NativeUdpPortHint {get;set;}
+    public int NativeUdpPortPreference {get;set;}
     public bool ConnectIntent {get;set;}
     public bool RecoveryRequired {get;set;}
     public string[] UuPaths {get;set;}=[];

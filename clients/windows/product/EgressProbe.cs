@@ -10,14 +10,15 @@ internal static class EgressProbe
     {
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(stop);
         deadline.CancelAfter(TimeSpan.FromSeconds(seconds));
+        CancellationToken probeToken=deadline.Token;
         var timer=Stopwatch.StartNew();
         async Task Read()
         {
             try{
-                using var response=await client.GetAsync("https://www.cloudflare.com/cdn-cgi/trace",HttpCompletionOption.ResponseHeadersRead,deadline.Token);
-                response.EnsureSuccessStatusCode();await using var stream=await response.Content.ReadAsStreamAsync(deadline.Token);
+                using var response=await client.GetAsync("https://www.cloudflare.com/cdn-cgi/trace",HttpCompletionOption.ResponseHeadersRead,probeToken);
+                response.EnsureSuccessStatusCode();await using var stream=await response.Content.ReadAsStreamAsync(probeToken);
                 using var memory=new MemoryStream();var buffer=new byte[1024];int read;
-                while((read=await stream.ReadAsync(buffer,deadline.Token))>0){if(memory.Length+read>8192)throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");memory.Write(buffer,0,read);}
+                while((read=await stream.ReadAsync(buffer,probeToken))>0){if(memory.Length+read>8192)throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");memory.Write(buffer,0,read);}
                 string body=System.Text.Encoding.UTF8.GetString(memory.ToArray());
                 if(!body.Split('\n').Any(line=>line=="ip=152.67.156.100"))throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");
             }
@@ -25,7 +26,12 @@ internal static class EgressProbe
             catch(HttpRequestException error){throw new IOException("ORACLE_PROBE_HTTP_FAILED",error);}
         }
         Task pending=Read();bool extended=seconds>=12;
+        void ObserveLateFailure()=>_ = pending.ContinueWith(t=>{_ = t.Exception;},CancellationToken.None,TaskContinuationOptions.OnlyOnFaulted|TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
         while(!pending.IsCompleted){
+            if(probeToken.IsCancellationRequested){
+                ObserveLateFailure();stop.ThrowIfCancellationRequested();
+                throw new IOException("ORACLE_PROBE_TIMEOUT");
+            }
             if(!extended && replyReceived()){
                 TimeSpan left=TimeSpan.FromSeconds(12)-timer.Elapsed;
                 deadline.CancelAfter(left>TimeSpan.Zero?left:TimeSpan.Zero);extended=true;

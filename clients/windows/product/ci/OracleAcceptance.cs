@@ -128,6 +128,12 @@ internal static class OracleAcceptance
                 var blocked=await ControlPipe.Send("Connect");
                 Check(blocked["ok"]?.GetValue<bool>()==false && blocked["error"]?.GetValue<string>()=="UU_MAINTENANCE_BUSY" && blocked["mode"]?.GetValue<string>()=="disconnected" && blocked["intent"]?.GetValue<bool>()==false,"REAL_CONNECT_REFUSED_DURING_ELEVATED_UU_MAINTENANCE");
             }
+            stage="FIXED_NATIVE_UDP8443";
+            await Send("Disconnect");await Send("PreferUdp8443");
+            var native8443Timer=Stopwatch.StartNew();await Send("Connect");var native8443=await Connected();
+            Console.WriteLine("REAL_NATIVE_WIREGUARD_UDP8443_COLD_MS="+native8443Timer.ElapsedMilliseconds);
+            Check(native8443["transport"]?.GetValue<string>()=="wireguard-udp" && native8443["native_udp_selected_port"]?.GetValue<int>()==8443 && native8443Timer.ElapsedMilliseconds<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_WIREGUARD_UDP8443_HTTP_AND_DNS_NO_QUIC_WRAPPER");
+            await Send("Disconnect");
             stage="FORCED_COLD_PROTOCOLS";
             foreach(string preference in new[]{"PreferUdp","PreferQuic"}){
                 string wanted=preference=="PreferUdp"?"wireguard-udp":"wireguard-quic";

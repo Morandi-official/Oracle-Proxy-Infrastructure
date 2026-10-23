@@ -38,9 +38,8 @@ internal static class OracleAcceptance
         return 0;
     }
     private static void Check(bool condition,string code){if(!condition)throw new IOException(code);Console.WriteLine(code+"=PASS");}
-    private static async Task<JsonObject> Send(string command)
+    private static JsonObject RequireSuccess(string command,JsonObject value)
     {
-        var value=await ControlPipe.Send(command);
         if(value["ok"]?.GetValue<bool>()!=true){
             foreach(string field in new[]{"mode","error","intent","guard","transport","connection_stage","core_stage","core_pid","tun_permitted","quick_ready","preparing"})Console.WriteLine("FAILED_"+command.ToUpperInvariant()+"_"+field.ToUpperInvariant()+"="+value[field]);
             if(value["failure"] is JsonObject failure)foreach(string field in new[]{"stage","category","hresult","native_error","socket_error","core_stage"})Console.WriteLine("FAILED_COMMAND_"+field.ToUpperInvariant()+"="+failure[field]);
@@ -48,6 +47,7 @@ internal static class OracleAcceptance
         }
         return value;
     }
+    private static async Task<JsonObject> Send(string command)=>RequireSuccess(command,await ControlPipe.Send(command));
     private static async Task<string> ExitIp()
     {
         using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(10)};
@@ -72,10 +72,14 @@ internal static class OracleAcceptance
         if(process.SessionId!=0 || process.MainModule?.FileName!=Platform.Core)throw new IOException("FIXTURE_CORE_IDENTITY_MISMATCH");
         process.Kill(true);await process.WaitForExitAsync();return pid;
     }
+    private static int PhysicalIndex()=>NetworkInterface.GetAllNetworkInterfaces()
+        .Where(n=>n.Name!="OracleProxy" && n.OperationalStatus==OperationalStatus.Up && n.NetworkInterfaceType!=NetworkInterfaceType.Loopback)
+        .Where(n=>n.GetIPProperties().GatewayAddresses.Any(a=>a.Address.AddressFamily==AddressFamily.InterNetwork && !a.Address.Equals(IPAddress.Any)))
+        .Select(n=>n.GetIPProperties().GetIPv4Properties().Index).First();
     private static async Task<bool> CarrierDirectBlocked()
     {
         using var socket=new TcpClient();using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        try{socket.Client.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)NativeGuard.PhysicalIPv4Index));await socket.ConnectAsync(IPAddress.Parse("152.67.156.100"),443,timeout.Token);return false;}catch{return true;}
+        try{socket.Client.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder(PhysicalIndex()));await socket.ConnectAsync(IPAddress.Parse("152.67.156.100"),443,timeout.Token);return false;}catch{return true;}
     }
     private static async Task<bool> AdminThroughVPN(){
         using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)};
@@ -101,7 +105,7 @@ internal static class OracleAcceptance
         string stage="BASELINE";
         try{
             Check(await ExitIp()!="152.67.156.100","REAL_RUNNER_DIRECT_BASELINE");
-            stage="LOGIN";var login=await ControlPipe.Send("Login",username,password);password=null;
+            stage="LOGIN";var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
             Check(login["ok"]?.GetValue<bool>()==true && login["account"]?["username"]?.GetValue<string>()==username,"REAL_ORACLE_CLIENT_LOGIN_AND_AUTOMATIC_ENROLLMENT");
             var account=login["account"]!;long used=account["used_bytes"]!.GetValue<long>();int devices=account["device_count"]!.GetValue<int>();
             Check(account["status"]?.GetValue<string>()=="active" && account["limit_bytes"]?.GetValue<long>() is long limit && limit<=128*1024*1024 && limit-used>=4*1024*1024,"REAL_ACCOUNT_HAS_BOUNDED_TEST_BUDGET");
@@ -231,6 +235,6 @@ internal static class OracleAcceptance
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
             stage="DISCONNECT";Check((await Send("Disconnect"))["mode"]?.GetValue<string>()=="disconnected" && await ExitIp()!="152.67.156.100","REAL_EXPLICIT_DISCONNECT_RESTORES_DIRECT_EXIT");
             await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
-        }catch(Exception error){Console.WriteLine("REAL_ORACLE_STAGE="+stage);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
+        }catch(Exception error){Console.WriteLine("REAL_ORACLE_STAGE="+stage);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }
 }

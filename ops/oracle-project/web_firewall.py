@@ -15,6 +15,7 @@ QUIC_RULE = ['-p', 'udp', '--dport', '8443', '-m', 'comment',
 UDP443_RULE=['-p','udp','--dport','443','-m','addrtype','--dst-type','LOCAL',
              '-m','u32','--u32','0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000',
              '-m','comment','--comment','oracle-proxy-native-udp443','-j','REDIRECT','--to-ports','51820']
+UDP8443_RULE=['8443' if x=='443' else 'oracle-proxy-native-udp8443' if x=='oracle-proxy-native-udp443' else x for x in UDP443_RULE]
 ADMIN_TUN_RULE=['-i','wg0','-d','152.67.156.100','-p','tcp','--dport','443',
                 '-m','comment','--comment','oracle-proxy-admin-through-tunnel','-j','REDIRECT','--to-ports','443']
 
@@ -37,6 +38,7 @@ def main():
         if name == 'iptables':
             allow(binary, QUIC_RULE)
             allow(binary, UDP443_RULE, 'nat', 'PREROUTING')
+            allow(binary, UDP8443_RULE, 'nat', 'PREROUTING')
             allow(binary, ADMIN_TUN_RULE, 'nat', 'PREROUTING')
     print('PROJECT_WEB_FIREWALL=TCP_80_443_UDP_8443_ALLOWED')
 

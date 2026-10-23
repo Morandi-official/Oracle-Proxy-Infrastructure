@@ -77,7 +77,7 @@ def client_state(snapshot, account, key):
             'tunnel':{'endpoint':f"152.67.156.100:{snapshot['listen_port']}",
                       'server_public_key':snapshot['server_public_key'], 'addresses':peer['allowed_ips'],
                       'allowed_ips':['0.0.0.0/0'], 'dns':['1.1.1.1'], 'ipv6_policy':'block',
-                      'native_udp_ports':[51820,443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],
+                      'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],
                       'https_relay':snapshot['listen_port']==51820,
                       'quic':quic_info() if snapshot['listen_port']==51820 else None}}
 

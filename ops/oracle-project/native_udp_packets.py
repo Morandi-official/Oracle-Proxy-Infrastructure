@@ -51,12 +51,11 @@ def classify(header, outgoing):
     if port not in PORTS or length < 12:
         return None
     kind = 'other'
-    if port != 8443:
-        value = struct.unpack_from('<I', header, ihl + 8)[0]
-        if value == 1 and length == 156: kind = 'initiation'
-        elif value == 2 and length == 100: kind = 'response'
-        elif value == 3 and length == 72: kind = 'cookie'
-        elif value == 4 and length >= 40: kind = 'data'
+    value = struct.unpack_from('<I', header, ihl + 8)[0]
+    if value == 1 and length == 156: kind = 'initiation'
+    elif value == 2 and length == 100: kind = 'response'
+    elif value == 3 and length == 72: kind = 'cookie'
+    elif value == 4 and length >= 40: kind = 'data'
     return str(port), ('out_' if outgoing else 'in_') + kind
 
 

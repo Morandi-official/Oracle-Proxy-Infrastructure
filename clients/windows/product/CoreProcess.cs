@@ -39,6 +39,7 @@ internal sealed class CoreProcess : IDisposable
         if(!SetInformationJobObject(_job,9,ref limits,(uint)Marshal.SizeOf<JobLimits>()) || !AssignProcessToJobObject(_job,_process.Handle))throw new IOException("JOB_ASSIGN_FAILED");
         Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){try{NativeGuard.SuspendTun();}catch{}}};
         _process.ErrorDataReceived+=(_,line)=>{
+            if(!ReferenceEquals(_process,owned))return;
             if(line.Data is "CARRIER_H3_TLS" or "CARRIER_H3_SETTINGS" or "CARRIER_H3_AUTH" or "CARRIER_H3_READY" or "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data=="WIREGUARD_REPLY_RECEIVED")Volatile.Write(ref _wireGuardReply,1);
             else if(line.Data is "CARRIER_NATIVE_TRY_51820" or "CARRIER_NATIVE_TRY_443")Volatile.Write(ref _carrierStage,line.Data);

@@ -14,6 +14,7 @@ import time
 PORTS = (51820, 443, 8443)
 MAX_SECONDS = 300
 FILTER = (
+    (0x30, 0, 0, 0), (0x54, 0, 0, 0xf0), (0x15, 0, 13, 0x40),
     (0x30, 0, 0, 9), (0x15, 0, 11, 17),
     (0x28, 0, 0, 6), (0x45, 9, 0, 0x1fff), (0xb1, 0, 0, 0),
     (0x48, 0, 0, 2),
@@ -91,7 +92,7 @@ def observe(seconds=MAX_SECONDS):
               'counts': empty(), 'windows': []}
     try:
         interface = physical_interface()
-        with socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0800)) as sock:
+        with socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0003)) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
             attach(sock)
             sock.bind((interface, 0))

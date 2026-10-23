@@ -11,7 +11,7 @@ if os.geteuid()!=0 or os.stat('/proc/self/ns/net').st_ino==os.stat('/proc/1/ns/n
 subprocess.run(['ip','link','set','lo','up'],check=True)
 spec=importlib.util.spec_from_file_location('packets',Path(__file__).with_name('native_udp_packets.py'))
 packets=importlib.util.module_from_spec(spec);spec.loader.exec_module(packets)
-with socket.socket(socket.AF_PACKET,socket.SOCK_DGRAM,socket.htons(0x0800)) as capture:
+with socket.socket(socket.AF_PACKET,socket.SOCK_DGRAM,socket.htons(0x0003)) as capture:
     packets.attach(capture);capture.bind(('lo',0));capture.settimeout(.1)
     with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as noise, socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sender:
         sender.bind(('127.0.0.1',35000))

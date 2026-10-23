@@ -182,7 +182,24 @@ internal static class ProductTests
         if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
            form.UuReport.Contains("synthetic-user") || form.UuReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.UuReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY"))return 1;
         Console.WriteLine("UU_DIAGNOSTIC_ACTIONABLE_WITHOUT_ACCOUNT_OR_CREDENTIALS=PASS");
-        using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,form.ClientRectangle);Directory.CreateDirectory("dist/review");image.Save("dist/review/windows-client-synthetic.png");}
+        snapshot["mode"]="connected";snapshot["transport"]="wireguard-quic";snapshot["verified_exit_ip"]="152.67.156.100";snapshot["latency_ms"]=186;snapshot["core_pid"]=123U;
+        snapshot["traffic"]=new JsonObject{["sample_ms"]=1000L,["rx_bytes"]=10000L,["tx_bytes"]=20000L};form.Display(snapshot);
+        snapshot["traffic"]=new JsonObject{["sample_ms"]=2000L,["rx_bytes"]=12048L,["tx_bytes"]=21024L};form.Display(snapshot);
+        if(form.DownloadRate!="2.0 KiB/s" || form.UploadRate!="1.0 KiB/s")return 1;
+        snapshot["traffic"]=new JsonObject{["sample_ms"]=3000L,["rx_bytes"]=0L,["tx_bytes"]=0L};form.Display(snapshot);
+        if(form.DownloadRate!="采样中…" || form.UploadRate!="采样中…")return 1;
+        snapshot["mode"]="protected";form.Display(snapshot);if(form.DownloadRate!="—" || form.UploadRate!="—")return 1;
+        Console.WriteLine("LOCAL_TUN_RATES_USE_MONOTONIC_DELTAS_RESET_ON_COUNTER_RESTART_AND_NEVER_USE_BILLING_TOTALS=PASS");
+        foreach(var size in new[]{new Size(1120,860),new Size(960,740)}){
+            form.ClientSize=size;form.CreateControl();form.PerformLayout();
+            using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,form.ClientRectangle);
+            var viewport=Descendants(form).Single(c=>c.Name=="viewport");
+            var sections=Descendants(form).OfType<GroupBox>().Where(c=>c.Name.EndsWith("Section",StringComparison.Ordinal)).OrderBy(c=>c.Top).ToArray();
+            if(sections.Length!=3 || sections.Any(c=>c.Width>viewport.ClientSize.Width || c.Left!=sections[0].Left) || sections.Zip(sections.Skip(1)).Any(pair=>pair.First.Bottom>pair.Second.Top))return 1;
+            if(viewport is ScrollableControl scroller && scroller.HorizontalScroll.Visible)return 1;
+            Directory.CreateDirectory("dist/review");image.Save($"dist/review/windows-client-{size.Width}x{size.Height}-synthetic.png");
+        }
+        Console.WriteLine("THREE_ALIGNED_SECTIONS_FIT_NORMAL_AND_MINIMUM_WINDOW_WITHOUT_HORIZONTAL_SCROLL=PASS");
         snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
         snapshot["mode"]="disconnected";snapshot["guard"]=false;snapshot["preparing"]=true;snapshot["quick_ready"]=true;
         snapshot["error"]="";snapshot["transport"]="wireguard-quic";

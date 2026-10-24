@@ -61,6 +61,7 @@ internal static class OracleAcceptance
             return start>=0 && rx>=0 && tx>=0 && rx<=long.MaxValue-tx && rx+tx>=start && rx+tx-start<=RunBudgetBytes;
         }catch(InvalidOperationException){return false;}
     }
+    internal static bool CanCloseDeviceBudget(JsonObject value,long start)=>WithinDeviceBudget(value,start) && value["mode"]?.GetValue<string>()=="disconnected" && value["intent"]?.GetValue<bool>()==false && value["core_pid"]?.GetValue<uint>()==0;
     internal static void VerifyDeviceBudgetFixture()
     {
         var state=new JsonObject{["peer_rx_bytes"]=40L,["peer_tx_bytes"]=60L,["account"]=new JsonObject{["used_bytes"]=1_000_000_000L}};
@@ -70,6 +71,12 @@ internal static class OracleAcceptance
         Check(!WithinDeviceBudget(new JsonObject(),0),"CI_BUDGET_REFUSES_MISSING_DEVICE_COUNTERS");
         state["peer_rx_bytes"]=0L;state["peer_tx_bytes"]=0L;
         Check(!WithinDeviceBudget(state,100),"CI_BUDGET_REFUSES_COUNTER_REGRESSION");
+        state["peer_rx_bytes"]=40L;state["peer_tx_bytes"]=60L;state["mode"]="disconnected";state["intent"]=false;state["core_pid"]=0u;
+        Check(CanCloseDeviceBudget(state,100),"CI_BUDGET_CLOSES_WITH_STOPPED_CORE_AND_VALID_FINAL_COUNTERS");
+        state["core_pid"]=1u;
+        Check(!CanCloseDeviceBudget(state,100),"CI_BUDGET_CANNOT_CLOSE_WHILE_CORE_EXISTS");
+        state["core_pid"]=0u;state["intent"]=true;
+        Check(!CanCloseDeviceBudget(state,100),"CI_BUDGET_CANNOT_CLOSE_WHILE_CONNECTION_INTENT_EXISTS");
     }
     private static async Task<JsonObject> Send(string command)=>RequireSuccess(command,await ControlPipe.Send(command));
     private static async Task<string> ExitIp()
@@ -401,7 +408,13 @@ internal static class OracleAcceptance
             Check(idle["core_pid"]?.GetValue<uint>()==0 && idle["preparing"]?.GetValue<bool>()==false && idle["account"]?["device_count"]?.GetValue<int>()==devices && await ExitIp()!="152.67.156.100","REAL_QUIT_LEAVES_AUTHENTICATED_SERVICE_IDLE_WITHOUT_CORE_RESTART");
             await Send("Connect");await Connected();
             Check((await Send("Quit"))["core_pid"]?.GetValue<uint>()==0 && await ExitIp()!="152.67.156.100","REAL_QUIT_WHILE_CONNECTED_STOPS_CORE_AND_RESTORES_DIRECT");
-            await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
+            stage="FINAL_DEVICE_BUDGET";var finalUsage=await Send("Status");
+            Check(_deviceUsageStart is long start && CanCloseDeviceBudget(finalUsage,start),"REAL_DEVICE_BUDGET_CLOSED_ONLY_AFTER_CORE_STOPPED");
+            Console.WriteLine("REAL_DEVICE_RUN_USED_BYTES="+(checked(finalUsage["peer_rx_bytes"]!.GetValue<long>()+finalUsage["peer_tx_bytes"]!.GetValue<long>())-_deviceUsageStart!.Value));
+            _deviceUsageStart=null;
+            stage="LOGOUT";var loggedOut=await Send("Logout");
+            Check(loggedOut["account"] is null && loggedOut["core_pid"]?.GetValue<uint>()==0 && loggedOut["intent"]?.GetValue<bool>()==false,"REAL_LOGOUT_CLEARS_ACCOUNT_AFTER_FINAL_DEVICE_BUDGET");
+            Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
         }catch(Exception error){try{SafeNativeState(await ControlPipe.Send("Status"));}catch{}try{await ControlPipe.Send("Disconnect");}catch{}Console.WriteLine("REAL_ORACLE_STAGE="+stage);if(_lastAssertion.Length>0)Console.WriteLine("REAL_ORACLE_ASSERTION="+_lastAssertion);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }
 }

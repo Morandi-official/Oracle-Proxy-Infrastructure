@@ -230,6 +230,9 @@ internal static class OracleAcceptance
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
         string? username=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),password=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
         if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password)){Console.WriteLine("ORACLE_ACCEPTANCE_CREDENTIALS_MISSING");return 2;}
+        string deviceName=Environment.MachineName;
+        if(!System.Text.RegularExpressions.Regex.IsMatch(deviceName,@"\A[A-Za-z0-9_.-]{1,64}\z"))return 3;
+        Console.WriteLine("REAL_DISPOSABLE_DEVICE_NAME="+deviceName);
         string stage="BASELINE";
         try{
             VerifyDeviceBudgetFixture();RecoveryPolicy();
@@ -238,6 +241,7 @@ internal static class OracleAcceptance
             Check(login["ok"]?.GetValue<bool>()==true && login["account"]?["username"]?.GetValue<string>()==username,"REAL_ORACLE_CLIENT_LOGIN_AND_AUTOMATIC_ENROLLMENT");
             var account=login["account"]!;long used=account["used_bytes"]!.GetValue<long>();int devices=account["device_count"]!.GetValue<int>();
             long? limit=account["limit_bytes"]?.GetValue<long>();
+            Console.WriteLine("REAL_ACCOUNT_TEST_REGISTERED_DEVICES="+devices);
             Console.WriteLine("REAL_ACCOUNT_TEST_LIMIT_BYTES="+(limit?.ToString() ?? "unlimited"));
             Console.WriteLine("REAL_ACCOUNT_TEST_REMAINING_BYTES="+(limit is null?"unlimited":Math.Max(0,limit.Value-used).ToString()));
             Check(account["status"]?.GetValue<string>()=="active" && used>=0 && (limit is null || limit.Value-used>=4*1024*1024),"REAL_ACCOUNT_HAS_AVAILABLE_TEST_BUDGET");

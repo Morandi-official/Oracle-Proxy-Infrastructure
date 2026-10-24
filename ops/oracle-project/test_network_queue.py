@@ -28,6 +28,11 @@ class QueuePolicy(unittest.TestCase):
             queue.apply()
         self.assertEqual(run.call_args.args[0],['tc','qdisc','replace','dev','enp0s6','root','fq_codel','limit','1024','flows','1024','target','5ms','interval','100ms','ecn'])
         self.assertEqual(json.loads(write.call_args.args[1]),{'schema':1,'device':'enp0s6','previous':'pfifo_fast'})
+    def test_existing_owned_fq_is_not_reconfigured(self):
+        with tempfile.TemporaryDirectory() as root:
+            state=Path(root)/'baseline';state.write_text('baseline')
+            with patch.object(queue,'STATE',state),patch.object(queue,'baseline') as baseline,patch.object(queue,'observe',return_value=FQ),patch.object(queue,'run') as run:
+                queue.apply();baseline.assert_called_once();run.assert_not_called()
     def test_failed_apply_rolls_back_and_preserves_failure(self):
         with tempfile.TemporaryDirectory() as root, patch.object(queue,'STATE',Path(root)/'baseline'), patch.object(queue,'write'), patch.object(queue,'observe',return_value=FIFO), patch.object(queue,'run',side_effect=RuntimeError('synthetic')), patch.object(queue,'restore') as restore:
             with self.assertRaises(RuntimeError):queue.apply()

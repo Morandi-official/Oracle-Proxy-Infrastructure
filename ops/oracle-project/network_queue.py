@@ -78,6 +78,9 @@ def apply():
     else: raise ValueError('DEFAULT_FIFO_BASELINE_REQUIRED')
     if row.get('kind') not in ('pfifo_fast', 'fq_codel') or row.get('kind') == 'pfifo_fast' and not default_fifo(row):
         raise ValueError('EXTERNAL_QUEUE_CHANGE_REFUSE_APPLY')
+    if row.get('kind') == 'fq_codel':
+        print('PROJECT_NETWORK_QUEUE=FQ_CODEL_ALREADY_PRESENT; BASELINE_VERIFIED')
+        return
     try:
         run(['tc', 'qdisc', 'replace', 'dev', DEVICE, 'root', 'fq_codel',
              'limit', '1024', 'flows', '1024', 'target', '5ms', 'interval', '100ms', 'ecn'])

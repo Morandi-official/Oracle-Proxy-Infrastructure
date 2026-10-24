@@ -277,3 +277,26 @@ class AdminTests(TestCase):
         with self.assertRaises(RuntimeError):
             collect()
         self.assertEqual(Snapshot.objects.count(), 0)
+
+
+    def test_audit_is_ten_recent_rows_and_activity_counts_only_current_window_clients(self):
+        self.signed_in()
+        from .models import ClientAccount
+        key='00000000-0000-0000-0000-000000000019'
+        ClientAccount.objects.create(user_id=key,username='activity-user',password='synthetic-not-login')
+        for _ in range(15):Audit.objects.create(actor='client:'+key,action='device.login')
+        old=Audit.objects.create(actor='client:'+key,action='device.logout')
+        Audit.objects.filter(pk=old.pk).update(occurred_at=timezone.now()-timedelta(hours=25))
+        value=self.get('/api/audit').json()
+        self.assertEqual(len(value['entries']),10)
+        self.assertEqual(value['activity'],[{'user_id':key,'username':'activity-user','count':15}])
+
+class PrivacyPageTests(TestCase):
+ def test_public_check_has_no_account_data_and_does_not_request_media(self):
+  c=Client(HTTP_HOST=HOST)
+  for path in ('/privacy-check/','/privacy-check.js','/privacy-check.css'):
+   response=c.get(path,secure=True);self.assertEqual(response.status_code,200)
+   self.assertEqual(response['Cache-Control'],'no-store')
+  response=c.get('/privacy-check.js',secure=True)
+  text=b''.join(response.streaming_content).decode()
+  self.assertIn('RTCPeerConnection',text);self.assertNotIn('getUserMedia',text);self.assertNotIn('fetch(',text)

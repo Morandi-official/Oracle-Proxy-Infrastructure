@@ -4,6 +4,7 @@ import datetime as dt
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import pwd
 import re
@@ -224,8 +225,19 @@ class Engine:
         if user['quota'] is not None and usage['rx'] + usage['tx'] >= user['quota']: return 'quota'
         return 'active'
 
+    def official_budget_reference(self):
+        value=self.official_usage()
+        if (value.get('free_tier_status')!='VERIFIED_USAGE_AND_PRICE_TIER' or value.get('period')!=period(self.now()) or
+            type(value.get('checked_at')) not in (int,float) or not 0<=self.now()-value['checked_at']<=7200): return None
+        used=value.get('free_tier_used_gb')
+        if type(used) not in (int,float) or not math.isfinite(used) or used<0: return None
+        # Conservative conversion, not an assertion that OCI GB equals local bytes:
+        # debit at the larger binary GB, retain the smaller configured decimal cap,
+        # and count ALL collected traffic again to cover the unbilled tail.
+        return math.ceil(used*(2**30))+self.used('server','all')['tx']
+
     def budget_state(self):
-        value = self.get('budget').copy(); month = period(self.now())
+        value = self.get('budget').copy(); month = period(self.now()); reference = self.official_budget_reference()
         measured = self.used('server', 'all')['tx']
         valid = (value['period'] == month and value['prior_usage_bytes'] is not None and
                  value.get('baseline_gaps',0) == self.get('accounting_gaps'))
@@ -234,7 +246,8 @@ class Engine:
         available = max(0, remaining - value['reserve_bytes']) if remaining is not None else None
         return {**value, 'current_period': month, 'measured_outbound_bytes': measured,
                 'estimated_used_bytes': estimated, 'remaining_bytes': remaining, 'vpn_available_bytes': available,
-                'history_complete': valid, 'official_api_connected': False, 'basis': 'manual-baseline-plus-local-vnic' if valid else 'local-since-observation-only',
+                'history_complete': valid, 'reference_used_bytes':reference,
+                'reference_available_bytes':max(0,value['limit_bytes']-value['reserve_bytes']-reference) if reference is not None else None, 'official_api_connected': reference is not None, 'basis': 'manual-baseline-plus-local-vnic' if valid else 'local-since-observation-only',
                 'guard_blocked': bool(value['guard_enabled'] and (available is None or available <= 0)),
                 'accounting_gaps': self.get('accounting_gaps'), 'started_at': self.get('started_at')}
 
@@ -344,7 +357,7 @@ class Engine:
             'period': period(self.now()), 'sample_interval_seconds':TICK, 'lease_seconds':LEASE,
             'users':users, 'peers':peers, 'budget':self.budget_state(), 'official_usage':self.official_usage(), 'nics':sorted(observation['nics']),
             'server_public_key':observation['server_public_key'], 'listen_port':observation['listen_port'],
-            'audit':[dict(row) for row in self.db.execute('SELECT at,actor,action,resource FROM audit ORDER BY id DESC LIMIT 50')]}
+            'audit':[dict(row) for row in self.db.execute('SELECT at,actor,action,resource FROM audit ORDER BY id DESC LIMIT 10')]}
 
     def official_usage(self):
         try:
@@ -481,6 +494,12 @@ class Engine:
                             (key,user_id,data['name'].strip(),json.dumps(addresses),int(operation=='peer.create' or bool(existing and existing['owned']))))
             self.audit(actor,operation,hashlib.sha256(key.encode()).hexdigest()[:12])
             self.tick()
+        elif operation == 'budget.calibrate':
+            if set(data)!={'limit_bytes','reserve_bytes','guard_enabled','confirm_current_period'} or data['confirm_current_period'] is not True: raise ValueError('BASELINE_CONFIRMATION_REQUIRED')
+            reference=self.official_budget_reference()
+            if reference is None: raise ValueError('OFFICIAL_USAGE_NOT_READY')
+            self.dispatch({'operation':'budget.set','actor':actor,'data':{**data,'prior_usage_bytes':reference}})
+            self.audit(actor,'budget.calibrated',period(self.now()))
         elif operation == 'budget.set':
             if set(data) != {'limit_bytes','reserve_bytes','guard_enabled','prior_usage_bytes','confirm_current_period'}: raise ValueError('INVALID_FIELDS')
             limit = integer(data['limit_bytes']); reserve = integer(data['reserve_bytes'])

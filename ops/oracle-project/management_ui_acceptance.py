@@ -20,6 +20,7 @@ def main():
     driver=fixture.FakeDriver();engine=fixture.agent.Engine(Path(temporary)/'fixture.sqlite3',driver);engine.tick()
     browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='UTC');page=context.new_page()
     accounts={};official_fixture=[None];pending_fixture=[[]];presence_fixture=[False]
+    engine.official_usage=lambda:official_fixture[0] or {'status':'NOT_QUERIED'}
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
     def serve(route):
      path=urlsplit(route.request.url).path
@@ -48,7 +49,7 @@ def main():
         if presence_fixture[0] and p['public_key']==fixture.KEY3:p['client_status']={'online':True,'reported_mode':'connected','transport':'wireguard-udp','last_seen_at':int(time.time())}
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':None}
-      elif path=='/api/audit':data={'entries':[]}
+      elif path=='/api/audit':data={'entries':[{'occurred_at':int(time.time())-i,'actor':'fixture','action':'test','resource':'fixture'} for i in range(20)],'activity':[{'username':'ci-user01','count':7}]}
       else:route.fulfill(status=404);return
       route.fulfill(status=200,content_type='application/json',body=json.dumps(data))
     page.route('**/*',serve)
@@ -65,13 +66,14 @@ def main():
      expect(row).to_contain_text('ci-user01');expect(page.locator('#user-form [name=password]')).to_have_value('')
      assert page.locator('#account-form').count()==0
      assert 'synthetic-password-only-123' not in page.locator('body').inner_text()
+     page.locator('#device-editor').evaluate('(el)=>el.open=true')
      page.locator('#peer-form [name=name]').fill('CI Windows PC');page.locator('#peer-form [name=user_id]').select_option(user['id'])
      page.locator('#peer-form [name=public_key]').fill(fixture.KEY1)
-     page.get_by_role('button',name='绑定 / 调整已有 Peer',exact=True).click()
+     page.get_by_role('button',name='保存设备',exact=True).click()
      expect(page.locator('#peer-rows tr').filter(has_text='CI Windows PC')).to_contain_text(label)
      assert driver.allowed=={'10.250.0.2'}
      page.locator('#peer-form [name=name]').fill('CI New Windows PC');page.locator('#peer-form [name=public_key]').fill(fixture.KEY3)
-     page.get_by_role('button',name='新增 Peer',exact=True).click()
+     page.get_by_role('button',name='保存设备',exact=True).click()
      expect(page.locator('#peer-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('10.250.0.4/32')
      engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{'public_key':fixture.KEY3,'user_id':user['id'],'name':'CI New Windows PC','machine_name':'CI-DESKTOP','client_version':'0.3.0-rc18','confirm':True}})
      pending_fixture[0]=[{'id':'a'*12,'name':'CI pending <b>literal</b>','user_id':user['id'],'created_at':int(time.time()),'last_seen_at':int(time.time())}];presence_fixture[0]=True
@@ -81,6 +83,9 @@ def main():
      expect(page.locator('#pending-device-rows')).to_contain_text('CI pending <b>literal</b>')
      assert page.locator('#pending-device-rows b').count()==0
      assert engine.device_count(user['id'])==2
+     confirmed.get_by_role('button',name='管理',exact=True).click()
+     expect(page.locator('#device-profile')).to_be_visible()
+     expect(page.locator('#device-profile')).to_contain_text('设备识别码')
      pending_fixture[0]=[]
      print(f'SYNTHETIC_{name.upper()}_PENDING_CONFIRMED_DEVICE_PRESENCE_AND_TEXT_ESCAPE=PASS',flush=True)
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=enabled]').uncheck()
@@ -89,6 +94,7 @@ def main():
      page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('可用')
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=expires]').fill('2020-01-01T00:00')
      page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('已到期');assert not driver.allowed
+     page.locator('#budget-form [name=source]').select_option('manual')
      page.locator('#budget-form [name=prior]').fill('10');page.locator('#budget-form [name=confirm]').check();page.locator('#budget-form [name=guard]').check()
      page.get_by_role('button',name='保存出站保护策略',exact=True).click()
      expect(page.locator('#balance-basis')).to_have_text('手工核对基线 + 本机增量估算')
@@ -102,9 +108,16 @@ def main():
      expect(page.locator('#official-remaining')).to_have_text('10,238.75 GB')
      expect(page.locator('#remaining')).to_have_text('10,238.75 GB')
      assert page.locator('#official-progress').evaluate('(el)=>el.max===10240 && el.value===1.25')
+     page.locator('#budget-form [name=source]').select_option('official')
+     page.locator('#budget-form [name=confirm]').check()
+     page.get_by_role('button',name='保存出站保护策略',exact=True).click()
+     assert engine.budget_state()['estimated_used_bytes']>=int(1.25*2**30)
+     expect(page.locator('#available')).not_to_have_text('未知')
      official_fixture[0]['free_tier_status']='PAGINATED_INCOMPLETE'
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
      expect(page.locator('#official-remaining')).to_have_text('未知')
+     expect(page.locator('#audit-rows tr')).to_have_count(10)
+     expect(page.locator('#activity-chart')).to_contain_text('7 次')
      assert not errors, 'Synthetic management UI raised JavaScript errors'
      print(f'SYNTHETIC_{name.upper()}_UI_USER_PEER_QUOTA_EXPIRY_BUDGET_CSRF_HEADER_AND_TEXT_ESCAPE=PASS',flush=True)
     finally:context.close();browser.close();engine.db.close()

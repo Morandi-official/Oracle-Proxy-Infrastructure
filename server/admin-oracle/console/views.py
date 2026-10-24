@@ -1,4 +1,6 @@
 from time import time
+from datetime import timedelta
+from django.db.models import Count
 
 from allauth.account.authentication import get_authentication_records
 from allauth.mfa.models import Authenticator
@@ -120,8 +122,14 @@ def audit(request):
         return rejected
     entries = [{'occurred_at': int(row.occurred_at.timestamp()), 'actor': row.actor,
                 'action': row.action, 'resource': row.resource}
-               for row in Audit.objects.order_by('-occurred_at', '-id')[:100]]
-    return JsonResponse({'entries': entries})
+               for row in Audit.objects.order_by('-occurred_at', '-id')[:10]]
+    since=timezone.now()-timedelta(hours=24)
+    names={str(a.user_id):a.username for a in ClientAccount.objects.all()}
+    grouped=[]
+    for row in Audit.objects.filter(occurred_at__gte=since,actor__startswith='client:').values('actor').annotate(count=Count('id')).order_by('-count','actor')[:256]:
+        identity=row['actor'].removeprefix('client:')
+        grouped.append({'user_id':identity,'username':names.get(identity,'已删除账号'),'count':row['count']})
+    return JsonResponse({'entries': entries,'activity':grouped,'activity_window_hours':24})
 
 
 @require_http_methods(['GET','POST'])
@@ -135,7 +143,7 @@ def management(request):
         try:
             value = json.loads(request.body)
             if not isinstance(value,dict) or set(value)!={'operation','data'} or value['operation'] not in (
-                    'peer.assign','peer.create','peer.revoke','account.save','account.delete','budget.set') or not isinstance(value['data'],dict):
+                    'peer.assign','peer.create','peer.revoke','account.save','account.delete','budget.set','budget.calibrate') or not isinstance(value['data'],dict):
                 raise ValueError()
             operation, data = value['operation'], value['data']
         except (ValueError,TypeError): return JsonResponse({'error':'INVALID_REQUEST'},status=400)
@@ -180,3 +188,14 @@ def health(request):
                  'balance_known':data['budget']['remaining_bytes'] is not None}
     except (OSError,ValueError,TimeoutError,KeyError): pass
     return JsonResponse({'ready': True,'control':summary})
+
+
+@require_GET
+def privacy_check(request):
+    return render(request,'privacy.html')
+
+
+@require_GET
+def privacy_asset(request,name):
+    if name not in ('privacy.js','style.css'):return JsonResponse({'error':'NOT_FOUND'},status=404)
+    return FileResponse((settings.BASE_DIR/'static'/'console'/name).open('rb'),content_type='text/javascript' if name.endswith('.js') else 'text/css')

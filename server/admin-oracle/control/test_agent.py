@@ -192,4 +192,14 @@ class PolicyTests(unittest.TestCase):
   self.request('peer.revoke',{'public_key':KEY3})
   with self.assertRaisesRegex(ValueError,'DEVICE_REVOKED'):enroll(uid=other['id'])
 
-if __name__=='__main__':unittest.main()
+
+ def test_official_reference_never_enables_guard_and_explicit_calibration_is_conservative(self):
+  official={'free_tier_status':'VERIFIED_USAGE_AND_PRICE_TIER','period':agent.period(self.clock[0]),'checked_at':self.clock[0],'free_tier_used_gb':2.5}
+  with patch.object(self.engine,'official_usage',return_value=official):
+   self.driver.value['nics']['eth0']['tx']+=100;self.engine.tick()
+   b=self.engine.budget_state();self.assertIsNone(b['vpn_available_bytes']);self.assertIsNotNone(b['reference_available_bytes']);self.assertFalse(b['guard_enabled'])
+   with self.assertRaises(ValueError):self.request('budget.calibrate',{'limit_bytes':10**13,'reserve_bytes':10**12,'guard_enabled':True,'confirm_current_period':False})
+   b=self.request('budget.calibrate',{'limit_bytes':10**13,'reserve_bytes':10**12,'guard_enabled':True,'confirm_current_period':True})['budget']
+   self.assertEqual(b['estimated_used_bytes'],int(2.5*2**30)+100);self.assertIsNotNone(b['vpn_available_bytes'])
+   official['checked_at']-=7201
+   with self.assertRaises(ValueError):self.request('budget.calibrate',{'limit_bytes':10**13,'reserve_bytes':10**12,'guard_enabled':True,'confirm_current_period':True})

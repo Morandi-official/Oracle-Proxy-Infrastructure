@@ -49,6 +49,7 @@ jobs:
               subprocess.run([sys.executable, '../../ops/oracle-project/verify_quic.py', '--require-reachable'], check=True)
           PYQUIC
       - run: node --check static/console/app.js
+      - run: node ../../ops/oracle-project/privacy-classifier-test.cjs
       - name: Package source without test-only privileged entrypoints or credentials
         if: matrix.python == '3.12'
         run: python deploy/package.py

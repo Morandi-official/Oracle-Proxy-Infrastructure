@@ -25,7 +25,7 @@ def observe():
     result = run(['tc', '-j', '-s', 'qdisc', 'show', 'dev', DEVICE])
     if len(result.stdout) > 16384: raise ValueError('QUEUE_OBSERVATION_LIMIT')
     rows = json.loads(result.stdout)
-    if len(rows) != 1 or rows[0].get('dev') != DEVICE or rows[0].get('root') is not True:
+    if len(rows) != 1 or rows[0].get('dev', DEVICE) != DEVICE or rows[0].get('root') is not True:
         raise ValueError('SINGLE_PHYSICAL_ROOT_QUEUE_REQUIRED')
     return rows[0]
 

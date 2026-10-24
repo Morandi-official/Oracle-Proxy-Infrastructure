@@ -16,6 +16,10 @@ class QueuePolicy(unittest.TestCase):
         self.assertTrue(queue.default_fifo(FIFO))
         self.assertFalse(queue.default_fifo(dict(FIFO,options={'bands':2})))
         self.assertFalse(queue.default_fifo(dict(FIFO,options={'unrecognized':1})))
+        # tc omits dev in JSON when the command already selects one device.
+        filtered=dict(FIFO);filtered.pop('dev')
+        with patch.object(queue,'run',return_value=SimpleNamespace(stdout=json.dumps([filtered]))):
+            self.assertTrue(queue.default_fifo(queue.observe()))
         for rows in ([],[FIFO,FQ],[dict(FIFO,root=False)],[dict(FIFO,dev='wg0')]):
             with patch.object(queue,'run',return_value=SimpleNamespace(stdout=json.dumps(rows))):
                 with self.assertRaises(ValueError):queue.observe()

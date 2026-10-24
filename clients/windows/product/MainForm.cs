@@ -2,6 +2,12 @@ using System.Text.Json.Nodes;
 namespace OracleProxy.Product;
 internal sealed class MainForm : Form
 {
+    private async Task ShowGitHubReport()
+    {
+        if(_githubChecking)return;_githubChecking=true;
+        try{string report=await GitHubDiagnostics.Run();if(!IsDisposed && !_closing)ShowReport("GitHub 连通性",report);}
+        finally{_githubChecking=false;}
+    }
     private readonly Label _mode=new(){Text="正在读取系统服务…",AutoSize=true,Font=new Font("Microsoft YaHei UI",23,FontStyle.Bold)};
     private readonly Label _detail=new(){Text="",AutoSize=true,MaximumSize=new Size(680,0)};
     private readonly Label _usage=new(){Text="用量未知",AutoSize=true};
@@ -14,6 +20,7 @@ internal sealed class MainForm : Form
     private readonly Button _connect=new(){Text="连接",Width=155,Height=48};
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
+    private bool _githubChecking;
     private bool _busy,_renderingTransport,_connectionIntent,_closing,_allowClose;
     private readonly ComboBox _transportChoice=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=240};
     private readonly SemaphoreSlim _requests=new(1,1);
@@ -79,6 +86,7 @@ internal sealed class MainForm : Form
         var diagnostics=Actions();
         Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=true,MinimumSize=new Size(112,36),Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
         diagnostics.Controls.Add(Tool("连接诊断",()=>ShowReport("连接诊断",_connectionReport)));
+        diagnostics.Controls.Add(Tool("GitHub 连通性",async()=>await ShowGitHubReport()));
         diagnostics.Controls.Add(Tool("UU 检查详情",ShowUuReport));
         diagnostics.Controls.Add(Tool("重新识别 UU",async()=>await Act("RefreshUu")));
         diagnostics.Controls.Add(Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443")));

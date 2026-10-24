@@ -61,3 +61,5 @@ a verified Oracle exit. No raw stderr, packet bytes, IP addresses or keys are
 exported in these counters. Intended socket closure is not a read failure.
 
 rc11协议重试：显式选择UDP或HTTP/3后，新的连接会重新尝试所选协议，不复用上次回退至其他协议的预备核心；在下拉框再次选择相同项目也会触发重新探测。自动模式保留已验证备用通道的快速重连。协议选择仍有受限网络下的自动兜底，实际协议继续明确显示。
+
+The rc15 TCP policy and GitHub local-intermediary diagnosis are described in [network performance evidence](../../../docs/network-performance-and-github-20261024.md). The actual WireGuard stack uses CUBIC with unchanged desktop buffers and stable MTUs. Corresponding source includes the exact-preimage dependency patch and its actual-stack regression.

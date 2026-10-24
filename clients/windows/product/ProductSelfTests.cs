@@ -12,6 +12,7 @@ internal static class ProductSelfTests
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:51820",["server_public_key"]=Convert.ToBase64String(pub),["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
         var secret=new DurableState{PrivateKey=Convert.ToBase64String(key),UuPaths=[@"E:\Different\GameViewer\GameViewer.exe"]};
         var config=CoreConfig.Build(state,secret,"synthetic-only");
+        if(config["dns"]?["strategy"]?.GetValue<string>()!="ipv4_only" || !GitHubDiagnostics.LocalOverride([System.Net.IPAddress.Loopback]) || !GitHubDiagnostics.LocalOverride([System.Net.IPAddress.IPv6Loopback]) || GitHubDiagnostics.LocalOverride([System.Net.IPAddress.Parse("185.199.108.133")]))return false;
         if(config["route"]?["final"]?.GetValue<string>()!="oracle-wireguard" || !System.Text.RegularExpressions.Regex.IsMatch(secret.UuPaths[0].ToLowerInvariant(),config["route"]!["rules"]![0]!["process_path_regex"]![0]!.GetValue<string>()))return false;
         if(config["endpoints"]?[0]?["peers"]?[0]?["port"]?.GetValue<int>()!=51820)return false;
         state["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443);

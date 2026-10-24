@@ -9,7 +9,7 @@ using OracleProxy.Product;
 internal static class Acceptance
 {
  static void Check(bool ok,string code){if(!ok)throw new IOException(code);Console.WriteLine(code+"=PASS");}
- static async Task<JsonObject> Send(string command,string? name=null,string? value=null){var state=await ControlPipe.Send(command,name,value);if(state["ok"]?.GetValue<bool>()!=true)throw new IOException("FIXED_CLIENT_OPERATION_FAILED");return state;}
+ static async Task<JsonObject> Send(string command,string? name=null,string? value=null){var state=await ControlPipe.Send(command,name,value);if(state["ok"]?.GetValue<bool>()!=true){Console.WriteLine("FAILED_OPERATION="+command);foreach(string field in new[]{"error","mode","connection_stage"}){string text=state[field]?.ToString()??"";if(System.Text.RegularExpressions.Regex.IsMatch(text,"^[A-Za-z0-9_-]{1,100}$"))Console.WriteLine("SERVICE_"+field.ToUpperInvariant()+"="+text);}foreach(string field in new[]{"device_count","device_limit"})if(state["account"]?[field] is JsonValue n && n.TryGetValue<int>(out var count))Console.WriteLine("ACCOUNT_"+field.ToUpperInvariant()+"="+count);throw new IOException("FIXED_CLIENT_OPERATION_FAILED");}return state;}
  static async Task<JsonObject> Cdp(ClientWebSocket ws,string expression,int id){
   using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(30));
   var frame=new JsonObject{["id"]=id,["method"]="Runtime.evaluate",["params"]=new JsonObject{["expression"]=expression,["awaitPromise"]=true,["returnByValue"]=true}};

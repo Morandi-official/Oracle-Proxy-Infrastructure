@@ -172,16 +172,16 @@ internal sealed class MainForm : Form
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
             foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","quic_available","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
-            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","carrier_stage","probe_failures","elapsed_ms"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
+            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;
             _renderingTransport=true;
             try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>() switch{"udp"=>1,"quic"=>2,_=>0};}finally{_renderingTransport=false;}
             _transportChoice.Enabled=!_connectionIntent && !_busy;
-            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","attempt_elapsed_ms"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
+            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc13");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc14");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){

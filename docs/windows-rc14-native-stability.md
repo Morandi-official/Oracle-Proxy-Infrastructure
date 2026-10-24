@@ -1,0 +1,9 @@
+# rc14 native UDP stability
+
+The MetaWise rc13 report showed Winsock WSAEMSGSIZE (10040) writes and 297 obsolete receives after repeated WireGuard reconnects. Inspection found ClientBind reconnects the transport socket on a write error while retaining WireGuard crypto state. NativeConn then sent type-4 data without a new initiation but discarded all replies because attempt was still -1. A real loopback datagram regression failed with RECV_OBSOLETE and timeout before the fix, and passed afterward.
+
+Track the socket actually written independently of fresh handshake rotation. Permit its data to reach WireGuard for cryptographic validation after a transport rebind. Unsolicited/unwritten sockets and obsolete alternate-port replies remain rejected; never duplicate a WireGuard initiation. Winning-socket sends also emit bounded numerical error diagnostics.
+
+IPv4-only endpoint MTU1200 bounds encrypted datagrams to1232bytes, allowing IPv4 outer traffic within a1280-byte path. Windows TUN MTU stays1280; the existing IPv6 block is unchanged. No physical adapter MTU is altered by the product. The disposable hosted test alone lowers/restores its physical IPv4 MTU, exercises bulk HTTPS, ordinary DNS and padded UDP DNS on Quad9 alternate port9953 (bypassing port53 DNS hijack) for at least120seconds, and requires the same8443 UDP core with no errors or fallback. This is cloud evidence, not a claim that the China Mobile path is already fixed.
+
+SCM restart backoff is3/5/10seconds, with a300-second failure-count reset. A nonshipped fixture queries the actual SCM policy; normal and fallback service-crash tests remain. Reset failed-probe state per new core, discard obsolete pending probes, and wait for an active bounded probe before fallback. Rename lifetime metrics and report first verified startup duration separately. All guard, UU trust, account and exit-IP checks remain required.

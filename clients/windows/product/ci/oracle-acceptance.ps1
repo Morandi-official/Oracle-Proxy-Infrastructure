@@ -10,7 +10,7 @@ $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
 New-Item -ItemType Directory -Force $root | Out-Null
 Set-Content "$root/authorized" 'DISPOSABLE_GITHUB_ONLY'
-$action=New-ScheduledTaskAction -Execute $test -Argument '--watchdog'
+$action=New-ScheduledTaskAction -Execute $test -Argument '--oracle-watchdog'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog' -Action $action -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'
 try{

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -13,6 +14,66 @@ import (
 type deniedNativeWrite struct{ net.Conn }
 
 func (c deniedNativeWrite) Write([]byte) (int, error) { return 0, errors.New("SYNTHETIC_SEND_DENIED") }
+
+type mtuBoundNativeWrite struct{ net.Conn }
+
+func (c mtuBoundNativeWrite) Write(b []byte) (int, error) {
+	if len(b) > 1232 {
+		return 0, &net.OpError{Op: "write", Net: "udp", Err: syscall.Errno(10040)}
+	}
+	return c.Conn.Write(b)
+}
+
+func TestNativeUDPRebindKeepsExistingWireGuardSessionData(t *testing.T) {
+	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	socket, err := net.DialUDP("udp4", nil, server.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newNativeConn([]net.Conn{mtuBoundNativeWrite{socket}}, []uint16{8443})
+	defer c.Close()
+	go func() {
+		buffer := make([]byte, 4096)
+		for {
+			n, peer, err := server.ReadFromUDP(buffer)
+			if err != nil {
+				return
+			}
+			server.WriteToUDP(buffer[:n], peer)
+		}
+	}()
+	// ClientBind may reconnect its UDP socket while WG retains authenticated
+	// session keys. Its next send is encrypted data, not a fresh initiation.
+	packet := append([]byte{4, 0, 0, 0}, bytes.Repeat([]byte{17}, 1228)...)
+	c.SetReadDeadline(time.Now().Add(time.Second))
+	for i := 0; i < 20; i++ {
+		if _, err := c.Write(packet); err != nil {
+			t.Fatal(err)
+		}
+		buffer := make([]byte, 4096)
+		n, err := c.Read(buffer)
+		if err != nil || !bytes.Equal(buffer[:n], packet) {
+			t.Fatalf("resumed WG data lost: %v", err)
+		}
+	}
+	oversize := append([]byte{4, 0, 0, 0}, make([]byte, 1404)...)
+	if _, err := c.Write(oversize); nativeError(err) != 10040 {
+		t.Fatal("oversized write error not preserved", err)
+	}
+	if c.events["NATIVE_UDP_8443_WRITE_ERROR_10040"] != 1 {
+		t.Fatal("winning socket error was not counted")
+	}
+	if _, err := c.Write(append([]byte{1, 0, 0, 0}, make([]byte, 144)...)); err != nil {
+		t.Fatal(err)
+	}
+	if c.attempt != -1 {
+		t.Fatal("transport manufactured a new WireGuard handshake")
+	}
+}
 
 func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
 	for _, loss := range []int{0, 1, 2, 3, 4} {

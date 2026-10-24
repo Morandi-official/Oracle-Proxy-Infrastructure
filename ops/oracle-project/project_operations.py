@@ -388,6 +388,9 @@ def enable_https():
     # refresh, deploy and preflight never alter queue discipline.
     request=json.loads(Path(__file__).with_name('request.json').read_text())
     action=request.get('request_id','')
+    if action=='webrtc-owned-ci-slot-observe-20261024':
+        cleanup_spec=importlib.util.spec_from_file_location('observe_webrtc_ci',Path(__file__).with_name('cleanup_webrtc_ci.py'))
+        cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.observe_only()
     if action=='webrtc-owned-ci-slot-release-20261024':
         cleanup_spec=importlib.util.spec_from_file_location('cleanup_webrtc_ci',Path(__file__).with_name('cleanup_webrtc_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()

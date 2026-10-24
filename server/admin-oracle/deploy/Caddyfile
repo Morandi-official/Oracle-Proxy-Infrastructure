@@ -3,6 +3,12 @@ vpn-admin.morandi.dpdns.org {
     request_body {
         max_size 16KB
     }
+    handle_path /downloads/* {
+        root * /var/lib/oracle-proxy-downloads
+        header X-Content-Type-Options nosniff
+        header Cache-Control "public, max-age=86400, immutable"
+        file_server
+    }
     # Only the local deployment checker may use the application health route.
     handle /api/health {
         respond 404

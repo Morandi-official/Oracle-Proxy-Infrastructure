@@ -109,3 +109,11 @@ sudo usermod --shell /usr/sbin/nologin oracle-project-ci
 disposable GitHub CI 另行验证真实 SSH 公钥认证、forced-command 拒绝、sudo 限制、
 实际 root 运维进程委派（仅模拟 GitHub 传输）、Secret 配置保密和现有后台生命周期。
 测试使用临时合成密钥，不访问真实 Oracle，不上传私钥。
+
+### Oracle direct release downloads
+
+`enable-https` mirrors only the accepted release assets pinned by `downloads-current.json`, into a root-owned version directory under `/var/lib/oracle-proxy-downloads`. Each client, corresponding-source archive, BUILD file and checksum file must match its exact size and SHA-256. Staging occurs outside the public document root, and the complete version is published atomically. Downloaded bytes are never executed. Existing mismatched versions are refused.
+
+Caddy serves the versioned `/downloads/` files directly through the administrator HTTPS host, with byte-range/resume support and no GitHub redirect or login requirement for downloads. Administrator APIs keep their existing fixed-password authentication. The operations workflow checks all four public file sizes and Range responses and hashes the complete client from the Oracle URL. Public download egress belongs to official instance outbound monitoring rather than an individual VPN user's tunnel accounting.
+
+The old rc13 mirror PR203 remains unmerged at the owner's request. This infrastructure is used for the newly accepted rc14 release under the owner's preference that future releases provide both GitHub and Oracle download links.

@@ -128,6 +128,13 @@ def preflight():
     probe_spec=importlib.util.spec_from_file_location('udp_resolver_probe',Path(__file__).with_name('udp_resolver_probe.py'))
     probe=importlib.util.module_from_spec(probe_spec);probe_spec.loader.exec_module(probe)
     value['public_udp_resolver_controls']=probe.observe()
+    diagnostic_request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if diagnostic_request.get('operation')=='preflight' and diagnostic_request.get('request_id','').startswith('network-performance-'):
+        try:
+            measured=subprocess.run([sys.executable,'-I',str(Path(__file__).with_name('performance_probe.py'))],capture_output=True,text=True,check=True,timeout=120)
+            if len(measured.stdout)>65536:raise ValueError('PERFORMANCE_RESULT_LIMIT')
+            value['performance_controls']=json.loads(measured.stdout)
+        except (OSError,ValueError,subprocess.SubprocessError):value['performance_controls']={'status':'UNAVAILABLE_OR_DEADLINE'}
     print(json.dumps(value, indent=2))
 
 

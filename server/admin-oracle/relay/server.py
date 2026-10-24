@@ -32,10 +32,11 @@ async def authenticate(session, token):
             body = bytearray()
             async for part in response.content.iter_chunked(4096):
                 body.extend(part)
-                if len(body) > 32768: return False
+                if len(body) > 65536: return False
             import json
             value = json.loads(body)
             return (value.get('account', {}).get('status') == 'active' and
+                    value.get('device', {}).get('registered') is True and
                     type(value.get('observed_at')) is int and abs(time.time() - value['observed_at']) <= 20)
     except (OSError, ValueError, TypeError, AttributeError, asyncio.TimeoutError):
         return False

@@ -19,7 +19,7 @@ def main():
    with tempfile.TemporaryDirectory() as temporary:
     driver=fixture.FakeDriver();engine=fixture.agent.Engine(Path(temporary)/'fixture.sqlite3',driver);engine.tick()
     browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='UTC');page=context.new_page()
-    accounts={};official_fixture=[None]
+    accounts={};official_fixture=[None];pending_fixture=[[]];presence_fixture=[False]
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
     def serve(route):
      path=urlsplit(route.request.url).path
@@ -43,6 +43,9 @@ def main():
         else:data=engine.dispatch({'actor':'github:204281968',**value})
        else:data=engine.snapshot()
        for u in data['users']:u['username']=accounts.get(u['id'])
+       data['pending_devices']=pending_fixture[0]
+       for p in data['peers']:
+        if presence_fixture[0] and p['public_key']==fixture.KEY3:p['client_status']={'online':True,'reported_mode':'connected','transport':'wireguard-udp','last_seen_at':int(time.time())}
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':None}
       elif path=='/api/audit':data={'entries':[]}
@@ -70,6 +73,16 @@ def main():
      page.locator('#peer-form [name=name]').fill('CI New Windows PC');page.locator('#peer-form [name=public_key]').fill(fixture.KEY3)
      page.get_by_role('button',name='新增 Peer',exact=True).click()
      expect(page.locator('#peer-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('10.250.0.4/32')
+     engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{'public_key':fixture.KEY3,'user_id':user['id'],'name':'CI New Windows PC','machine_name':'CI-DESKTOP','client_version':'0.3.0-rc18','confirm':True}})
+     pending_fixture[0]=[{'id':'a'*12,'name':'CI pending <b>literal</b>','user_id':user['id'],'created_at':int(time.time()),'last_seen_at':int(time.time())}];presence_fixture[0]=True
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
+     confirmed=page.locator('#peer-rows tr').filter(has_text='CI New Windows PC')
+     expect(confirmed).to_contain_text('用户已确认');expect(confirmed).to_contain_text('CI-DESKTOP');expect(confirmed).to_contain_text('自报已连接')
+     expect(page.locator('#pending-device-rows')).to_contain_text('CI pending <b>literal</b>')
+     assert page.locator('#pending-device-rows b').count()==0
+     assert engine.device_count(user['id'])==2
+     pending_fixture[0]=[]
+     print(f'SYNTHETIC_{name.upper()}_PENDING_CONFIRMED_DEVICE_PRESENCE_AND_TEXT_ESCAPE=PASS',flush=True)
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=enabled]').uncheck()
      page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('已禁用');assert not driver.allowed
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=enabled]').check()

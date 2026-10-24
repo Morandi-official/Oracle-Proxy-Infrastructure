@@ -151,7 +151,7 @@ def management(request):
         Audit.objects.create(actor=audit_actor(request),action=operation,resource='policy-control')
     accounts = {str(a.user_id):a.username for a in ClientAccount.objects.all()}
     for user in result.get('users',[]): user['username'] = accounts.get(user['id'])
-    return JsonResponse(result)
+    return JsonResponse(client_api.annotate_devices(result))
 
 
 @require_GET

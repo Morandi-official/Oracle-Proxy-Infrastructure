@@ -165,6 +165,8 @@ class Engine:
           CREATE TABLE IF NOT EXISTS devices (key TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
             addresses TEXT NOT NULL, owned INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE IF NOT EXISTS device_limits (user_id TEXT PRIMARY KEY, maximum INTEGER NOT NULL);
+          CREATE TABLE IF NOT EXISTS device_enrollments (key TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+            machine_name TEXT NOT NULL, client_version TEXT NOT NULL, confirmed_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS revoked_devices (key TEXT PRIMARY KEY);
           CREATE TABLE IF NOT EXISTS deleted_users (user_id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY, rx INTEGER, tx INTEGER, boot TEXT);
@@ -326,10 +328,14 @@ class Engine:
                           'remaining_bytes': max(0, user['quota']-usage['rx']-usage['tx']) if user['quota'] is not None else None,
                           'status': self.reason(user), 'device_limit':self.device_limit(user['id']), 'device_count':self.device_count(user['id'])})
         bindings = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM devices')}
+        confirmations = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM device_enrollments')}
         peers = []
         for key in sorted(set(observation['peers']) | set(bindings)):
             peer = observation['peers'].get(key); device = bindings.get(key)
+            confirmation = confirmations.get(key)
+            if not device or (confirmation and confirmation['user_id'] != device['user_id']): confirmation = None
             peers.append({'public_key':key, 'fingerprint':hashlib.sha256(key.encode()).hexdigest()[:12],
+                'enrollment':{name:confirmation[name] for name in ('machine_name','client_version','confirmed_at')} if confirmation else None,
                 'user_id':device['user_id'] if device else None, 'name':device['name'] if device else '',
                 'allowed_ips': peer['allowed_ips'] if peer else json.loads(device['addresses']),
                 'handshake':peer['handshake'] if peer else 0, 'present':peer is not None,
@@ -405,6 +411,27 @@ class Engine:
             if self.device_count(user_id) > maximum: raise ValueError('REVOKE_DEVICES_BEFORE_LOWERING_LIMIT')
             self.db.execute('INSERT OR REPLACE INTO device_limits VALUES (?,?)', (user_id,maximum))
             self.audit(actor,operation,user_id)
+        elif operation == 'peer.enroll':
+            if set(data) != {'public_key','user_id','name','machine_name','client_version','confirm'} or data['confirm'] is not True:
+                raise ValueError('DEVICE_CONFIRMATION_REQUIRED')
+            key=public_key(data['public_key']);user_id=identifier(data['user_id'])
+            user=self.db.execute('SELECT * FROM users WHERE id=?',(user_id,)).fetchone()
+            if not user or self.reason(user)!='active':raise ValueError('ACCOUNT_UNAVAILABLE')
+            if self.budget_state()['guard_blocked']:raise ValueError('SERVER_BUDGET_BLOCKED')
+            for name in ('name','machine_name'):
+                if not isinstance(data[name],str) or not 1<=len(data[name].strip())<=80 or any(ord(c)<32 for c in data[name]):raise ValueError('INVALID_NAME')
+            if not isinstance(data['client_version'],str) or not re.fullmatch(r'[A-Za-z0-9.+-]{1,100}',data['client_version']):raise ValueError('INVALID_CLIENT_VERSION')
+            existing=self.db.execute('SELECT * FROM devices WHERE key=?',(key,)).fetchone()
+            if self.revoked(key) or (existing and existing['user_id']!=user_id):raise ValueError('DEVICE_REVOKED')
+            if not existing:
+                if key in self.observation['peers']:raise ValueError('DEVICE_NOT_MANAGED')
+                self.dispatch({'operation':'peer.create','actor':actor,'data':{'public_key':key,'user_id':user_id,'name':data['name'].strip()}})
+            else:
+                self.db.execute('UPDATE devices SET name=? WHERE key=?',(data['name'].strip(),key))
+            receipt=self.db.execute('SELECT * FROM device_enrollments WHERE key=? AND user_id=?',(key,user_id)).fetchone()
+            at=receipt['confirmed_at'] if receipt else int(self.now())
+            self.db.execute('INSERT OR REPLACE INTO device_enrollments VALUES (?,?,?,?,?)',(key,user_id,data['machine_name'].strip(),data['client_version'],at))
+            if not receipt:self.audit(actor,'device.confirmed',hashlib.sha256(key.encode()).hexdigest()[:12])
         elif operation == 'peer.revoke':
             if set(data) != {'public_key'}: raise ValueError('INVALID_FIELDS')
             key = public_key(data['public_key'])

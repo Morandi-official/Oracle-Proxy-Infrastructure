@@ -39,6 +39,12 @@ class ClientSession(models.Model):
     public_key = models.CharField(max_length=44)
     expires_at = models.DateTimeField(db_index=True)
     created_at = models.DateTimeField(default=timezone.now)
+    enrollment_flow = models.BooleanField(default=False)
+    proposed_name = models.CharField(max_length=80, default='')
+    client_version = models.CharField(max_length=100, default='')
+    last_seen_at = models.DateTimeField(null=True)
+    reported_mode = models.CharField(max_length=16, default='unknown')
+    reported_transport = models.CharField(max_length=24, default='')
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['account', 'public_key'], name='client_session_per_device')]

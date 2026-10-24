@@ -23,7 +23,7 @@ jobs:
         run: python ops/windows-webrtc/prepare.py
       - name: Compile non-shipped real Edge acceptance harness
         run: dotnet publish ops/windows-webrtc/Acceptance.csproj -c Release -p:DebugType=None -o dist/webrtc-tests
-      - name: Check counters-only physical NIC baseline without accounts
+      - name: Check physical counters and public Edge page without accounts
         run: ./dist/webrtc-tests/OracleProxy.WebRtc.Acceptance.exe --counter-self-test
       - name: Real Edge RTCPeerConnection and STUN through native WireGuard
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -1,0 +1,32 @@
+name: Accepted Windows client real browser WebRTC privacy
+on:
+  pull_request:
+    paths: ['ops/windows-webrtc/**', '.github/workflows/windows-webrtc-acceptance.yml']
+  push:
+    branches: [main]
+    paths: ['ops/windows-webrtc/**', '.github/workflows/windows-webrtc-acceptance.yml']
+permissions:
+  contents: read
+jobs:
+  browser-privacy:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    environment: ${{ github.event_name == 'push' && 'windows-client-acceptance' || 'windows-product-build' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Download and verify exact previously accepted rc18 payloads
+        run: python ops/windows-webrtc/prepare.py
+      - name: Compile non-shipped real Edge acceptance harness
+        run: dotnet publish ops/windows-webrtc/Acceptance.csproj -c Release -p:DebugType=None -o dist/webrtc-tests
+      - name: Real Edge RTCPeerConnection and STUN through native WireGuard
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        run: ./ops/windows-webrtc/run.ps1

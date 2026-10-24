@@ -296,7 +296,7 @@ internal sealed class MainForm : Form
         long at=state["observed_at"]?.GetValue<long>() ?? 0;bool fresh=at>0 && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
         bool active=account?["status"]?.GetValue<string>()=="active" && fresh;
         bool requiresSlot=registration?["requires_slot"]?.GetValue<bool>()!=false;
-        long count=account?["device_count"]?.GetValue<long>() ?? 0,limit=account?["device_limit"]?.GetValue<long>() ?? 0;
+        int count=account?["device_count"]?.GetValue<int>() ?? 0,limit=account?["device_limit"]?.GetValue<int>() ?? 0;
         _canConnect=_deviceRegistered && active;_connect.Enabled=!_busy && _canConnect;
         _canRegister=registration is not null && !_deviceRegistered && active && (!requiresSlot || count<limit);
         _deviceName.ReadOnly=_deviceRegistered;_deviceConfirmation.Enabled=!_deviceRegistered && !_connectionIntent && active && registration is not null;

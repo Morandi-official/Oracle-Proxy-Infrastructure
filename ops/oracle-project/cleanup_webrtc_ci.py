@@ -11,19 +11,20 @@ import subprocess
 import tempfile
 import time
 
-REQUEST='webrtc-owned-ci-slot-release-20261024'
+REQUEST='webrtc-owned-ci-slot-release-v2-20261024'
+HOSTED=r'(?:fv-az[0-9]+-[0-9]+|runnervm[a-z0-9]{1,32})'
 BEGIN=int(dt.datetime(2026,10,24,15,44,tzinfo=dt.timezone.utc).timestamp())
 END=int(dt.datetime(2026,10,24,16,44,30,tzinfo=dt.timezone.utc).timestamp())
 VERSION='0.3.0-rc18+41169fd6fca86815d67d7566bdc45c4cfcbacaa1'
 STATE=Path('/var/lib/oracle-proxy-control')
-MARKER=STATE/'webrtc-ci-cleanup-20261024.json'
+MARKER=STATE/'webrtc-ci-cleanup-20261024-v2.json'
 
 
 def candidates(rows,peers,now):
     selected=[]
     for row in rows:
         if (row['name']!='Cloud WebRTC acceptance' or row['client_version']!=VERSION or
-            not re.fullmatch(r'fv-az[0-9]+-[0-9]+',row['machine_name'],re.I) or
+            not re.fullmatch(HOSTED,row['machine_name'],re.I) or
             not BEGIN<=row['confirmed_at']<=END or peers.get(row['key'],{}).get('handshake',0)>now-180):continue
         selected.append(row)
     return [r['key'] for r in sorted(selected,key=lambda r:r['confirmed_at'])[:3]]
@@ -55,6 +56,7 @@ def apply():
             db.row_factory=sqlite3.Row
             rows=db.execute('SELECT d.key,d.name,e.machine_name,e.client_version,e.confirmed_at FROM devices d JOIN device_enrollments e ON e.key=d.key AND e.user_id=d.user_id WHERE d.key NOT IN (SELECT key FROM revoked_devices)').fetchall()
         plan={'keys':candidates(rows,observed['peers'],int(time.time())),'done':False}
+        print('CI_OWNED_WEBRTC_EXACT_HOSTED_MATCH_COUNT='+str(len(plan['keys'])))
         save(plan) # Persist the exact plan so retries can never select another batch.
     if set(plan)!={'keys','done'} or type(plan['done']) is not bool or not isinstance(plan['keys'],list) or len(plan['keys'])>3 or any(not re.fullmatch(r'[A-Za-z0-9+/]{43}=',k) for k in plan['keys']):raise ValueError('INVALID_CLEANUP_PLAN')
     if plan['done']:print('CI_OWNED_WEBRTC_DEVICE_CLEANUP=ALREADY_DONE');return

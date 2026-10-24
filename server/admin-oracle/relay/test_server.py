@@ -86,3 +86,23 @@ class BoundsTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+class DeviceEnrollmentAuthorization(unittest.IsolatedAsyncioTestCase):
+    async def test_pending_or_missing_device_confirmation_cannot_authorize_relay(self):
+        import json,time
+        from relay.server import authenticate
+        class Content:
+            def __init__(self,value):self.value=value
+            async def iter_chunked(self,size):yield json.dumps(self.value).encode()
+        class Reply:
+            status=200
+            def __init__(self,value):self.content=Content(value)
+            async def __aenter__(self):return self
+            async def __aexit__(self,*args):pass
+        class Session:
+            def __init__(self,value):self.value=value
+            def get(self,*args,**kwargs):return Reply(self.value)
+        for registered,expected in ((None,False),(False,False),(True,True)):
+            data={'account':{'status':'active'},'observed_at':int(time.time())}
+            if registered is not None:data['device']={'registered':registered}
+            self.assertEqual(await authenticate(Session(data),TOKEN),expected)

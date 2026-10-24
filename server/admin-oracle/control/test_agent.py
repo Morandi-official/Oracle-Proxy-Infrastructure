@@ -171,4 +171,25 @@ class PolicyTests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'USER_DELETED'):self.user(id=user['id'])
   with self.assertRaisesRegex(ValueError,'USER_DELETED'):self.bind(KEY1,user)
 
+ def test_confirmation_is_durable_bound_to_owner_and_cannot_bypass_cap(self):
+  user=self.user(quota_bytes=100000)
+  def enroll(key=KEY3,uid=None,confirm=True):return self.request('peer.enroll',{'public_key':key,'user_id':uid or user['id'],'name':'Recognized PC','machine_name':'Machine label','client_version':'0.3.0-rc18','confirm':confirm})
+  with self.assertRaisesRegex(ValueError,'DEVICE_CONFIRMATION_REQUIRED'):enroll(confirm=False)
+  self.assertEqual(self.engine.device_count(user['id']),0)
+  enroll();first=next(p for p in self.engine.snapshot()['peers'] if p['public_key']==KEY3)['enrollment']
+  self.clock[0]+=5;enroll()
+  self.assertEqual(next(p for p in self.engine.snapshot()['peers'] if p['public_key']==KEY3)['enrollment'],first)
+  self.assertEqual(self.engine.device_count(user['id']),1)
+  self.engine.db.close();self.engine=agent.Engine(self.database,self.driver,lambda:self.clock[0]);self.engine.tick()
+  self.assertEqual(next(p for p in self.engine.snapshot()['peers'] if p['public_key']==KEY3)['enrollment'],first)
+  self.user(quota_bytes=100000,name='Second user')
+  other=next(u for u in self.engine.snapshot()['users'] if u['id']!=user['id'])
+  with self.assertRaisesRegex(ValueError,'DEVICE_REVOKED'):enroll(uid=other['id'])
+  self.request('peer.assign',{'public_key':KEY3,'user_id':other['id'],'name':'Admin reassigned'})
+  self.assertIsNone(next(p for p in self.engine.snapshot()['peers'] if p['public_key']==KEY3)['enrollment'])
+  enroll(uid=other['id'])
+  self.assertIsNotNone(next(p for p in self.engine.snapshot()['peers'] if p['public_key']==KEY3)['enrollment'])
+  self.request('peer.revoke',{'public_key':KEY3})
+  with self.assertRaisesRegex(ValueError,'DEVICE_REVOKED'):enroll(uid=other['id'])
+
 if __name__=='__main__':unittest.main()

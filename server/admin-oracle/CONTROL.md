@@ -69,3 +69,5 @@ SSH/HTTPS 的公网入口不受 wg0 流量规则影响，不使用通配规则�
 Windows 必须在本机生成并保护私钥，通过受保护服务导入已验证配置；后续应加入签名注册与设备身份流程。
 当前 JSON 不包含私钥，也不表示 Alpha 已支持最终自动接入。
 服务器 IPv6 限制测试不等于 Oracle 具备 IPv6 公网出口，更不替代 Windows 的 IPv6 防泄漏验收。
+
+`peer.enroll` is a fixed native-client confirmation operation. It accepts only a session-bound public key/user plus bounded name, machine label, client version and literal confirmation=true. It creates a new owned Peer under the existing serialized device cap or confirms an existing same-owner identity, retaining the first confirmation timestamp. Unmanaged/other-owner/revoked identities are rejected. The root ledger exposes confirmation metadata to administrator snapshots; it does not trust a client-reported connection state for authorization or accounting.

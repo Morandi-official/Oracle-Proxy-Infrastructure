@@ -39,7 +39,7 @@ class ReadOnlyUsageTests(unittest.TestCase):
  def test_error_diagnostics_do_not_export_messages_headers_or_arbitrary_service_codes(self):
   error=type('ServiceError',(Exception,),{'status':400,'code':'InvalidParameter','headers':{'authorization':'SECRET'}})('SECRET_REQUEST_BODY')
   details=probe.error_details(error)
-  self.assertEqual(details,{'http_status':400,'category':'HTTP_ERROR','service_code':'InvalidParameter'})
+  self.assertEqual(details,{'exception_type':'ServiceError','http_status':400,'category':'HTTP_ERROR','service_code':'InvalidParameter'})
   self.assertNotIn('SECRET',json.dumps(details))
   error.code='SECRET_SESSION_TOKEN';self.assertEqual(probe.error_details(error)['service_code'],'OTHER')
   self.assertEqual(probe.error_details(AttributeError('SECRET'))['category'],'SDK_RESPONSE_ERROR')
@@ -120,3 +120,8 @@ class ReadOnlyUsageTests(unittest.TestCase):
   self.assertEqual(result['billing_granularity'],'DAILY_FALLBACK')
   self.assertEqual(result['billing_hourly_status'],'HOURLY_QUERY_REJECTED')
   self.assertEqual(result['billing_through'],int(dt.datetime(2026,10,21,tzinfo=dt.timezone.utc).timestamp()))
+
+ def test_http_library_timeout_is_fixed_category_not_raw_error(self):
+  error=type('ReadTimeout',(Exception,),{})('SECRET_REQUEST_URL')
+  result=probe.error_details(error)
+  self.assertEqual(result['category'],'TIMEOUT');self.assertEqual(result['exception_type'],'ReadTimeout');self.assertNotIn('SECRET',str(result))

@@ -29,6 +29,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     environment: oracle-ops
+    outputs:
+      operation: ${{ steps.request.outputs.operation }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -122,3 +124,22 @@ jobs:
           "$browser_venv/bin/pip" install --disable-pip-version-check playwright==1.56.0
           "$browser_venv/bin/python" -m playwright install --with-deps chromium firefox
           "$browser_venv/bin/python" ops/oracle-project/browser_acceptance.py
+
+  release-download-links:
+    needs: operations
+    if: needs.operations.result == 'success' && (needs.operations.outputs.operation == 'deploy' || needs.operations.outputs.operation == 'enable-https')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Add independently verified Oracle and GitHub download links
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s ops/release-links -p 'test_*.py' -v
+          python3 ops/release-links/update_release_links.py

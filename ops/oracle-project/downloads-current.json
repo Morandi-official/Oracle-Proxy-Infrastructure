@@ -1,26 +1,26 @@
 {
-  "version": "v0.3.0-rc15",
-  "source_revision": "afce1f86865e2ad13808497232a4cdee50d4f23e",
+  "version": "v0.3.0-rc16",
+  "source_revision": "1c13adef75facc1dee77489543f7f36da04f0218",
   "assets": [
     {
       "name": "BUILD.json",
       "size": 5126,
-      "sha256": "986b1b1032cf4505a60ec778381bdf8ad01e5acef8c44d1383c4f1f90844312a"
+      "sha256": "0521f31aa030c4eb168fde9c80b74086959f518a60d14b9ffae549c744fbb36a"
     },
     {
-      "name": "OracleProxy-0.3.0-rc15-win-x64-afce1f86865e-source.zip",
-      "size": 457776477,
-      "sha256": "4b3efba167679478a75d827885cb30e03f423fe1ba9e3403276d6bb1efab781a"
+      "name": "OracleProxy-0.3.0-rc16-win-x64-1c13adef75fa-source.zip",
+      "size": 457777894,
+      "sha256": "b968894d1ffc439cfa533f603fb2d6af8a7fd2961ff33d1201f6a20dc7cfde99"
     },
     {
-      "name": "OracleProxy-0.3.0-rc15-win-x64-afce1f86865e.zip",
-      "size": 83305342,
-      "sha256": "6413bb6e4a65881ec6ef4f00f868f290c7fea1651ef3207543d118c72d1b8b20"
+      "name": "OracleProxy-0.3.0-rc16-win-x64-1c13adef75fa.zip",
+      "size": 83366123,
+      "sha256": "77457c8f84c8c4c385a4061d3fb22c38c699500cc4860886fcf174897d9f1398"
     },
     {
       "name": "SHA256SUMS.txt",
       "size": 237,
-      "sha256": "0b19ab877405edc77eb75840ba838535ee5643a55886c56181d70b536b2e8455"
+      "sha256": "27f4d68a072f7380d6fe5a25599ea10c2758d39db36a26db05191b927630d582"
     }
   ]
 }

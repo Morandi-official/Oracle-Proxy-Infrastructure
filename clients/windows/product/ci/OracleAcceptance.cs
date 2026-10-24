@@ -137,6 +137,30 @@ internal static class OracleAcceptance
         while((read=await stream.ReadAsync(buffer,timeout.Token))>0){total+=read;if(total>524288)throw new IOException("BULK_RESPONSE_LIMIT_EXCEEDED");}
         Check(total==524288,"REAL_LOW_MTU_BULK_DOWNLOAD_512_KIB");
     }
+    private static void SafeNativeState(JsonObject state)
+    {
+        foreach(string key in new[]{"mode","error","transport","connection_stage","carrier_stage","core_pid","tun_permitted","guard"})Console.WriteLine("STABILITY_"+key.ToUpperInvariant()+"="+state[key]);
+        if(state["native_udp_attempt"] is JsonObject attempt){
+            foreach(string key in new[]{"selected_port","inner_mtu","probe_result","probe_failures","core_age_ms","verified_after_start_ms"})Console.WriteLine("STABILITY_NATIVE_"+key.ToUpperInvariant()+"="+attempt[key]);
+            if(attempt["ports"]?["8443"] is JsonObject port)foreach(string key in new[]{"tx_initiations","rx_responses","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})Console.WriteLine("STABILITY_PORT_"+key.ToUpperInvariant()+"="+port[key]);
+        }
+    }
+    private static void RequireStableNative(JsonObject state,uint pid)
+    {
+        var counters=state["native_udp_attempt"]?["ports"]?["8443"];
+        Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["native_udp_selected_port"]?.GetValue<int>()==8443 && state["core_pid"]?.GetValue<uint>()==pid && (counters?["write_errors"]?.GetValue<int>()??0)==0 && (counters?["read_errors"]?.GetValue<int>()??0)==0 && (counters?["rx_obsolete"]?.GetValue<int>()??0)==0,"REAL_LOW_MTU_NATIVE_STAYS_ON_SAME_CORE_WITHOUT_MESSAGE_SIZE_ERROR_OR_FALLBACK");
+    }
+    private static async Task<bool> LargeUdpRoundTrip(uint pid)
+    {
+        for(int attempt=0;attempt<2;attempt++){
+            try{if(await FreshDns(2048))return true;}catch(Exception error)when(error is SocketException or OperationCanceledException){}
+            // UDP is best-effort. Retry one datagram only while the actual
+            // tunnel, process and error counters are still demonstrably healthy.
+            var state=await Send("Status");SafeNativeState(state);RequireStableNative(state,pid);
+            Console.WriteLine("LARGE_UDP9953_BOUNDED_RETRY="+(attempt+1));
+        }
+        return false;
+    }
     private static async Task StableNative8443(JsonObject initial)
     {
         uint pid=initial["core_pid"]!.GetValue<uint>();
@@ -144,9 +168,10 @@ internal static class OracleAcceptance
             var timer=Stopwatch.StartNew();int round=0;
             do{
                 if(round%4==0)await BulkDownload();
-                Check(await ExitIp()=="152.67.156.100" && await FreshDns() && await FreshDns(2048),"REAL_LOW_MTU_LARGE_UDP9953_DATAGRAM_NORMAL_DNS_AND_HTTPS_EXIT");
-                var state=await Send("Status");var counters=state["native_udp_attempt"]?["ports"]?["8443"];
-                Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["native_udp_selected_port"]?.GetValue<int>()==8443 && state["core_pid"]?.GetValue<uint>()==pid && (counters?["write_errors"]?.GetValue<int>()??0)==0 && (counters?["rx_obsolete"]?.GetValue<int>()??0)==0,"REAL_LOW_MTU_NATIVE_STAYS_ON_SAME_CORE_WITHOUT_MESSAGE_SIZE_ERROR_OR_FALLBACK");
+                Console.WriteLine("LOW_MTU_PHASE=HTTPS_EXIT");Check(await ExitIp()=="152.67.156.100","REAL_LOW_MTU_HTTPS_EXIT");
+                Console.WriteLine("LOW_MTU_PHASE=NORMAL_DNS");Check(await FreshDns(),"REAL_LOW_MTU_NORMAL_DNS");
+                Console.WriteLine("LOW_MTU_PHASE=LARGE_UDP9953");Check(await LargeUdpRoundTrip(pid),"REAL_LOW_MTU_LARGE_UDP9953_DATAGRAM_RESPONSE");
+                var state=await Send("Status");RequireStableNative(state,pid);
                 round++;await Task.Delay(10000);
             }while(timer.Elapsed<TimeSpan.FromSeconds(120));
             Console.WriteLine("REAL_NATIVE_8443_LOW_MTU_STABLE_MS="+timer.ElapsedMilliseconds);
@@ -352,6 +377,6 @@ internal static class OracleAcceptance
             await Send("Connect");await Connected();
             Check((await Send("Quit"))["core_pid"]?.GetValue<uint>()==0 && await ExitIp()!="152.67.156.100","REAL_QUIT_WHILE_CONNECTED_STOPS_CORE_AND_RESTORES_DIRECT");
             await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
-        }catch(Exception error){try{await ControlPipe.Send("Disconnect");}catch{}Console.WriteLine("REAL_ORACLE_STAGE="+stage);if(_lastAssertion.Length>0)Console.WriteLine("REAL_ORACLE_ASSERTION="+_lastAssertion);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
+        }catch(Exception error){try{SafeNativeState(await ControlPipe.Send("Status"));}catch{}try{await ControlPipe.Send("Disconnect");}catch{}Console.WriteLine("REAL_ORACLE_STAGE="+stage);if(_lastAssertion.Length>0)Console.WriteLine("REAL_ORACLE_ASSERTION="+_lastAssertion);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }
 }

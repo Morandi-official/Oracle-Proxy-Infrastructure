@@ -8,8 +8,8 @@ from publish_candidate import REPO, read_archive, validate_run, validate_manifes
 
 
 class PublicationBoundaries(unittest.TestCase):
-    def test_manifest_requires_two_distinct_exact_artifacts_and_rc13_source(self):
-        manifest={'version':'0.3.0-rc13','run_id':42,'source_revision':'a'*40,
+    def test_manifest_requires_two_distinct_exact_artifacts_and_rc14_source(self):
+        manifest={'version':'0.3.0-rc14','run_id':42,'source_revision':'a'*40,
                   'artifacts':[{'id':1,'sha256':'b'*64},{'id':2,'sha256':'c'*64}]}
         validate_manifest(manifest)
         variants=[dict(manifest,artifacts=[]),dict(manifest,artifacts=manifest['artifacts'][:1]),

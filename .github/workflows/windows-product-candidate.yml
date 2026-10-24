@@ -52,6 +52,9 @@ jobs:
       - name: Verify bounded download retries and atomic digest failure
         shell: pwsh
         run: ./clients/windows/product/ci/test-official-download.ps1
+      - name: Verify pinned TCP policy source integrity
+        shell: pwsh
+        run: python -m unittest discover -s clients/windows/product/ci -p test_tcp_policy_patch.py -v
       - name: Build pinned userspace WireGuard/TUN core from source
         shell: pwsh
         working-directory: clients/windows/product/core

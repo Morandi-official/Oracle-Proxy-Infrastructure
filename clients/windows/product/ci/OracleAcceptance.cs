@@ -39,7 +39,7 @@ internal static class OracleAcceptance
         return 0;
     }
     private const long RunBudgetBytes=16L*1024*1024;
-    private static long? _runUsageStart;
+    private static long? _deviceUsageStart;
     private static string _lastAssertion="";
     private static void Check(bool condition,string code){if(!condition){_lastAssertion=code;throw new IOException("ORACLE_ASSERTION_FAILED");}Console.WriteLine(code+"=PASS");}
     private static JsonObject RequireSuccess(string command,JsonObject value)
@@ -49,10 +49,27 @@ internal static class OracleAcceptance
             if(value["failure"] is JsonObject failure)foreach(string field in new[]{"stage","category","hresult","native_error","socket_error","core_stage"})Console.WriteLine("FAILED_COMMAND_"+field.ToUpperInvariant()+"="+failure[field]);
             throw new IOException("ORACLE_SERVICE_COMMAND_FAILED");
         }
-        if(_runUsageStart is long start && value["account"]?["used_bytes"]?.GetValue<long>() is long used){
-            if(used<start || used-start>RunBudgetBytes){_lastAssertion="REAL_ORACLE_RUN_USAGE_WITHIN_16_MIB";throw new IOException("ORACLE_ASSERTION_FAILED");}
+        if(_deviceUsageStart is long start && !WithinDeviceBudget(value,start)){
+            _lastAssertion="REAL_DEVICE_RUN_USAGE_WITHIN_16_MIB";throw new IOException("ORACLE_ASSERTION_FAILED");
         }
         return value;
+    }
+    internal static bool WithinDeviceBudget(JsonObject value,long start)
+    {
+        try{
+            long rx=value["peer_rx_bytes"]?.GetValue<long>()??-1,tx=value["peer_tx_bytes"]?.GetValue<long>()??-1;
+            return start>=0 && rx>=0 && tx>=0 && rx<=long.MaxValue-tx && rx+tx>=start && rx+tx-start<=RunBudgetBytes;
+        }catch(InvalidOperationException){return false;}
+    }
+    internal static void VerifyDeviceBudgetFixture()
+    {
+        var state=new JsonObject{["peer_rx_bytes"]=40L,["peer_tx_bytes"]=60L,["account"]=new JsonObject{["used_bytes"]=1_000_000_000L}};
+        Check(WithinDeviceBudget(state,100),"CI_BUDGET_IGNORES_OTHER_DEVICES_ACCOUNT_USAGE");
+        state["peer_tx_bytes"]=RunBudgetBytes+101;
+        Check(!WithinDeviceBudget(state,100),"CI_BUDGET_REFUSES_THIS_DEVICE_OVER_16_MIB");
+        Check(!WithinDeviceBudget(new JsonObject(),0),"CI_BUDGET_REFUSES_MISSING_DEVICE_COUNTERS");
+        state["peer_rx_bytes"]=0L;state["peer_tx_bytes"]=0L;
+        Check(!WithinDeviceBudget(state,100),"CI_BUDGET_REFUSES_COUNTER_REGRESSION");
     }
     private static async Task<JsonObject> Send(string command)=>RequireSuccess(command,await ControlPipe.Send(command));
     private static async Task<string> ExitIp()
@@ -208,7 +225,7 @@ internal static class OracleAcceptance
         if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password)){Console.WriteLine("ORACLE_ACCEPTANCE_CREDENTIALS_MISSING");return 2;}
         string stage="BASELINE";
         try{
-            RecoveryPolicy();
+            VerifyDeviceBudgetFixture();RecoveryPolicy();
             Check(await ExitIp()!="152.67.156.100","REAL_RUNNER_DIRECT_BASELINE");
             stage="LOGIN";var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
             Check(login["ok"]?.GetValue<bool>()==true && login["account"]?["username"]?.GetValue<string>()==username,"REAL_ORACLE_CLIENT_LOGIN_AND_AUTOMATIC_ENROLLMENT");
@@ -217,7 +234,8 @@ internal static class OracleAcceptance
             Console.WriteLine("REAL_ACCOUNT_TEST_LIMIT_BYTES="+(limit?.ToString() ?? "unlimited"));
             Console.WriteLine("REAL_ACCOUNT_TEST_REMAINING_BYTES="+(limit is null?"unlimited":Math.Max(0,limit.Value-used).ToString()));
             Check(account["status"]?.GetValue<string>()=="active" && used>=0 && (limit is null || limit.Value-used>=4*1024*1024),"REAL_ACCOUNT_HAS_AVAILABLE_TEST_BUDGET");
-            _runUsageStart=used;
+            _deviceUsageStart=checked(login["peer_rx_bytes"]!.GetValue<long>()+login["peer_tx_bytes"]!.GetValue<long>());
+            Check(WithinDeviceBudget(login,_deviceUsageStart.Value),"REAL_DEVICE_BUDGET_BASELINE_PRESENT");
             stage="UU_MAINTENANCE_CONCURRENCY";
             using(UuAclRepair.AcquireMaintenance()){
                 var blocked=await ControlPipe.Send("Connect");
@@ -228,6 +246,9 @@ internal static class OracleAcceptance
             var native8443Timer=Stopwatch.StartNew();await Send("Connect");var native8443=await Connected();
             Console.WriteLine("REAL_NATIVE_WIREGUARD_UDP8443_COLD_MS="+native8443Timer.ElapsedMilliseconds);
             Check(native8443["transport"]?.GetValue<string>()=="wireguard-udp" && native8443["native_udp_selected_port"]?.GetValue<int>()==8443 && native8443Timer.ElapsedMilliseconds<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_WIREGUARD_UDP8443_HTTP_AND_DNS_NO_QUIC_WRAPPER");
+            var nativeBuffers=native8443["native_udp_attempt"]?["ports"]?["8443"];
+            Check(nativeBuffers?["rcvbuf_after"]?.GetValue<uint>()>=7*1024*1024 && nativeBuffers?["sndbuf_after"]?.GetValue<uint>()>=7*1024*1024,"REAL_OWNED_WINDOWS_UDP_BUFFERS_MATCH_WIREGUARD_POLICY");
+            foreach(string key in new[]{"rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after"})Console.WriteLine("REAL_NATIVE_8443_"+key.ToUpperInvariant()+"="+nativeBuffers?[key]);
             stage="NATIVE_8443_LOW_MTU_STABILITY";await StableNative8443(native8443);
             await Send("Disconnect");
             stage="FORCED_COLD_PROTOCOLS";

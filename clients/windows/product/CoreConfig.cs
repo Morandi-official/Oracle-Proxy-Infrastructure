@@ -24,7 +24,7 @@ internal static class CoreConfig
         if(tunnel["ipv6_policy"]?.GetValue<string>()!="tunnel")rules.Add(new JsonObject{["ip_version"]=6,["action"]="reject"});
         var config=new JsonObject{
             ["log"]=new JsonObject{["disabled"]=true},
-            ["dns"]=new JsonObject{["servers"]=new JsonArray(new JsonObject{["type"]="udp",["tag"]="vpn-dns",["server"]="1.1.1.1",["detour"]="oracle-wireguard"}),["final"]="vpn-dns"},
+            ["dns"]=new JsonObject{["servers"]=new JsonArray(new JsonObject{["type"]="udp",["tag"]="vpn-dns",["server"]="1.1.1.1",["detour"]="oracle-wireguard"}),["final"]="vpn-dns",["strategy"]=tunnel["ipv6_policy"]?.GetValue<string>()=="tunnel"?"prefer_ipv4":"ipv4_only"},
             ["inbounds"]=new JsonArray(new JsonObject{["type"]="tun",["tag"]="device",["interface_name"]="OracleProxy",["address"]=new JsonArray("172.29.255.1/30","fd42:6f70:78::1/126"),["mtu"]=1280,["auto_route"]=true,["strict_route"]=true,["stack"]="mixed"},new JsonObject{["type"]="socks",["tag"]="service-probe",["listen"]="127.0.0.1",["listen_port"]=28083,["users"]=new JsonArray(new JsonObject{["username"]="service",["password"]=socksPassword})}),
             ["endpoints"]=new JsonArray(new JsonObject{["type"]="wireguard",["tag"]="oracle-wireguard",["system"]=false,["mtu"]=tunnel["ipv6_policy"]?.GetValue<string>()=="tunnel"?1280:1200,["address"]=addresses.DeepClone(),["private_key"]=secret.PrivateKey,["peers"]=new JsonArray(new JsonObject{["address"]="152.67.156.100",["port"]=port,["public_key"]=serverKey,["allowed_ips"]=new JsonArray("0.0.0.0/0","::/0"),["persistent_keepalive_interval"]=25})}),
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="uu-direct"}),

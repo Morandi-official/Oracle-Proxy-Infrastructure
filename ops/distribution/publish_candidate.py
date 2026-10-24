@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc14 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc15 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc14.json')
+MANIFEST = Path(__file__).with_name('windows-rc15.json')
 
 
 def gh(*args, output=None):
@@ -27,11 +27,11 @@ def api(path): return json.loads(gh('api',f'repos/{REPO}/{path}'))
 
 def validate_manifest(manifest):
     artifacts=manifest.get('artifacts')
-    if (manifest.get('version')!='0.3.0-rc14' or
+    if (manifest.get('version')!='0.3.0-rc15' or
         type(manifest.get('run_id')) is not int or manifest['run_id']<=0 or
         not re.fullmatch(r'[a-f0-9]{40}',str(manifest.get('source_revision',''))) or
         not isinstance(artifacts,list) or len(artifacts)!=2):
-        raise ValueError('COMPLETE_PINNED_RC14_MANIFEST_REQUIRED')
+        raise ValueError('COMPLETE_PINNED_RC15_MANIFEST_REQUIRED')
     ids=[]
     for item in artifacts:
         if (not isinstance(item,dict) or type(item.get('id')) is not int or item['id']<=0 or
@@ -108,7 +108,7 @@ def main():
         for name,value in sums.items():
             if digest(assets/name)!=value: raise ValueError('PAYLOAD_OR_SOURCE_DIGEST_MISMATCH')
         notes=root/'notes.md'
-        notes.write_text(Path(__file__).with_name('windows-rc14-notes.md').read_text(encoding='utf-8')+
+        notes.write_text(Path(__file__).with_name('windows-rc15-notes.md').read_text(encoding='utf-8')+
                          f"\n构建提交：`{manifest['source_revision']}`；[完整云端验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']
         if api('git/matching-refs/tags/'+tag): raise ValueError('EXISTING_RC_TAG_REQUIRES_REVIEW')

@@ -58,6 +58,10 @@ internal static class Acceptance
    Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME",null);Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD",null);
    if(login["device_registered"]?.GetValue<bool>()!=true)login=await Send("ConfirmDevice","Cloud WebRTC acceptance","confirmed");
    initial=(login["peer_rx_bytes"]?.GetValue<long>()??0)+(login["peer_tx_bytes"]?.GetValue<long>()??0);
+   var descriptorClock=Stopwatch.StartNew();JsonObject descriptor;
+   do{descriptor=await Send("Status");if(descriptor["device_registered"]?.GetValue<bool>()==true && descriptor["native_udp_8443_available"]?.GetValue<bool>()==true)break;await Task.Delay(250);}while(descriptorClock.ElapsedMilliseconds<12000);
+   Check(descriptor["device_registered"]?.GetValue<bool>()==true && descriptor["native_udp_8443_available"]?.GetValue<bool>()==true,"CONFIRMED_NATIVE_DESCRIPTOR_READY_BEFORE_SELECTION");
+   Console.WriteLine("DESCRIPTOR_REFRESH_WAIT_MS="+descriptorClock.ElapsedMilliseconds);
    await Send("PreferUdp8443");await Send("Connect");var timer=Stopwatch.StartNew();JsonObject state;
    do{await Task.Delay(250);state=await Send("Status");}while(state["mode"]?.GetValue<string>()!="connected"&&timer.ElapsedMilliseconds<30000);
    Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true,"PINNED_RC18_NATIVE_UDP_GUARD_CONNECTED");

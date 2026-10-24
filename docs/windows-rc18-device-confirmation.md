@@ -9,3 +9,9 @@ The client displays only the signed-in account's device names, short identifiers
 Backend PR227 passed 40 Django, 20 root policy and 22 relay tests locally, both Python CI versions, actual Chromium/Firefox management UI tests, disposable lifecycle/control checks and production migration/deployment. Client acceptance adds actual WinForms pending/consent/name-preservation/cap cases and a real Oracle pending login -> rejected Connect -> explicit confirmation -> idempotent re-confirmation sequence, retaining the full UDP8443, QUIC, HTTPS and fault acceptance suite. Release acceptance results are appended only after the actual run passes.
 
 Native UDP8443 selection, stable MTUs, core transport code, socket buffers and server queue configuration are unchanged. This remains an unsigned candidate with the broader boot/IPv6/signing acceptance limitations documented in the product README.
+
+## Accepted release source
+
+Source41169fd6fca86815d67d7566bdc45c4cfcbacaa1, main run40088627377/job120856554605 passed the complete Windows and real Oracle acceptance. Actual WinForms consent/name preservation/slot checks, aligned layout and unchanged idle-poll rendering passed. Real authentication stayed pending without a core/slot; the service rejected Connect and registration without consent; explicit confirmation allocated exactly one slot and repeated confirmation was idempotent. Native8443 low-MTU stability lasted121903ms. The dedicated acceptance account had29 registered devices, below its separate32-device test cap. Ordinary accounts still default to three.
+
+Backend PR227 is deployed; client PR228 and portable-instruction PR229 are merged. Publication uses only the exact accepted source/client artifacts, with draft-first release validation and independent public metadata verification before Oracle mirroring. Broader signing/boot/IPv6 acceptance remains open.

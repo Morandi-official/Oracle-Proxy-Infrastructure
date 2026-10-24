@@ -75,8 +75,9 @@ def error_details(error):
     category=('HTTP_ERROR' if type(status) is int else
               'SDK_RESPONSE_ERROR' if isinstance(error,AttributeError) else
               'SDK_VALIDATION_ERROR' if isinstance(error,(ValueError,TypeError)) else
-              'TIMEOUT' if isinstance(error,TimeoutError) else 'TRANSPORT_OR_SDK_ERROR')
-    return {'http_status':status if type(status) is int and 100<=status<=599 else None,
+              'TIMEOUT' if isinstance(error,TimeoutError) or type(error).__name__ in ('ReadTimeout','ConnectTimeout','Timeout') else 'TRANSPORT_OR_SDK_ERROR')
+    allowed_types={'ServiceError','ReadTimeout','ConnectTimeout','Timeout','ConnectionError','SSLError','AttributeError','TypeError','ValueError','NameError','RuntimeError','TimeoutError'}
+    return {'exception_type':type(error).__name__ if type(error).__name__ in allowed_types else 'OTHER','http_status':status if type(status) is int and 100<=status<=599 else None,
             'category':category,'service_code':code if isinstance(code,str) and code in allowed else 'OTHER'}
 
 
@@ -146,7 +147,7 @@ def collect():
                       metric_query_from=int(start.timestamp()),metric_query_to=int(end.timestamp()),metric_points=points)
     except Exception as error: result['monitoring_status']=error_code(error)
     try:
-        client=UsageapiClient({'region':region},signer=signer,timeout=(3,8),retry_strategy=retry)
+        client=UsageapiClient({'region':region},signer=signer,timeout=(5,20),retry_strategy=retry)
         billing_start,billing_end=billing_range(now)
         result['billing_through']=int(billing_end.timestamp())
         result['billing_granularity']='HOURLY'
@@ -179,10 +180,12 @@ def collect():
             except Exception as error:
                 # Preserve a complete historical result if today's hourly query is
                 # rejected; never claim that a partial current day was included.
-                if granularity!='HOURLY' or getattr(error,'status',None)!=400:raise
+                if granularity!='HOURLY':raise
                 rows=rows[:before];result['billing_granularity']='DAILY_FALLBACK'
                 result['billing_through']=int(midnight.timestamp())
-                result['billing_hourly_status']='HOURLY_QUERY_REJECTED'
+                result['billing_hourly_status']='HOURLY_QUERY_REJECTED' if getattr(error,'status',None)==400 else error_code(error)
+                result['billing_hourly_error_category']=error_details(error)['category']
+                result['billing_hourly_exception_type']=error_details(error)['exception_type']
                 window_complete=True
             if not window_complete:complete=False;break
         if len(rows)>32:complete=False

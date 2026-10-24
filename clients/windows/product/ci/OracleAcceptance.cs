@@ -103,10 +103,6 @@ internal static class OracleAcceptance
         foreach(string part in ("opx-"+Guid.NewGuid().ToString("N")+".example.com").Split('.')){query.Add((byte)part.Length);query.AddRange(System.Text.Encoding.ASCII.GetBytes(part));}
         query.AddRange(new byte[]{0,0,1,0,1});
         if(padding>0){int length=padding+4;query.AddRange(new byte[]{0,0,41,16,0,0,0,0,0,(byte)(length>>8),(byte)length,0,12,(byte)(padding>>8),(byte)padding});query.AddRange(new byte[padding]);}
-        // Keep the original IPv4 datagram above the WG inner MTU (1200),
-        // but below the TUN/physical MTU (1280). Only the tunnel should fragment;
-        // fragmentation on the public Oracle-to-resolver path is outside this test.
-        if(padding>0)Check(query.Count+28>1200 && query.Count+28<=1280,"REAL_LOW_MTU_UDP_SIZE_WITHIN_CONTROLLED_FRAGMENTATION_RANGE");
         // Quad9's alternate DNS port bypasses the product's port-53 DNS hijack,
         // so the padded datagram itself must traverse the WireGuard data path.
         using var udp=new UdpClient();udp.Connect(padding>0?"9.9.9.9":"1.1.1.1",padding>0?9953:53);
@@ -154,14 +150,17 @@ internal static class OracleAcceptance
         var counters=state["native_udp_attempt"]?["ports"]?["8443"];
         Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["native_udp_selected_port"]?.GetValue<int>()==8443 && state["core_pid"]?.GetValue<uint>()==pid && (counters?["write_errors"]?.GetValue<int>()??0)==0 && (counters?["read_errors"]?.GetValue<int>()??0)==0 && (counters?["rx_obsolete"]?.GetValue<int>()??0)==0,"REAL_LOW_MTU_NATIVE_STAYS_ON_SAME_CORE_WITHOUT_MESSAGE_SIZE_ERROR_OR_FALLBACK");
     }
-    private static async Task<bool> LargeUdpRoundTrip(uint pid)
+    private static async Task<bool> DatagramRoundTrip(uint pid)
     {
         for(int attempt=0;attempt<2;attempt++){
-            try{if(await FreshDns(1120))return true;}catch(Exception error)when(error is SocketException or OperationCanceledException){}
+            try{if(await FreshDns(64))return true;}catch(Exception error)when(error is SocketException or OperationCanceledException){}
+            // Oracle direct controls also lose padded large public DNS requests.
+            // Use a small real UDP control here; bulk HTTPS exercises the MTU,
+            // and deterministic socket tests cover oversized writes and rebinds.
             // UDP is best-effort. Retry one datagram only while the actual
             // tunnel, process and error counters are still demonstrably healthy.
             var state=await Send("Status");SafeNativeState(state);RequireStableNative(state,pid);
-            Console.WriteLine("LARGE_UDP9953_BOUNDED_RETRY="+(attempt+1));
+            Console.WriteLine("UDP9953_BOUNDED_RETRY="+(attempt+1));
         }
         return false;
     }
@@ -174,7 +173,7 @@ internal static class OracleAcceptance
                 if(round%4==0)await BulkDownload();
                 Console.WriteLine("LOW_MTU_PHASE=HTTPS_EXIT");Check(await ExitIp()=="152.67.156.100","REAL_LOW_MTU_HTTPS_EXIT");
                 Console.WriteLine("LOW_MTU_PHASE=NORMAL_DNS");Check(await FreshDns(),"REAL_LOW_MTU_NORMAL_DNS");
-                Console.WriteLine("LOW_MTU_PHASE=LARGE_UDP9953");Check(await LargeUdpRoundTrip(pid),"REAL_LOW_MTU_LARGE_UDP9953_DATAGRAM_RESPONSE");
+                Console.WriteLine("LOW_MTU_PHASE=UDP9953");Check(await DatagramRoundTrip(pid),"REAL_LOW_MTU_NON_HIJACKED_UDP9953_DATAGRAM_RESPONSE");
                 var state=await Send("Status");RequireStableNative(state,pid);
                 round++;await Task.Delay(10000);
             }while(timer.Elapsed<TimeSpan.FromSeconds(120));

@@ -81,9 +81,9 @@ def error_details(error):
 
 
 def billing_range(now):
-    # DAILY reports must not imply that today's partial usage is complete.
-    end=now.astimezone(dt.timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0)
-    return end.replace(day=1),end
+    # Query completed UTC hours, including today; this does not remove Oracle ingestion delay.
+    end=now.astimezone(dt.timezone.utc).replace(minute=0,second=0,microsecond=0)
+    return end.replace(day=1,hour=0),end
 
 
 def finite(value):
@@ -149,11 +149,12 @@ def collect():
         client=UsageapiClient({'region':region},signer=signer,timeout=(3,8),retry_strategy=retry)
         billing_start,billing_end=billing_range(now)
         result['billing_through']=int(billing_end.timestamp())
+        result['billing_granularity']='HOURLY'
         if billing_end<=billing_start:
-            result['billing_status']='NO_COMPLETED_DAYS'
+            result['billing_status']='NO_COMPLETED_HOURS'
             return result
         details=RequestSummarizedUsagesDetails(tenant_id=signer.tenancy_id,time_usage_started=billing_start,time_usage_ended=billing_end,
-                    granularity='DAILY',query_type='USAGE',group_by=['service','skuName','skuPartNumber','unit'],is_aggregate_by_time=True)
+                    granularity='HOURLY',query_type='USAGE',group_by=['service','skuName','skuPartNumber','unit'],is_aggregate_by_time=True)
         rows=[]; page=None; seen=set(); complete=False
         for _ in range(8):
             response=client.request_summarized_usages(details,page=page,limit=1000,retry_strategy=retry)
@@ -178,6 +179,13 @@ def collect():
 
 
 def write_cache(value):
+    previous={}
+    try:
+        if not CACHE.is_symlink() and CACHE.stat().st_size<=32768: previous=json.loads(CACHE.read_text())
+    except (OSError,ValueError): pass
+    signature=lambda v:(v.get('period'),v.get('billing_rows'),v.get('billing_status'))
+    value['billing_changed_at']=previous.get('billing_changed_at',previous.get('checked_at')) if signature(value)==signature(previous) else value['checked_at']
+    value['next_check_at']=value['checked_at']+600
     CACHE.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
     fd,name=tempfile.mkstemp(prefix='.oci-usage-',dir=CACHE.parent)
     try:

@@ -3,6 +3,9 @@ from django.conf import settings
 from console import views, client_api, transports
 
 urlpatterns = [
+    path('privacy-check/',views.privacy_check),
+    path('privacy-check.js',views.privacy_asset,{'name':'privacy.js'}),
+    path('privacy-check.css',views.privacy_asset,{'name':'style.css'}),
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_page, name='login'),
     path('logout/', views.logout_page, name='logout'),

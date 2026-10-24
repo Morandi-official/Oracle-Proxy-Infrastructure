@@ -2,7 +2,7 @@
 Description=Oracle Proxy periodic official usage query
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=15min
+OnUnitActiveSec=10min
 RandomizedDelaySec=30
 Persistent=true
 [Install]

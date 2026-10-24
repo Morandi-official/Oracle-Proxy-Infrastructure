@@ -221,7 +221,10 @@ def presence(request):
         result=state_for(credential,control.call('state',actor(request),{}))
         mode=value['mode'] if result['registration']['status']=='registered' else 'pending'
         transport=value['transport'] if mode=='connected' else ''
-        ClientSession.objects.filter(pk=credential.pk).update(last_seen_at=timezone.now(),reported_mode=mode,reported_transport=transport or '')
+        changed=ClientSession.objects.filter(pk=credential.pk).exclude(reported_mode=mode).update(reported_mode=mode)
+        if changed and mode in ('connected','disconnected','protected','recovery'):
+            Audit.objects.create(actor=f'client:{credential.account.user_id}',action='client.reported.'+mode,resource=fingerprint(credential.public_key))
+        ClientSession.objects.filter(pk=credential.pk).update(last_seen_at=timezone.now(),reported_transport=transport or '')
         return response(result)
     except (ValueError,TypeError,KeyError) as error:return failed(error)
     except (OSError,TimeoutError,DatabaseError):return response({'error':'CONTROL_SERVICE_UNAVAILABLE'},503)

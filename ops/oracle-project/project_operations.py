@@ -384,6 +384,16 @@ def enable_https():
     finally:
         candidate.unlink(missing_ok=True)
     print('PROJECT_HTTPS_CONFIGURATION=ENABLED; existing Caddy hosts preserved')
+    # Queue changes require a distinct, explicit GitOps request. Ordinary HTTPS
+    # refresh, deploy and preflight never alter queue discipline.
+    request=json.loads(Path(__file__).with_name('request.json').read_text())
+    action=request.get('request_id','')
+    if action.startswith(('network-queue-apply-','network-queue-rollback-')):
+        module_spec=importlib.util.spec_from_file_location('network_queue',Path(__file__).with_name('network_queue.py'))
+        module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
+        if action.startswith('network-queue-apply-'):module.install()
+        else:module.uninstall()
+
 
 
 def status():

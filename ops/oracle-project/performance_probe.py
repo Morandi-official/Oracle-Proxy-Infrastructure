@@ -28,6 +28,28 @@ def metadata():
     except (OSError,ValueError,TypeError): return {'status':'UNAVAILABLE'}
 
 
+
+def udp_counters(text):
+    lines=[line.split()[1:] for line in text.splitlines() if line.startswith('Udp:')]
+    if len(lines)!=2 or len(lines[0])!=len(lines[1]):return {}
+    allowed={'InDatagrams','OutDatagrams','InErrors','RcvbufErrors','SndbufErrors','NoPorts','InCsumErrors','IgnoredMulti','MemErrors'}
+    return {key:int(value) for key,value in zip(*lines) if key in allowed and value.isdecimal()}
+
+
+def qdiscs():
+    # Fixed read-only argv; export no classifier rules, addresses or identities.
+    try:
+        value=subprocess.run(['tc','-j','-s','qdisc','show'],capture_output=True,text=True,timeout=3,check=True)
+        if len(value.stdout)>65536:return {'status':'TOO_LARGE'}
+        rows=json.loads(value.stdout)
+        safe=[]
+        for row in rows[:32]:
+            item={key:row[key] for key in ('kind','dev','bytes','packets','drops','overlimits','requeues','backlog','qlen') if key in row and (type(row[key]) is int or key in ('kind','dev') and isinstance(row[key],str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}',row[key]))}
+            safe.append(item)
+        return {'status':'OBSERVED','queues':safe}
+    except (OSError,ValueError,TypeError,subprocess.SubprocessError):return {'status':'UNAVAILABLE'}
+
+
 def local():
     result={'logical_cpus':os.cpu_count(),'load_average':list(os.getloadavg())}
     text=Path('/proc/meminfo').read_text()
@@ -39,6 +61,8 @@ def local():
     for name in ('rmem_max','wmem_max','netdev_max_backlog'):
         path=Path('/proc/sys/net/core')/name
         if path.exists():result['tcp_settings'][name]=path.read_text().strip()[:100]
+    result['udp_counters']=udp_counters(Path('/proc/net/snmp').read_text())
+    result['qdiscs']=qdiscs()
     result['interface_counters']={}
     for directory in Path('/sys/class/net').iterdir():
         if directory.name=='lo':continue

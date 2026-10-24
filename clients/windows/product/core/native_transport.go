@@ -14,7 +14,8 @@ import (
 )
 
 type nativeRead struct {
-	data  []byte
+	data  *[4096]byte
+	size  int
 	index int
 	err   error
 }
@@ -23,6 +24,7 @@ type nativeConn struct {
 	sockets   []net.Conn
 	ports     []uint16
 	incoming  chan nativeRead
+	free      chan *[4096]byte
 	done      chan struct{}
 	mu        sync.Mutex
 	winner    int
@@ -56,7 +58,12 @@ func nativeError(err error) uint32 {
 }
 
 func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
-	c := &nativeConn{sockets: sockets, ports: ports, incoming: make(chan nativeRead, 16), done: make(chan struct{}), winner: -1, attempt: -1, sentIndex: -1}
+	c := &nativeConn{sockets: sockets, ports: ports, incoming: make(chan nativeRead, 16), free: make(chan *[4096]byte, 16+len(sockets)), done: make(chan struct{}), winner: -1, attempt: -1, sentIndex: -1}
+	// One frame per queued delivery plus one per socket reader. Ownership
+	// moves reader -> incoming -> Read -> free; never reuse a queued frame.
+	for i := 0; i < cap(c.free); i++ {
+		c.free <- new([4096]byte)
+	}
 	for i, s := range sockets {
 		buffers, bufferErr := tuneNativeSocket(s)
 		for _, item := range []struct {
@@ -70,11 +77,17 @@ func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
 		}
 		go func(i int, s net.Conn) {
 			for {
-				b := make([]byte, 4096)
-				n, e := s.Read(b)
+				var b *[4096]byte
+				select {
+				case b = <-c.free:
+				case <-c.done:
+					return
+				}
+				n, e := s.Read(b[:])
 				if e != nil {
 					select {
 					case <-c.done:
+						c.recycle(b)
 						return
 					default:
 					}
@@ -82,12 +95,14 @@ func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
 					retired := c.winner >= 0 && c.winner != i
 					c.mu.Unlock()
 					if retired {
+						c.recycle(b)
 						return
 					}
 					c.event(i, fmt.Sprintf("READ_ERROR_%d", nativeError(e)))
 				}
 				if e == nil && !validPacket(b[:n]) {
 					c.event(i, "RECV_INVALID")
+					c.recycle(b)
 					continue
 				}
 				if e == nil && b[0] == 2 {
@@ -97,8 +112,9 @@ func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
 					c.event(i, "RECV_COOKIE")
 				}
 				select {
-				case c.incoming <- nativeRead{b[:n], i, e}:
+				case c.incoming <- nativeRead{b, n, i, e}:
 				case <-c.done:
+					c.recycle(b)
 					return
 				}
 				if e != nil {
@@ -108,6 +124,12 @@ func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
 		}(i, s)
 	}
 	return c
+}
+func (c *nativeConn) recycle(b *[4096]byte) {
+	select {
+	case c.free <- b:
+	case <-c.done:
+	}
 }
 func (c *nativeConn) Read(b []byte) (int, error) {
 	ctx, cancel := c.operation(true)
@@ -123,6 +145,7 @@ func (c *nativeConn) Read(b []byte) (int, error) {
 			c.mu.Lock()
 			winner := c.winner
 			if p.err != nil {
+				c.recycle(p.data)
 				c.mu.Unlock()
 				failed[p.index] = true
 				if winner == p.index || len(failed) == len(c.sockets) {
@@ -131,6 +154,7 @@ func (c *nativeConn) Read(b []byte) (int, error) {
 				continue
 			}
 			if winner >= 0 && winner != p.index {
+				c.recycle(p.data)
 				c.mu.Unlock()
 				continue
 			}
@@ -143,6 +167,7 @@ func (c *nativeConn) Read(b []byte) (int, error) {
 			// authenticates all returned bytes; unsolicited sockets stay rejected.
 			if winner < 0 && (c.sentIndex < 0 || p.index != c.sentIndex) {
 				c.event(p.index, "RECV_OBSOLETE")
+				c.recycle(p.data)
 				c.mu.Unlock()
 				continue
 			}
@@ -156,10 +181,13 @@ func (c *nativeConn) Read(b []byte) (int, error) {
 				}
 			}
 			c.mu.Unlock()
-			if len(b) < len(p.data) {
+			if len(b) < p.size {
+				c.recycle(p.data)
 				return 0, io.ErrShortBuffer
 			}
-			return copy(b, p.data), nil
+			n := copy(b, p.data[:p.size])
+			c.recycle(p.data)
+			return n, nil
 		}
 	}
 }

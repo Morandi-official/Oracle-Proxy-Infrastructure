@@ -153,21 +153,38 @@ def collect():
         if billing_end<=billing_start:
             result['billing_status']='NO_COMPLETED_HOURS'
             return result
-        details=RequestSummarizedUsagesDetails(tenant_id=signer.tenancy_id,time_usage_started=billing_start,time_usage_ended=billing_end,
-                    granularity='HOURLY',query_type='USAGE',group_by=['service','skuName','skuPartNumber','unit'],is_aggregate_by_time=True)
-        rows=[]; page=None; seen=set(); complete=False
-        for _ in range(8):
-            response=client.request_summarized_usages(details,page=page,limit=1000,retry_strategy=retry)
-            for row in response.data.items:
-                label=row.sku_name or ''
-                if re.search(r'outbound|outgoing|data transfer',label,re.I):
-                    part=getattr(row,'sku_part_number','') or ''
-                    if part and not re.fullmatch(r'B[0-9]{5,8}',part):raise ValueError('INVALID_TRANSFER_SKU')
-                    rows.append({'sku':label[:160],'part_number':part,'unit':(row.unit or '')[:40],'quantity':finite(row.computed_quantity)})
-            page=response.headers.get('opc-next-page')
-            if not page:complete=True;break
-            if page in seen:break
-            seen.add(page)
+        midnight=billing_end.replace(hour=0)
+        windows=[]
+        if midnight>billing_start:windows.append((billing_start,midnight,'DAILY'))
+        if billing_end>midnight:windows.append((midnight,billing_end,'HOURLY'))
+        result['billing_granularity']='DAILY_HISTORY_HOURLY_TODAY'
+        rows=[];complete=True
+        for window_start,window_end,granularity in windows:
+            details=RequestSummarizedUsagesDetails(tenant_id=signer.tenancy_id,time_usage_started=window_start,time_usage_ended=window_end,
+                granularity=granularity,query_type='USAGE',group_by=['service','skuName','skuPartNumber','unit'],is_aggregate_by_time=True)
+            before=len(rows);page=None;seen=set();window_complete=False
+            try:
+                for _ in range(4):
+                    response=client.request_summarized_usages(details,page=page,limit=1000,retry_strategy=retry)
+                    for row in response.data.items:
+                        label=row.sku_name or ''
+                        if re.search(r'outbound|outgoing|data transfer',label,re.I):
+                            part=getattr(row,'sku_part_number','') or ''
+                            if part and not re.fullmatch(r'B[0-9]{5,8}',part):raise ValueError('INVALID_TRANSFER_SKU')
+                            rows.append({'sku':label[:160],'part_number':part,'unit':(row.unit or '')[:40],'quantity':finite(row.computed_quantity)})
+                    page=response.headers.get('opc-next-page')
+                    if not page:window_complete=True;break
+                    if page in seen:break
+                    seen.add(page)
+            except Exception as error:
+                # Preserve a complete historical result if today's hourly query is
+                # rejected; never claim that a partial current day was included.
+                if granularity!='HOURLY' or getattr(error,'status',None)!=400:raise
+                rows=rows[:before];result['billing_granularity']='DAILY_FALLBACK'
+                result['billing_through']=int(midnight.timestamp())
+                result['billing_hourly_status']='HOURLY_QUERY_REJECTED'
+                window_complete=True
+            if not window_complete:complete=False;break
         if len(rows)>32:complete=False
         result.update(billing_status='PAGINATED_INCOMPLETE' if not complete else 'ROWS_REQUIRE_SKU_REVIEW' if rows else 'NO_EGRESS_ROWS',billing_rows=rows[:32])
         result.update(free_tier(rows,complete))
@@ -184,7 +201,7 @@ def write_cache(value):
         if not CACHE.is_symlink() and CACHE.stat().st_size<=32768: previous=json.loads(CACHE.read_text())
     except (OSError,ValueError): pass
     signature=lambda v:(v.get('period'),v.get('billing_rows'),v.get('billing_status'))
-    value['billing_changed_at']=previous.get('billing_changed_at',previous.get('checked_at')) if signature(value)==signature(previous) else value['checked_at']
+    value['billing_changed_at']=previous.get('billing_changed_at') if signature(value)==signature(previous) else value['checked_at']
     value['next_check_at']=value['checked_at']+600
     CACHE.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
     fd,name=tempfile.mkstemp(prefix='.oci-usage-',dir=CACHE.parent)

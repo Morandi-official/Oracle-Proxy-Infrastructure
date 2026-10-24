@@ -83,7 +83,7 @@ def official_usage_status():
                   'vnic_count', 'vnic_outbound_bytes', 'metric_points', 'metric_from', 'metric_through',
                   'metric_query_from', 'metric_query_to', 'instance_created_at', 'billing_through',
                   'billing_error_http_status', 'billing_error_category', 'billing_error_service_code',
-                  'billing_granularity','billing_changed_at','next_check_at','free_tier_status','free_tier_limit_gb','free_tier_used_gb','free_tier_remaining_gb','free_tier_policy_checked')
+                  'billing_granularity','billing_hourly_status','billing_changed_at','next_check_at','free_tier_status','free_tier_limit_gb','free_tier_used_gb','free_tier_remaining_gb','free_tier_policy_checked')
         result = {name: value.get(name) for name in fields}
         if any(not (item is None or type(item) in (int,float) and math.isfinite(item) and 0<=item<=10**18 or isinstance(item, str) and len(item) <= 96)
                for item in result.values()):
@@ -288,7 +288,7 @@ def install_usage_probe():
         print('OCI_READ_ONLY_API_PROBE='+json.dumps({k:value.get(k) for k in ('status','monitoring_status','billing_status','vnic_count','vnic_outbound_bytes','metric_through',
                  'instance_created_at','metric_from','metric_points','billing_through',
                  'billing_error_http_status','billing_error_category','billing_error_service_code',
-                 'billing_granularity','billing_changed_at','next_check_at','free_tier_status','free_tier_limit_gb','free_tier_used_gb','free_tier_remaining_gb')},sort_keys=True))
+                 'billing_granularity','billing_hourly_status','billing_changed_at','next_check_at','free_tier_status','free_tier_limit_gb','free_tier_used_gb','free_tier_remaining_gb')},sort_keys=True))
     else: print('OCI_READ_ONLY_API_PROBE=UNAVAILABLE; budget remains unknown')
 
 

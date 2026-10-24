@@ -96,16 +96,80 @@ internal static class OracleAcceptance
         using var response=await client.GetAsync("https://vpn-admin.morandi.dpdns.org/login/");
         return response.StatusCode==HttpStatusCode.OK && (await response.Content.ReadAsStringAsync()).Contains("csrfmiddlewaretoken",StringComparison.Ordinal);
     }
-    private static async Task<bool> FreshDns()
+    private static async Task<bool> FreshDns(int padding=0)
     {
         byte[] id=System.Security.Cryptography.RandomNumberGenerator.GetBytes(2);
-        var query=new List<byte>{id[0],id[1],1,0,0,1,0,0,0,0,0,0};
+        var query=new List<byte>{id[0],id[1],1,0,0,1,0,0,0,0,0,(byte)(padding>0?1:0)};
         foreach(string part in ("opx-"+Guid.NewGuid().ToString("N")+".example.com").Split('.')){query.Add((byte)part.Length);query.AddRange(System.Text.Encoding.ASCII.GetBytes(part));}
         query.AddRange(new byte[]{0,0,1,0,1});
+        if(padding>0){int length=padding+4;query.AddRange(new byte[]{0,0,41,16,0,0,0,0,0,(byte)(length>>8),(byte)length,0,12,(byte)(padding>>8),(byte)padding});query.AddRange(new byte[padding]);}
         using var udp=new UdpClient();udp.Connect("1.1.1.1",53);
         await udp.SendAsync(query.ToArray());using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var reply=(await udp.ReceiveAsync(timeout.Token)).Buffer;
         return reply.Length>=12 && reply[0]==id[0] && reply[1]==id[1] && (reply[2]&128)!=0 && (reply[3]&15) is 0 or 3;
+    }
+    private sealed class PhysicalMtuFixture : IDisposable
+    {
+        private readonly int _index,_original;
+        private static void Set(int index,int mtu){
+            using var process=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"netsh.exe")){
+                UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,
+                ArgumentList={"interface","ipv4","set","subinterface",index.ToString(),"mtu="+mtu,"store=active"}})!;
+            process.BeginOutputReadLine();process.BeginErrorReadLine();
+            if(!process.WaitForExit(10000)||process.ExitCode!=0)throw new IOException("DISPOSABLE_PHYSICAL_MTU_CHANGE_FAILED");
+        }
+        internal PhysicalMtuFixture(){
+            if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" || !Platform.IsAdmin)throw new IOException("DISPOSABLE_ADMIN_REQUIRED");
+            _index=PhysicalIndex();_original=NetworkInterface.GetAllNetworkInterfaces().Single(n=>n.GetIPProperties().GetIPv4Properties()?.Index==_index).GetIPProperties().GetIPv4Properties().Mtu;
+            try{Set(_index,1280);}catch{Set(_index,_original);throw;}
+        }
+        public void Dispose()=>Set(_index,_original);
+    }
+    private static async Task BulkDownload()
+    {
+        using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false}){Timeout=TimeSpan.FromSeconds(20)};
+        using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var response=await client.GetAsync("https://speed.cloudflare.com/__down?bytes=524288",HttpCompletionOption.ResponseHeadersRead,timeout.Token);
+        response.EnsureSuccessStatusCode();await using var stream=await response.Content.ReadAsStreamAsync();
+        byte[] buffer=new byte[32768];int read,total=0;
+        while((read=await stream.ReadAsync(buffer,timeout.Token))>0){total+=read;if(total>524288)throw new IOException("BULK_RESPONSE_LIMIT_EXCEEDED");}
+        Check(total==524288,"REAL_LOW_MTU_BULK_DOWNLOAD_512_KIB");
+    }
+    private static async Task StableNative8443(JsonObject initial)
+    {
+        uint pid=initial["core_pid"]!.GetValue<uint>();
+        using(var mtu=new PhysicalMtuFixture()){
+            var timer=Stopwatch.StartNew();int round=0;
+            do{
+                if(round%4==0)await BulkDownload();
+                Check(await ExitIp()=="152.67.156.100" && await FreshDns(2048),"REAL_LOW_MTU_UDP_FRAGMENT_AND_HTTPS_EXIT");
+                var state=await Send("Status");var counters=state["native_udp_attempt"]?["ports"]?["8443"];
+                Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["native_udp_selected_port"]?.GetValue<int>()==8443 && state["core_pid"]?.GetValue<uint>()==pid && (counters?["write_errors"]?.GetValue<int>()??0)==0 && (counters?["rx_obsolete"]?.GetValue<int>()??0)==0,"REAL_LOW_MTU_NATIVE_STAYS_ON_SAME_CORE_WITHOUT_MESSAGE_SIZE_ERROR_OR_FALLBACK");
+                round++;await Task.Delay(10000);
+            }while(timer.Elapsed<TimeSpan.FromSeconds(120));
+            Console.WriteLine("REAL_NATIVE_8443_LOW_MTU_STABLE_MS="+timer.ElapsedMilliseconds);
+        }
+        Check(await ExitIp()=="152.67.156.100","REAL_PHYSICAL_MTU_RESTORED_AFTER_SUSTAINED_NATIVE_TEST");
+    }
+    [StructLayout(LayoutKind.Sequential)]private struct FailureActions { public uint Reset;public IntPtr Reboot,Command;public uint Count;public IntPtr Actions; }
+    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern IntPtr OpenSCManager(string? machine,string? database,uint access);
+    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern IntPtr OpenService(IntPtr manager,string name,uint access);
+    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool QueryServiceConfig2(IntPtr service,uint level,IntPtr buffer,uint length,out uint needed);
+    [DllImport("advapi32.dll")]private static extern bool CloseServiceHandle(IntPtr handle);
+    private static void RecoveryPolicy()
+    {
+        IntPtr manager=OpenSCManager(null,null,1);if(manager==IntPtr.Zero)throw new Win32Exception();
+        IntPtr service=IntPtr.Zero,buffer=IntPtr.Zero;
+        try{
+            service=OpenService(manager,Platform.Service,1);if(service==IntPtr.Zero)throw new Win32Exception();
+            QueryServiceConfig2(service,2,IntPtr.Zero,0,out uint needed);
+            if(needed<40 || needed>4096)throw new IOException("SCM_RECOVERY_QUERY_SIZE_INVALID");
+            buffer=Marshal.AllocHGlobal((int)needed);
+            if(!QueryServiceConfig2(service,2,buffer,needed,out _))throw new Win32Exception();
+            var actions=Marshal.PtrToStructure<FailureActions>(buffer);
+            Check(actions.Reset==300 && actions.Count==3 && actions.Actions!=IntPtr.Zero &&
+                Enumerable.Range(0,3).All(i=>Marshal.ReadInt32(actions.Actions,i*8)==1 && Marshal.ReadInt32(actions.Actions,i*8+4)==new[]{3000,5000,10000}[i]),"REAL_SCM_RESTART_BACKOFF_3_5_10_SECONDS_WITH_FIVE_MINUTE_RESET");
+        }finally{if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);if(service!=IntPtr.Zero)CloseServiceHandle(service);CloseServiceHandle(manager);}
     }
     internal static async Task<int> Run()
     {
@@ -114,6 +178,7 @@ internal static class OracleAcceptance
         if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password)){Console.WriteLine("ORACLE_ACCEPTANCE_CREDENTIALS_MISSING");return 2;}
         string stage="BASELINE";
         try{
+            RecoveryPolicy();
             Check(await ExitIp()!="152.67.156.100","REAL_RUNNER_DIRECT_BASELINE");
             stage="LOGIN";var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
             Check(login["ok"]?.GetValue<bool>()==true && login["account"]?["username"]?.GetValue<string>()==username,"REAL_ORACLE_CLIENT_LOGIN_AND_AUTOMATIC_ENROLLMENT");
@@ -133,6 +198,7 @@ internal static class OracleAcceptance
             var native8443Timer=Stopwatch.StartNew();await Send("Connect");var native8443=await Connected();
             Console.WriteLine("REAL_NATIVE_WIREGUARD_UDP8443_COLD_MS="+native8443Timer.ElapsedMilliseconds);
             Check(native8443["transport"]?.GetValue<string>()=="wireguard-udp" && native8443["native_udp_selected_port"]?.GetValue<int>()==8443 && native8443Timer.ElapsedMilliseconds<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_WIREGUARD_UDP8443_HTTP_AND_DNS_NO_QUIC_WRAPPER");
+            stage="NATIVE_8443_LOW_MTU_STABILITY";await StableNative8443(native8443);
             await Send("Disconnect");
             stage="FORCED_COLD_PROTOCOLS";
             foreach(string preference in new[]{"PreferUdp","PreferQuic"}){

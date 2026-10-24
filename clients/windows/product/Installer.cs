@@ -53,7 +53,7 @@ internal static class Installer
             foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"OracleProxy.exe":name),Path.Combine(Platform.Root,name),true);
             if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Oracle Proxy VPN");
             Platform.ServiceEnvironment(Platform.Service);
-            Sc("failure",Platform.Service,"reset=","86400","actions=","restart/3000/restart/10000/restart/30000");
+            Sc("failure",Platform.Service,"reset=","300","actions=","restart/3000/restart/5000/restart/10000");
             Sc("start",Platform.Service);
             using var service=new ServiceController(Platform.Service);service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(25));
             bool ready=false;for(int i=0;i<20;i++){try{await ControlPipe.Send("Status");ready=true;break;}catch{await Task.Delay(500);}}

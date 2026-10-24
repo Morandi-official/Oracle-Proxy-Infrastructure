@@ -123,7 +123,7 @@ jobs:
         id: oracle-acceptance
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
-        timeout-minutes: 6
+        timeout-minutes: 8
         env:
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
@@ -146,7 +146,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc13-win-x64-unsigned-acceptance-candidate
+          name: OracleProxy-0.3.0-rc14-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             !dist/candidate/*-source.zip
@@ -157,7 +157,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc13-corresponding-source
+          name: OracleProxy-0.3.0-rc14-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt

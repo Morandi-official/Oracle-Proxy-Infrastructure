@@ -62,6 +62,7 @@ internal static class ProductTests
             bool valid=!value.ConnectIntent && !value.RecoveryRequired && value.Token=="" && value.PrivateKey.Length==44 && digest==File.ReadAllText(Path.Combine(Root,"public-sha256")) && !NativeGuard.Active;
             File.WriteAllText(Path.Combine(Root,"recovery-verified"),valid?"KEY_AND_SAFE_OFF_PRESERVED":"FAIL");return valid?0:1;
         }
+        if(args.SequenceEqual(new[]{"--oracle-watchdog"})){Thread.Sleep(TimeSpan.FromMinutes(9));Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--watchdog"})){
             Thread.Sleep(TimeSpan.FromMinutes(4));Rescue();return 0;
         }
@@ -392,6 +393,7 @@ internal static class ProductTests
         diagnosticState["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443,8443);
         var diagnosticConfig=CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");
         Require(diagnosticConfig["outbounds"]![1]!["ports"]!.ToJsonString()=="[8443]" && diagnosticConfig["endpoints"]![0]!["peers"]![0]!["port"]!.GetValue<int>()==51820,"FIXED_NATIVE_8443_HAS_SINGLE_UNWRAPPED_PORT_AND_UNCHANGED_WG_PEER");
+        Require(config["inbounds"]![0]!["mtu"]!.GetValue<int>()==1280 && config["endpoints"]![0]!["mtu"]!.GetValue<int>()==1200,"WINDOWS_TUN_IPV6_MINIMUM_WITH_IPV4_WG_1232_BYTE_OUTER_DATAGRAM_BUDGET");
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";

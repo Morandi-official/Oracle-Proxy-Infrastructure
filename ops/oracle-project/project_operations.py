@@ -125,6 +125,9 @@ def preflight():
     value['native_udp_readiness']=native.observe()
     value['ipv6_readiness'] = ipv6_readiness()
     value['official_usage'] = official_usage_status()
+    probe_spec=importlib.util.spec_from_file_location('udp_resolver_probe',Path(__file__).with_name('udp_resolver_probe.py'))
+    probe=importlib.util.module_from_spec(probe_spec);probe_spec.loader.exec_module(probe)
+    value['public_udp_resolver_controls']=probe.observe()
     print(json.dumps(value, indent=2))
 
 

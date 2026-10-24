@@ -17,11 +17,11 @@ internal static class Acceptance
   byte[] buffer=new byte[65536];
   while(true){int size=0;WebSocketReceiveResult response;do{if(size==buffer.Length)throw new IOException("CDP_FRAME_TOO_LARGE");response=await ws.ReceiveAsync(new ArraySegment<byte>(buffer,size,buffer.Length-size),deadline.Token);size+=response.Count;if(response.MessageType==WebSocketMessageType.Close)throw new IOException("CDP_CLOSED");}while(!response.EndOfMessage);
    var value=JsonNode.Parse(buffer.AsSpan(0,size))!.AsObject();if(value["id"]?.GetValue<int>()!=id)continue;
-   if(value["error"] is not null || value["result"]?["exceptionDetails"] is not null)throw new IOException("BROWSER_EVALUATION_FAILED");
+   if(value["error"] is not null || value["result"]?["exceptionDetails"] is not null){if(value["error"]?["code"] is JsonValue code && code.TryGetValue<int>(out var number))Console.WriteLine("BROWSER_CDP_ERROR_CODE="+number);string category=value["result"]?["exceptionDetails"]?["exception"]?["className"]?.ToString()??"";if(System.Text.RegularExpressions.Regex.IsMatch(category,"^[A-Za-z]{1,40}$"))Console.WriteLine("BROWSER_JS_ERROR_CATEGORY="+category);throw new IOException("BROWSER_EVALUATION_FAILED");}
    return value["result"]!["result"]!["value"]!.AsObject();
   }
  }
- static async Task Browser(){
+ static async Task Browser(bool checkStun=true){
   Check(!System.Security.Principal.WindowsIdentity.GetCurrent().IsSystem,"BROWSER_NOT_RUNNING_AS_SYSTEM");
   string edge=new[]{Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)}.Select(p=>Path.Combine(p,"Microsoft","Edge","Application","msedge.exe")).FirstOrDefault(File.Exists)??throw new IOException("EDGE_NOT_INSTALLED");
   string profile=Path.Combine(Path.GetTempPath(),"oracle-webrtc-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(profile);
@@ -36,7 +36,10 @@ internal static class Acceptance
    if(target is null)throw new IOException("PRIVACY_PAGE_NOT_LOADED");
    var uri=new Uri(target["webSocketDebuggerUrl"]!.GetValue<string>());Check(uri.IsLoopback && uri.Port==port,"BROWSER_DEBUG_ENDPOINT_IS_OWN_LOOPBACK");
    using var ws=new ClientWebSocket();using var connectDeadline=new CancellationTokenSource(TimeSpan.FromSeconds(10));await ws.ConnectAsync(uri,connectDeadline.Token);
-   var result=await Cdp(ws,"(async()=>{for(let i=0;i<100&&(!document.getElementById('start')||typeof window.OraclePrivacyResult==='undefined');i++)await new Promise(r=>setTimeout(r,100));document.getElementById('start').click();for(let i=0;i<150&&!window.OraclePrivacyResult;i++)await new Promise(r=>setTimeout(r,100));return window.OraclePrivacyResult || {error:'DEADLINE'};})()",1);
+   bool ready=false;int call=1;var pageClock=Stopwatch.StartNew();while(pageClock.ElapsedMilliseconds<15000){try{var status=await Cdp(ws,"({ready:location.href==='https://vpn-admin.morandi.dpdns.org/privacy-check/' && document.readyState==='complete' && typeof window.OraclePrivacyResult!=='undefined' && !!document.getElementById('start')})",call++);if(status["ready"]?.GetValue<bool>()==true){ready=true;break;}}catch(IOException error)when(error.Message=="BROWSER_EVALUATION_FAILED"){}await Task.Delay(150);}
+   Check(ready,"PUBLIC_EDGE_PRIVACY_DOCUMENT_AND_SCRIPT_READY");if(!checkStun)return;
+   var result=await Cdp(ws,"(async()=>{document.getElementById('start').click();for(let i=0;i<150&&!window.OraclePrivacyResult;i++)await new Promise(r=>setTimeout(r,100));return window.OraclePrivacyResult || {error:'DEADLINE'};})()",call++);
+   Console.WriteLine("BROWSER_STUN_PUBLIC_CANDIDATE_COUNT="+(result["public_ips"] as JsonArray)?.Count);Console.WriteLine("BROWSER_STUN_UNEXPECTED_PUBLIC="+(result["unexpected_public"]?.GetValue<bool>()==true));
    Check(result["oracle_verified"]?.GetValue<bool>()==true && result["unexpected_public"]?.GetValue<bool>()==false && result["public_ips"]!.AsArray().Any(p=>p?.GetValue<string>()=="152.67.156.100"),"REAL_EDGE_RTCPEERCONNECTION_STUN_PUBLIC_CANDIDATE_IS_ORACLE");
    Console.WriteLine("BROWSER_LOCAL_ICE_LITERAL_EXPOSED="+(result["local_exposed"]?.GetValue<bool>()==true));
   }finally{try{if(!process.HasExited)process.Kill(true);process.WaitForExit(5000);}catch{}try{Directory.Delete(profile,true);}catch{}}
@@ -59,7 +62,7 @@ internal static class Acceptance
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
   long initial=0;
   var adapter=NetworkInterface.GetAllNetworkInterfaces().First(n=>n.OperationalStatus==OperationalStatus.Up && n.GetIPProperties().GatewayAddresses.Any(g=>g.Address.AddressFamily==AddressFamily.InterNetwork));uint physical=(uint)adapter.GetIPProperties().GetIPv4Properties().Index;
-  if(args.SequenceEqual(new[]{"--counter-self-test"})){try{using var preflight=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);Check(preflight.Packets()>0,"REAL_PHYSICAL_STUN_COUNTER_SCHEMA_AND_BASELINE");return 0;}catch(Exception error){if(System.Text.RegularExpressions.Regex.IsMatch(error.Message,"^[A-Z0-9_]{1,100}$"))Console.WriteLine("FAILED_PREFLIGHT="+error.Message);return 1;}}
+  if(args.SequenceEqual(new[]{"--counter-self-test"})){try{using var preflight=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);Check(preflight.Packets()>0,"REAL_PHYSICAL_STUN_COUNTER_SCHEMA_AND_BASELINE");await Browser(false);return 0;}catch(Exception error){if(System.Text.RegularExpressions.Regex.IsMatch(error.Message,"^[A-Z0-9_]{1,100}$"))Console.WriteLine("FAILED_PREFLIGHT="+error.Message);return 1;}}
   if(args.Length!=0 || Environment.GetEnvironmentVariable("GITHUB_REF")!="refs/heads/main")return 3;
   try{
    using var capture=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);long before=capture.Packets();Check(before>0,"BASELINE_RAW_STUN_PHYSICAL_COUNTER_POSITIVE");
@@ -74,7 +77,7 @@ internal static class Acceptance
    await Send("PreferUdp8443");await Send("Connect");var timer=Stopwatch.StartNew();JsonObject state;
    do{await Task.Delay(250);state=await Send("Status");}while(state["mode"]?.GetValue<string>()!="connected"&&timer.ElapsedMilliseconds<30000);
    Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true,"PINNED_RC18_NATIVE_UDP_GUARD_CONNECTED");
-   long connected=capture.Packets();await ProbePhysical(physical);await Browser();await Task.Delay(500);Check(capture.Packets()==connected,"REAL_RAW_STUN_HAS_ZERO_PHYSICAL_EGRESS_WITH_VPN");
+   long connected=capture.Packets();await ProbePhysical(physical);try{await Browser();}finally{await Task.Delay(500);long delta=capture.Packets()-connected;Console.WriteLine("RAW_STUN_PHYSICAL_TX_DELTA="+delta);Check(delta==0,"REAL_RAW_STUN_HAS_ZERO_PHYSICAL_EGRESS_WITH_VPN");}
    await Send("Quit");state=await Send("Status");long used=(state["peer_rx_bytes"]?.GetValue<long>()??-1)+(state["peer_tx_bytes"]?.GetValue<long>()??-1)-initial;
    Check(used>=0 && used<=16*1024*1024 && state["intent"]?.GetValue<bool>()==false && state["core_pid"]?.GetValue<uint>()==0,"WEBRTC_ACCEPTANCE_BOUNDED_USAGE_AND_CORE_STOPPED");
    await Send("Logout");return 0;

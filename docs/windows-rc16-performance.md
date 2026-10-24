@@ -25,3 +25,10 @@ The server's opt-in read-only preflight additionally samples UDP counters and sa
 ## Follow-up server queue evidence
 
 Read-only production run40076050698/job120819496866 refreshed the same2Gbps metadata. Physical enp0s6 used pfifo_fast with26012 historical queue drops and no new drops during the approximately1.9s control snapshot; UDP RcvbufErrors276 was also historical and unchanged. Physical NIC error/drop counters remained zero; CPU load averages were0,0,0. This does not prove a bottleneck during the owner's speedtest. It supports evaluating FQ-CoDel for fairness and active queue management instead of increasing every global buffer. Opt-in queue application/rollback is separately documented in ops/oracle-project/README.md, with real namespace CI before production. No speed claim is inferred from historical counters.
+
+
+## Accepted and deployed evidence
+
+- Candidate source1c13adef75facc1dee77489543f7f36da04f0218: main run40076050658/job120819496775 passed complete real Oracle acceptance, including native8443 low-MTU stability, all carriers, recovery, fail-closed, account/device usage linkage and quit/logout. Disposable peer traffic4,766,004bytes. This is not a China Mobile throughput measurement.
+- FQ-CoDel source62551ae128c62bc2b301b9d87598062b06f8466c: isolated namespace run40076712794/job120821507867 proved apply/idempotence/rollback; production mergec9136bdf479d44770f3f564a70d62429a02d441c/run40077060162/job120822585169 successfully applied the owned queue unit, then passed external HTTPS, QUIC/H3 and real Chromium/Firefox admin acceptance.
+- Public rc16 release source/build/checksum metadata independently verified against accepted run; client SHA25677457c8f84c8c4c385a4061d3fb22c38c699500cc4860886fcf174897d9f1398. Mirror pins all four exact public assets; rc15 remains available. No field speed improvement is claimed before owner comparison.

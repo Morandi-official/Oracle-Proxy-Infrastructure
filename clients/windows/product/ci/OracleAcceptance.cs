@@ -103,10 +103,12 @@ internal static class OracleAcceptance
         foreach(string part in ("opx-"+Guid.NewGuid().ToString("N")+".example.com").Split('.')){query.Add((byte)part.Length);query.AddRange(System.Text.Encoding.ASCII.GetBytes(part));}
         query.AddRange(new byte[]{0,0,1,0,1});
         if(padding>0){int length=padding+4;query.AddRange(new byte[]{0,0,41,16,0,0,0,0,0,(byte)(length>>8),(byte)length,0,12,(byte)(padding>>8),(byte)padding});query.AddRange(new byte[padding]);}
-        using var udp=new UdpClient();udp.Connect("1.1.1.1",53);
+        // Quad9's alternate DNS port bypasses the product's port-53 DNS hijack,
+        // so the padded datagram itself must traverse the WireGuard data path.
+        using var udp=new UdpClient();udp.Connect(padding>0?"9.9.9.9":"1.1.1.1",padding>0?9953:53);
         await udp.SendAsync(query.ToArray());using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var reply=(await udp.ReceiveAsync(timeout.Token)).Buffer;
-        return reply.Length>=12 && reply[0]==id[0] && reply[1]==id[1] && (reply[2]&128)!=0 && (reply[3]&15) is 0 or 3;
+        return reply.Length>=12 && reply[0]==id[0] && reply[1]==id[1] && (reply[2]&128)!=0 && (padding>0 || (reply[3]&15) is 0 or 3);
     }
     private sealed class PhysicalMtuFixture : IDisposable
     {
@@ -142,7 +144,7 @@ internal static class OracleAcceptance
             var timer=Stopwatch.StartNew();int round=0;
             do{
                 if(round%4==0)await BulkDownload();
-                Check(await ExitIp()=="152.67.156.100" && await FreshDns(2048),"REAL_LOW_MTU_UDP_FRAGMENT_AND_HTTPS_EXIT");
+                Check(await ExitIp()=="152.67.156.100" && await FreshDns() && await FreshDns(2048),"REAL_LOW_MTU_LARGE_UDP9953_DATAGRAM_NORMAL_DNS_AND_HTTPS_EXIT");
                 var state=await Send("Status");var counters=state["native_udp_attempt"]?["ports"]?["8443"];
                 Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["native_udp_selected_port"]?.GetValue<int>()==8443 && state["core_pid"]?.GetValue<uint>()==pid && (counters?["write_errors"]?.GetValue<int>()??0)==0 && (counters?["rx_obsolete"]?.GetValue<int>()??0)==0,"REAL_LOW_MTU_NATIVE_STAYS_ON_SAME_CORE_WITHOUT_MESSAGE_SIZE_ERROR_OR_FALLBACK");
                 round++;await Task.Delay(10000);

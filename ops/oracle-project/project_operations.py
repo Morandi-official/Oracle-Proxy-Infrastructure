@@ -322,7 +322,14 @@ def install_control():
         raise
 
 
+def install_downloads():
+    spec=importlib.util.spec_from_file_location('project_downloads',Path(__file__).with_name('downloads.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    module.install()
+
+
 def enable_https():
+    install_downloads()
     main = CADDY_MAIN
     directory = CADDY_DIRECTORY
     snippet = directory / 'admin.caddy'

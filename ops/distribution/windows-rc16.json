@@ -1,0 +1,15 @@
+{
+  "run_id": 40076050658,
+  "source_revision": "1c13adef75facc1dee77489543f7f36da04f0218",
+  "version": "0.3.0-rc16",
+  "artifacts": [
+    {
+      "id": 12553223792,
+      "sha256": "996d85490284118798186b894f6046e8ffc11e4484436f5a03ac96e6bfe25c8a"
+    },
+    {
+      "id": 12552974787,
+      "sha256": "23ff387fd149c66e6e6039997316974fd9d397c90a23a6f327b1e4805f9fbeda"
+    }
+  ]
+}

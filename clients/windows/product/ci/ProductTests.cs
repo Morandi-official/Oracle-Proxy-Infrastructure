@@ -197,11 +197,12 @@ internal static class ProductTests
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
     private static int Ui()
     {
+        OracleAcceptance.VerifyDeviceBudgetFixture();
         var nativeEvents=new NativeUdpEvidence();
         if(!nativeEvents.Record("NATIVE_UDP_443_SEND_INIT") || !nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_10054") || nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_9999999999") || nativeEvents.Record("NATIVE_UDP_443_RECV_REPLY SYNTHETIC_SECRET") || nativeEvents.Record("NATIVE_UDP_22_SEND_INIT") || nativeEvents.Record("NATIVE_UDP_443_SEND_INIT\n"))return 1;
-        if(!nativeEvents.Record("NATIVE_UDP_8443_RECV_REPLY"))return 1;
+        if(!nativeEvents.Record("NATIVE_UDP_8443_RECV_REPLY") || !nativeEvents.Record("NATIVE_UDP_8443_SNDBUF_AFTER_7340032") || nativeEvents.Record("NATIVE_UDP_8443_RCVBUF_AFTER_999999999") || nativeEvents.Record("NATIVE_UDP_8443_RCVBUF_AFTER_7340032 SYNTHETIC_SECRET"))return 1;
         var savedNative=nativeEvents.Snapshot();nativeEvents.Clear();
-        if(savedNative["8443"]?["rx_responses"]?.GetValue<int>()!=1 || savedNative["443"]?["tx_initiations"]?.GetValue<int>()!=1 || savedNative["443"]?["last_read_error"]?.GetValue<uint>()!=10054 || nativeEvents.Snapshot().Count!=0)return 1;
+        if(savedNative["8443"]?["sndbuf_after"]?.GetValue<uint>()!=7340032 || savedNative["8443"]?["rx_responses"]?.GetValue<int>()!=1 || savedNative["443"]?["tx_initiations"]?.GetValue<int>()!=1 || savedNative["443"]?["last_read_error"]?.GetValue<uint>()!=10054 || nativeEvents.Snapshot().Count!=0)return 1;
         Console.WriteLine("NATIVE_UDP_PORT_COUNTERS_STRICT_NUMERIC_VOCABULARY_AND_IMMUTABLE_SNAPSHOT=PASS");
         var carriers=new CarrierMemory();var relayState=new JsonObject{["tunnel"]=new JsonObject{["https_relay"]=true}};
         carriers.Observe("synthetic-network-a");carriers.Failed(TunnelTransport.WireGuardUdp);

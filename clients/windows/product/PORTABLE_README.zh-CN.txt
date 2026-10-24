@@ -91,3 +91,5 @@ rc14：修复原生 UDP socket 重建后，沿用已有 WireGuard 加密会话�
 服务异常重启退避改为3、5、10秒，连续健康5分钟后重置失败计数，避免旧的24小时失败记录长期导致30秒等待。故障循环仍保留退避，重连仍须通过出口验证。诊断将核心存续时长明确标为 core_uptime_ms/core_age_ms，初次出口验证耗时另列 verified_after_start_ms；重建核心会清除旧的探测失败次数，并丢弃旧代探测任务。仍需实机确认 UDP 长时间稳定性和 UU 服务故障连续性。
 
 rc15：实际 WireGuard 用户态 TCP 栈启用 CUBIC，保留桌面缓冲区和已验收 MTU；当前 IPv6 阻断策略下 DNS 只返回 IPv4。“GitHub 连通性”可识别 Steam++ 等本机 hosts 重写，不会修改 hosts 或关闭其他软件。线路基础 RTT 和热点吞吐仍受实际网络限制。
+
+原生UDP socket沿用WireGuard标准策略，申请7MiB收发缓冲；仅作用于本产品的socket，系统可能钳制请求。连接诊断列出rcvbuf/sndbuf调整前后实际字节数，不修改全局网卡或系统参数。

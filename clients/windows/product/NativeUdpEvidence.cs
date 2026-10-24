@@ -8,10 +8,17 @@ internal sealed class NativeUdpEvidence
     private readonly object _gate=new();
     private readonly JsonObject _ports=new();
     private static readonly Regex Event=new(@"\ANATIVE_UDP_(51820|443|8443)_(SEND_INIT|RECV_REPLY|RECV_COOKIE|RECV_INVALID|RECV_OBSOLETE|READ_ERROR_[0-9]{1,10}|WRITE_ERROR_[0-9]{1,10})\z",RegexOptions.CultureInvariant);
+    private static readonly Regex SocketEvent=new(@"\ANATIVE_UDP_(51820|443|8443)_(RCVBUF_BEFORE|SNDBUF_BEFORE|RCVBUF_AFTER|SNDBUF_AFTER|SOCKET_BUFFER_ERROR)_([0-9]{1,10})\z",RegexOptions.CultureInvariant);
     internal void Clear(){lock(_gate)_ports.Clear();}
     internal bool Record(string? line)
     {
         if(line is null || line.Length>80)return false;
+        var socket=SocketEvent.Match(line);
+        if(socket.Success){
+            if(!uint.TryParse(socket.Groups[3].Value,out uint bytes) || (socket.Groups[2].Value!="SOCKET_BUFFER_ERROR" && bytes>64*1024*1024))return false;
+            lock(_gate){string bufferPort=socket.Groups[1].Value;if(_ports[bufferPort] is not JsonObject bufferValues){bufferValues=new JsonObject();_ports[bufferPort]=bufferValues;}bufferValues[socket.Groups[2].Value.ToLowerInvariant()]=bytes;}
+            return true;
+        }
         var match=Event.Match(line);if(!match.Success)return false;
         string port=match.Groups[1].Value,kind=match.Groups[2].Value;
         uint? code=null;

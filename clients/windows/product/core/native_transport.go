@@ -58,6 +58,16 @@ func nativeError(err error) uint32 {
 func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
 	c := &nativeConn{sockets: sockets, ports: ports, incoming: make(chan nativeRead, 16), done: make(chan struct{}), winner: -1, attempt: -1, sentIndex: -1}
 	for i, s := range sockets {
+		buffers, bufferErr := tuneNativeSocket(s)
+		for _, item := range []struct {
+			name  string
+			value int
+		}{{"RCVBUF_BEFORE", buffers.receiveBefore}, {"SNDBUF_BEFORE", buffers.sendBefore}, {"RCVBUF_AFTER", buffers.receiveAfter}, {"SNDBUF_AFTER", buffers.sendAfter}} {
+			fmt.Fprintf(os.Stderr, "NATIVE_UDP_%d_%s_%d\n", ports[i], item.name, item.value)
+		}
+		if bufferErr != nil {
+			fmt.Fprintf(os.Stderr, "NATIVE_UDP_%d_SOCKET_BUFFER_ERROR_%d\n", ports[i], nativeError(bufferErr))
+		}
 		go func(i int, s net.Conn) {
 			for {
 				b := make([]byte, 4096)

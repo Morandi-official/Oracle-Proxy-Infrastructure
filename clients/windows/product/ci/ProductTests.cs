@@ -279,17 +279,33 @@ internal static class ProductTests
         while((!read.IsCompleted || !click.IsCompleted) && deadline.Elapsed<TimeSpan.FromSeconds(5)){Application.DoEvents();Thread.Sleep(5);}
         if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Prepare","Connect"}))return 1;
         Console.WriteLine("CONNECT_CLICK_DURING_PASSIVE_READ_IS_QUEUED_AND_EXECUTED=PASS");
-        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";
+        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";preferenceState["native_udp_8443_available"]=true;
         var preferenceCalls=new List<string>();
         using var reselect=new MainForm((command,_,_)=>{preferenceCalls.Add(command);return Task.FromResult((JsonObject)preferenceState.DeepClone());});
         reselect.Display(preferenceState);
         var sameChoice=Descendants(reselect).OfType<ComboBox>().Single();
         typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
-        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp"}))return 1;
-        Console.WriteLine("RESELECTING_SAME_UDP_CHOICE_EXPLICITLY_RESTARTS_PRIMARY_DISCOVERY=PASS");
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp8443"}))return 1;
+        Console.WriteLine("RESELECTING_NORMAL_UDP_RETAINS_ADVERTISED_NATIVE_8443=PASS");
         typeof(Button).GetMethod("OnClick",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(Descendants(reselect).OfType<Button>().Single(b=>b.Text=="原生 UDP 8443 测试"),[EventArgs.Empty]);
-        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp","PreferUdp8443"}))return 1;
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp8443","PreferUdp8443"}))return 1;
         Console.WriteLine("NATIVE_UDP8443_DIAGNOSTIC_BUTTON_USES_FIXED_AUTHENTICATED_COMMAND=PASS");
+        preferenceState["intent"]=true;reselect.Display(preferenceState);
+        if(Descendants(reselect).OfType<Button>().Single(b=>b.Text=="原生 UDP 8443 测试").Enabled)return 1;
+        foreach(string preference in new[]{"auto","udp"}){
+            var defaults=(JsonObject)snapshot.DeepClone();defaults["intent"]=false;defaults["transport_preference"]=preference;defaults["native_udp_8443_available"]=true;defaults["native_udp_port_preference"]=0;defaults["ok"]=true;
+            var selectionCalls=new List<string>();
+            using var normal=new MainForm((command,_,_)=>{selectionCalls.Add(command);if(command.EndsWith("8443",StringComparison.Ordinal))defaults["native_udp_port_preference"]=8443;return Task.FromResult((JsonObject)defaults.DeepClone());});
+            normal.Display(defaults);normal.Act("Connect").GetAwaiter().GetResult();
+            if(!selectionCalls.SequenceEqual(new[]{preference=="auto"?"PreferAuto8443":"PreferUdp8443","Connect"}))return 1;
+        }
+        var denied=(JsonObject)preferenceState.DeepClone();denied["intent"]=false;denied["native_udp_port_preference"]=0;denied["ok"]=false;
+        var deniedCalls=new List<string>();using(var rejected=new MainForm((command,_,_)=>{deniedCalls.Add(command);return Task.FromResult((JsonObject)denied.DeepClone());})){
+            rejected.Display(denied);rejected.Act("Connect").GetAwaiter().GetResult();
+            if(!deniedCalls.SequenceEqual(new[]{"PreferUdp8443"}))return 1;
+        }
+        if(TransportPolicy.ClientSelection(1,false)!="PreferUdp" || TransportPolicy.ClientSelection(0,false)!="PreferAuto" || TransportPolicy.ClientSelection(2,true)!="PreferQuic")return 1;
+        Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_SELECT_NATIVE_8443_BEFORE_CONNECT_AND_REFUSE_FAILED_SELECTION=PASS");
         var quitState=new JsonObject{["ok"]=true,["intent"]=false,["core_pid"]=0U,["mode"]="disconnected"};
         var exitCalls=new List<string>();
         using var exitForm=new MainForm((command,_,_)=>{exitCalls.Add(command);return Task.FromResult((JsonObject)quitState.DeepClone());});

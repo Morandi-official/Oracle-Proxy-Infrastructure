@@ -252,6 +252,9 @@ internal static class OracleAcceptance
                 var blocked=await ControlPipe.Send("Connect");
                 Check(blocked["ok"]?.GetValue<bool>()==false && blocked["error"]?.GetValue<string>()=="UU_MAINTENANCE_BUSY" && blocked["mode"]?.GetValue<string>()=="disconnected" && blocked["intent"]?.GetValue<bool>()==false,"REAL_CONNECT_REFUSED_DURING_ELEVATED_UU_MAINTENANCE");
             }
+            stage="NORMAL_AUTO_NATIVE8443_POLICY";
+            await Send("Disconnect");var automatic8443=await Send("PreferAuto8443");
+            Check(automatic8443["transport_preference"]?.GetValue<string>()=="auto" && automatic8443["native_udp_port_preference"]?.GetValue<int>()==8443 && automatic8443["native_udp_8443_available"]?.GetValue<bool>()==true,"REAL_NORMAL_AUTO_NATIVE_8443_SELECTION_IS_SERVER_ADVERTISED_AND_PRESERVES_AUTO_POLICY");
             stage="FIXED_NATIVE_UDP8443";
             await Send("Disconnect");await Send("PreferUdp8443");
             var native8443Timer=Stopwatch.StartNew();await Send("Connect");var native8443=await Connected();

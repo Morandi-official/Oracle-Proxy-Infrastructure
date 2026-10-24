@@ -187,18 +187,18 @@ internal sealed class VpnRuntime : IDisposable
         string command=value["command"]?.GetValue<string>() ?? "";
         var fields=command=="Login"?new[]{"version","command","username","password"}:new[]{"version","command"};
         if(value.Count!=fields.Length || fields.Any(field=>!value.ContainsKey(field)))throw new IOException("INVALID_FIELDS");
-        if(command is not ("Status" or "Login" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferUdp8443" or "PreferQuic"))throw new IOException("UNKNOWN_COMMAND");
+        if(command is not ("Status" or "Login" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferUdp8443" or "PreferAuto8443" or "PreferQuic"))throw new IOException("UNKNOWN_COMMAND");
         await _gate.WaitAsync();
         try{
             switch(command){
             case "Prepare":_prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);break;
-            case "PreferAuto":case "PreferUdp":case "PreferUdp8443":case "PreferQuic":
+            case "PreferAuto":case "PreferUdp":case "PreferUdp8443":case "PreferAuto8443":case "PreferQuic":
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_TRANSPORT_CHANGE");
-                if(command=="PreferUdp8443" && (_state?["tunnel"]?["native_udp_ports"] is not JsonArray nativePorts || !nativePorts.Any(n=>n?.GetValue<int>()==8443)))throw new IOException("NATIVE_UDP8443_NOT_AVAILABLE");
+                if((command is "PreferUdp8443" or "PreferAuto8443") && !TransportPolicy.Native8443Available(_state))throw new IOException("NATIVE_UDP8443_NOT_AVAILABLE");
                 if(command=="PreferQuic" && (_state is null || !TransportPolicy.QuicAvailable(_state)))throw new IOException("QUIC_NOT_AVAILABLE");
                 await StopCore();_carriers.Clear();_carrierFailures.Clear();_nativeUdpAttempt=null;_probeFailures=0;
                 _secret.TransportPreference=command is "PreferUdp" or "PreferUdp8443"?"udp":command=="PreferQuic"?"quic":"auto";
-                _secret.NativeUdpPortPreference=command=="PreferUdp8443"?8443:0;
+                _secret.NativeUdpPortPreference=command is "PreferUdp8443" or "PreferAuto8443"?8443:0;
                 _secret.CarrierHintUntil=0;_secret.Save();_transport=Preferred();_initialCarrierSelected=true;
                 _prepareUntil=default;_error="";_failure=null;_connectMs=null;_switchTimings=null;_clickStarted=0;_readyMs=null;break;
             case "Login":
@@ -330,7 +330,7 @@ internal sealed class VpnRuntime : IDisposable
             }catch(NetworkInformationException){}catch(System.Net.Sockets.SocketException){}
         }
         return new(){["traffic"]=traffic,["verified_exit_ip"]=_mode=="connected" && _verifiedGeneration==_generation && NativeGuard.TunPermitted?"152.67.156.100":null,["ok"]=ok,["schema"]=1,["mode"]=_secret.RecoveryRequired || (_secret.ConnectIntent && !NativeGuard.Active)?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
-        ["transport_preference"]=_secret.TransportPreference,["native_udp_port_preference"]=_secret.NativeUdpPortPreference,["carrier_stage"]=_core.CarrierStage,["carrier_failures"]=_carrierFailures.DeepClone(),["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
+        ["transport_preference"]=_secret.TransportPreference,["native_udp_port_preference"]=_secret.NativeUdpPortPreference,["native_udp_8443_available"]=TransportPolicy.Native8443Available(_state),["carrier_stage"]=_core.CarrierStage,["carrier_failures"]=_carrierFailures.DeepClone(),["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
         ["native_udp_attempt"]=_nativeUdpAttempt?.DeepClone(),["native_udp_selected_port"]=_core.NativePort,["client_handshake_reply"]=_core.HandshakeReplyReceived,["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,

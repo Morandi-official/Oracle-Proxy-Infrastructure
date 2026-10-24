@@ -22,6 +22,16 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _githubChecking;
     private bool _native8443Available,_native8443Selected;
+    private bool _deviceRegistered,_canConnect,_canRegister;
+    private string _deviceIdentity="",_deviceListSignature="";
+    private readonly TextBox _deviceName=new(){Name="device-name",MaxLength=80,Dock=DockStyle.Fill};
+    private readonly Label _deviceIdentityLabel=new(){AutoSize=false,Height=28,AutoEllipsis=true};
+    private readonly Label _registrationNote=new(){AutoSize=false,Height=48};
+    private readonly CheckBox _deviceConfirmation=new(){Name="device-confirm",Text="这是我的设备，我确认将它登记到当前账号。",AutoSize=false,Height=44,Dock=DockStyle.Fill};
+    private readonly Button _registerDevice=new(){Name="register-device",Text="确认并登记此设备",Width=190,Height=38};
+    private readonly ListBox _knownDevices=new(){Name="my-devices",Dock=DockStyle.Fill,Height=90,HorizontalScrollbar=true};
+    private readonly TableLayoutPanel _registrationGroup;
+
     private readonly Button _native8443Test;
     private bool _busy,_renderingTransport,_connectionIntent,_closing,_allowClose;
     private readonly ComboBox _transportChoice=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=240};
@@ -78,12 +88,22 @@ internal sealed class MainForm : Form
         _usage.AutoSize=false;_usage.Height=30;_usage.Margin=new Padding(0,0,0,4);Row(account,_usage);
         _progress.Dock=DockStyle.Fill;_progress.Height=14;_progress.Margin=new Padding(0,0,0,10);Row(account,_progress);
         _expiry.AutoSize=false;_expiry.Height=28;_expiry.AutoEllipsis=true;_expiry.Margin=new Padding(0,0,0,6);Row(account,_expiry);_usageUpdated.AutoSize=false;_usageUpdated.Height=28;_usageUpdated.AutoEllipsis=true;_usageUpdated.Margin=new Padding(0,0,0,14);Row(account,_usageUpdated);
+        _registrationGroup=Stack("deviceRegistration");
+        Row(_registrationGroup,new Label{Text="本机设备登记",AutoSize=true,Font=new Font(Font.FontFamily,11,FontStyle.Bold),Margin=new Padding(0,10,0,6)});
+        Row(_registrationGroup,new Label{Text="核对本机名称与识别码，确认归属后登记；重复登录不会重复占用名额。",AutoSize=false,Height=42});
+        Row(_registrationGroup,_deviceIdentityLabel);Row(_registrationGroup,new Label{Text="设备名称（可改成便于辨认的名字）",AutoSize=true});
+        Row(_registrationGroup,_deviceName);Row(_registrationGroup,_deviceConfirmation);
+        var registrationActions=Actions();registrationActions.Controls.Add(_registerDevice);Row(_registrationGroup,registrationActions);
+        Row(_registrationGroup,_registrationNote);Row(_registrationGroup,new Label{Text="此账号已登记的设备",AutoSize=true});Row(_registrationGroup,_knownDevices);
+        Row(account,_registrationGroup);_registrationGroup.Visible=false;
+        _deviceName.TextChanged+=(_,_)=>UpdateRegistrationActions();_deviceConfirmation.CheckedChanged+=(_,_)=>UpdateRegistrationActions();
+        _registerDevice.Click+=async(_,_)=>{if(_deviceConfirmation.Checked)await Act("ConfirmDevice");};
         var credentials=new TableLayoutPanel{Name="credentials",Dock=DockStyle.Fill,AutoSize=true,ColumnCount=2,RowCount=2,Margin=new Padding(0)};
         credentials.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));credentials.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
         credentials.Controls.Add(new Label{Text="登录账号",AutoSize=true,Margin=new Padding(0,0,12,6)},0,0);credentials.Controls.Add(new Label{Text="密码",AutoSize=true,Margin=new Padding(0,0,0,6)},1,0);
         _username.Dock=_password.Dock=DockStyle.Fill;_username.Margin=new Padding(0,0,12,0);_password.Margin=new Padding(0);credentials.Controls.Add(_username,0,1);credentials.Controls.Add(_password,1,1);Row(account,credentials);
         var accountActions=Actions();_login.MinimumSize=_logout.MinimumSize=new Size(100,36);_login.Margin=new Padding(0,0,10,0);_logout.Margin=new Padding(0);accountActions.Controls.AddRange([_login,_logout]);Row(account,accountActions);
-        _logout.Click+=async(_,_)=>await Act("Logout");var accountCard=Card("accountSection","02   账号与用量",account);Row(body,accountCard);
+        _logout.Click+=async(_,_)=>await Act("Logout");var accountCard=Card("accountSection","02   账号、用量与设备",account);Row(body,accountCard);
         var tools=Stack("toolsContent");
         var diagnostics=Actions();
         Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=true,MinimumSize=new Size(112,36),Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
@@ -103,7 +123,7 @@ internal sealed class MainForm : Form
         maintenance.Controls.Add(Tool("恢复直连（UAC）",()=>{if(MessageBox.Show(this,"将停止本产品的隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","紧急恢复",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.ElevateRecovery();}catch{_detail.Text="恢复请求未完成。";}}}));Row(tools,maintenance);
         Row(tools,new Label{Text="集成候选版 · IPv6 当前阻断；UU 实机故障及重启连续性仍待验收。",AutoSize=false,Height=44,ForeColor=Color.DarkOrange,Margin=new Padding(0,10,0,0)});
         var toolsCard=Card("toolsSection","03   诊断与测试",tools);Row(body,toolsCard);
-        foreach(var (title,target) in new[]{("01  当前连接",connectionCard),("02  账号与用量",accountCard),("03  诊断与测试",toolsCard)}){
+        foreach(var (title,target) in new[]{("01  当前连接",connectionCard),("02  账号与设备",accountCard),("03  诊断与测试",toolsCard)}){
             var button=new Button{Text=title,Dock=DockStyle.Fill,Height=46,TextAlign=ContentAlignment.MiddleLeft,FlatStyle=FlatStyle.Flat,BackColor=Color.FromArgb(20,31,53),UseVisualStyleBackColor=false,ForeColor=Color.White,Margin=new Padding(0,0,0,8)};button.FlatAppearance.BorderSize=0;button.Click+=(_,_)=>viewport.ScrollControlIntoView(target);Row(navigation,button);
         }
         _login.Click+=async(_,_)=>await Act("Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
@@ -139,7 +159,7 @@ internal sealed class MainForm : Form
         bool passive=command=="Status";
         if(passive){if(!_requests.Wait(0))return;}
         else{
-            if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=_transportChoice.Enabled=_native8443Test.Enabled=false;
+            if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=_transportChoice.Enabled=_native8443Test.Enabled=_registerDevice.Enabled=false;
             // A click arriving during a read waits for that read instead of
             // disappearing. Passive reads never change button enabled state.
             await _requests.WaitAsync();
@@ -149,18 +169,19 @@ internal sealed class MainForm : Form
             // plan. Resolve the advertised native port before the user's Connect.
             // Keep an already prepared8443 core warm, and never change an active
             // connection's policy from a status poll.
-            if(command=="Connect" && !_connectionIntent && _native8443Available && !_native8443Selected && (_transportChoice.SelectedIndex is 0 or 1)){
+            if(command=="Connect" && _deviceRegistered && !_connectionIntent && _native8443Available && !_native8443Selected && (_transportChoice.SelectedIndex is 0 or 1)){
                 var selected=await _send(TransportPolicy.ClientSelection(_transportChoice.SelectedIndex,true),null,null);
                 Display(selected);if(selected["ok"]?.GetValue<bool>()!=true)return;
             }
-            var state=await _send(command=="Status"?"Prepare":command,command=="Login"?_username.Text:null,command=="Login"?_password.Text:null);
+            var state=await _send(command=="Status"?"Prepare":command,command=="Login"?_username.Text:command=="ConfirmDevice"?_deviceName.Text:null,command=="Login"?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null);
             if(command=="Login")_password.Clear();
             Display(state);
+            if(command=="Login" && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
         }catch{
             _mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_protocol.Text=_exitIp.Text=_latency.Text=_uu.Text="—";UpdateRates(new JsonObject(),false);_progress.Enabled=false;_usageUpdated.Text="用量更新暂不可用，显示上次读取值。";_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";
             try{string path=Path.Combine(Platform.Root,"diagnostics.json");if(new FileInfo(path).Length<=4096){var d=JsonNode.Parse(File.ReadAllText(path));_detail.Text+=$" 诊断：{d?["stage"]} / {d?["code"]}。";}}catch{}
         }
-        finally{_requests.Release();if(!passive){_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=true;_transportChoice.Enabled=!_connectionIntent;_native8443Test.Enabled=!_connectionIntent && _native8443Available;}}
+        finally{_requests.Release();if(!passive){_busy=false;_disconnect.Enabled=_login.Enabled=_logout.Enabled=true;_connect.Enabled=_canConnect;UpdateRegistrationActions();_transportChoice.Enabled=!_connectionIntent;_native8443Test.Enabled=!_connectionIntent && _native8443Available;}}
     }
     private void ShowUuReport()=>ShowReport("UU 自动识别详情",_uuReport);
     private void ShowReport(string title,string report)
@@ -202,7 +223,7 @@ internal sealed class MainForm : Form
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc17");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc18");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
@@ -231,6 +252,11 @@ internal sealed class MainForm : Form
             // Set the final text once: intermediate short text used to resize
             // every AutoSize row twice on every 250 ms preparation poll.
             if(state["native_udp_port_preference"]?.GetValue<int>()==8443)detail+=" 原生 WireGuard 使用 UDP 8443；首选协议切换会保留服务器支持的端口策略。";
+            UpdateRegistration(state);
+            if(account is not null && !_deviceRegistered && mode=="disconnected"){
+                _mode.Text="已登录 · 请确认本机设备";
+                detail="请在账号与设备区核对本机名称和识别码，确认归属并登记后再连接。";
+            }
             if(_detail.Text!=detail)_detail.Text=detail;
             _protocol.Text=mode=="connected"?state["transport"]?.GetValue<string>() switch{"wireguard-udp"=>"WireGuard / UDP","wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS / TLS 兜底",_=>"—"}:"—";
             _exitIp.Text=mode=="connected"?state["verified_exit_ip"]?.GetValue<string>() ?? "待验证":"—";
@@ -254,10 +280,45 @@ internal sealed class MainForm : Form
         }else if(pid!=_samplePid || _sampleAt is null || at<_sampleAt || rx<_sampleRx || tx<_sampleTx || at-_sampleAt>10000)_download.Text=_upload.Text="采样中…";
         _sampleAt=at;_sampleRx=rx;_sampleTx=tx;_samplePid=pid;
     }
+    private void UpdateRegistrationActions(){
+        _registerDevice.Enabled=!_busy && !_connectionIntent && _canRegister && _deviceConfirmation.Checked && _deviceName.Text.Trim().Length is >0 and <=80 && !_deviceName.Text.Any(char.IsControl);
+    }
+    private void UpdateRegistration(JsonObject state){
+        var account=state["account"] as JsonObject;var registration=state["registration"] as JsonObject;
+        _registrationGroup.Visible=account is not null;
+        _deviceRegistered=state["device_registered"]?.GetValue<bool>()==true && registration?["status"]?.GetValue<string>()=="registered";
+        string id=registration?["device_id"]?.GetValue<string>() ?? "";
+        string identity=(account?["username"]?.GetValue<string>() ?? "")+"|"+id;
+        string name=registration?["device_name"]?.GetValue<string>() ?? Environment.MachineName;
+        if(identity!=_deviceIdentity){_deviceIdentity=identity;_deviceName.Text=name;_deviceConfirmation.Checked=false;}
+        else if(_deviceRegistered && !_deviceName.Focused && _deviceName.Text!=name)_deviceName.Text=name;
+        _deviceIdentityLabel.Text="本机识别码："+(id.Length==0?"等待系统服务读取":id)+(_deviceRegistered?"  ·  已确认登记":"  ·  尚未确认");
+        long at=state["observed_at"]?.GetValue<long>() ?? 0;bool fresh=at>0 && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
+        bool active=account?["status"]?.GetValue<string>()=="active" && fresh;
+        bool requiresSlot=registration?["requires_slot"]?.GetValue<bool>()!=false;
+        long count=account?["device_count"]?.GetValue<long>() ?? 0,limit=account?["device_limit"]?.GetValue<long>() ?? 0;
+        _canConnect=_deviceRegistered && active;_connect.Enabled=!_busy && _canConnect;
+        _canRegister=registration is not null && !_deviceRegistered && active && (!requiresSlot || count<limit);
+        _deviceName.ReadOnly=_deviceRegistered;_deviceConfirmation.Enabled=!_deviceRegistered && !_connectionIntent && active && registration is not null;
+        long? confirmed=registration?["confirmed_at"]?.GetValue<long>();
+        string note=registration is null?"请先安装 / 升级系统服务，以读取设备登记信息。":_deviceRegistered?"已登记："+name+(confirmed is null?"":"  ·  "+DateTimeOffset.FromUnixTimeSeconds(confirmed.Value).ToLocalTime().ToString("yyyy-MM-dd HH:mm")):_connectionIntent?"请先断开，再确认本机设备。":!active?"账号不可用或状态待刷新，暂不能登记。":requiresSlot && count>=limit?$"设备名额已满（{count}/{limit}），请联系管理员撤销旧设备。":"确认后仅登记当前设备；管理员可查看归属、确认时间与使用状态。";
+        if(_registrationNote.Text!=note)_registrationNote.Text=note;
+        var devices=state["devices"] as JsonArray;string signature=devices?.ToJsonString() ?? "";
+        if(signature!=_deviceListSignature){
+            _deviceListSignature=signature;_knownDevices.BeginUpdate();_knownDevices.Items.Clear();
+            if(devices is not null)foreach(var device in devices)_knownDevices.Items.Add((device?["current"]?.GetValue<bool>()==true?"[本机] ":"")+(device?["name"]?.GetValue<string>() ?? "未命名")+"  ·  "+device?["id"]+(device?["revoked"]?.GetValue<bool>()==true?"  ·  已撤销":""));
+            if(_knownDevices.Items.Count==0)_knownDevices.Items.Add("尚无已登记设备。");_knownDevices.EndUpdate();
+        }
+        UpdateRegistrationActions();
+    }
     private static string FormatRate(double bytes)=>bytes>=1024*1024?$"{bytes/(1024*1024):0.0} MiB/s":bytes>=1024?$"{bytes/1024:0.0} KiB/s":$"{bytes:0} B/s";
     private static string PolicyName(string status)=>status switch{"disabled"=>"已停用","expired"=>"已到期","quota"=>"配额已耗尽","server_budget"=>"服务器出站额度保护中",_=>"待核对"};
     private static string FormatBytes(long bytes)=>bytes>=(1L<<40)?$"{bytes/(double)(1L<<40):0.00} TiB":bytes>=(1L<<30)?$"{bytes/(double)(1L<<30):0.00} GiB":bytes>=(1L<<20)?$"{bytes/(double)(1L<<20):0.00} MiB":bytes>=1024?$"{bytes/1024d:0.0} KiB":$"{bytes:N0} B";
     private static string Message(string code)=>code switch{
+        "DEVICE_CONFIRMATION_REQUIRED"=>"请先核对本机名称和识别码，勾选归属并登记此设备。",
+        "DISCONNECT_BEFORE_ENROLLMENT"=>"请先断开 VPN，再确认本机设备。",
+        "CLIENT_UPDATE_REQUIRED"=>"请升级客户端并在账号与设备区完成设备确认。",
+
         "QUIC_NOT_AVAILABLE"=>"服务器暂未提供 QUIC / HTTP/3，请使用自动模式。", "DISCONNECT_BEFORE_TRANSPORT_CHANGE"=>"请先断开，再选择连接方式。",
         "INVALID_CREDENTIALS"=>"账号或密码错误。", "DEVICE_LIMIT_REACHED"=>"设备数量已达上限，请联系管理员撤销旧设备。", "RATE_LIMITED"=>"登录尝试过于频繁，请稍后重试。",
         "UU_TRUST_NOT_VERIFIED"=>"发现 UU 安装记录，但程序签名或目录权限尚未通过核验。保持原有网络，请勿在远控机器强行连接。",

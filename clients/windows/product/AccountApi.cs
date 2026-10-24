@@ -24,14 +24,14 @@ internal sealed class AccountApi : IDisposable
     }
     internal async Task<JsonObject> Call(string action,string token,JsonObject? body=null)
     {
-        if(action is not ("login" or "state" or "logout"))throw new InvalidOperationException();
+        if(action is not ("login" or "authenticate" or "enroll" or "presence" or "state" or "logout"))throw new InvalidOperationException();
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);deadline.CancelAfter(TimeSpan.FromSeconds(12));
         using var request=new HttpRequestMessage(body is null?HttpMethod.Get:HttpMethod.Post,"api/client/"+action);
         if(token.Length>0)request.Headers.Authorization=new("Bearer",token);
         if(body is not null)request.Content=new StringContent(body.ToJsonString(),Encoding.UTF8,"application/json");
         using var result=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,deadline.Token);
         await using var stream=await result.Content.ReadAsStreamAsync(deadline.Token);using var memory=new MemoryStream();var buffer=new byte[4096];
-        int n;while((n=await stream.ReadAsync(buffer,deadline.Token))!=0){if(memory.Length+n>32768)throw new IOException("API_RESPONSE_TOO_LARGE");memory.Write(buffer,0,n);}
+        int n;while((n=await stream.ReadAsync(buffer,deadline.Token))!=0){if(memory.Length+n>65536)throw new IOException("API_RESPONSE_TOO_LARGE");memory.Write(buffer,0,n);}
         var value=JsonNode.Parse(memory.ToArray())?.AsObject() ?? throw new IOException("INVALID_API_RESPONSE");
         if(!result.IsSuccessStatusCode)throw new ApiException(value["error"]?.GetValue<string>() ?? "API_UNAVAILABLE");
         return value;

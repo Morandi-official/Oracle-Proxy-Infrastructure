@@ -21,6 +21,8 @@ internal sealed class MainForm : Form
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _githubChecking;
+    private bool _native8443Available,_native8443Selected;
+    private readonly Button _native8443Test;
     private bool _busy,_renderingTransport,_connectionIntent,_closing,_allowClose;
     private readonly ComboBox _transportChoice=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=240};
     private readonly SemaphoreSlim _requests=new(1,1);
@@ -66,7 +68,7 @@ internal sealed class MainForm : Form
         for(int i=0;i<values.Length;i++)metrics.Controls.Add(values[i],i%3,i/3);Row(connection,metrics);
         _transportChoice.Items.AddRange(["自动（UDP 优先）","WireGuard / UDP","QUIC / HTTP/3"]);_transportChoice.SelectedIndex=0;
         var selection=Actions();selection.Controls.Add(new Label{Text="首选连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_transportChoice);Row(connection,selection);
-        _transportChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(_transportChoice.SelectedIndex switch{1=>"PreferUdp",2=>"PreferQuic",_=>"PreferAuto"});};
+        _transportChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(TransportPolicy.ClientSelection(_transportChoice.SelectedIndex,_native8443Available));};
         var buttons=Actions();_connect.BackColor=Color.FromArgb(11,137,108);_connect.ForeColor=Color.White;_connect.FlatStyle=FlatStyle.Flat;_connect.FlatAppearance.BorderSize=0;_connect.UseVisualStyleBackColor=false;_connect.Margin=new Padding(0,0,10,0);_disconnect.Margin=new Padding(0);buttons.Controls.AddRange([_connect,_disconnect]);Row(connection,buttons);
         var quit=new Button{Text="断开并退出",AutoSize=true,Height=48,Margin=new Padding(10,0,0,0)};quit.Click+=async(_,_)=>await QuitClient();buttons.Controls.Add(quit);
         Row(connection,new Label{Text="关闭窗口将断开 VPN 并退出；仅断开可保留快速重连。系统服务空闲待命。",AutoSize=true,ForeColor=Color.FromArgb(100,113,134),Margin=new Padding(0,8,0,0)});
@@ -89,7 +91,7 @@ internal sealed class MainForm : Form
         diagnostics.Controls.Add(Tool("GitHub 连通性",async()=>await ShowGitHubReport()));
         diagnostics.Controls.Add(Tool("UU 检查详情",ShowUuReport));
         diagnostics.Controls.Add(Tool("重新识别 UU",async()=>await Act("RefreshUu")));
-        diagnostics.Controls.Add(Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443")));
+        _native8443Test=Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443"));diagnostics.Controls.Add(_native8443Test);
         void Open(string url){try{System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url){UseShellExecute=true});}catch{_detail.Text="未能打开默认浏览器。";}}
         diagnostics.Controls.Add(Tool("打开出口检查",()=>Open("https://www.cloudflare.com/cdn-cgi/trace")));
         diagnostics.Controls.Add(Tool("打开管理后台",()=>Open("https://vpn-admin.morandi.dpdns.org/")));Row(tools,diagnostics);
@@ -137,12 +139,20 @@ internal sealed class MainForm : Form
         bool passive=command=="Status";
         if(passive){if(!_requests.Wait(0))return;}
         else{
-            if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=_transportChoice.Enabled=false;
+            if(_busy)return;_busy=true;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=_transportChoice.Enabled=_native8443Test.Enabled=false;
             // A click arriving during a read waits for that read instead of
             // disappearing. Passive reads never change button enabled state.
             await _requests.WaitAsync();
         }
         try{
+            // A fresh/default UI must not silently restart the legacy 51820/443
+            // plan. Resolve the advertised native port before the user's Connect.
+            // Keep an already prepared8443 core warm, and never change an active
+            // connection's policy from a status poll.
+            if(command=="Connect" && !_connectionIntent && _native8443Available && !_native8443Selected && (_transportChoice.SelectedIndex is 0 or 1)){
+                var selected=await _send(TransportPolicy.ClientSelection(_transportChoice.SelectedIndex,true),null,null);
+                Display(selected);if(selected["ok"]?.GetValue<bool>()!=true)return;
+            }
             var state=await _send(command=="Status"?"Prepare":command,command=="Login"?_username.Text:null,command=="Login"?_password.Text:null);
             if(command=="Login")_password.Clear();
             Display(state);
@@ -150,7 +160,7 @@ internal sealed class MainForm : Form
             _mode.Text="系统服务不可用";_mode.ForeColor=Color.DarkOrange;_protocol.Text=_exitIp.Text=_latency.Text=_uu.Text="—";UpdateRates(new JsonObject(),false);_progress.Enabled=false;_usageUpdated.Text="用量更新暂不可用，显示上次读取值。";_detail.Text="首次使用请点击“安装 / 升级服务”并完成 UAC。服务身份无法验证时不会发送账号密码。";
             try{string path=Path.Combine(Platform.Root,"diagnostics.json");if(new FileInfo(path).Length<=4096){var d=JsonNode.Parse(File.ReadAllText(path));_detail.Text+=$" 诊断：{d?["stage"]} / {d?["code"]}。";}}catch{}
         }
-        finally{_requests.Release();if(!passive){_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=true;_transportChoice.Enabled=!_connectionIntent;}}
+        finally{_requests.Release();if(!passive){_busy=false;_connect.Enabled=_disconnect.Enabled=_login.Enabled=_logout.Enabled=true;_transportChoice.Enabled=!_connectionIntent;_native8443Test.Enabled=!_connectionIntent && _native8443Available;}}
     }
     private void ShowUuReport()=>ShowReport("UU 自动识别详情",_uuReport);
     private void ShowReport(string title,string report)
@@ -179,9 +189,12 @@ internal sealed class MainForm : Form
     internal void Display(JsonObject state)
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","quic_available","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","quic_available","native_udp_8443_available","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
             if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;
+            _native8443Available=state["native_udp_8443_available"]?.GetValue<bool>()==true;
+            _native8443Selected=state["native_udp_port_preference"]?.GetValue<int>()==8443;
+            _native8443Test.Enabled=!_connectionIntent && !_busy && _native8443Available;
             _renderingTransport=true;
             try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>() switch{"udp"=>1,"quic"=>2,_=>0};}finally{_renderingTransport=false;}
             _transportChoice.Enabled=!_connectionIntent && !_busy;
@@ -189,7 +202,7 @@ internal sealed class MainForm : Form
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc14");
+            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc17");
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
@@ -217,7 +230,7 @@ internal sealed class MainForm : Form
             if(!fresh && account is not null)detail+=" 用量未刷新，显示的是上次读取值。";
             // Set the final text once: intermediate short text used to resize
             // every AutoSize row twice on every 250 ms preparation poll.
-            if(state["native_udp_port_preference"]?.GetValue<int>()==8443)detail+=" 当前为原生 UDP 8443 测试；重新选择正常协议可退出测试。";
+            if(state["native_udp_port_preference"]?.GetValue<int>()==8443)detail+=" 原生 WireGuard 使用 UDP 8443；首选协议切换会保留服务器支持的端口策略。";
             if(_detail.Text!=detail)_detail.Text=detail;
             _protocol.Text=mode=="connected"?state["transport"]?.GetValue<string>() switch{"wireguard-udp"=>"WireGuard / UDP","wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS / TLS 兜底",_=>"—"}:"—";
             _exitIp.Text=mode=="connected"?state["verified_exit_ip"]?.GetValue<string>() ?? "待验证":"—";

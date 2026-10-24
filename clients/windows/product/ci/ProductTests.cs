@@ -309,7 +309,7 @@ internal static class ProductTests
         }
         if(TransportPolicy.ClientSelection(1,false)!="PreferUdp" || TransportPolicy.ClientSelection(0,false)!="PreferAuto" || TransportPolicy.ClientSelection(2,true)!="PreferQuic")return 1;
         Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_SELECT_NATIVE_8443_BEFORE_CONNECT_AND_REFUSE_FAILED_SELECTION=PASS");
-        var pending=(JsonObject)snapshot.DeepClone();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
+        var pending=(JsonObject)snapshot.DeepClone();pending["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
         pending["registration"]=new JsonObject{["status"]="pending",["device_id"]="112233aabbcc",["device_name"]="DESKTOP-NEW",["requires_slot"]=true};pending["devices"]=new JsonArray();
         var registrationCalls=new List<(string Command,string? Name,string? Consent)>();
         using(var registrationForm=new MainForm((command,name,consent)=>{

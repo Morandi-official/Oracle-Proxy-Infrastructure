@@ -1,4 +1,4 @@
 {
-  "operation": "deploy",
-  "request_id": "admin-budget-audit-webrtc-20261024"
+  "operation": "enable-https",
+  "request_id": "webrtc-owned-ci-slot-release-20261024"
 }

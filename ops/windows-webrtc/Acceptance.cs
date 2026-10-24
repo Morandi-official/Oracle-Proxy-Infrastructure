@@ -41,19 +41,26 @@ internal static class Acceptance
    Console.WriteLine("BROWSER_LOCAL_ICE_LITERAL_EXPOSED="+(result["local_exposed"]?.GetValue<bool>()==true));
   }finally{try{if(!process.HasExited)process.Kill(true);process.WaitForExit(5000);}catch{}try{Directory.Delete(profile,true);}catch{}}
  }
- static async Task CheckPhysical(uint index){
+ sealed class PacketCounter:IDisposable {
+  readonly string description,name;readonly string[] filters={"OPRtcA"+Guid.NewGuid().ToString("N")[..8],"OPRtcB"+Guid.NewGuid().ToString("N")[..8]};bool started;
+  static string Run(params string[] arguments){var start=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"pktmon.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};foreach(var arg in arguments)start.ArgumentList.Add(arg);using var child=Process.Start(start)??throw new IOException("COUNTER_START_FAILED");var stdout=child.StandardOutput.ReadToEndAsync();var stderr=child.StandardError.ReadToEndAsync();if(!child.WaitForExit(10000)){child.Kill(true);throw new IOException("COUNTER_DEADLINE");}string output=stdout.GetAwaiter().GetResult();_ = stderr.GetAwaiter().GetResult();if(child.ExitCode!=0 || output.Length>512*1024)throw new IOException("COUNTER_COMMAND_FAILED");return output;}
+  public PacketCounter(string adapterName,string adapterDescription){name=adapterName;description=adapterDescription;if(Run("status").Trim()!="Packet Monitor is not running." || !System.Text.RegularExpressions.Regex.IsMatch(Run("filter","list"),@"\A\s*Packet Filters:\s*None\s*\z"))throw new IOException("PREEXISTING_COUNTER_REFUSED");try{Run("filter","add",filters[0],"-t","UDP","-p","3478");Run("filter","add",filters[1],"-t","UDP","-p","19302");Run("start","--capture","--counters-only","--comp","all");started=true;}catch{Dispose();throw;}}
+  static IEnumerable<JsonObject> Objects(JsonNode? node){if(node is JsonObject obj){yield return obj;foreach(var pair in obj)foreach(var child in Objects(pair.Value))yield return child;}else if(node is JsonArray array)foreach(var item in array)foreach(var child in Objects(item))yield return child;}
+  public long Packets(){var root=JsonNode.Parse(Run("counters","--json"));var components=Objects(root).Where(o=>o["Counters"] is JsonArray && o.Any(p=>p.Value is JsonValue v && v.TryGetValue<string>(out var text) && (string.Equals(text,description,StringComparison.OrdinalIgnoreCase)||string.Equals(text,name,StringComparison.OrdinalIgnoreCase)))).ToArray();if(components.Length==0)throw new IOException("PHYSICAL_COUNTER_COMPONENT_NOT_FOUND");long total=0;int found=0;foreach(var component in components)foreach(var counter in component["Counters"]!.AsArray())if(counter?["Type"]?.GetValue<string>()=="Flows"){total+=counter["Outbound"]?["Packets"]?.GetValue<long>()??throw new IOException("PHYSICAL_COUNTER_SCHEMA_CHANGED");found++;}if(found==0)throw new IOException("PHYSICAL_FLOW_COUNTER_NOT_FOUND");return total;}
+  public void Dispose(){if(started){Run("stop");started=false;}if(Run("status").Trim()!="Packet Monitor is not running.")throw new IOException("ACTIVE_COUNTER_CLEANUP_REFUSED");string list=Run("filter","list");if(System.Text.RegularExpressions.Regex.IsMatch(list,@"\A\s*Packet Filters:\s*None\s*\z"))return;var rows=System.Text.RegularExpressions.Regex.Matches(list,@"(?m)^\s*\d+\s+(\S+)\s+.+$").Select(m=>m.Groups[1].Value).ToArray();if(rows.Length==0 || rows.Any(n=>!filters.Contains(n)) || rows.Distinct().Count()!=rows.Length)throw new IOException("FOREIGN_COUNTER_FILTER_REFUSED");Run("filter","remove");}
+ }
+ static async Task ProbePhysical(uint index){
   var ip=(await Dns.GetHostAddressesAsync("stun.cloudflare.com")).First(a=>a.AddressFamily==AddressFamily.InterNetwork);
-  bool blocked=false;using var socket=new Socket(AddressFamily.InterNetwork,SocketType.Dgram,ProtocolType.Udp);
-  socket.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)index));
+  using var socket=new Socket(AddressFamily.InterNetwork,SocketType.Dgram,ProtocolType.Udp);socket.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)index));
   try{await socket.ConnectAsync(new IPEndPoint(ip,3478));byte[] request=new byte[20];request[1]=1;request[4]=0x21;request[5]=0x12;request[6]=0xa4;request[7]=0x42;System.Security.Cryptography.RandomNumberGenerator.Fill(request.AsSpan(8));await socket.SendAsync(request,SocketFlags.None);}
-  catch(SocketException error)when(error.SocketErrorCode==SocketError.AccessDenied){blocked=true;}
-  Check(blocked,"PHYSICAL_BOUND_UDP_STUN_DENIED_BY_WFP");
+  catch(SocketException error)when(error.SocketErrorCode==SocketError.AccessDenied){} // Absence of this error is not proof of wire delivery.
  }
  static async Task<int> Main(){
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("GITHUB_REF")!="refs/heads/main")return 3;
   long initial=0;
-  uint physical=(uint)NetworkInterface.GetAllNetworkInterfaces().First(n=>n.OperationalStatus==OperationalStatus.Up && n.GetIPProperties().GatewayAddresses.Any(g=>g.Address.AddressFamily==AddressFamily.InterNetwork)).GetIPProperties().GetIPv4Properties().Index;
+  var adapter=NetworkInterface.GetAllNetworkInterfaces().First(n=>n.OperationalStatus==OperationalStatus.Up && n.GetIPProperties().GatewayAddresses.Any(g=>g.Address.AddressFamily==AddressFamily.InterNetwork));uint physical=(uint)adapter.GetIPProperties().GetIPv4Properties().Index;
   try{
+   using var capture=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);long before=capture.Packets();Check(before>0,"BASELINE_RAW_STUN_PHYSICAL_COUNTER_POSITIVE");
    var login=await Send("Login",Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD"));
    Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME",null);Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD",null);
    if(login["device_registered"]?.GetValue<bool>()!=true)login=await Send("ConfirmDevice","Cloud WebRTC acceptance","confirmed");
@@ -65,7 +72,7 @@ internal static class Acceptance
    await Send("PreferUdp8443");await Send("Connect");var timer=Stopwatch.StartNew();JsonObject state;
    do{await Task.Delay(250);state=await Send("Status");}while(state["mode"]?.GetValue<string>()!="connected"&&timer.ElapsedMilliseconds<30000);
    Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true,"PINNED_RC18_NATIVE_UDP_GUARD_CONNECTED");
-   await CheckPhysical(physical);await Browser();
+   long connected=capture.Packets();await ProbePhysical(physical);await Browser();await Task.Delay(500);Check(capture.Packets()==connected,"REAL_RAW_STUN_HAS_ZERO_PHYSICAL_EGRESS_WITH_VPN");
    await Send("Quit");state=await Send("Status");long used=(state["peer_rx_bytes"]?.GetValue<long>()??-1)+(state["peer_tx_bytes"]?.GetValue<long>()??-1)-initial;
    Check(used>=0 && used<=16*1024*1024 && state["intent"]?.GetValue<bool>()==false && state["core_pid"]?.GetValue<uint>()==0,"WEBRTC_ACCEPTANCE_BOUNDED_USAGE_AND_CORE_STOPPED");
    await Send("Logout");return 0;

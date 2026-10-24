@@ -22,7 +22,7 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _githubChecking;
     private bool _native8443Available,_native8443Selected;
-    private bool _deviceRegistered,_canConnect,_canRegister;
+    private bool _deviceRegistered,_canConnect,_canRegister,_registrationShown;
     private string _deviceIdentity="",_deviceListSignature="";
     private readonly TextBox _deviceName=new(){Name="device-name",MaxLength=80,Dock=DockStyle.Fill};
     private readonly Label _deviceIdentityLabel=new(){AutoSize=false,Height=28,AutoEllipsis=true};
@@ -285,7 +285,8 @@ internal sealed class MainForm : Form
     }
     private void UpdateRegistration(JsonObject state){
         var account=state["account"] as JsonObject;var registration=state["registration"] as JsonObject;
-        _registrationGroup.Visible=account is not null;
+        bool showRegistration=account is not null;
+        if(_registrationShown!=showRegistration){_registrationShown=showRegistration;_registrationGroup.Visible=showRegistration;}
         _deviceRegistered=state["device_registered"]?.GetValue<bool>()==true && registration?["status"]?.GetValue<string>()=="registered";
         string id=registration?["device_id"]?.GetValue<string>() ?? "";
         string identity=(account?["username"]?.GetValue<string>() ?? "")+"|"+id;

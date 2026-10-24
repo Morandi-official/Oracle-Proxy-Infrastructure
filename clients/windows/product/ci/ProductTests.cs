@@ -266,11 +266,11 @@ internal static class ProductTests
             if(control is Button)control.EnabledChanged+=(_,_)=>buttonChanges++;
         }
         for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
-        if(textChanges!=0 || buttonChanges!=0 || layouts!=0 || idle.PollInterval!=3000)return 1;
+        if(textChanges!=0 || buttonChanges!=0 || layouts!=0 || idle.PollInterval!=3000){Console.WriteLine($"IDLE_POLL_MUTATION text={textChanges} buttons={buttonChanges} layouts={layouts} interval={idle.PollInterval}");return 1;}
         snapshot["quick_ready"]=false;idle.Display(snapshot);if(idle.PollInterval!=250)return 1;
         int preparingChanges=textChanges;
         for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
-        if(textChanges!=preparingChanges || buttonChanges!=0)return 1;
+        if(textChanges!=preparingChanges || buttonChanges!=0){Console.WriteLine($"PREPARING_POLL_MUTATION text={textChanges} before={preparingChanges} buttons={buttonChanges}");return 1;}
         Console.WriteLine("IDLE_AND_PREPARING_POLLS_DO_NOT_REWRITE_TEXT_OR_TOGGLE_BUTTONS=PASS");
         var pendingRead=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls=new List<string>();

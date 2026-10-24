@@ -392,6 +392,7 @@ internal static class OracleAcceptance
             }
             stage="USAGE_LINKAGE";await Task.Delay(6000);var after=await Send("Status");
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
+            Check(checked(after["peer_rx_bytes"]!.GetValue<long>()+after["peer_tx_bytes"]!.GetValue<long>())>_deviceUsageStart!.Value,"REAL_SERVER_THIS_DEVICE_USAGE_LINKAGE");
             stage="DISCONNECT";Check((await Send("Disconnect"))["mode"]?.GetValue<string>()=="disconnected" && await ExitIp()!="152.67.156.100","REAL_EXPLICIT_DISCONNECT_RESTORES_DIRECT_EXIT");
             stage="EXPLICIT_QUIT";
             var quit=await Send("Quit");

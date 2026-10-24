@@ -319,6 +319,7 @@ internal static class ProductTests
             }
             return Task.FromResult((JsonObject)pending.DeepClone());
         })){
+            if(Descendants(registrationForm).OfType<Button>().Single(b=>b.Text=="连接").Enabled || Descendants(registrationForm).OfType<Button>().Single(b=>b.Name=="register-device").Enabled)return 1;
             registrationForm.Display(pending);
             var connectButton=Descendants(registrationForm).OfType<Button>().Single(b=>b.Text=="连接");
             var register=Descendants(registrationForm).OfType<Button>().Single(b=>b.Name=="register-device");

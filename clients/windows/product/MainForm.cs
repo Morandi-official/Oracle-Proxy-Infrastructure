@@ -17,7 +17,7 @@ internal sealed class MainForm : Form
     private readonly TextBox _username=new(){PlaceholderText="管理员分配的账号",Width=215,MaxLength=64};
     private readonly TextBox _password=new(){PlaceholderText="管理员分配的密码",Width=215,UseSystemPasswordChar=true,MaxLength=128};
     private readonly Button _login=new(){Text="登录",AutoSize=true};
-    private readonly Button _connect=new(){Text="连接",Width=155,Height=48};
+    private readonly Button _connect=new(){Text="连接",Width=155,Height=48,Enabled=false};
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _githubChecking;
@@ -28,7 +28,7 @@ internal sealed class MainForm : Form
     private readonly Label _deviceIdentityLabel=new(){AutoSize=false,Height=28,AutoEllipsis=true};
     private readonly Label _registrationNote=new(){AutoSize=false,Height=48};
     private readonly CheckBox _deviceConfirmation=new(){Name="device-confirm",Text="这是我的设备，我确认将它登记到当前账号。",AutoSize=false,Height=44,Dock=DockStyle.Fill};
-    private readonly Button _registerDevice=new(){Name="register-device",Text="确认并登记此设备",Width=190,Height=38};
+    private readonly Button _registerDevice=new(){Name="register-device",Text="确认并登记此设备",Width=190,Height=38,Enabled=false};
     private readonly ListBox _knownDevices=new(){Name="my-devices",Dock=DockStyle.Fill,Height=90,HorizontalScrollbar=true};
     private readonly TableLayoutPanel _registrationGroup;
 

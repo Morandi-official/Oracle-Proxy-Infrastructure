@@ -65,3 +65,15 @@ def apply():
         if result.returncode!=0 or result.stdout.strip()!='REVOKED':raise ValueError('OWNED_CI_DEVICE_REVOKE_FAILED')
     plan['done']=True;save(plan)
     print('CI_OWNED_WEBRTC_DEVICE_REVOKED_COUNT='+str(len(plan['keys'])))
+
+
+def observe_only():
+    """Bounded aggregate metadata; no keys, usernames or machine names leave host."""
+    if os.geteuid()!=0:raise ValueError('ROOT_ONLY')
+    with sqlite3.connect('file:'+str(STATE/'ledger.sqlite3')+'?mode=ro',uri=True) as db:
+        db.row_factory=sqlite3.Row
+        rows=db.execute('SELECT d.key,d.name,e.machine_name,e.client_version,e.confirmed_at FROM devices d JOIN device_enrollments e ON e.key=d.key AND e.user_id=d.user_id WHERE d.key NOT IN (SELECT key FROM revoked_devices)').fetchall()
+    named=[r for r in rows if r['name']=='Cloud WebRTC acceptance']
+    window=[r for r in named if BEGIN<=r['confirmed_at']<=END]
+    versions=sorted({r['client_version'] for r in window if re.fullmatch(r'(?:0\.3\.0-rc18|1\.0\.0)(?:\+[a-f0-9]{7,40})?',r['client_version'])})
+    print('CI_OWNED_WEBRTC_DEVICE_SCOPE='+json.dumps({'named':len(named),'window':len(window),'azure_pattern':sum(bool(re.fullmatch(r'fv-az[0-9]+-[0-9]+',r['machine_name'],re.I)) for r in window),'exact_version':sum(r['client_version']==VERSION for r in window),'versions':versions},sort_keys=True))

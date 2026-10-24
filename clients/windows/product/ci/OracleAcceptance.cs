@@ -103,6 +103,10 @@ internal static class OracleAcceptance
         foreach(string part in ("opx-"+Guid.NewGuid().ToString("N")+".example.com").Split('.')){query.Add((byte)part.Length);query.AddRange(System.Text.Encoding.ASCII.GetBytes(part));}
         query.AddRange(new byte[]{0,0,1,0,1});
         if(padding>0){int length=padding+4;query.AddRange(new byte[]{0,0,41,16,0,0,0,0,0,(byte)(length>>8),(byte)length,0,12,(byte)(padding>>8),(byte)padding});query.AddRange(new byte[padding]);}
+        // Keep the original IPv4 datagram above the WG inner MTU (1200),
+        // but below the TUN/physical MTU (1280). Only the tunnel should fragment;
+        // fragmentation on the public Oracle-to-resolver path is outside this test.
+        if(padding>0)Check(query.Count+28>1200 && query.Count+28<=1280,"REAL_LOW_MTU_UDP_SIZE_WITHIN_CONTROLLED_FRAGMENTATION_RANGE");
         // Quad9's alternate DNS port bypasses the product's port-53 DNS hijack,
         // so the padded datagram itself must traverse the WireGuard data path.
         using var udp=new UdpClient();udp.Connect(padding>0?"9.9.9.9":"1.1.1.1",padding>0?9953:53);
@@ -153,7 +157,7 @@ internal static class OracleAcceptance
     private static async Task<bool> LargeUdpRoundTrip(uint pid)
     {
         for(int attempt=0;attempt<2;attempt++){
-            try{if(await FreshDns(2048))return true;}catch(Exception error)when(error is SocketException or OperationCanceledException){}
+            try{if(await FreshDns(1120))return true;}catch(Exception error)when(error is SocketException or OperationCanceledException){}
             // UDP is best-effort. Retry one datagram only while the actual
             // tunnel, process and error counters are still demonstrably healthy.
             var state=await Send("Status");SafeNativeState(state);RequireStableNative(state,pid);

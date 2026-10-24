@@ -9,3 +9,10 @@ The authenticated service now exports the capability boolean native_udp_8443_ava
 The service independently rechecks its own server-advertised capability for both fixed8443 commands. The GUI capability is not authorization. No arbitrary ports, commands, destinations, keys or settings are accepted. The test button is disabled while connected/connecting, and stale instructions about reselecting UDP to exit the working path are removed. Legacy service protocol commands remain available for backward compatibility and cloud51820/443 loss fixtures.
 
 Validation covers actual WinForms selection/click dispatch, Auto/UDP default Connect ordering, failed-selection refusal and connected button state; real Oracle acceptance adds the fixed Auto preference then retains full native8443 stability and legacy port/loss/fallback tests. Server configuration is unchanged.
+
+
+## Accepted release evidence
+
+Main sourcefa3ee556e5d0e2ef7f51f1dfc10153df69923a53/run40080860124/job120833945309 passed complete Windows and real Oracle acceptance. Actual WinForms ordinary UDP reselection/default UDP+Auto Connect/refusal cases passed, as did real advertised Auto8443 preference. Native8443 low-MTU stability lasted120535ms; disposable peer usage2751956bytes, registered devices27. All legacy/native/QUIC/HTTPS, service recovery, fail-closed, usage linkage and quit/logout checks passed. The initial PR disposable synthetic-core startup failed once; the identical source passed on retry, with the GUI regressions passing in both attempts.
+
+Public rc17 BUILD/source/checksums were independently verified against that accepted run. Client SHA2565c480d61add3d50b1b7fec526b84370d55bfefb585445fa317a858b87fa22dae. Oracle mirror pins all four exact public assets and keeps older versions. No transport/server rollback or new bandwidth improvement is claimed.

@@ -212,6 +212,9 @@ internal static class ProductTests
         Application.EnableVisualStyles();
         var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
         var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
+        snapshot["device_registered"]=true;
+        snapshot["registration"]=new JsonObject{["status"]="registered",["device_id"]="aabbccddeeff",["device_name"]="Known test PC",["confirmed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["requires_slot"]=false};
+        snapshot["devices"]=new JsonArray(new JsonObject{["id"]="aabbccddeeff",["name"]="Known test PC",["current"] = true,["revoked"] = false});
         snapshot["uu_candidates"]=1;snapshot["uu_rejected"]=1;
         snapshot["uu_diagnostics"]=new JsonArray(new JsonObject{["path"]=@"E:\Apps\GameViewer",["code"]="UU_DIRECTORY_WRITABLE",["detail"]=""});
         snapshot["password"]="SYNTHETIC_PASSWORD_DO_NOT_COPY";snapshot["token"]="SYNTHETIC_TOKEN_DO_NOT_COPY";
@@ -263,11 +266,11 @@ internal static class ProductTests
             if(control is Button)control.EnabledChanged+=(_,_)=>buttonChanges++;
         }
         for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
-        if(textChanges!=0 || buttonChanges!=0 || layouts!=0 || idle.PollInterval!=3000)return 1;
+        if(textChanges!=0 || buttonChanges!=0 || layouts!=0 || idle.PollInterval!=3000){Console.WriteLine($"IDLE_POLL_MUTATION text={textChanges} buttons={buttonChanges} layouts={layouts} interval={idle.PollInterval}");return 1;}
         snapshot["quick_ready"]=false;idle.Display(snapshot);if(idle.PollInterval!=250)return 1;
         int preparingChanges=textChanges;
         for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
-        if(textChanges!=preparingChanges || buttonChanges!=0)return 1;
+        if(textChanges!=preparingChanges || buttonChanges!=0){Console.WriteLine($"PREPARING_POLL_MUTATION text={textChanges} before={preparingChanges} buttons={buttonChanges}");return 1;}
         Console.WriteLine("IDLE_AND_PREPARING_POLLS_DO_NOT_REWRITE_TEXT_OR_TOGGLE_BUTTONS=PASS");
         var pendingRead=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls=new List<string>();
@@ -306,6 +309,37 @@ internal static class ProductTests
         }
         if(TransportPolicy.ClientSelection(1,false)!="PreferUdp" || TransportPolicy.ClientSelection(0,false)!="PreferAuto" || TransportPolicy.ClientSelection(2,true)!="PreferQuic")return 1;
         Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_SELECT_NATIVE_8443_BEFORE_CONNECT_AND_REFUSE_FAILED_SELECTION=PASS");
+        var pending=(JsonObject)snapshot.DeepClone();pending["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
+        pending["registration"]=new JsonObject{["status"]="pending",["device_id"]="112233aabbcc",["device_name"]="DESKTOP-NEW",["requires_slot"]=true};pending["devices"]=new JsonArray();
+        var registrationCalls=new List<(string Command,string? Name,string? Consent)>();
+        using(var registrationForm=new MainForm((command,name,consent)=>{
+            registrationCalls.Add((command,name,consent));
+            if(command=="ConfirmDevice" && consent=="confirmed"){
+                pending["device_registered"]=true;pending["registration"]!["status"]="registered";pending["registration"]!["device_name"]=name;pending["registration"]!["confirmed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["account"]!["device_count"]=2;
+            }
+            return Task.FromResult((JsonObject)pending.DeepClone());
+        })){
+            if(Descendants(registrationForm).OfType<Button>().Single(b=>b.Text=="连接").Enabled || Descendants(registrationForm).OfType<Button>().Single(b=>b.Name=="register-device").Enabled)return 1;
+            registrationForm.Display(pending);
+            var connectButton=Descendants(registrationForm).OfType<Button>().Single(b=>b.Text=="连接");
+            var register=Descendants(registrationForm).OfType<Button>().Single(b=>b.Name=="register-device");
+            var name=Descendants(registrationForm).OfType<TextBox>().Single(b=>b.Name=="device-name");
+            var consent=Descendants(registrationForm).OfType<CheckBox>().Single(b=>b.Name=="device-confirm");
+            if(connectButton.Enabled || register.Enabled)return 1;
+            name.Text="My own study PC";consent.Checked=true;registrationForm.Display(pending);
+            if(name.Text!="My own study PC" || !consent.Checked || !register.Enabled)return 1;
+            pending["account"]!["device_count"]=3;registrationForm.Display(pending);if(register.Enabled)return 1;
+            pending["registration"]!["requires_slot"]=false;registrationForm.Display(pending);if(!register.Enabled)return 1;
+            pending["account"]!["device_count"]=1;
+            registrationForm.Act("ConfirmDevice").GetAwaiter().GetResult();
+            if(registrationCalls.Count!=1 || registrationCalls[0]!=("ConfirmDevice","My own study PC","confirmed") || !connectButton.Enabled || register.Enabled)return 1;
+        }
+        var unconfirmed=new JsonObject{["account"]=new JsonObject{["status"]="active"},["registration"]=new JsonObject{["status"]="pending"},["device"]=new JsonObject{["registered"]=false},["tunnel"]=null};
+        if(DeviceRegistration.Confirmed(unconfirmed) || DeviceRegistration.ReportMode("connected",false,false)!="pending")return 1;
+        unconfirmed["registration"]!["status"]="registered";unconfirmed["device"]!["registered"]=true;
+        if(DeviceRegistration.Confirmed(unconfirmed))return 1;
+        unconfirmed["tunnel"]=new JsonObject();if(!DeviceRegistration.Confirmed(unconfirmed))return 1;
+        Console.WriteLine("DEVICE_CONFIRMATION_UI_BLOCKS_CONNECT_REQUIRES_EXPLICIT_CONSENT_PRESERVES_TYPED_NAME_AND_ENFORCES_SLOTS=PASS");
         var quitState=new JsonObject{["ok"]=true,["intent"]=false,["core_pid"]=0U,["mode"]="disconnected"};
         var exitCalls=new List<string>();
         using var exitForm=new MainForm((command,_,_)=>{exitCalls.Add(command);return Task.FromResult((JsonObject)quitState.DeepClone());});

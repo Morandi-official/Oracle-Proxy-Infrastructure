@@ -50,9 +50,9 @@ internal static class ControlPipe
         // Authenticate the server through the SCM-owned process, before sending
         // credentials. A pipe DACL alone authenticates only its client.
         if(!BoundToService(pipe))throw new IOException("SERVICE_IDENTITY_NOT_VERIFIED");
-        var frame=new JsonObject{["version"]=1,["command"]=command};if(command=="Login"){frame["username"]=username;frame["password"]=password;}
+        var frame=new JsonObject{["version"]=1,["command"]=command};if(command=="Login"){frame["username"]=username;frame["password"]=password;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
         await using var writer=new StreamWriter(pipe,new UTF8Encoding(false),8192,true){AutoFlush=true};await writer.WriteLineAsync(frame.ToJsonString());
-        var result=JsonNode.Parse(await ReadFrame(pipe,16384,timeout.Token))!.AsObject();
+        var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");return result;
     }
     internal static bool ServiceAbsent()

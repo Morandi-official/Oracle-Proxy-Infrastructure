@@ -65,6 +65,7 @@ try{
     if($probeServer.ReadByte() -ne -1){throw 'COMMAND_SENT_BEFORE_SERVICE_IDENTITY_VERIFIED'}
     Write-Host 'SCM_IDENTITY_REFUSES_SPOOFED_PIPE_BEFORE_COMMAND=PASS'
 }finally{$probeServer.Dispose()}
+& (Join-Path $PSScriptRoot 'PortPipe.Cloud.ps1')
 function Run-Pktmon([string[]]$Arguments){
   $text=(& "$env:WINDIR\System32\pktmon.exe" @Arguments 2>&1 | Out-String)
   if($LASTEXITCODE -ne 0){throw ('PKTMON_COMMAND_FAILED: '+($Arguments -join ' ')+': '+$text)}

@@ -50,6 +50,21 @@ try{
     [Console]::OutputEncoding=$previousEncoding
     Remove-Item -LiteralPath $fixtureDirectory -Recurse -Force
 }
+# The port diagnostic must fail closed before sending to a non-service pipe.
+$legacy=Join-Path (Split-Path $PSScriptRoot -Parent) 'Test-LegacyNativePorts.ps1'
+$errors=$null;$tokens=$null
+$null=[Management.Automation.Language.Parser]::ParseFile($legacy,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'LEGACY_PORT_DIAGNOSTIC_PARSE_FAILED'}
+. $legacy -DefinitionsOnly
+$probeServer=[IO.Pipes.NamedPipeServerStream]::new('OracleProxy.Control.v1',[IO.Pipes.PipeDirection]::InOut,1,[IO.Pipes.PipeTransmissionMode]::Byte,[IO.Pipes.PipeOptions]::Asynchronous)
+try{
+    $pending=$probeServer.WaitForConnectionAsync()
+    $refused=$false
+    try{$null=Invoke-OPFixedControl 'Status'}catch{if($_.Exception.Message -ne 'SERVICE_IDENTITY_NOT_VERIFIED'){throw};$refused=$true}
+    if(-not $refused -or -not $pending.Wait(3000)){throw 'SPOOFED_SERVICE_PIPE_NOT_REJECTED'}
+    if($probeServer.ReadByte() -ne -1){throw 'COMMAND_SENT_BEFORE_SERVICE_IDENTITY_VERIFIED'}
+    Write-Host 'SCM_IDENTITY_REFUSES_SPOOFED_PIPE_BEFORE_COMMAND=PASS'
+}finally{$probeServer.Dispose()}
 function Run-Pktmon([string[]]$Arguments){
   $text=(& "$env:WINDIR\System32\pktmon.exe" @Arguments 2>&1 | Out-String)
   if($LASTEXITCODE -ne 0){throw ('PKTMON_COMMAND_FAILED: '+($Arguments -join ' ')+': '+$text)}

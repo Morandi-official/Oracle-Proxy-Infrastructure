@@ -1,4 +1,4 @@
 {
-  "operation": "enable-https",
-  "request_id": "publish-udp-return-control-20261025"
+  "operation": "preflight",
+  "request_id": "udp-egress-readonly-audit-20261025"
 }

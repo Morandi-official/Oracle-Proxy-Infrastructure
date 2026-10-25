@@ -1,4 +1,4 @@
 {
-  "operation": "deploy",
-  "request_id": "compact-admin-user-history-device-delete-20261025"
+  "operation": "preflight",
+  "request_id": "udp8443-regression-readonly-20261025"
 }

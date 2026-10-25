@@ -1,5 +1,6 @@
 """Check Oracle serves exact client bytes and byte ranges without redirects."""
 import hashlib
+import design_previews
 import json
 import urllib.error
 import urllib.request
@@ -32,6 +33,13 @@ def main():
                     size += len(block); assert size <= item['size']; digest.update(block)
             assert size == item['size'] and digest.hexdigest() == item['sha256']
     print('ORACLE_DIRECT_DOWNLOAD_FULL_CLIENT_SHA256_AND_ALL_RANGES=PASS')
+    for name,item in design_previews.PINS.items():
+        with opener.open(BASE+design_previews.VERSION+'/'+name,timeout=30) as response:
+            assert response.status==200 and response.headers.get_content_type()=='image/png'
+            assert response.headers['X-Content-Type-Options']=='nosniff'
+            body=response.read(item['size']+1)
+            assert len(body)==item['size'] and hashlib.sha256(body).hexdigest()==item['sha256']
+        print('PUBLIC_DESIGN_PREVIEW_'+name.split('-')[2]+'_PNG_SHA256=PASS')
 
 
 if __name__ == '__main__': main()

@@ -18,7 +18,7 @@ def main():
   for name in ('chromium','firefox'):
    with tempfile.TemporaryDirectory() as temporary:
     driver=fixture.FakeDriver();engine=fixture.agent.Engine(Path(temporary)/'fixture.sqlite3',driver);engine.tick()
-    browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='UTC');page=context.new_page()
+    browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='Europe/London');page=context.new_page()
     accounts={};official_fixture=[None];pending_fixture=[[]];presence_fixture=[False]
     engine.official_usage=lambda:official_fixture[0] or {'status':'NOT_QUERIED'}
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
@@ -43,7 +43,9 @@ def main():
          accounts.pop(value['data']['user_id'],None)
         else:data=engine.dispatch({'actor':'github:204281968',**value})
        else:data=engine.snapshot()
-       for u in data['users']:u['username']=accounts.get(u['id'])
+       for u in data['users']:
+        u['username']=accounts.get(u['id']);u['is_admin_account']=u['username']=='owner-ci'
+       data['administrator']={'username':'owner-local','device_account_username':'owner-ci'}
        data['pending_devices']=pending_fixture[0]
        for p in data['peers']:
         if presence_fixture[0] and p['public_key']==fixture.KEY3:p['client_status']={'online':True,'reported_mode':'connected','transport':'wireguard-udp','last_seen_at':int(time.time())}
@@ -70,11 +72,21 @@ def main():
      page.locator('#peer-form [name=name]').fill('CI Windows PC');page.locator('#peer-form [name=user_id]').select_option(user['id'])
      page.locator('#peer-form [name=public_key]').fill(fixture.KEY1)
      page.get_by_role('button',name='保存设备',exact=True).click()
+     expect(page.locator('#pending-device-rows tr').filter(has_text='CI Windows PC')).to_contain_text('ci-user01')
+     engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{'public_key':fixture.KEY1,'user_id':user['id'],'name':'CI Windows PC','machine_name':'CI-FIRST','client_version':'0.3.0-rc18','confirm':True}})
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
      expect(page.locator('#peer-rows tr').filter(has_text='CI Windows PC')).to_contain_text(label)
      assert driver.allowed=={'10.250.0.2'}
+     assert engine.snapshot()['users'][0]['quota']==1_000_000_000
+     engine.dispatch({'operation':'user.save','actor':'github:204281968','data':{'id':user['id'],'name':label,'quota_bytes':1073741824,'expires_at':None,'enabled':True,'device_limit':3}})
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
+     row.get_by_role('button',name='编辑',exact=True).click()
+     expect(page.locator('#user-form [name=quota]')).to_have_value('1.073741824')
+     page.get_by_role('button',name='保存用户',exact=True).click()
+     assert engine.snapshot()['users'][0]['quota']==1073741824
      page.locator('#peer-form [name=name]').fill('CI New Windows PC');page.locator('#peer-form [name=public_key]').fill(fixture.KEY3)
      page.get_by_role('button',name='保存设备',exact=True).click()
-     expect(page.locator('#peer-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('10.250.0.4/32')
+     expect(page.locator('#pending-device-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('无客户端确认记录')
      engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{'public_key':fixture.KEY3,'user_id':user['id'],'name':'CI New Windows PC','machine_name':'CI-DESKTOP','client_version':'0.3.0-rc18','confirm':True}})
      pending_fixture[0]=[{'id':'a'*12,'name':'CI pending <b>literal</b>','user_id':user['id'],'created_at':int(time.time()),'last_seen_at':int(time.time())}];presence_fixture[0]=True
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
@@ -118,6 +130,19 @@ def main():
      expect(page.locator('#official-remaining')).to_have_text('未知')
      expect(page.locator('#audit-rows tr')).to_have_count(10)
      expect(page.locator('#activity-chart')).to_contain_text('7 次')
+     assert 'UTC+8' in page.locator('#official-usage').inner_text()
+     assert 'GMT+1' not in page.locator('#official-usage').inner_text()
+     owner=engine.dispatch({'operation':'user.save','actor':'github:204281968','data':{'id':None,'name':'Z owner','quota_bytes':None,'expires_at':None,'enabled':True,'device_limit':3}})['saved_user_id']
+     ordinary=engine.dispatch({'operation':'user.save','actor':'github:204281968','data':{'id':None,'name':'A ordinary','quota_bytes':None,'expires_at':None,'enabled':True,'device_limit':3}})['saved_user_id']
+     accounts[owner]='owner-ci';accounts[ordinary]='aaa-ordinary'
+     pending_fixture[0]=[{'id':'b'*12,'name':'Owner pending','user_id':owner,'created_at':int(time.time()),'last_seen_at':None},{'id':'c'*12,'name':'Unknown <b>literal</b>','user_id':ordinary,'created_at':int(time.time()),'last_seen_at':None}]
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
+     expect(page.locator('#peer-rows .device-group').first).to_contain_text('管理员 · owner-ci')
+     expect(page.locator('#peer-rows')).to_contain_text('Owner pending')
+     expect(page.locator('#pending-device-rows')).not_to_contain_text('Owner pending')
+     expect(page.locator('#pending-device-rows')).to_contain_text('Unknown <b>literal</b>')
+     assert page.locator('#pending-device-rows b').count()==0
+     print(f'SYNTHETIC_{name.upper()}_ADMIN_FIRST_GROUPED_DEVICES_PENDING_REVIEW_DECIMAL_GB_FIXED_SHANGHAI_TIME=PASS',flush=True)
      assert not errors, 'Synthetic management UI raised JavaScript errors'
      print(f'SYNTHETIC_{name.upper()}_UI_USER_PEER_QUOTA_EXPIRY_BUDGET_CSRF_HEADER_AND_TEXT_ESCAPE=PASS',flush=True)
     finally:context.close();browser.close();engine.db.close()

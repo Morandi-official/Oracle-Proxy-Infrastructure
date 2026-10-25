@@ -3,4 +3,4 @@
 <body><main class="auth-page"><section class="panel"><p class="eyebrow">ORACLE PROXY / ADMIN</p><h1>登录管理后台</h1><p class="muted">仅限管理员使用。客户端 VPN 账号不能登录此后台。</p>
 {% if error %}<p role="alert">{{ error }}</p>{% endif %}
 <form method="post" action="/login/" class="form-grid">{% csrf_token %}<label>管理员账号<input name="username" required maxlength="64" autocomplete="username" autofocus></label><label>密码<input name="password" type="password" required maxlength="256" autocomplete="current-password"></label><button type="submit">登录</button></form>
-<p class="muted">账号由服务器管理员配置，不开放注册。</p></section></main></body></html>
+<p class="muted">登录后在此浏览器保留 30 天；退出登录、清除 Cookie 或关闭无痕窗口后需重新登录。</p></section></main></body></html>

@@ -1,5 +1,6 @@
 """Anonymous browser acceptance only; never authenticate or export browser state."""
 from urllib.parse import urlsplit
+import time
 import os
 
 from playwright.sync_api import sync_playwright, TimeoutError as BrowserTimeout
@@ -38,12 +39,28 @@ def main():
                         control=context.request.get(BASE+'/api/control')
                         assert status.status==200 and control.status==200
                         assert status.json()['actor']==username and 'users' in control.json()
+                        cookies=context.cookies()
+                        session=next(c for c in cookies if c['name']=='__Host-oracle_admin')
+                        assert session['secure'] and session['httpOnly'] and session['sameSite']=='Lax'
+                        assert 30*86400-60 <= session['expires']-time.time() <= 30*86400
+                        restored=browser.new_context(service_workers='block')
+                        fresh=browser.new_context(service_workers='block')
+                        try:
+                            restored.add_cookies(cookies)
+                            assert restored.request.get(BASE+'/api/status').status==200
+                            assert fresh.request.get(BASE+'/api/status').status==401
+                        finally:
+                            fresh.close()
+                        assert control.json().get('administrator',{}).get('username')==username
+                        assert page.locator('#unconfirmed').count()==1
                         page.get_by_role('button',name='退出登录',exact=True).click()
                         page.wait_for_url(BASE+'/login/',timeout=15000)
                         assert context.request.get(BASE+'/api/control').status==401
+                        assert restored.request.get(BASE+'/api/status').status==401
+                        restored.close()
                     except Exception:
                         raise RuntimeError('LOCAL_ADMIN_BROWSER_ACCEPTANCE_FAILED') from None
-                    print(f'BROWSER_{name.upper()}_REAL_LOCAL_PASSWORD_LOGIN_CONTROL_AND_LOGOUT=PASS',flush=True)
+                    print(f'BROWSER_{name.upper()}_REAL_LOCAL_PASSWORD_30_DAY_COOKIE_RESTORE_FRESH_CONTEXT_AND_LOGOUT=PASS',flush=True)
                     continue
                 with page.expect_request(lambda request:
                         (urlsplit(request.url).netloc, urlsplit(request.url).path) ==

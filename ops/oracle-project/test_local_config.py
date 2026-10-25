@@ -24,3 +24,14 @@ class LocalConfigurationTests(unittest.TestCase):
         self.assertEqual(algorithm,'pbkdf2_sha256');self.assertGreaterEqual(int(iterations),1000000)
         self.assertEqual(value,base64.b64encode(hashlib.pbkdf2_hmac('sha256',password.encode(),salt.encode(),int(iterations))).decode())
         self.assertNotIn(password,encoded)
+
+    def test_same_password_preserves_sessions_but_changed_password_rotates_hash(self):
+        password='synthetic-12'
+        encoded=operations.password_hash(password)
+        self.assertEqual(operations.password_hash(password,encoded),encoded)
+        self.assertNotEqual(operations.password_hash('different-synthetic-12',encoded),encoded)
+
+    def test_invalid_or_unbounded_existing_kdf_parameters_are_not_trusted(self):
+        password='synthetic-12'
+        for old in ('not-a-hash','pbkdf2_sha256$9999999999999$syntheticsalt1234$ignored'):
+            self.assertTrue(operations.password_hash(password,old).startswith('pbkdf2_sha256$1200000$'))

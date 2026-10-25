@@ -31,7 +31,7 @@ def assurance(request):
         if not local_auth.permitted(user): return None, 'LOGIN_REQUIRED'
         at=request.session.get('admin_password_at')
         valid=(request.session.get('_auth_user_backend')=='console.local_auth.LocalAdminBackend' and
-               isinstance(at,(int,float)) and 0 <= time()-at < settings.SESSION_COOKIE_AGE)
+               isinstance(at,(int,float)) and 0 <= time()-at < settings.ADMIN_REMEMBER_SECONDS)
         return str(user.pk), None if valid else 'LOGIN_REQUIRED'
     uid = github_identity(request)
     if not uid:
@@ -78,6 +78,8 @@ def login_page(request):
         return render(request,'local_login.html',{'error':'账号或密码不正确。'},status=401)
     auth_login(request,user,backend='console.local_auth.LocalAdminBackend')
     request.session['admin_password_at']=time()
+    # A fixed expiry, not a rolling timeout extended by background polling.
+    request.session.set_expiry(timezone.now()+timedelta(seconds=settings.ADMIN_REMEMBER_SECONDS))
     Audit.objects.create(actor=f'local:{user.pk}',action='admin.login')
     return redirect('dashboard')
 
@@ -158,7 +160,12 @@ def management(request):
     if operation!='state':
         Audit.objects.create(actor=audit_actor(request),action=operation,resource='policy-control')
     accounts = {str(a.user_id):a.username for a in ClientAccount.objects.all()}
-    for user in result.get('users',[]): user['username'] = accounts.get(user['id'])
+    for user in result.get('users',[]):
+        user['username'] = accounts.get(user['id'])
+        user['is_admin_account'] = bool(user['username'] and
+            user['username'].casefold() == settings.ADMIN_DEVICE_ACCOUNT_USERNAME)
+    result['administrator'] = {'username':request.user.username,
+        'device_account_username':settings.ADMIN_DEVICE_ACCOUNT_USERNAME}
     return JsonResponse(client_api.annotate_devices(result))
 
 

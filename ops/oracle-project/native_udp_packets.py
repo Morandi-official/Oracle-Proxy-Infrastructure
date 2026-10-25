@@ -12,7 +12,8 @@ import subprocess
 import time
 
 PORTS = (51820, 443, 8443)
-MAX_SECONDS = 300
+DEFAULT_SECONDS = 300
+MAX_SECONDS = 900
 FILTER = (
     (0x30, 0, 0, 0), (0x54, 0, 0, 0xf0), (0x15, 0, 13, 0x40),
     (0x30, 0, 0, 9), (0x15, 0, 11, 17),
@@ -82,7 +83,7 @@ def physical_interface():
     return name
 
 
-def observe(seconds=MAX_SECONDS):
+def observe(seconds=DEFAULT_SECONDS):
     if type(seconds) is not int or not 1 <= seconds <= MAX_SECONDS:
         raise ValueError('BOUNDED_CAPTURE_REQUIRED')
     started = int(time.time())

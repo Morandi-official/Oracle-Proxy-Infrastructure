@@ -1,4 +1,4 @@
 {
-  "operation": "enable-https",
-  "request_id": "webrtc-owned-ci-slot-release-v3-20261025"
+  "operation": "preflight",
+  "request_id": "native-port-diagnostic-publish-ready-20261025"
 }

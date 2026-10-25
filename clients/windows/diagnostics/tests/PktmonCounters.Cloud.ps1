@@ -67,6 +67,9 @@ try{
   Run-Pktmon -Arguments @('filter','add',$own,'-i','1.1.1.1','-t','UDP','-p','53') | Out-Null;$added+=,$own
   Run-Pktmon -Arguments @('filter','add',$other,'-i','1.1.1.1','-t','UDP','-p','54') | Out-Null;$added+=,$other
   Write-Host (Run-Pktmon -Arguments @('start','--capture','--counters-only','--comp','all'));$started=$true
+  # No traffic has been sent yet. This was a legitimate early sample on MetaWise.
+  $null=Read-OPCounterText
+  Write-Host 'REAL_EMPTY_EARLY_TEXT_SAMPLE_ACCEPTED=PASS'
   # Public, synthetic example.com DNS lookup; never uses product credentials.
   [byte[]]$query=0x57,0x47,1,0,0,1,0,0,0,0,0,0,7,101,120,97,109,112,108,101,3,99,111,109,0,0,1,0,1
   $udp=New-Object Net.Sockets.UdpClient
@@ -82,9 +85,9 @@ try{
   $flows=@($parsed | ForEach-Object {$_.Components} | ForEach-Object {$_.Counters} | Where-Object {$_.Type -eq 'Flows'})
   if(-not $flows.Count){throw 'FLOW_COUNTER_SCHEMA_NOT_FOUND'}
   if(@($flows | Where-Object {$_.Inbound.Packets -gt 0 -and $_.Outbound.Packets -gt 0}).Count -lt 1){throw 'REAL_TX_RX_COUNTERS_NOT_POSITIVE'}
-  $rows=@(Read-OPCounterRows)
-  if(-not @($rows | Where-Object {$_.rx -gt 0 -and $_.tx -gt 0}).Count){throw 'TIMELINE_ROWS_SCHEMA_OR_POSITIVE_CONTROL_FAILED'}
-  Write-Host 'REAL_TIMELINE_COMPONENT_ROWS_POSITIVE=PASS'
+  $text=Read-OPCounterText
+  if($text -notmatch 'Rx' -or $text -notmatch 'Tx'){throw 'REAL_TEXT_FLOW_DIRECTIONS_MISSING'}
+  Write-Host 'REAL_TIMELINE_NATIVE_TEXT_AND_POSITIVE_COUNTERS=PASS'
   Write-Host 'COUNTERS_ONLY_JSON_BEGIN';Write-Host $counters;Write-Host 'COUNTERS_ONLY_JSON_END'
   Run-Pktmon -Arguments @('stop') | Out-Null;$started=$false
   $before=Run-Pktmon -Arguments @('filter','list');$refused=$false

@@ -56,34 +56,12 @@ function Clear-OPOwnedFilters([string[]]$Names){
     Invoke-OPPktmon -Arguments @('filter','remove') | Out-Null
     if(-not (Test-OPNoFilters (Invoke-OPPktmon -Arguments @('filter','list')))){throw 'FILTER_CLEANUP_NOT_VERIFIED'}
 }
-function Get-OPCounterGroups([object]$Node){
-    if($null -eq $Node){return}
-    if($Node -is [Array]){foreach($item in $Node){Get-OPCounterGroups $item};return}
-    if($Node -is [PSCustomObject]){
-        if($Node.PSObject.Properties['Group'] -and $Node.PSObject.Properties['Components']){Write-Output $Node;return}
-        foreach($property in $Node.PSObject.Properties){Get-OPCounterGroups $property.Value}
-    }
-}
-function Read-OPCounterRows {
-    $json=Invoke-OPPktmon -Arguments @('counters','--json')
-    if($json.Length -gt 1048576){throw 'COUNTER_OUTPUT_LIMIT'}
-    $groups=@(Get-OPCounterGroups ($json | ConvertFrom-Json));$rows=@()
-    foreach($group in $groups){
-        foreach($component in @($group.Components)){
-            $index=0
-            foreach($counter in @($component.Counters)){
-                if($counter.Type -eq 'Flows'){
-                    if($null -eq $counter.Inbound.Packets -or $null -eq $counter.Outbound.Packets){throw 'COUNTER_FLOW_SCHEMA_CHANGED'}
-                    if($counter.Inbound.Packets -or $counter.Outbound.Packets){
-                        $rows+=,[PSCustomObject]@{group=[string]$group.Group;component=[string]$component.Name;id=$component.Id;edge=$index;rx=[long]$counter.Inbound.Packets;tx=[long]$counter.Outbound.Packets}
-                    }
-                    $index++
-                }
-            }
-        }
-    }
-    if(-not $groups.Count){throw 'COUNTER_GROUP_SCHEMA_CHANGED'}
-    return $rows
+function Read-OPCounterText {
+    # Keep pktmon's original localized text. Empty/no-traffic output is valid;
+    # neither localized JSON property names nor a populated Group are required.
+    $text=Invoke-OPPktmon -Arguments @('counters','--include-hidden','--drop-reason')
+    if($text.Length -gt 1048576){throw 'COUNTER_OUTPUT_LIMIT'}
+    return $text
 }
 if($DefinitionsOnly){return}
 $status=(Invoke-OPPktmon -Arguments @('status')).Trim()
@@ -106,15 +84,18 @@ try{
     foreach($target in @(5,10,15,$Seconds)){
         $remaining=[Math]::Max(0,[int]($target*1000-$watch.ElapsedMilliseconds))
         if($remaining){Start-Sleep -Milliseconds $remaining}
-        $sample=[PSCustomObject]@{utc=[DateTime]::UtcNow.ToString('o');elapsed_ms=$watch.ElapsedMilliseconds;port=$Port;flows=@(Read-OPCounterRows)}
-        Write-Host ($sample | ConvertTo-Json -Depth 5 -Compress)
+        Write-Host ('SAMPLE UTC='+[DateTime]::UtcNow.ToString('o')+' ELAPSED_MS='+$watch.ElapsedMilliseconds+' PORT='+$Port)
+        Write-Host (Read-OPCounterText)
     }
     Write-Host '=== ORACLE_NATIVE_UDP_TIMELINE_END ==='
     Write-Host '=== ORACLE_NATIVE_UDP_COUNTERS_BEGIN ==='
-    Write-Host (Invoke-OPPktmon -Arguments @('counters','--include-hidden','--drop-reason'))
+    Write-Host (Read-OPCounterText)
     Write-Host '=== ORACLE_NATIVE_UDP_COUNTERS_END ==='
 }finally{
     try{if($started){Invoke-OPPktmon -Arguments @('stop') | Out-Null}}
-    finally{Clear-OPOwnedFilters -Names $owned}
+    finally{
+        Clear-OPOwnedFilters -Names $owned
+        Write-Host 'PKTMON_OWNED_CLEANUP=PASS'
+    }
 }
 Write-Host '计数已结束，临时筛选器已清理；未记录数据包内容。请复制上方计数和客户端连接诊断。'

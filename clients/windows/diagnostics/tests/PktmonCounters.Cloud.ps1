@@ -5,6 +5,51 @@ $parseErrors=$null;$parseTokens=$null
 $null=[Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1'),[ref]$parseTokens,[ref]$parseErrors)
 if($parseErrors.Count){throw 'PUBLIC_COLLECTOR_POWERSHELL_PARSE_FAILED'}
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1') -DefinitionsOnly
+# Exercise real UTF-8 native pipes under CP936, not Unicode string literals alone.
+$fixtureDirectory=Join-Path $env:RUNNER_TEMP ('op-utf8-'+[Guid]::NewGuid().ToString('N'))
+$null=New-Item -ItemType Directory -Path $fixtureDirectory
+$fixture=Join-Path $fixtureDirectory 'NativeUtf8Fixture.exe'
+$source=@'
+using System;
+using System.Text;
+public class NativeUtf8Fixture {
+    public static int Main(string[] args) {
+        string text;
+        switch(args[0]) {
+            case "status": text="\r\n数据包监视器没有运行。\r\n"; break;
+            case "filters": text="数据包筛选器:\r\n    无\r\n"; break;
+            case "active": text="数据包监视器正在运行。\r\n"; break;
+            case "foreign": text="数据包筛选器:\r\n 1 Other UDP 1.1.1.1 53\r\n"; break;
+            default: text="unknown"; break;
+        }
+        byte[] bytes=Encoding.UTF8.GetBytes(text);
+        var output=Console.OpenStandardOutput();
+        output.Write(bytes,0,bytes.Length);output.Flush();
+        return 0;
+    }
+}
+'@
+$null=Add-Type -TypeDefinition $source -OutputAssembly $fixture -OutputType ConsoleApplication
+$previousEncoding=[Console]::OutputEncoding
+try{
+    [Console]::OutputEncoding=[Text.Encoding]::GetEncoding(936)
+    $legacy=(& $fixture status | Out-String)
+    if(Test-OPIdle $legacy){throw 'CP936_MOJIBAKE_REGRESSION_NOT_REPRODUCED'}
+    $chineseStatus=Invoke-OPUtf8Process -Executable $fixture -Arguments @('status')
+    $chineseFilters=Invoke-OPUtf8Process -Executable $fixture -Arguments @('filters')
+    if(-not (Test-OPIdle $chineseStatus) -or -not (Test-OPNoFilters $chineseFilters)){throw 'CHINESE_NATIVE_UTF8_PIPE_FAILED'}
+    if(Test-OPIdle (Invoke-OPUtf8Process -Executable $fixture -Arguments @('active'))){throw 'CHINESE_ACTIVE_MONITOR_ACCEPTED'}
+    if(Test-OPNoFilters (Invoke-OPUtf8Process -Executable $fixture -Arguments @('foreign'))){throw 'CHINESE_FOREIGN_FILTER_ACCEPTED'}
+    if(Test-OPIdle 'unknown'){throw 'UNKNOWN_STATE_ACCEPTED'}
+    if([Console]::OutputEncoding.CodePage -ne 936){throw 'COLLECTOR_CHANGED_CONSOLE_ENCODING'}
+    # The real pktmon read-only checks must also work with this console setting.
+    if(-not (Test-OPIdle (Invoke-OPPktmon -Arguments @('status')))){throw 'REAL_CP936_PKTMON_STATUS_FAILED'}
+    if(-not (Test-OPNoFilters (Invoke-OPPktmon -Arguments @('filter','list')))){throw 'REAL_CP936_PKTMON_FILTERS_FAILED'}
+    Write-Host 'CHINESE_UTF8_NATIVE_CP936_REGRESSION_AND_FAIL_CLOSED=PASS'
+}finally{
+    [Console]::OutputEncoding=$previousEncoding
+    Remove-Item -LiteralPath $fixtureDirectory -Recurse -Force
+}
 function Run-Pktmon([string[]]$Arguments){
   $text=(& "$env:WINDIR\System32\pktmon.exe" @Arguments 2>&1 | Out-String)
   if($LASTEXITCODE -ne 0){throw ('PKTMON_COMMAND_FAILED: '+($Arguments -join ' ')+': '+$text)}

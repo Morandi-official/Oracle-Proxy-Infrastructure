@@ -3,10 +3,38 @@
 [CmdletBinding()]
 param([ValidateRange(20,45)][int]$Seconds=40,[ValidateSet(51820,443,8443)][int]$Port=51820,[switch]$DefinitionsOnly)
 $ErrorActionPreference='Stop'
+function Invoke-OPUtf8Process([string]$Executable,[string[]]$Arguments){
+    # pktmon emits UTF-8 on redirected pipes even when the console is CP936.
+    # Read those pipes explicitly; PowerShell 5.1 otherwise decodes with CP936.
+    foreach($argument in $Arguments){
+        if($argument -notmatch '\A[a-zA-Z0-9_.:-]+\z'){throw 'UNSUPPORTED_NATIVE_ARGUMENT'}
+    }
+    $info=New-Object Diagnostics.ProcessStartInfo
+    $info.FileName=$Executable
+    $info.Arguments=$Arguments -join ' '
+    $info.UseShellExecute=$false
+    $info.CreateNoWindow=$true
+    $info.RedirectStandardOutput=$true
+    $info.RedirectStandardError=$true
+    $utf8=New-Object Text.UTF8Encoding($false,$true)
+    $info.StandardOutputEncoding=$utf8
+    $info.StandardErrorEncoding=$utf8
+    $process=New-Object Diagnostics.Process
+    $process.StartInfo=$info
+    try{
+        if(-not $process.Start()){throw 'NATIVE_START_FAILED'}
+        $stdout=$process.StandardOutput.ReadToEndAsync()
+        $stderr=$process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $result=$stdout.GetAwaiter().GetResult()
+        $errorText=$stderr.GetAwaiter().GetResult()
+        if($process.ExitCode -ne 0){throw ('Packet Monitor failed: '+($Arguments -join ' '))}
+        if($errorText.Trim()){throw 'UNEXPECTED_NATIVE_STDERR'}
+        return $result
+    }finally{$process.Dispose()}
+}
 function Invoke-OPPktmon([string[]]$Arguments){
-    $result=(& "$env:WINDIR\System32\pktmon.exe" @Arguments 2>&1 | Out-String)
-    if($LASTEXITCODE -ne 0){throw ('Packet Monitor failed: '+($Arguments -join ' '))}
-    return $result
+    return Invoke-OPUtf8Process -Executable "$env:WINDIR\System32\pktmon.exe" -Arguments $Arguments
 }
 function Test-OPIdle([string]$Text){
     $value=$Text.Trim()

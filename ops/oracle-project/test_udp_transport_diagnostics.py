@@ -6,6 +6,21 @@ spec=importlib.util.spec_from_file_location('udpdiag',Path(__file__).with_name('
 diag=importlib.util.module_from_spec(spec);spec.loader.exec_module(diag)
 
 class UdpSummaryTests(unittest.TestCase):
+    def test_link_local_output_jump_is_distinguished_from_public_and_inverted_selector(self):
+        body='''*filter
+:OUTPUT ACCEPT [0:0]
+[2:3] -A OUTPUT -d 169.254.0.0/16 -j private-instance-services
+[4:5] -A OUTPUT ! -d 169.254.0.0/16 -j private-other
+COMMIT'''
+        shapes=diag.firewall_summary(body)['egress']['filter_output_shapes']
+        self.assertEqual(shapes[0]['destination_scope'],'LINK_LOCAL')
+        self.assertFalse(shapes[0]['destination_negated'])
+        self.assertTrue(shapes[1]['destination_negated'])
+        self.assertNotIn('169.254',json.dumps(shapes))
+        self.assertNotIn('private-',json.dumps(shapes))
+        for value,expected in ((None,'ANY'),('0.0.0.0/0','ANY'),('127.0.0.0/8','LOOPBACK'),('8.8.8.8','GLOBAL'),('10.0.0.0/8','NON_GLOBAL_OR_MIXED'),('bad','UNKNOWN')):
+            self.assertEqual(diag.destination_scope(value),expected)
+
     def test_egress_policy_and_selector_shapes_hide_addresses_and_chain_names(self):
         text='''*filter
 :OUTPUT ACCEPT [0:0]

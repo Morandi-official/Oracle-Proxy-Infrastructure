@@ -1,5 +1,6 @@
 """Fixed read-only UDP transport summaries; no peers, addresses, keys or raw logs."""
 import json
+import ipaddress
 import re
 import shlex
 import subprocess
@@ -12,6 +13,18 @@ UNITS=('oracle-proxy-quic.service','wg-quick@wg0.service','oracle-proxy-control.
 def normalize_u32(value):
     if not isinstance(value,str):return ''
     return re.sub(r'0[xX][0-9a-fA-F]+|[0-9]+',lambda m:str(int(m[0],16 if m[0].lower().startswith('0x') else 10)),value.replace(' ',''))
+
+
+def destination_scope(value):
+    if value is None:return 'ANY'
+    try:network=ipaddress.ip_network(value,strict=False)
+    except ValueError:return 'UNKNOWN'
+    if network.version!=4:return 'OTHER_FAMILY'
+    if network.prefixlen==0:return 'ANY'
+    if network.is_link_local:return 'LINK_LOCAL'
+    if network.is_loopback:return 'LOOPBACK'
+    if network.network_address.is_global and network.broadcast_address.is_global:return 'GLOBAL'
+    return 'NON_GLOBAL_OR_MIXED'
 
 
 def firewall_summary(text):
@@ -36,6 +49,8 @@ def firewall_summary(text):
                         'protocol':item('-p') if item('-p') in ('tcp','udp','icmp','all') else 'OTHER',
                         'target':item('-j') if item('-j') in ('ACCEPT','DROP','REJECT','RETURN','LOG') else 'CUSTOM_OR_OTHER',
                         'source_match':'-s' in fields,'destination_match':'-d' in fields,
+                        'destination_scope':destination_scope(item('-d')),
+                        'destination_negated':'-d' in fields and fields.index('-d')>0 and fields[fields.index('-d')-1]=='!',
                         'interface_match':any(x in fields for x in ('-i','-o')),
                         'port_match':any(x in fields for x in ('--sport','--dport','--sports','--dports')),
                         'packets':packets})

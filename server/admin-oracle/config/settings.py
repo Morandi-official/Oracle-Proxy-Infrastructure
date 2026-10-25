@@ -34,6 +34,8 @@ NODE_ID = 'oracle-primary'
 ADMIN_AUTH_MODE = os.environ.get('ADMIN_AUTH_MODE', 'github')
 if ADMIN_AUTH_MODE not in ('github','local'): raise ImproperlyConfigured('Invalid ADMIN_AUTH_MODE')
 ADMIN_LOCAL_USERNAME = os.environ.get('ADMIN_LOCAL_USERNAME','')
+# Display grouping only; this does not grant VPN or administrator permissions.
+ADMIN_DEVICE_ACCOUNT_USERNAME = os.environ.get('ADMIN_DEVICE_ACCOUNT_USERNAME', ADMIN_LOCAL_USERNAME).casefold()
 ADMIN_LOCAL_PASSWORD_HASH = os.environ.get('ADMIN_LOCAL_PASSWORD_HASH','')
 if ADMIN_AUTH_MODE == 'local' and (not re.fullmatch(r'[\w.@+-]{1,64}',ADMIN_LOCAL_USERNAME) or not ADMIN_LOCAL_PASSWORD_HASH):
     raise ImproperlyConfigured('Provisioned local administrator is required')
@@ -106,6 +108,7 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_AGE = 3600
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+ADMIN_REMEMBER_SECONDS = 30 * 24 * 60 * 60
 CSRF_COOKIE_NAME = '__Host-oracle_csrf'
 CSRF_COOKIE_SECURE = True
 CSRF_COOKIE_HTTPONLY = True

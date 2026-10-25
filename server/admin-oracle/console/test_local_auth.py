@@ -1,9 +1,12 @@
 import re
+from datetime import timedelta
 from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
 from django.core.management import call_command
 from django.test import Client, TestCase, override_settings
+from django.conf import settings
+from django.utils import timezone
 from .models import Audit, Snapshot
 
 
@@ -50,6 +53,45 @@ class LocalAdminTests(TestCase):
         for _ in range(5):self.assertEqual(self.client.post('/login/',{'username':'owner-local','password':'synthetic-wrong'},secure=True).status_code,401)
         self.assertEqual(Client().post('/login/',{'username':'owner-local','password':self.password},secure=True).status_code,429)
         self.assertFalse(Audit.objects.filter(actor__contains='synthetic').exists())
+
+    def test_remember_device_has_fixed_30_day_expiry_and_logout_revokes_saved_cookie(self):
+        response=self.client.post('/login/',{'username':'owner-local','password':self.password},secure=True)
+        cookie=response.cookies[settings.SESSION_COOKIE_NAME]
+        self.assertTrue(cookie['secure']);self.assertTrue(cookie['httponly'])
+        self.assertEqual(cookie['samesite'],'Lax')
+        self.assertTrue(30*86400-5 <= int(cookie['max-age']) <= 30*86400)
+        expires=self.client.session.get_expiry_date()
+        at=self.client.session['admin_password_at']
+        saved=cookie.value
+        with patch('console.views.time',return_value=at+29*86400):
+            self.assertEqual(self.client.get('/api/status',secure=True).status_code,200)
+        self.assertEqual(self.client.session.get_expiry_date(),expires)
+        with patch('console.views.time',return_value=at+30*86400+1):
+            self.assertEqual(self.client.get('/api/status',secure=True).status_code,403)
+        self.assertEqual(Client().get('/api/status',secure=True).status_code,401)
+        self.client.post('/logout/',secure=True)
+        restored=Client();restored.cookies[settings.SESSION_COOKIE_NAME]=saved
+        self.assertEqual(restored.get('/api/status',secure=True).status_code,401)
+
+    def test_password_change_invalidates_remembered_browser(self):
+        self.client.post('/login/',{'username':'owner-local','password':self.password},secure=True)
+        self.owner.set_password('synthetic-changed-password');self.owner.save()
+        self.assertEqual(self.client.get('/api/status',secure=True).status_code,401)
+
+    @override_settings(ADMIN_DEVICE_ACCOUNT_USERNAME='vpn-owner')
+    def test_device_owner_marker_uses_exact_account_not_display_name_and_grants_no_role(self):
+        import uuid
+        from .models import ClientAccount
+        first=str(uuid.uuid4());second=str(uuid.uuid4())
+        ClientAccount.objects.create(user_id=first,username='vpn-owner',password='synthetic-not-login')
+        ClientAccount.objects.create(user_id=second,username='someone-else',password='synthetic-not-login')
+        self.client.post('/login/',{'username':'owner-local','password':self.password},secure=True)
+        value={'users':[{'id':first,'name':'Owner'},{'id':second,'name':'vpn-owner'}],'peers':[]}
+        with patch('console.control.call',return_value=value):
+            data=self.client.get('/api/control',secure=True).json()
+        self.assertTrue(data['users'][0]['is_admin_account'])
+        self.assertFalse(data['users'][1]['is_admin_account'])
+        self.assertEqual(data['administrator']['device_account_username'],'vpn-owner')
 
     def test_host_provision_stores_hash_and_does_not_grant_django_superuser(self):
         encoded=make_password(self.password)

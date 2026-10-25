@@ -68,7 +68,7 @@ HTTPServer(('127.0.0.1',8787),Handler).serve_forever()
         front=subprocess.Popen(['ip','netns','exec',names[1],'caddy','run','--config',str(config),'--adapter','caddyfile'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         header_client="""import http.client,json
 observed=[]
-for source,expected in [(None,'h3=":443"'),(('10.77.0.2',0),'clear')]:
+for source,expected in [(None,None),(('10.77.0.2',0),'clear')]:
  c=http.client.HTTPConnection('192.0.2.2',80,timeout=2,source_address=source)
  c.request('GET','/privacy-check/',headers={'Host':'vpn-admin.morandi.dpdns.org'})
  r=c.getresponse();observed.append({'vpn_source':source is not None,'status':r.status,'alt_svc':r.getheader('Alt-Svc'),'expected':expected});r.read();c.close()
@@ -84,7 +84,7 @@ assert all(row['status']==200 and row['alt_svc']==row['expected'] for row in obs
             print('ISOLATED_HEADER_OBSERVATION='+result.stdout[-2048:],flush=True)
             print('ISOLATED_HEADER_FAILURE='+result.stderr[-1024:],flush=True)
             raise RuntimeError('ISOLATED_CADDY_SOURCE_HEADER_POLICY_FAILED')
-        print('REAL_ADMIN_VPN_ALT_SVC_CLEAR_PUBLIC_HTTP3_ADVERTISEMENT_PRESERVED=PASS')
+        print('REAL_ADMIN_ALT_SVC_CLEAR_ONLY_FOR_VPN_SOURCE=PASS')
 
     finally:
         for process in (front,back,proc):

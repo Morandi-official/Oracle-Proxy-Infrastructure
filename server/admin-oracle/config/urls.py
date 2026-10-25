@@ -19,7 +19,9 @@ urlpatterns = [
     path('api/status', views.status),
     path('api/audit', views.audit),
     path('api/control', views.management),
+    path('api/users/<uuid:user_id>/usage', views.user_usage),
     path('api/health', views.health),
+    path('usage.js', views.asset, {'name': 'usage.js'}),
     path('app.js', views.asset, {'name': 'app.js'}),
     path('style.css', views.asset, {'name': 'style.css'}),
 ]

@@ -238,3 +238,72 @@ class ClientApiTests(TestCase):
         peer=next(p for p in annotate_devices(self.engine.snapshot())['peers'] if p['user_id']==self.user['id'])
         self.assertFalse(peer['client_status']['online'])
         self.assertIsNotNone(peer['enrollment']['confirmed_at'])
+
+    def owner_browser(self):
+        from django.contrib.auth import get_user_model
+        owner=get_user_model().objects.create_user('testadmin')
+        from allauth.socialaccount.models import SocialAccount
+        from allauth.mfa.totp.internal.auth import TOTP
+        from .tests import SECRET
+        SocialAccount.objects.create(user=owner,provider='github',uid='204281968');TOTP.activate(owner,SECRET)
+        browser=Client(enforce_csrf_checks=True,HTTP_HOST=HOST)
+        browser.force_login(owner,backend='console.adapters.GitHubSessionBackend')
+        saved=browser.session;at=time.time()
+        saved['account_authentication_methods']=[{'method':'socialaccount','provider':'github','uid':'204281968','at':at},{'method':'mfa','type':'totp','at':at}];saved.save()
+        import re
+        page=browser.get('/',secure=True)
+        token=re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"',page.content).group(1).decode()
+        return browser,token
+
+    def test_usage_history_is_administrator_only_bounded_and_read_only(self):
+        token=self.login().json()['token'];path=f"/api/users/{self.user['id']}/usage"
+        self.assertEqual(self.state(token,path).status_code,401)
+        browser,csrf=self.owner_browser()
+        for window,count in [('day',24),('week',7),('month',None)]:
+            result=browser.get(path,{'window':window},secure=True);self.assertEqual(result.status_code,200)
+            data=result.json();self.assertEqual(data['user_id'],self.user['id'])
+            self.assertEqual(data['quota_bytes'],100000)
+            if count:self.assertEqual(len(data['buckets']),count)
+        self.assertEqual(browser.get(path,{'window':'year'},secure=True).status_code,400)
+        self.assertEqual(browser.get(path+'?window=day&window=month',secure=True).status_code,400)
+        self.assertEqual(browser.get(path,{'command':'id'},secure=True).status_code,400)
+        self.assertEqual(browser.post(path,secure=True,HTTP_X_CSRFTOKEN=csrf,HTTP_ORIGIN=f'https://{HOST}').status_code,405)
+
+    def test_administrator_delete_stops_device_frees_slot_invalidates_token_and_keeps_usage(self):
+        value=self.login().json();key=value['device']['public_key'];token=value['token']
+        self.driver.value['peers'][key]['tx']+=41;self.engine.tick()
+        browser,csrf=self.owner_browser();body=json.dumps({'operation':'peer.delete','data':{'public_key':key}})
+        self.assertEqual(browser.post('/api/control',body,content_type='application/json',secure=True).status_code,403)
+        self.assertFalse(self.engine.revoked(key))
+        result=browser.post('/api/control',body,content_type='application/json',secure=True,HTTP_X_CSRFTOKEN=csrf,HTTP_ORIGIN=f'https://{HOST}')
+        self.assertEqual(result.status_code,200,result.content)
+        self.assertFalse(any(p['public_key']==key for p in result.json()['peers']))
+        self.assertNotIn(key,self.driver.value['peers']);self.assertEqual(self.engine.device_count(self.user['id']),0)
+        self.assertEqual(self.state(token).status_code,401)
+        self.assertFalse(ClientSession.objects.filter(public_key=key).exists())
+        self.assertEqual(self.engine.used('user',self.user['id'])['tx'],41)
+        self.assertEqual(self.login().json()['error'],'DEVICE_REVOKED')
+        from .models import Audit
+        self.assertTrue(Audit.objects.filter(action='device.deleted',resource=__import__('hashlib').sha256(key.encode()).hexdigest()[:12]).exists())
+
+    def test_pending_device_can_be_deleted_without_ever_creating_a_peer(self):
+        value=self.login(confirm=False).json();key=value['device']['public_key'];token=value['token']
+        browser,csrf=self.owner_browser()
+        pending=browser.get('/api/control',secure=True).json()['pending_devices'];self.assertEqual(pending[0]['public_key'],key)
+        result=browser.post('/api/control',json.dumps({'operation':'peer.delete','data':{'public_key':key}}),content_type='application/json',secure=True,HTTP_X_CSRFTOKEN=csrf,HTTP_ORIGIN=f'https://{HOST}')
+        self.assertEqual(result.status_code,200);self.assertEqual(result.json()['pending_devices'],[])
+        self.assertEqual(self.engine.device_count(self.user['id']),0);self.assertEqual(self.state(token).status_code,401)
+        self.assertEqual(self.login(confirm=False).json()['error'],'DEVICE_REVOKED')
+
+    def test_device_delete_web_database_failure_cannot_restore_access_and_retry_finishes(self):
+        from django.db import DatabaseError
+        value=self.login().json();key=value['device']['public_key'];token=value['token']
+        browser,csrf=self.owner_browser();body=json.dumps({'operation':'peer.delete','data':{'public_key':key}})
+        with patch('console.client_api.ClientSession.objects.filter') as rows:
+            rows.return_value.delete.side_effect=DatabaseError('synthetic-web-write-failure')
+            result=browser.post('/api/control',body,content_type='application/json',secure=True,HTTP_X_CSRFTOKEN=csrf,HTTP_ORIGIN=f'https://{HOST}')
+        self.assertEqual(result.status_code,503)
+        self.assertTrue(self.engine.revoked(key));self.assertNotIn(key,self.driver.value['peers'])
+        self.assertEqual(self.state(token).json()['error'],'DEVICE_REVOKED')
+        retried=browser.post('/api/control',body,content_type='application/json',secure=True,HTTP_X_CSRFTOKEN=csrf,HTTP_ORIGIN=f'https://{HOST}')
+        self.assertEqual(retried.status_code,200);self.assertEqual(self.state(token).status_code,401)

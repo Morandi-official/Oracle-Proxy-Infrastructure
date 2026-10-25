@@ -53,6 +53,21 @@ def main():
                             fresh.close()
                         assert control.json().get('administrator',{}).get('username')==username
                         assert page.locator('#unconfirmed').count()==1
+                        assert not page.locator('#user-form').is_visible()
+                        help_icon=page.locator('#users .help-icon').first
+                        help_icon.click()
+                        assert page.locator('#help-users').is_visible()
+                        page.keyboard.press('Escape')
+                        assert not page.locator('#help-users').is_visible()
+                        if control.json()['users']:
+                            from playwright.sync_api import expect
+                            page.locator('#user-rows .user-toggle').first.click()
+                            chart=page.locator('#user-rows .user-history:not([hidden])').first
+                            for choice,count in [('day',24),('week',7)]:
+                                chart.get_by_label('流量统计范围').select_option(choice)
+                                expect(chart.locator('svg rect')).to_have_count(count)
+                            chart.get_by_label('流量统计范围').select_option('month')
+                        print(f'BROWSER_{name.upper()}_REAL_COMPACT_HELP_AND_USER_USAGE_CHART_READ_ONLY=PASS',flush=True)
                         page.get_by_role('button',name='退出登录',exact=True).click()
                         page.wait_for_url(BASE+'/login/',timeout=15000)
                         assert context.request.get(BASE+'/api/control').status==401

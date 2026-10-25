@@ -1,10 +1,11 @@
 """Browser UI tests with local synthetic RPC/ledger. No production login or user fixtures."""
 import importlib.util
 import json
+import base64
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 from playwright.sync_api import sync_playwright, expect
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -27,7 +28,7 @@ def main():
      if path=='/':
       body=(SERVER/'templates/dashboard.html').read_text().replace('{% csrf_token %}','<input type="hidden" name="csrfmiddlewaretoken" value="synthetic-browser-only-token">')
       route.fulfill(status=200,content_type='text/html',body=body)
-     elif path in ('/app.js','/style.css'):
+     elif path in ('/app.js','/usage.js','/style.css'):
       route.fulfill(status=200,content_type='text/javascript' if path.endswith('.js') else 'text/css',body=(SERVER/'static/console'/path[1:]).read_text())
      else:
       if path=='/api/control':
@@ -41,7 +42,9 @@ def main():
         elif value['operation']=='account.delete':
          data=engine.dispatch({'actor':'github:204281968','operation':'user.delete','data':value['data']})
          accounts.pop(value['data']['user_id'],None)
-        else:data=engine.dispatch({'actor':'github:204281968',**value})
+        else:
+         data=engine.dispatch({'actor':'github:204281968',**value})
+         if value['operation']=='peer.delete':pending_fixture[0]=[p for p in pending_fixture[0] if p.get('public_key')!=value['data']['public_key']]
        else:data=engine.snapshot()
        for u in data['users']:
         u['username']=accounts.get(u['id']);u['is_admin_account']=u['username']=='owner-ci'
@@ -50,6 +53,8 @@ def main():
        for p in data['peers']:
         if presence_fixture[0] and p['public_key']==fixture.KEY3:p['client_status']={'online':True,'reported_mode':'connected','transport':'wireguard-udp','last_seen_at':int(time.time())}
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
+      elif path.startswith('/api/users/') and path.endswith('/usage'):
+       data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':None}
       elif path=='/api/audit':data={'entries':[{'occurred_at':int(time.time())-i,'actor':'fixture','action':'test','resource':'fixture'} for i in range(20)],'activity':[{'username':'ci-user01','count':7}]}
       else:route.fulfill(status=404);return
@@ -58,6 +63,13 @@ def main():
     try:
      page.goto('https://management-fixture.invalid/',wait_until='networkidle')
      expect(page.locator('#remaining')).to_have_text('未知')
+     page.on('dialog',lambda dialog:dialog.accept())
+     expect(page.locator('#user-form')).not_to_be_visible()
+     help_icon=page.locator('#users .help-icon').first
+     help_icon.hover();expect(page.locator('#help-users')).to_be_visible()
+     page.keyboard.press('Escape');expect(page.locator('#help-users')).not_to_be_visible()
+     help_icon.focus();expect(page.locator('#help-users')).to_be_visible()
+     page.keyboard.press('Escape');page.locator('#user-editor > summary').click()
      label='CI browser user <b>literal</b>'
      page.locator('#user-form [name=username]').fill('ci-user01');page.locator('#user-form [name=password]').fill('synthetic-password-only-123')
      page.locator('#user-form [name=name]').fill(label);page.locator('#user-form [name=quota]').fill('1')
@@ -65,6 +77,18 @@ def main():
      row=page.locator('#user-rows tr').filter(has_text=label);expect(row).to_contain_text('可用')
      assert page.locator('#user-rows b').count()==0
      user=engine.snapshot()['users'][0]
+     row.locator('.user-toggle').click()
+     chart=page.locator('#usage-'+user['id']);expect(chart).to_be_visible()
+     expect(chart.locator('progress')).to_be_visible()
+     select=chart.get_by_label('流量统计范围');select.select_option('day')
+     expect(chart.locator('svg rect')).to_have_count(24)
+     expect(chart.locator('.history-note')).to_contain_text('未采集')
+     select.select_option('week');expect(chart.locator('svg rect')).to_have_count(7)
+     select.select_option('month');expect(chart.locator('svg rect')).to_have_count(__import__('datetime').datetime.now(__import__('datetime').timezone.utc).day)
+     control=select.element_handle()
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
+     assert control.evaluate('(node)=>node.isConnected'), 'Polling replaced the expanded chart controls'
+     expect(row.locator('.user-toggle')).to_have_attribute('aria-expanded','true')
      expect(row).to_contain_text('ci-user01');expect(page.locator('#user-form [name=password]')).to_have_value('')
      assert page.locator('#account-form').count()==0
      assert 'synthetic-password-only-123' not in page.locator('body').inner_text()
@@ -88,7 +112,7 @@ def main():
      page.get_by_role('button',name='保存设备',exact=True).click()
      expect(page.locator('#pending-device-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('无客户端确认记录')
      engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{'public_key':fixture.KEY3,'user_id':user['id'],'name':'CI New Windows PC','machine_name':'CI-DESKTOP','client_version':'0.3.0-rc18','confirm':True}})
-     pending_fixture[0]=[{'id':'a'*12,'name':'CI pending <b>literal</b>','user_id':user['id'],'created_at':int(time.time()),'last_seen_at':int(time.time())}];presence_fixture[0]=True
+     pending_fixture[0]=[{'public_key':base64.b64encode(bytes([5])*32).decode(),'id':'a'*12,'name':'CI pending <b>literal</b>','user_id':user['id'],'created_at':int(time.time()),'last_seen_at':int(time.time())}];presence_fixture[0]=True
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
      confirmed=page.locator('#peer-rows tr').filter(has_text='CI New Windows PC')
      expect(confirmed).to_contain_text('用户已确认');expect(confirmed).to_contain_text('CI-DESKTOP');expect(confirmed).to_contain_text('自报已连接')
@@ -98,7 +122,16 @@ def main():
      confirmed.get_by_role('button',name='管理',exact=True).click()
      expect(page.locator('#device-profile')).to_be_visible()
      expect(page.locator('#device-profile')).to_contain_text('设备识别码')
-     pending_fixture[0]=[]
+     pending=page.locator('#pending-device-rows tr').filter(has_text='CI pending <b>literal</b>')
+     pending.get_by_role('button',name='删除设备',exact=True).click()
+     expect(page.locator('#pending-device-rows')).not_to_contain_text('CI pending <b>literal</b>')
+     assert not pending_fixture[0]
+     driver.value['peers'][fixture.KEY3]['tx']+=8
+     confirmed.get_by_role('button',name='删除设备',exact=True).click()
+     expect(page.locator('#peer-rows')).not_to_contain_text('CI New Windows PC')
+     assert fixture.KEY3 not in driver.value['peers'] and engine.device_count(user['id'])==1
+     assert engine.used('user',user['id'])['tx']==8
+     print(f'SYNTHETIC_{name.upper()}_DIRECT_DEVICE_AND_PENDING_DELETE_RETAIN_USAGE_AND_RELEASE_SLOT=PASS',flush=True)
      print(f'SYNTHETIC_{name.upper()}_PENDING_CONFIRMED_DEVICE_PRESENCE_AND_TEXT_ESCAPE=PASS',flush=True)
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=enabled]').uncheck()
      page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('已禁用');assert not driver.allowed
@@ -106,13 +139,14 @@ def main():
      page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('可用')
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=expires]').fill('2020-01-01T00:00')
      page.get_by_role('button',name='保存用户',exact=True).click();expect(row).to_contain_text('已到期');assert not driver.allowed
+     page.locator('#budget-editor > summary').click()
      page.locator('#budget-form [name=source]').select_option('manual')
      page.locator('#budget-form [name=prior]').fill('10');page.locator('#budget-form [name=confirm]').check();page.locator('#budget-form [name=guard]').check()
      page.get_by_role('button',name='保存出站保护策略',exact=True).click()
      expect(page.locator('#balance-basis')).to_have_text('手工核对基线 + 本机增量估算')
      assert engine.budget_state()['estimated_used_bytes']==10_000_000_000
-     page.on('dialog',lambda dialog:dialog.accept())
-     row.get_by_role('button',name='删除',exact=True).click();expect(page.locator('#user-rows')).to_contain_text('尚无用户')
+     row.get_by_role('button',name='编辑',exact=True).click()
+     page.get_by_role('button',name='删除用户',exact=True).click();expect(page.locator('#user-rows')).to_contain_text('尚无用户')
      assert not engine.snapshot()['users'] and not driver.allowed
      assert all(p['revoked'] for p in engine.snapshot()['peers'] if p['managed'])
      official_fixture[0]={'status':'INSTANCE_PRINCIPAL_READY','free_tier_status':'VERIFIED_USAGE_AND_PRICE_TIER','free_tier_limit_gb':10240,'free_tier_used_gb':1.25,'free_tier_remaining_gb':10238.75,'period':engine.snapshot()['period'],'checked_at':int(time.time()),'billing_through':int(time.time())-86400,'free_tier_policy_checked':'2026-10-23'}
@@ -130,12 +164,12 @@ def main():
      expect(page.locator('#official-remaining')).to_have_text('未知')
      expect(page.locator('#audit-rows tr')).to_have_count(10)
      expect(page.locator('#activity-chart')).to_contain_text('7 次')
-     assert 'UTC+8' in page.locator('#official-usage').inner_text()
-     assert 'GMT+1' not in page.locator('#official-usage').inner_text()
+     assert 'UTC+8' in page.locator('#official-usage').text_content()
+     assert 'GMT+1' not in page.locator('#official-usage').text_content()
      owner=engine.dispatch({'operation':'user.save','actor':'github:204281968','data':{'id':None,'name':'Z owner','quota_bytes':None,'expires_at':None,'enabled':True,'device_limit':3}})['saved_user_id']
      ordinary=engine.dispatch({'operation':'user.save','actor':'github:204281968','data':{'id':None,'name':'A ordinary','quota_bytes':None,'expires_at':None,'enabled':True,'device_limit':3}})['saved_user_id']
      accounts[owner]='owner-ci';accounts[ordinary]='aaa-ordinary'
-     pending_fixture[0]=[{'id':'b'*12,'name':'Owner pending','user_id':owner,'created_at':int(time.time()),'last_seen_at':None},{'id':'c'*12,'name':'Unknown <b>literal</b>','user_id':ordinary,'created_at':int(time.time()),'last_seen_at':None}]
+     pending_fixture[0]=[{'public_key':base64.b64encode(bytes([6])*32).decode(),'id':'b'*12,'name':'Owner pending','user_id':owner,'created_at':int(time.time()),'last_seen_at':None},{'public_key':base64.b64encode(bytes([7])*32).decode(),'id':'c'*12,'name':'Unknown <b>literal</b>','user_id':ordinary,'created_at':int(time.time()),'last_seen_at':None}]
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
      expect(page.locator('#peer-rows .device-group').first).to_contain_text('管理员 · owner-ci')
      expect(page.locator('#peer-rows')).to_contain_text('Owner pending')
@@ -143,6 +177,13 @@ def main():
      expect(page.locator('#pending-device-rows')).to_contain_text('Unknown <b>literal</b>')
      assert page.locator('#pending-device-rows b').count()==0
      print(f'SYNTHETIC_{name.upper()}_ADMIN_FIRST_GROUPED_DEVICES_PENDING_REVIEW_DECIMAL_GB_FIXED_SHANGHAI_TIME=PASS',flush=True)
+     page.locator('#user-rows tr').filter(has_text='Z owner').locator('.user-toggle').click()
+     expect(page.locator('#usage-'+owner+' progress')).not_to_be_visible()
+     page.set_viewport_size({'width':390,'height':844})
+     mobile_help=page.locator('#users .help-icon').first;mobile_help.click()
+     expect(page.locator('#help-users')).to_be_visible()
+     bounds=page.locator('#help-users').bounding_box();assert bounds['x']>=0 and bounds['x']+bounds['width']<=390
+     print(f'SYNTHETIC_{name.upper()}_HOVER_FOCUS_CLICK_ESCAPE_MOBILE_HELP_AND_PERSISTENT_DAY_WEEK_MONTH_CHART=PASS',flush=True)
      assert not errors, 'Synthetic management UI raised JavaScript errors'
      print(f'SYNTHETIC_{name.upper()}_UI_USER_PEER_QUOTA_EXPIRY_BUDGET_CSRF_HEADER_AND_TEXT_ESCAPE=PASS',flush=True)
     finally:context.close();browser.close();engine.db.close()

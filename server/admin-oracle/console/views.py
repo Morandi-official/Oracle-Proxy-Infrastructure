@@ -1,5 +1,6 @@
 from time import time
 from datetime import timedelta
+from django.db import DatabaseError
 from django.db.models import Count
 
 from allauth.account.authentication import get_authentication_records
@@ -145,15 +146,16 @@ def management(request):
         try:
             value = json.loads(request.body)
             if not isinstance(value,dict) or set(value)!={'operation','data'} or value['operation'] not in (
-                    'peer.assign','peer.create','peer.revoke','account.save','account.delete','budget.set','budget.calibrate') or not isinstance(value['data'],dict):
+                    'peer.assign','peer.create','peer.revoke','peer.delete','account.save','account.delete','budget.set','budget.calibrate') or not isinstance(value['data'],dict):
                 raise ValueError()
             operation, data = value['operation'], value['data']
         except (ValueError,TypeError): return JsonResponse({'error':'INVALID_REQUEST'},status=400)
     try:
         if operation == 'account.save': result = client_api.save_account(request,data)
         elif operation == 'account.delete': result = client_api.delete_account(request,data)
+        elif operation == 'peer.delete': result = client_api.delete_device(request,data)
         else: result = control.call(operation, audit_actor(request), data)
-    except (OSError,TimeoutError,json.JSONDecodeError):
+    except (OSError,TimeoutError,json.JSONDecodeError,DatabaseError):
         return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
     except ValueError as error:
         return JsonResponse({'error':str(error)},status=400)
@@ -167,6 +169,23 @@ def management(request):
     result['administrator'] = {'username':request.user.username,
         'device_account_username':settings.ADMIN_DEVICE_ACCOUNT_USERNAME}
     return JsonResponse(client_api.annotate_devices(result))
+
+
+@require_GET
+def user_usage(request,user_id):
+    rejected=deny(request)
+    if rejected is not None:return rejected
+    if set(request.GET)-{'window'} or len(request.GET.getlist('window'))>1:
+        return JsonResponse({'error':'INVALID_HISTORY_WINDOW'},status=400)
+    window=request.GET.get('window','month')
+    if window not in ('day','week','month'):
+        return JsonResponse({'error':'INVALID_HISTORY_WINDOW'},status=400)
+    try:
+        return JsonResponse(control.call('usage.history',audit_actor(request),{'user_id':str(user_id),'window':window}))
+    except ValueError as error:
+        return JsonResponse({'error':str(error)},status=404 if str(error)=='USER_NOT_FOUND' else 400)
+    except (OSError,TimeoutError,json.JSONDecodeError,DatabaseError):
+        return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
 
 
 @require_GET

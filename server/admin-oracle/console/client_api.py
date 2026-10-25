@@ -80,6 +80,7 @@ def confirmed(peer):
 
 
 def client_state(snapshot,account,key,allow_legacy=False,proposed_name=''):
+    if key in snapshot.get('deleted_public_keys',[]):raise ValueError('DEVICE_REVOKED')
     user=next((u for u in snapshot['users'] if u['id']==str(account.user_id)),None)
     peer=next((p for p in snapshot['peers'] if p['public_key']==key),None)
     if not user:raise ValueError('ACCOUNT_UNAVAILABLE')
@@ -249,7 +250,7 @@ def annotate_devices(snapshot):
         age=(now-row.last_seen_at).total_seconds() if row and row.last_seen_at else None
         peer['client_status']={'last_seen_at':int(row.last_seen_at.timestamp()) if row and row.last_seen_at else None,'online':age is not None and 0<=age<=30,'reported_mode':row.reported_mode if row else 'unknown','transport':row.reported_transport if row else ''}
     users={u['id'] for u in snapshot.get('users',[])}
-    snapshot['pending_devices']=[{'id':fingerprint(row.public_key),'name':row.proposed_name,'user_id':str(row.account.user_id),'created_at':int(row.created_at.timestamp()),'last_seen_at':int(row.last_seen_at.timestamp()) if row.last_seen_at else None} for row in sessions.values() if row.enrollment_flow and row.public_key not in peers and str(row.account.user_id) in users]
+    snapshot['pending_devices']=[{'id':fingerprint(row.public_key),'public_key':row.public_key,'name':row.proposed_name,'user_id':str(row.account.user_id),'created_at':int(row.created_at.timestamp()),'last_seen_at':int(row.last_seen_at.timestamp()) if row.last_seen_at else None} for row in sessions.values() if row.enrollment_flow and row.public_key not in peers and row.public_key not in snapshot.get('deleted_public_keys',[]) and str(row.account.user_id) in users]
     return snapshot
 
 
@@ -315,4 +316,15 @@ def delete_account(request, value):
         with transaction.atomic():
             ClientAccount.objects.filter(user_id=user_id).delete()
             Audit.objects.create(actor=actor(request),action='account.deleted',resource=user_id)
+        return snapshot
+
+
+def delete_device(request,value):
+    if set(value)!={'public_key'}:raise ValueError('INVALID_FIELDS')
+    key=value['public_key']
+    with management_lock():
+        snapshot=control.call('peer.delete',actor(request),{'public_key':key})
+        with transaction.atomic():
+            ClientSession.objects.filter(public_key=key).delete()
+            Audit.objects.create(actor=actor(request),action='device.deleted',resource=fingerprint(key))
         return snapshot

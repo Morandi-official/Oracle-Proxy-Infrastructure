@@ -1,10 +1,10 @@
 name: Windows native UDP counters-only diagnostic proof
 on:
   pull_request:
-    paths: ['clients/windows/diagnostics/Measure-NativeUdp.ps1', 'clients/windows/diagnostics/Test-LegacyNativePorts.ps1', 'clients/windows/diagnostics/tests/PktmonCounters.Cloud.ps1', 'clients/windows/diagnostics/tests/PortPipe.Cloud.ps1', '.github/workflows/windows-native-udp-counters.yml']
+    paths: ['clients/windows/diagnostics/Measure-NativeUdp.ps1', 'clients/windows/diagnostics/Test-LegacyNativePorts.ps1', 'clients/windows/diagnostics/Test-QuicUdpReturn.ps1', 'clients/windows/diagnostics/tests/QuicUdpReturn.Cloud.ps1', 'clients/windows/diagnostics/tests/PktmonCounters.Cloud.ps1', 'clients/windows/diagnostics/tests/PortPipe.Cloud.ps1', '.github/workflows/windows-native-udp-counters.yml']
   push:
     branches: [main]
-    paths: ['clients/windows/diagnostics/Measure-NativeUdp.ps1', 'clients/windows/diagnostics/Test-LegacyNativePorts.ps1', 'clients/windows/diagnostics/tests/PktmonCounters.Cloud.ps1', 'clients/windows/diagnostics/tests/PortPipe.Cloud.ps1', '.github/workflows/windows-native-udp-counters.yml']
+    paths: ['clients/windows/diagnostics/Measure-NativeUdp.ps1', 'clients/windows/diagnostics/Test-LegacyNativePorts.ps1', 'clients/windows/diagnostics/Test-QuicUdpReturn.ps1', 'clients/windows/diagnostics/tests/QuicUdpReturn.Cloud.ps1', 'clients/windows/diagnostics/tests/PktmonCounters.Cloud.ps1', 'clients/windows/diagnostics/tests/PortPipe.Cloud.ps1', '.github/workflows/windows-native-udp-counters.yml']
 permissions:
   contents: read
 jobs:
@@ -18,3 +18,6 @@ jobs:
       - name: Actual packet counters with payload logging disabled and named-filter cleanup
         shell: powershell
         run: ./clients/windows/diagnostics/tests/PktmonCounters.Cloud.ps1
+      - name: Independent UDP control without account, browser, VPN or service pipe
+        shell: powershell
+        run: ./clients/windows/diagnostics/tests/QuicUdpReturn.Cloud.ps1

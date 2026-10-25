@@ -179,8 +179,17 @@ def parse_configuration(body):
     return value
 
 
-def password_hash(password):
-    import base64,hashlib,secrets
+def password_hash(password, existing=None):
+    import base64,hashlib,hmac,secrets
+    # Keep the same encoded hash when deploying the same password so Django's
+    # session-auth hash remains stable. Never accept unbounded KDF parameters.
+    if isinstance(existing,str) and len(existing)<=256:
+        fields=existing.split('$')
+        if (len(fields)==4 and fields[0]=='pbkdf2_sha256' and fields[1]=='1200000'
+                and re.fullmatch(r'[A-Za-z0-9_-]{16,64}',fields[2])):
+            digest=hashlib.pbkdf2_hmac('sha256',password.encode(),fields[2].encode(),1200000)
+            if hmac.compare_digest(base64.b64encode(digest).decode(),fields[3]):
+                return existing
     salt=secrets.token_urlsafe(18)
     digest=hashlib.pbkdf2_hmac('sha256',password.encode(),salt.encode(),1200000)
     return 'pbkdf2_sha256$1200000$'+salt+'$'+base64.b64encode(digest).decode()
@@ -194,8 +203,9 @@ def configure(body):
     if info.st_uid!=0 or info.st_mode & 0o077:raise ValueError('UNTRUSTED_HOST_CONFIGURATION')
     old=host.CONFIG.read_bytes(); text=old.decode()
     if 'admin_username' in value:
+        previous=re.findall(r'^ADMIN_LOCAL_PASSWORD_HASH=(.*)$',text,flags=re.MULTILINE)
         updates={'ADMIN_AUTH_MODE':'local','ADMIN_LOCAL_USERNAME':value['admin_username'],
-                 'ADMIN_LOCAL_PASSWORD_HASH':password_hash(value['admin_password'])}
+                 'ADMIN_LOCAL_PASSWORD_HASH':password_hash(value['admin_password'],previous[0] if len(previous)==1 else None)}
     else:updates={'ADMIN_GITHUB_CLIENT_ID':value['client_id'],'ADMIN_GITHUB_CLIENT_SECRET':value['client_secret']}
     for name,entry in updates.items():
         text,count=re.subn(r'^'+name+r'=.*$',lambda _:name+'='+entry,text,flags=re.MULTILINE)

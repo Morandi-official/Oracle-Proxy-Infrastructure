@@ -78,6 +78,12 @@ def main():
      expect(page.locator('#peer-rows tr').filter(has_text='CI Windows PC')).to_contain_text(label)
      assert driver.allowed=={'10.250.0.2'}
      assert engine.snapshot()['users'][0]['quota']==1_000_000_000
+     engine.dispatch({'operation':'user.save','actor':'github:204281968','data':{'id':user['id'],'name':label,'quota_bytes':1073741824,'expires_at':None,'enabled':True,'device_limit':3}})
+     page.get_by_role('button',name='↻ 刷新',exact=True).click()
+     row.get_by_role('button',name='编辑',exact=True).click()
+     expect(page.locator('#user-form [name=quota]')).to_have_value('1.073741824')
+     page.get_by_role('button',name='保存用户',exact=True).click()
+     assert engine.snapshot()['users'][0]['quota']==1073741824
      page.locator('#peer-form [name=name]').fill('CI New Windows PC');page.locator('#peer-form [name=public_key]').fill(fixture.KEY3)
      page.get_by_role('button',name='保存设备',exact=True).click()
      expect(page.locator('#pending-device-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('无客户端确认记录')

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import io
+import os
 spec=importlib.util.spec_from_file_location('publish_diagnostic',Path(__file__).with_name('publish_port_diagnostic.py'))
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
@@ -29,3 +30,13 @@ class PinnedDiagnostic(unittest.TestCase):
                 if valid:m.verify_public()
                 else:
                     with self.assertRaises(ValueError):m.verify_public()
+
+    def test_root_umask_still_yields_traversable_public_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'downloads'/'diagnostics'
+            old=os.umask(0o077)
+            try:m.install(root=root)
+            finally:os.umask(old)
+            self.assertEqual(root.stat().st_mode&0o777,0o755)
+            self.assertEqual(root.parent.stat().st_mode&0o777,0o755)
+            self.assertEqual((root/m.NAME).stat().st_mode&0o777,0o644)

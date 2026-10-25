@@ -18,6 +18,7 @@ def install(source=SOURCE,root=ROOT):
         if parent.is_symlink():raise ValueError('DIAGNOSTIC_ROOT_LINK_REJECTED')
         if not parent.exists():parent.mkdir(mode=0o755)
         if not parent.is_dir() or parent.stat().st_uid!=os.geteuid() or parent.stat().st_mode&0o022:raise ValueError('DIAGNOSTIC_ROOT_WRITABLE')
+        parent.chmod(0o755) # Root bridge uses umask077; this directory contains public assets.
     destination=root/NAME
     if destination.exists() or destination.is_symlink():
         if destination.is_symlink() or not destination.is_file() or destination.stat().st_uid!=os.geteuid() or destination.stat().st_mode&0o022 or destination.read_bytes()!=body:raise ValueError('DIAGNOSTIC_EXISTING_MISMATCH')

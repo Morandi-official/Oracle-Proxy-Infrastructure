@@ -1,7 +1,7 @@
 ﻿#requires -RunAsAdministrator
 # Bounded counters only. No packet logging, firewall, route or adapter changes.
 [CmdletBinding()]
-param([ValidateRange(20,45)][int]$Seconds=40,[ValidateSet(51820,443)][int]$Port=51820,[switch]$DefinitionsOnly)
+param([ValidateRange(20,45)][int]$Seconds=40,[ValidateSet(51820,443,8443)][int]$Port=51820,[switch]$DefinitionsOnly)
 $ErrorActionPreference='Stop'
 function Invoke-OPPktmon([string[]]$Arguments){
     $result=(& "$env:WINDIR\System32\pktmon.exe" @Arguments 2>&1 | Out-String)
@@ -17,20 +17,49 @@ function Test-OPNoFilters([string]$Text){
 }
 function Clear-OPOwnedFilters([string[]]$Names){
     if(-not $Names.Count){return}
-    if(-not (Test-OPIdle (Invoke-OPPktmon @('status')))){throw 'ACTIVE_MONITOR_REFUSE_FILTER_CLEAR'}
-    $current=Invoke-OPPktmon @('filter','list')
+    if(-not (Test-OPIdle (Invoke-OPPktmon -Arguments @('status')))){throw 'ACTIVE_MONITOR_REFUSE_FILTER_CLEAR'}
+    $current=Invoke-OPPktmon -Arguments @('filter','list')
     if(Test-OPNoFilters $current){return}
     $rows=@([regex]::Matches($current,'(?m)^\s*\d+\s+(\S+)\s+.+$'))
     $found=@($rows | ForEach-Object {$_.Groups[1].Value})
     if($found.Count -ne $Names.Count -or @($found | Select-Object -Unique).Count -ne $found.Count -or @($found | Where-Object {$Names -notcontains $_}).Count){throw 'FILTERS_CHANGED_REFUSE_CLEAR'}
     # This command removes ALL filters. Use it only after proving the entire
     # stopped list is still ours; never simulate selective removal by name.
-    Invoke-OPPktmon @('filter','remove') | Out-Null
-    if(-not (Test-OPNoFilters (Invoke-OPPktmon @('filter','list')))){throw 'FILTER_CLEANUP_NOT_VERIFIED'}
+    Invoke-OPPktmon -Arguments @('filter','remove') | Out-Null
+    if(-not (Test-OPNoFilters (Invoke-OPPktmon -Arguments @('filter','list')))){throw 'FILTER_CLEANUP_NOT_VERIFIED'}
+}
+function Get-OPCounterGroups([object]$Node){
+    if($null -eq $Node){return}
+    if($Node -is [Array]){foreach($item in $Node){Get-OPCounterGroups $item};return}
+    if($Node -is [PSCustomObject]){
+        if($Node.PSObject.Properties['Group'] -and $Node.PSObject.Properties['Components']){Write-Output $Node;return}
+        foreach($property in $Node.PSObject.Properties){Get-OPCounterGroups $property.Value}
+    }
+}
+function Read-OPCounterRows {
+    $json=Invoke-OPPktmon -Arguments @('counters','--json')
+    if($json.Length -gt 1048576){throw 'COUNTER_OUTPUT_LIMIT'}
+    $groups=@(Get-OPCounterGroups ($json | ConvertFrom-Json));$rows=@()
+    foreach($group in $groups){
+        foreach($component in @($group.Components)){
+            $index=0
+            foreach($counter in @($component.Counters)){
+                if($counter.Type -eq 'Flows'){
+                    if($null -eq $counter.Inbound.Packets -or $null -eq $counter.Outbound.Packets){throw 'COUNTER_FLOW_SCHEMA_CHANGED'}
+                    if($counter.Inbound.Packets -or $counter.Outbound.Packets){
+                        $rows+=,[PSCustomObject]@{group=[string]$group.Group;component=[string]$component.Name;id=$component.Id;edge=$index;rx=[long]$counter.Inbound.Packets;tx=[long]$counter.Outbound.Packets}
+                    }
+                    $index++
+                }
+            }
+        }
+    }
+    if(-not $groups.Count){throw 'COUNTER_GROUP_SCHEMA_CHANGED'}
+    return $rows
 }
 if($DefinitionsOnly){return}
-$status=(Invoke-OPPktmon @('status')).Trim()
-$filters=(Invoke-OPPktmon @('filter','list')).Trim()
+$status=(Invoke-OPPktmon -Arguments @('status')).Trim()
+$filters=(Invoke-OPPktmon -Arguments @('filter','list')).Trim()
 $idle=Test-OPIdle $status
 $empty=Test-OPNoFilters $filters
 if(-not $idle -or -not $empty){throw 'Existing or unknown Packet Monitor state; nothing changed.'}
@@ -38,17 +67,26 @@ $owned=@();$started=$false
 try{
     foreach($selectedPort in @($Port)){
         $name='OPNative'+$selectedPort
-        Invoke-OPPktmon @('filter','add',$name,'-i','152.67.156.100','-t','UDP','-p',[string]$selectedPort) | Out-Null
+        Invoke-OPPktmon -Arguments @('filter','add',$name,'-i','152.67.156.100','-t','UDP','-p',[string]$selectedPort) | Out-Null
         $owned+=,$name
     }
-    Write-Host (Invoke-OPPktmon @('start','--capture','--counters-only','--comp','all'));$started=$true
-    Write-Host "计数已开始（UDP/$Port）：现在在 rc11 选择 UDP 并连接。请保持此窗口打开，$Seconds 秒内自动结束。"
-    Start-Sleep -Seconds $Seconds
+    Write-Host (Invoke-OPPktmon -Arguments @('start','--capture','--counters-only','--comp','all'));$started=$true
+    $guide=if($Port -eq 8443){"点击原生 UDP 8443 测试，再直接连接；不要重选首选协议。"}else{"选择 WireGuard / UDP 并连接。"}
+    Write-Host "计数已开始（UDP/$Port）：$guide 请保持此窗口打开，$Seconds 秒内自动结束。"
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    Write-Host '=== ORACLE_NATIVE_UDP_TIMELINE_BEGIN ==='
+    foreach($target in @(5,10,15,$Seconds)){
+        $remaining=[Math]::Max(0,[int]($target*1000-$watch.ElapsedMilliseconds))
+        if($remaining){Start-Sleep -Milliseconds $remaining}
+        $sample=[PSCustomObject]@{utc=[DateTime]::UtcNow.ToString('o');elapsed_ms=$watch.ElapsedMilliseconds;port=$Port;flows=@(Read-OPCounterRows)}
+        Write-Host ($sample | ConvertTo-Json -Depth 5 -Compress)
+    }
+    Write-Host '=== ORACLE_NATIVE_UDP_TIMELINE_END ==='
     Write-Host '=== ORACLE_NATIVE_UDP_COUNTERS_BEGIN ==='
-    Write-Host (Invoke-OPPktmon @('counters','--include-hidden','--drop-reason'))
+    Write-Host (Invoke-OPPktmon -Arguments @('counters','--include-hidden','--drop-reason'))
     Write-Host '=== ORACLE_NATIVE_UDP_COUNTERS_END ==='
 }finally{
-    try{if($started){Invoke-OPPktmon @('stop') | Out-Null}}
-    finally{Clear-OPOwnedFilters $owned}
+    try{if($started){Invoke-OPPktmon -Arguments @('stop') | Out-Null}}
+    finally{Clear-OPOwnedFilters -Names $owned}
 }
 Write-Host '计数已结束，临时筛选器已清理；未记录数据包内容。请复制上方计数和客户端连接诊断。'

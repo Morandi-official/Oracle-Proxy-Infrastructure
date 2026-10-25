@@ -419,6 +419,9 @@ def enable_https():
     if action in ('publish-native-port-diagnostic-20261025','publish-native-port-diagnostic-v2-20261025','publish-native-port-diagnostic-v3-20261025'):
         diagnostic_spec=importlib.util.spec_from_file_location('publish_port_diagnostic',Path(__file__).with_name('publish_port_diagnostic.py'))
         diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic);diagnostic.install();diagnostic.verify_public()
+    if action=='publish-udp-return-control-20261025':
+        diagnostic_spec=importlib.util.spec_from_file_location('publish_udp_control',Path(__file__).with_name('publish_udp_control.py'))
+        diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic);diagnostic.install();diagnostic.verify_public()
     if action.startswith(('network-queue-apply-','network-queue-rollback-')):
         module_spec=importlib.util.spec_from_file_location('network_queue',Path(__file__).with_name('network_queue.py'))
         module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)

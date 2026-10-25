@@ -37,6 +37,13 @@ function Test-OPVersionReply([byte[]]$Packet, $Probe) {
     return $supported
 }
 
+function Get-OPSocketError($Record) {
+    # PS5 can wrap .NET method errors; inspect the root exception explicitly.
+    $cause=$Record.Exception.GetBaseException()
+    if ($cause -isnot [Net.Sockets.SocketException]) { throw $Record }
+    return [string]$cause.SocketErrorCode
+}
+
 function Invoke-OPVersionProbe([ValidateSet(443,8443)][int]$Port) {
     $probe=New-OPVersionProbe
     $socket=New-Object Net.Sockets.UdpClient ([Net.Sockets.AddressFamily]::InterNetwork)
@@ -53,8 +60,8 @@ function Invoke-OPVersionProbe([ValidateSet(443,8443)][int]$Port) {
             if (Test-OPVersionReply $reply $probe) { $matched=$true; break }
             if ($received -ge 8) { break }
         }
-    } catch [Net.Sockets.SocketException] {
-        $socketError=[string]$_.Exception.SocketErrorCode
+    } catch {
+        $socketError=Get-OPSocketError $_
     } finally { $watch.Stop(); $socket.Dispose() }
     return [pscustomobject]@{
         port=$Port; matching_version_reply=$matched; received_datagrams=$received

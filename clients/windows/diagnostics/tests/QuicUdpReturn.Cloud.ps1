@@ -17,5 +17,15 @@ foreach ($size in @(0,1,6,14,23,26,28,4097)) {
     if (Test-OPVersionReply (New-Object byte[] $size) $probe) { throw 'MALFORMED_ACCEPTED' }
 }
 Write-Host 'QUIC_VERSION_NEGOTIATION_NONCE_AND_MALFORMED_REPLY=PASS'
+$idle=New-Object Net.Sockets.UdpClient 0
+try {
+    $idle.Client.ReceiveTimeout=100
+    $remote=New-Object Net.IPEndPoint ([Net.IPAddress]::Any),0
+    try { [void]$idle.Receive([ref]$remote); throw 'EXPECTED_SOCKET_TIMEOUT' }
+    catch {
+        if ((Get-OPSocketError $_) -ne 'TimedOut') { throw 'WRAPPED_SOCKET_ERROR_NOT_RECOGNIZED' }
+    }
+} finally { $idle.Dispose() }
+Write-Host 'REAL_PS5_WRAPPED_UDP_RECEIVE_TIMEOUT=PASS'
 & $script -RequireReply
 Write-Host 'REAL_WINDOWS_PUBLIC_UDP443_AND_8443_RETURN=PASS'

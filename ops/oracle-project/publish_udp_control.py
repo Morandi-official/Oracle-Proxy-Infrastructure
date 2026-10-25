@@ -3,7 +3,7 @@ import importlib.util
 from pathlib import Path
 
 SOURCE=Path(__file__).resolve().parents[2]/'clients/windows/diagnostics/Test-QuicUdpReturn.ps1'
-DIGEST='5a89d1729db719855d8c7dbcf38f1e04caaab85f800087373831bb64d8b577cf'
+DIGEST='e700eab9cf46f5aa7a04398f54dfc97b0982307ad454d497276d327a442f6a52'
 NAME='Test-QuicUdpReturn-'+DIGEST[:12]+'.ps1'
 ROOT=Path('/var/lib/oracle-proxy-downloads/diagnostics')
 _spec=importlib.util.spec_from_file_location('pinned_udp_control_publisher',Path(__file__).with_name('publish_port_diagnostic.py'))

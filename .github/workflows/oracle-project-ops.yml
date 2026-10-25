@@ -111,6 +111,7 @@ jobs:
           python3 -m venv "$quic_venv"
           "$quic_venv/bin/pip" install --disable-pip-version-check aioquic==1.3.0
           "$quic_venv/bin/python" ops/oracle-project/verify_quic.py
+          "$quic_venv/bin/python" ops/oracle-project/verify_web_http3.py --require-reachable
       - name: Real Chromium and Firefox administrator login acceptance
         if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
         shell: bash

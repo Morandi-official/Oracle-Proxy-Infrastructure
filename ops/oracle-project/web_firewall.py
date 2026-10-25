@@ -10,6 +10,9 @@ QUIC_RULE = ['-p', 'udp', '--dport', '8443', '-m', 'comment',
              '--comment', 'oracle-proxy-wireguard-quic', '-j', 'ACCEPT']
 
 
+HTTP3_RULE=['-p','udp','--dport','443','-m','comment',
+            '--comment','oracle-proxy-admin-http3','-j','ACCEPT']
+
 # Only WireGuard message types are redirected; genuine QUIC / HTTP/3 on
 # UDP443 keeps its existing destination. No generic port-forwarding interface.
 UDP443_RULE=['-p','udp','--dport','443','-m','addrtype','--dst-type','LOCAL',
@@ -18,6 +21,7 @@ UDP443_RULE=['-p','udp','--dport','443','-m','addrtype','--dst-type','LOCAL',
 UDP8443_RULE=['8443' if x=='443' else 'oracle-proxy-native-udp8443' if x=='oracle-proxy-native-udp443' else x for x in UDP443_RULE]
 ADMIN_TUN_RULE=['-i','wg0','-d','152.67.156.100','-p','tcp','--dport','443',
                 '-m','comment','--comment','oracle-proxy-admin-through-tunnel','-j','REDIRECT','--to-ports','443']
+ADMIN_H3_TUN_RULE=['udp' if x=='tcp' else 'oracle-proxy-admin-h3-through-tunnel' if x=='oracle-proxy-admin-through-tunnel' else x for x in ADMIN_TUN_RULE]
 
 
 def allow(binary, rule, table='filter', chain='INPUT'):
@@ -35,12 +39,14 @@ def main():
         binary = shutil.which(name)
         if not binary: continue
         allow(binary, RULE)
+        allow(binary, HTTP3_RULE)
         if name == 'iptables':
             allow(binary, QUIC_RULE)
             allow(binary, UDP443_RULE, 'nat', 'PREROUTING')
             allow(binary, UDP8443_RULE, 'nat', 'PREROUTING')
             allow(binary, ADMIN_TUN_RULE, 'nat', 'PREROUTING')
-    print('PROJECT_WEB_FIREWALL=TCP_80_443_UDP_8443_ALLOWED')
+            allow(binary, ADMIN_H3_TUN_RULE, 'nat', 'PREROUTING')
+    print('PROJECT_WEB_FIREWALL=TCP_80_443_UDP_443_8443_ALLOWED')
 
 
 if __name__ == '__main__': main()

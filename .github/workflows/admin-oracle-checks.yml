@@ -48,6 +48,9 @@ jobs:
           if PUBLIC_QUIC_ENABLED:
               subprocess.run([sys.executable, '../../ops/oracle-project/verify_quic.py', '--require-reachable'], check=True)
           PYQUIC
+      - name: Read-only public HTTP3 control on existing UDP443
+        if: matrix.python == '3.12'
+        run: python ../../ops/oracle-project/verify_web_http3.py
       - run: node --check static/console/app.js
       - run: node ../../ops/oracle-project/privacy-classifier-test.cjs
       - name: Package source without test-only privileged entrypoints or credentials

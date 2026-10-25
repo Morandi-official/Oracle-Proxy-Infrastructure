@@ -1,4 +1,4 @@
 {
-  "operation": "status",
-  "request_id": "udp8443-paired-counts-ready-20261025"
+  "operation": "preflight",
+  "request_id": "udp8443-local-rx-zero-preflight-20261025"
 }

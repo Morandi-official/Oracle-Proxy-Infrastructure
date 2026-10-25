@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 import io
 import os
+from email.message import Message
 spec=importlib.util.spec_from_file_location('publish_diagnostic',Path(__file__).with_name('publish_port_diagnostic.py'))
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
@@ -26,6 +27,7 @@ class PinnedDiagnostic(unittest.TestCase):
         url='https://vpn-admin.morandi.dpdns.org/downloads/diagnostics/'+m.NAME
         for body,valid in ((m.SOURCE.read_bytes(),True),(b'changed',False),(b'x'*16385,False)):
             response=io.BytesIO(body);response.geturl=lambda:url
+            response.headers=Message();response.headers['Content-Disposition']='attachment';response.headers['Content-Type']='application/octet-stream'
             with patch('urllib.request.urlopen',return_value=response):
                 if valid:m.verify_public()
                 else:
@@ -40,3 +42,10 @@ class PinnedDiagnostic(unittest.TestCase):
             self.assertEqual(root.stat().st_mode&0o777,0o755)
             self.assertEqual(root.parent.stat().st_mode&0o777,0o755)
             self.assertEqual((root/m.NAME).stat().st_mode&0o777,0o644)
+
+    def test_inline_response_is_not_reported_as_browser_download(self):
+        response=io.BytesIO(m.SOURCE.read_bytes())
+        response.geturl=lambda:'https://vpn-admin.morandi.dpdns.org/downloads/diagnostics/'+m.NAME
+        response.headers=Message();response.headers['Content-Type']='text/plain'
+        with patch('urllib.request.urlopen',return_value=response):
+            with self.assertRaisesRegex(ValueError,'DOWNLOAD_HEADERS_MISSING'):m.verify_public()

@@ -37,5 +37,6 @@ def verify_public():
     url='https://vpn-admin.morandi.dpdns.org/downloads/diagnostics/'+NAME
     with urllib.request.urlopen(url,timeout=15) as response:
         body=response.read(16385)
+        if response.headers.get('Content-Disposition','').lower()!='attachment' or response.headers.get_content_type()!='application/octet-stream':raise ValueError('PUBLIC_DIAGNOSTIC_DOWNLOAD_HEADERS_MISSING')
         if response.geturl()!=url or len(body)>16384 or hashlib.sha256(body).hexdigest()!=DIGEST:raise ValueError('PUBLIC_DIAGNOSTIC_DIGEST_MISMATCH')
     print('PUBLIC_NETWORK_DIAGNOSTIC=SHA256_VERIFIED')

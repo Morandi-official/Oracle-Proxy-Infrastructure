@@ -6,6 +6,8 @@ vpn-admin.morandi.dpdns.org {
     handle_path /downloads/* {
         root * /var/lib/oracle-proxy-downloads
         header X-Content-Type-Options nosniff
+        header /diagnostics/*.ps1 Content-Disposition attachment
+        header /diagnostics/*.ps1 Content-Type application/octet-stream
         header Cache-Control "public, max-age=86400, immutable"
         file_server
     }

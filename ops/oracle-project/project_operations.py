@@ -413,7 +413,7 @@ def enable_https():
     if action=='webrtc-owned-ci-slot-release-v3-20261025':
         cleanup_spec=importlib.util.spec_from_file_location('cleanup_webrtc_ci_oct25',Path(__file__).with_name('cleanup_webrtc_ci_20261025.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()
-    if action in ('publish-native-port-diagnostic-20261025','publish-native-port-diagnostic-v2-20261025'):
+    if action in ('publish-native-port-diagnostic-20261025','publish-native-port-diagnostic-v2-20261025','publish-native-port-diagnostic-v3-20261025'):
         diagnostic_spec=importlib.util.spec_from_file_location('publish_port_diagnostic',Path(__file__).with_name('publish_port_diagnostic.py'))
         diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic);diagnostic.install();diagnostic.verify_public()
     if action.startswith(('network-queue-apply-','network-queue-rollback-')):

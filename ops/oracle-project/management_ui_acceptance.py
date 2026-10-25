@@ -79,6 +79,7 @@ def main():
      user=engine.snapshot()['users'][0]
      row.locator('.user-toggle').click()
      chart=page.locator('#usage-'+user['id']);expect(chart).to_be_visible()
+     expect(chart.locator('progress')).to_be_visible()
      select=chart.get_by_label('流量统计范围');select.select_option('day')
      expect(chart.locator('svg rect')).to_have_count(24)
      expect(chart.locator('.history-note')).to_contain_text('未采集')
@@ -176,6 +177,8 @@ def main():
      expect(page.locator('#pending-device-rows')).to_contain_text('Unknown <b>literal</b>')
      assert page.locator('#pending-device-rows b').count()==0
      print(f'SYNTHETIC_{name.upper()}_ADMIN_FIRST_GROUPED_DEVICES_PENDING_REVIEW_DECIMAL_GB_FIXED_SHANGHAI_TIME=PASS',flush=True)
+     page.locator('#user-rows tr').filter(has_text='Z owner').locator('.user-toggle').click()
+     expect(page.locator('#usage-'+owner+' progress')).not_to_be_visible()
      page.set_viewport_size({'width':390,'height':844})
      mobile_help=page.locator('#users .help-icon').first;mobile_help.click()
      expect(page.locator('#help-users')).to_be_visible()

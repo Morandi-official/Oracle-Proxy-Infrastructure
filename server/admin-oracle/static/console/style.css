@@ -13,3 +13,4 @@ h1 .help,h2 .help,h3 .help{vertical-align:middle;font-weight:400;letter-spacing:
 @media(max-width:700px){.help-text{position:fixed;left:16px;right:16px;top:90px;width:auto;max-height:60vh;overflow:auto}}
 
 .quota-progress{appearance:none;border:0;border-radius:999px;background:#303a35}.quota-progress::-webkit-progress-bar{background:#303a35;border-radius:999px}.quota-progress::-webkit-progress-value{background:var(--green);border-radius:999px}.quota-progress::-moz-progress-bar{background:var(--green);border-radius:999px}
+.quota-progress[hidden]{display:none}

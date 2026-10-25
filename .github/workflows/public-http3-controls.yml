@@ -1,0 +1,62 @@
+name: Account-free public HTTP3 reference controls
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['.github/workflows/public-http3-controls.yml']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/public-http3-controls.yml']
+permissions:
+  contents: read
+jobs:
+  public-controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/admin-oracle/requirements.txt
+      - run: pip install -r server/admin-oracle/requirements.txt
+      - name: Real CA-validated HTTP3 HEAD over IPv4 UDP443
+        run: |
+          python - <<'PY'
+          import asyncio, json, socket, sys
+          import certifi
+          sys.path.insert(0,'ops/oracle-project')
+          from verify_quic import Http3Probe
+          from aioquic.asyncio import connect
+          from aioquic.quic.configuration import QuicConfiguration
+
+          async def one(host, fixed_ip=None):
+              result={'host':host,'port':443,'tls_verified':False,'http3_reply':False}
+              config=QuicConfiguration(is_client=True,alpn_protocols=['h3'],server_name=host)
+              config.load_verify_locations(cafile=certifi.where())
+              async def request():
+                  ip=fixed_ip
+                  if ip is None:
+                      rows=await asyncio.get_running_loop().getaddrinfo(host,443,family=socket.AF_INET,type=socket.SOCK_DGRAM)
+                      ip=rows[0][4][0]
+                  async with connect(ip,443,configuration=config,create_protocol=Http3Probe) as client:
+                      result['tls_verified']=True
+                      client.http.send_headers(0,[(b':method',b'HEAD'),(b':scheme',b'https'),(b':authority',host.encode('ascii')),(b':path',b'/')],end_stream=True)
+                      client.transmit()
+                      status=await asyncio.wait_for(client.status.get(),4)
+                      if status and status.isdigit() and 100<=int(status)<=599:
+                          result['http3_reply']=True;result['http_status']=int(status)
+              try:await asyncio.wait_for(request(),14)
+              except Exception as error:result['error_category']=type(error).__name__
+              print('PUBLIC_HTTP3_REFERENCE='+json.dumps(result,sort_keys=True),flush=True)
+              return result['tls_verified'] and result['http3_reply']
+
+          async def main():
+              oracle=await one('vpn-admin.morandi.dpdns.org','152.67.156.100')
+              cloudflare=await one('www.cloudflare.com')
+              nginx=await one('quic.nginx.org')
+              if not oracle or not (cloudflare or nginx):raise SystemExit(1)
+          asyncio.run(main())
+          PY

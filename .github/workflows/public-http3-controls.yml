@@ -60,3 +60,43 @@ jobs:
               if not oracle or not (cloudflare or nginx):raise SystemExit(1)
           asyncio.run(main())
           PY
+  windows-edge-controls:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install playwright==1.56.0
+      - name: Installed Edge direct HTTP3 with standard TLS verification
+        shell: powershell
+        run: |
+          @'
+          import json
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              browser=p.chromium.launch(channel='msedge',headless=True,args=[
+                  '--no-proxy-server','--enable-quic',
+                  '--origin-to-force-quic-on=www.cloudflare.com:443,vpn-admin.morandi.dpdns.org:443'])
+              print('PUBLIC_EDGE_VERSION='+browser.version,flush=True)
+              context=browser.new_context()
+              results=[]
+              for host,path in [('www.cloudflare.com','/cdn-cgi/trace'),('vpn-admin.morandi.dpdns.org','/privacy-check/')]:
+                  page=context.new_page();result={'host':host,'protocol':None,'tls_bypass':False}
+                  try:
+                      response=page.goto('https://'+host+path,wait_until='domcontentloaded',timeout=20000)
+                      result['protocol']=page.evaluate("performance.getEntriesByType('navigation')[0].nextHopProtocol")
+                      result['http_status']=response.status
+                  except Exception as error:
+                      result['error_category']=type(error).__name__
+                      message=str(error)
+                      result['quic_error']='ERR_QUIC_PROTOCOL_ERROR' in message
+                  finally:page.close()
+                  results.append(result)
+                  print('PUBLIC_EDGE_HTTP3_REFERENCE='+json.dumps(result,sort_keys=True),flush=True)
+              context.close();browser.close()
+              if any(x['protocol']!='h3' for x in results):raise SystemExit(1)
+          '@ | python -

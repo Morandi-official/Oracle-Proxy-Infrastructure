@@ -53,7 +53,7 @@ class AdminTests(TestCase):
         return user
 
     def test_anonymous_requests_cannot_read_data_assets_or_mutate(self):
-        for path in ['/api/status', '/api/audit', '/api/control', '/app.js', '/style.css']:
+        for path in ['/api/status', '/api/audit', '/api/control', '/app.js', '/usage.js', '/style.css']:
             self.assertEqual(self.get(path).status_code, 401)
         self.assertRedirects(self.get('/'), '/login/', fetch_redirect_response=False)
         self.assertEqual(self.post('/api/status').status_code, 405)

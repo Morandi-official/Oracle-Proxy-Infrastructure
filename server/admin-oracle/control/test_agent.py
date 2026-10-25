@@ -23,6 +23,7 @@ class FakeDriver:
   if self.fail: raise OSError('synthetic')
   return copy.deepcopy(self.value)
  def add_peer(self,key,addresses): self.value['peers'][key]={'allowed_ips':addresses,'rx':0,'tx':0,'handshake':0}
+ def remove_peer(self,key): self.value['peers'].pop(key,None)
 
 
 class PolicyTests(unittest.TestCase):

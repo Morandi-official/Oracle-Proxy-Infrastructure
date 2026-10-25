@@ -96,10 +96,19 @@ def worker(path):
  assert engine.snapshot()['users']==[]
  request('peer.revoke',{'public_key':info['client_public']});ping(False)
  assert engine.device_count(u['id'])==0
+ before_delete=engine.used('user',u['id'])
+ request('peer.delete',{'public_key':info['client_public']})
+ assert info['client_public'] not in driver.observe()['peers']
+ assert not any(p['public_key']==info['client_public'] for p in engine.snapshot()['peers'])
+ assert all(engine.used('user',u['id'])[field]>=before_delete[field] for field in ('rx','tx'))
+ # A stale external wg config cannot resurrect the deleted identity.
+ driver.add_peer(info['client_public'],['10.250.0.2/32','fd42:250::2/128'])
  before=engine.used('user',u['id']);engine.db.close()
  engine=agent.Engine(Path(path).parent/'ledger.sqlite3',driver,lambda:clock[0]);engine.tick();ping(False)
  assert engine.used('user',u['id'])['tx']>=before['tx']
+ assert info['client_public'] not in driver.observe()['peers']
  engine.db.close()
+ print('DISPOSABLE_REAL_DEVICE_DELETE_KERNEL_REMOVE_AND_RESTART_TOMBSTONE_WITH_LEDGER_RETAINED=PASS')
  print('DISPOSABLE_REAL_USER_DELETE_ALL_DEVICES_DENIED_WITH_ACCOUNTING_RETAINED_AFTER_RESTART=PASS')
  print('DISPOSABLE_REAL_DEVICE_REVOKE_KERNEL_DENIAL_SURVIVES_CONTROL_RESTART=PASS')
  print('DISPOSABLE_REAL_WIREGUARD_DUALSTACK_UDP_DNS_USER_DISABLE_EXPIRY_QUOTA_ESTABLISHED_TCP_KERNEL_LEASE_GLOBAL_BUDGET_LEDGER=PASS')

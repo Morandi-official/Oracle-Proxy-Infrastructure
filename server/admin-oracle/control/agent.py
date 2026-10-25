@@ -111,6 +111,10 @@ class Driver:
         public_key(key); host_ips(addresses)
         self.command(['wg', 'set', 'wg0', 'peer', key, 'allowed-ips', ','.join(addresses)])
 
+    def remove_peer(self, key):
+        public_key(key)
+        self.command(['wg', 'set', 'wg0', 'peer', key, 'remove'])
+
     def initialize(self, guarded):
         for family in (4, 6):
             suffix = str(family); tool = 'iptables' if family == 4 else 'ip6tables'
@@ -169,17 +173,23 @@ class Engine:
           CREATE TABLE IF NOT EXISTS device_enrollments (key TEXT PRIMARY KEY, user_id TEXT NOT NULL,
             machine_name TEXT NOT NULL, client_version TEXT NOT NULL, confirmed_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS revoked_devices (key TEXT PRIMARY KEY);
+          CREATE TABLE IF NOT EXISTS deleted_devices (key TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS deleted_users (user_id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY, rx INTEGER, tx INTEGER, boot TEXT);
           CREATE TABLE IF NOT EXISTS usage (month TEXT, kind TEXT, key TEXT, rx INTEGER, tx INTEGER,
             PRIMARY KEY(month,kind,key));
           CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, at INTEGER, actor TEXT, action TEXT, resource TEXT);
+          CREATE TABLE IF NOT EXISTS usage_hourly (hour INTEGER NOT NULL, user_id TEXT NOT NULL,
+            rx INTEGER NOT NULL, tx INTEGER NOT NULL, PRIMARY KEY(user_id,hour));
+          CREATE TABLE IF NOT EXISTS usage_history_gaps (start_at INTEGER NOT NULL, end_at INTEGER NOT NULL,
+            PRIMARY KEY(start_at,end_at));
         ''')
         self.driver = driver; self.now = now; self.observation = None; self.error = None
         self.last_sample = None; self.last_enforced = None
         self.set_default('started_at', int(now())); self.set_default('nic_total', 0)
         self.set_default('accounting_gaps', 0)
         self.set_default('user_states', {})
+        self.set_default('usage_hourly_started_at', int(now()))
         self.set_default('budget', {'limit_bytes': 10_000_000_000_000, 'reserve_bytes': 1_000_000_000_000,
             'guard_enabled': False, 'period': period(now()), 'prior_usage_bytes': None, 'anchor_total': 0,
             'baseline_at': None, 'baseline_gaps': 0})
@@ -203,6 +213,35 @@ class Engine:
     def used(self, kind, key):
         row = self.db.execute('SELECT rx,tx FROM usage WHERE month=? AND kind=? AND key=?', (period(self.now()), kind, key)).fetchone()
         return {'rx': row['rx'], 'tx': row['tx']} if row else {'rx': 0, 'tx': 0}
+
+    def usage_history(self, data):
+        if set(data) != {'user_id','window'} or data['window'] not in ('day','week','month'):
+            raise ValueError('INVALID_HISTORY_WINDOW')
+        user_id=identifier(data['user_id']);window=data['window']
+        user=self.db.execute('SELECT * FROM users WHERE id=?',(user_id,)).fetchone()
+        if not user or self.deleted(user_id):raise ValueError('USER_NOT_FOUND')
+        now=int(self.now());today=now//86400*86400
+        start=today if window=='day' else today-6*86400 if window=='week' else int(
+            dt.datetime.fromtimestamp(now,dt.timezone.utc).replace(day=1,hour=0,minute=0,second=0,microsecond=0).timestamp())
+        step=3600 if window=='day' else 86400
+        end=today+86400;tracked=self.get('usage_hourly_started_at')
+        hours=list(self.db.execute('SELECT hour,rx,tx FROM usage_hourly WHERE user_id=? AND hour>=? AND hour<? ORDER BY hour',
+                                  (user_id,start,end)))
+        gaps=list(self.db.execute('SELECT start_at,end_at FROM usage_history_gaps WHERE start_at<? AND end_at>?',(end,start)))
+        buckets=[]
+        for at in range(start,end,step):
+            rows=[r for r in hours if at<=r['hour']<at+step]
+            future=at>now
+            coverage=('future' if future else 'unknown' if at+step<=tracked else 'partial'
+                      if at<tracked or any(g['start_at']<min(at+step,now+1) and g['end_at']>at for g in gaps)
+                      else 'complete')
+            buckets.append({'start_at':at,'end_at':at+step,'rx_bytes':sum(r['rx'] for r in rows),
+                'tx_bytes':sum(r['tx'] for r in rows),'coverage':coverage,'ongoing':at<=now<at+step})
+        used=self.used('user',user_id)
+        return {'user_id':user_id,'window':window,'timezone':'UTC','recorded_from':tracked,'observed_at':self.last_sample,
+            'buckets':buckets,'recorded_bytes':sum(b['rx_bytes']+b['tx_bytes'] for b in buckets),
+            'history_complete':all(b['coverage']=='complete' for b in buckets if b['coverage']!='future'),
+            'month_used_bytes':used['rx']+used['tx'],'quota_bytes':user['quota']}
 
     def device_limit(self, user_id):
         row = self.db.execute('SELECT maximum FROM device_limits WHERE user_id=?', (user_id,)).fetchone()
@@ -254,6 +293,11 @@ class Engine:
     def tick(self):
         try:
             observation = self.driver.observe()
+            removed=False
+            for row in self.db.execute('SELECT key FROM deleted_devices'):
+                if row['key'] in observation['peers']:
+                    self.driver.remove_peer(row['key']);removed=True
+            if removed:observation=self.driver.observe()
             # New product-owned peers are restored after wg-quick/reboot, without reading/writing wg0.conf.
             for device in self.db.execute('SELECT * FROM devices WHERE owned=1 AND key NOT IN (SELECT key FROM revoked_devices)'):
                 addresses = json.loads(device['addresses'])
@@ -267,6 +311,9 @@ class Engine:
             try:
                 old_sample = self.get('last_sample') if self.db.execute("SELECT 1 FROM kv WHERE key='last_sample'").fetchone() else now
                 if now - old_sample > LEASE: self.set('accounting_gaps', self.get('accounting_gaps') + 1)
+                interval_known=0<=now-old_sample<=LEASE and old_sample>=self.get('usage_hourly_started_at')
+                if not interval_known:
+                    self.db.execute('INSERT OR IGNORE INTO usage_history_gaps VALUES (?,?)',(min(old_sample,now),max(old_sample,now)+1))
                 budget = self.get('budget')
                 if budget['period'] != month:
                     # Only a fully observed UTC month can start automatically with a zero baseline.
@@ -284,6 +331,7 @@ class Engine:
                                             counter[field] >= old[field] else counter[field] if old else 0)
                         if old and (old['boot'] != observation['boot'] or any(counter[f] < old[f] for f in ('rx','tx'))):
                             self.set('accounting_gaps', self.get('accounting_gaps') + 1)
+                            self.db.execute('INSERT OR IGNORE INTO usage_history_gaps VALUES (?,?)',(min(old_sample,now),max(old_sample,now)+1))
                         self.db.execute('INSERT OR REPLACE INTO counters VALUES (?,?,?,?)',
                                         (kind+':'+key, counter['rx'], counter['tx'], observation['boot']))
                         if kind == 'nic':
@@ -292,7 +340,17 @@ class Engine:
                         else:
                             self.add_usage('peer', key, delta['rx'], delta['tx'])
                             device = self.db.execute('SELECT user_id FROM devices WHERE key=?', (key,)).fetchone()
-                            if device: self.add_usage('user', device['user_id'], delta['rx'], delta['tx'])
+                            if device:
+                                self.add_usage('user', device['user_id'], delta['rx'], delta['tx'])
+                                if (interval_known and old and old['boot']==observation['boot'] and
+                                        all(counter[f]>=old[f] for f in ('rx','tx')) and (delta['rx'] or delta['tx'])):
+                                    self.db.execute('INSERT INTO usage_hourly VALUES (?,?,?,?) ON CONFLICT(user_id,hour) DO UPDATE SET rx=rx+excluded.rx,tx=tx+excluded.tx',
+                                                    (now//3600*3600,device['user_id'],delta['rx'],delta['tx']))
+                self.set_default('usage_history_pruned_day',now//86400)
+                if self.get('usage_history_pruned_day')!=now//86400:
+                    self.db.execute('DELETE FROM usage_hourly WHERE hour<?',(now-90*86400,))
+                    self.db.execute('DELETE FROM usage_history_gaps WHERE end_at<?',(now-90*86400,))
+                    self.set('usage_history_pruned_day',now//86400)
                 self.set('last_sample', now); self.db.execute('COMMIT')
             except Exception:
                 self.db.execute('ROLLBACK'); raise
@@ -342,8 +400,10 @@ class Engine:
                           'status': self.reason(user), 'device_limit':self.device_limit(user['id']), 'device_count':self.device_count(user['id'])})
         bindings = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM devices')}
         confirmations = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM device_enrollments')}
+        deleted_keys={row['key'] for row in self.db.execute('SELECT key FROM deleted_devices')}
         peers = []
         for key in sorted(set(observation['peers']) | set(bindings)):
+            if key in deleted_keys:continue
             peer = observation['peers'].get(key); device = bindings.get(key)
             confirmation = confirmations.get(key)
             if not device or (confirmation and confirmation['user_id'] != device['user_id']): confirmation = None
@@ -355,7 +415,8 @@ class Engine:
                 'user_deleted':bool(device and self.deleted(device['user_id'])), 'revoked':self.revoked(key), 'managed':device is not None, 'owned':bool(device and device['owned']), 'usage': self.used('peer',key)})
         return {'schema':1, 'observed_at':self.last_sample, 'enforced_at':self.last_enforced, 'error':self.error,
             'period': period(self.now()), 'sample_interval_seconds':TICK, 'lease_seconds':LEASE,
-            'users':users, 'peers':peers, 'budget':self.budget_state(), 'official_usage':self.official_usage(), 'nics':sorted(observation['nics']),
+            'users':users, 'peers':peers, 'deleted_public_keys':sorted(deleted_keys),
+            'budget':self.budget_state(), 'official_usage':self.official_usage(), 'nics':sorted(observation['nics']),
             'server_public_key':observation['server_public_key'], 'listen_port':observation['listen_port'],
             'audit':[dict(row) for row in self.db.execute('SELECT at,actor,action,resource FROM audit ORDER BY id DESC LIMIT 10')]}
 
@@ -374,6 +435,10 @@ class Engine:
         if not isinstance(actor, str) or not re.fullmatch(r'(?:(?:github|local):[0-9]{1,20}|system:(?:client-api|health))', actor): raise ValueError('INVALID_ACTOR')
         if not isinstance(data, dict): raise ValueError('INVALID_DATA')
         if operation == 'state' and not data: return self.snapshot()
+        if operation == 'usage.history':
+            if actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')
+            return self.usage_history(data)
+        if operation == 'peer.delete' and actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')
         # Account all current counters under the old ownership before any binding/config mutation.
         self.tick()
         saved_user_id = None
@@ -445,6 +510,22 @@ class Engine:
             at=receipt['confirmed_at'] if receipt else int(self.now())
             self.db.execute('INSERT OR REPLACE INTO device_enrollments VALUES (?,?,?,?,?)',(key,user_id,data['machine_name'].strip(),data['client_version'],at))
             if not receipt:self.audit(actor,'device.confirmed',hashlib.sha256(key.encode()).hexdigest()[:12])
+        elif operation == 'peer.delete':
+            if set(data) != {'public_key'}:raise ValueError('INVALID_FIELDS')
+            key=public_key(data['public_key'])
+            if key==self.observation['server_public_key']:raise ValueError('CLIENT_PUBLIC_KEY_EQUALS_SERVER')
+            self.db.execute('BEGIN IMMEDIATE')
+            try:
+                self.db.execute('INSERT OR IGNORE INTO revoked_devices VALUES (?)',(key,))
+                self.db.execute('INSERT OR IGNORE INTO deleted_devices VALUES (?,?)',(key,int(self.now())))
+                self.audit(actor,operation,hashlib.sha256(key.encode()).hexdigest()[:12])
+                self.db.execute('COMMIT')
+            except Exception:
+                self.db.execute('ROLLBACK');raise
+            # Block the saved addresses before attempting the kernel removal.
+            # Tombstones survive failures, service restart, and older-code rollback.
+            self.enforce()
+            if key in self.observation['peers']:self.driver.remove_peer(key)
         elif operation == 'peer.revoke':
             if set(data) != {'public_key'}: raise ValueError('INVALID_FIELDS')
             key = public_key(data['public_key'])

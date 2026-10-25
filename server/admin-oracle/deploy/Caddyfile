@@ -2,7 +2,10 @@ vpn-admin.morandi.dpdns.org {
     encode zstd gzip
     # VPN inner MTU is currently 1200; avoid advertising browser QUIC on that path.
     @vpn_clients remote_ip 10.77.0.0/24
-    header @vpn_clients >Alt-Svc clear
+    header @vpn_clients {
+        Alt-Svc clear
+        defer
+    }
     request_body {
         max_size 16KB
     }

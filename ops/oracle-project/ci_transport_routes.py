@@ -66,18 +66,24 @@ HTTPServer(('127.0.0.1',8787),Handler).serve_forever()
         config.write_text('{\n admin off\n auto_https off\n}\n'+template.replace('vpn-admin.morandi.dpdns.org {',':80 {',1))
         env=dict(os.environ,XDG_DATA_HOME=directory.name+'/data',XDG_CONFIG_HOME=directory.name+'/config')
         front=subprocess.Popen(['ip','netns','exec',names[1],'caddy','run','--config',str(config),'--adapter','caddyfile'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        header_client="""import http.client
+        header_client="""import http.client,json
+observed=[]
 for source,expected in [(None,'h3=":443"'),(('10.77.0.2',0),'clear')]:
  c=http.client.HTTPConnection('192.0.2.2',80,timeout=2,source_address=source)
  c.request('GET','/privacy-check/',headers={'Host':'vpn-admin.morandi.dpdns.org'})
- r=c.getresponse();assert r.status==200;assert r.getheader('Alt-Svc')==expected;r.read();c.close()
+ r=c.getresponse();observed.append({'vpn_source':source is not None,'status':r.status,'alt_svc':r.getheader('Alt-Svc'),'expected':expected});r.read();c.close()
+print(json.dumps(observed),flush=True)
+assert all(row['status']==200 and row['alt_svc']==row['expected'] for row in observed)
 """
         for _ in range(30):
-            result=subprocess.run(['ip','netns','exec',names[0],'python3','-c',header_client],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            result=subprocess.run(['ip','netns','exec',names[0],'python3','-c',header_client],capture_output=True,text=True)
             if result.returncode==0:break
             if front.poll() is not None:raise RuntimeError('ISOLATED_CADDY_START_FAILED')
             time.sleep(.2)
-        else:raise RuntimeError('ISOLATED_CADDY_SOURCE_HEADER_POLICY_FAILED')
+        else:
+            print('ISOLATED_HEADER_OBSERVATION='+result.stdout[-2048:],flush=True)
+            print('ISOLATED_HEADER_FAILURE='+result.stderr[-1024:],flush=True)
+            raise RuntimeError('ISOLATED_CADDY_SOURCE_HEADER_POLICY_FAILED')
         print('REAL_ADMIN_VPN_ALT_SVC_CLEAR_PUBLIC_HTTP3_ADVERTISEMENT_PRESERVED=PASS')
 
     finally:

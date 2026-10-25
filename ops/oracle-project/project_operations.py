@@ -415,7 +415,7 @@ def enable_https():
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()
     if action=='publish-native-port-diagnostic-20261025':
         diagnostic_spec=importlib.util.spec_from_file_location('publish_port_diagnostic',Path(__file__).with_name('publish_port_diagnostic.py'))
-        diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic);diagnostic.install()
+        diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic);diagnostic.install();diagnostic.verify_public()
     if action.startswith(('network-queue-apply-','network-queue-rollback-')):
         module_spec=importlib.util.spec_from_file_location('network_queue',Path(__file__).with_name('network_queue.py'))
         module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)

@@ -514,6 +514,10 @@ class Engine:
             if set(data) != {'public_key'}:raise ValueError('INVALID_FIELDS')
             key=public_key(data['public_key'])
             if key==self.observation['server_public_key']:raise ValueError('CLIENT_PUBLIC_KEY_EQUALS_SERVER')
+            # Only saved host-address bindings can be blocked before removal.
+            # An unrelated unmanaged/site-to-site peer must be adopted first.
+            if key in self.observation['peers'] and not self.db.execute('SELECT 1 FROM devices WHERE key=?',(key,)).fetchone():
+                raise ValueError('DEVICE_NOT_MANAGED')
             self.db.execute('BEGIN IMMEDIATE')
             try:
                 self.db.execute('INSERT OR IGNORE INTO revoked_devices VALUES (?)',(key,))

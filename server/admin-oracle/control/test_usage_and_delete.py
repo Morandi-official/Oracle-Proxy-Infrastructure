@@ -78,3 +78,11 @@ class HistoryAndDeleteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'ADMINISTRATOR'):self.request('peer.delete',{'public_key':f.KEY2},'system:client-api')
         with self.assertRaisesRegex(ValueError,'CLIENT_PUBLIC_KEY_EQUALS_SERVER'):
             self.request('peer.delete',{'public_key':self.driver.value['server_public_key']})
+
+    def test_unmanaged_external_peer_requires_adoption_before_any_delete_or_tombstone(self):
+        with self.assertRaisesRegex(ValueError,'DEVICE_NOT_MANAGED'):
+            self.request('peer.delete',{'public_key':f.KEY2})
+        self.assertFalse(self.engine.revoked(f.KEY2));self.assertIn(f.KEY2,self.driver.value['peers'])
+        self.request('peer.assign',{'public_key':f.KEY2,'user_id':self.user['id'],'name':'Adopted external device'})
+        self.request('peer.delete',{'public_key':f.KEY2})
+        self.assertNotIn(f.KEY2,self.driver.value['peers'])

@@ -410,6 +410,9 @@ def enable_https():
     if action in ('webrtc-owned-ci-slot-release-20261024','webrtc-owned-ci-slot-release-v2-20261024'):
         cleanup_spec=importlib.util.spec_from_file_location('cleanup_webrtc_ci',Path(__file__).with_name('cleanup_webrtc_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()
+    if action=='webrtc-owned-ci-slot-release-v3-20261025':
+        cleanup_spec=importlib.util.spec_from_file_location('cleanup_webrtc_ci_oct25',Path(__file__).with_name('cleanup_webrtc_ci_20261025.py'))
+        cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()
     if action.startswith(('network-queue-apply-','network-queue-rollback-')):
         module_spec=importlib.util.spec_from_file_location('network_queue',Path(__file__).with_name('network_queue.py'))
         module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)

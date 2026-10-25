@@ -59,8 +59,8 @@ function renderUserUsage(id){
  view.note.textContent=stale?'采样已过期，当前图表不能作为实时状态。':data.history_complete?`采样 ${time(data.observed_at)}`:`细分采集始于 ${time(data.recorded_from)}；未采集部分未补零。`;
  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 720 190');svg.setAttribute('role','img');svg.setAttribute('aria-label','用户'+({day:'今日小时',week:'近7天每日',month:'本月每日'})[data.window]+'流量柱状图，UTC统计');
  const make=(tag,attrs,text)=>{const node=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))node.setAttribute(k,String(v));if(text!==undefined)node.textContent=text;return node;};
- const buckets=data.buckets,max=Math.max(1,...buckets.map(b=>b.rx_bytes+b.tx_bytes)),width=640/buckets.length;
- for(let i=0;i<=3;i++){const y=150-i*40;svg.append(make('line',{x1:58,x2:704,y1:y,y2:y,class:'usage-grid'}),make('text',{x:52,y:y+4,'text-anchor':'end'},size(max*i/3)));}
+ const buckets=data.buckets,peak=Math.max(0,...buckets.map(b=>b.rx_bytes+b.tx_bytes)),max=Math.max(3,peak),width=640/buckets.length;
+ for(let i=0;i<=(peak?3:0);i++){const y=150-i*40;svg.append(make('line',{x1:58,x2:704,y1:y,y2:y,class:'usage-grid'}),make('text',{x:52,y:y+4,'text-anchor':'end'},size(max*i/3)));}
  for(let i=0;i<buckets.length;i++){
   const b=buckets[i],value=b.rx_bytes+b.tx_bytes,height=Math.max(value?2:1,value/max*120),x=60+i*width+width*.18;
   const rect=make('rect',{x,y:150-height,width:Math.max(3,width*.64),height,rx:2,class:'usage-bar '+b.coverage});
@@ -69,5 +69,6 @@ function renderUserUsage(id){
   rect.append(make('title',{},`${date.toISOString().slice(0,16).replace('T',' ')} UTC\n${size(value)} · ${coverage}`));svg.append(rect);
   if(i%Math.ceil(buckets.length/8)===0 || i===buckets.length-1)svg.append(make('text',{x:x+width*.32,y:174,'text-anchor':'middle'},label));
  }
+ if(!peak)svg.append(make('text',{x:380,y:84,'text-anchor':'middle'},'暂无已记录流量'));
  view.chart.replaceChildren(svg);
 }

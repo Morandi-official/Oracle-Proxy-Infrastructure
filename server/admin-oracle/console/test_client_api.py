@@ -294,3 +294,16 @@ class ClientApiTests(TestCase):
         self.assertEqual(result.status_code,200);self.assertEqual(result.json()['pending_devices'],[])
         self.assertEqual(self.engine.device_count(self.user['id']),0);self.assertEqual(self.state(token).status_code,401)
         self.assertEqual(self.login(confirm=False).json()['error'],'DEVICE_REVOKED')
+
+    def test_device_delete_web_database_failure_cannot_restore_access_and_retry_finishes(self):
+        from django.db import DatabaseError
+        value=self.login().json();key=value['device']['public_key'];token=value['token']
+        browser,csrf=self.owner_browser();body=json.dumps({'operation':'peer.delete','data':{'public_key':key}})
+        with patch('console.client_api.ClientSession.objects.filter') as rows:
+            rows.return_value.delete.side_effect=DatabaseError('synthetic-web-write-failure')
+            result=browser.post('/api/control',body,content_type='application/json',secure=True,HTTP_X_CSRFTOKEN=csrf,HTTP_ORIGIN=f'https://{HOST}')
+        self.assertEqual(result.status_code,503)
+        self.assertTrue(self.engine.revoked(key));self.assertNotIn(key,self.driver.value['peers'])
+        self.assertEqual(self.state(token).json()['error'],'DEVICE_REVOKED')
+        retried=browser.post('/api/control',body,content_type='application/json',secure=True,HTTP_X_CSRFTOKEN=csrf,HTTP_ORIGIN=f'https://{HOST}')
+        self.assertEqual(retried.status_code,200);self.assertEqual(self.state(token).status_code,401)

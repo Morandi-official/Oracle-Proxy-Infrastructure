@@ -343,6 +343,9 @@ def install_downloads():
     spec=importlib.util.spec_from_file_location('project_downloads',Path(__file__).with_name('downloads.py'))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     module.install()
+    preview_spec=importlib.util.spec_from_file_location('project_design_previews',Path(__file__).with_name('design_previews.py'))
+    previews=importlib.util.module_from_spec(preview_spec);preview_spec.loader.exec_module(previews)
+    previews.install()
 
 
 def enable_https():

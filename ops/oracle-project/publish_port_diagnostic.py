@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 
 SOURCE=Path(__file__).resolve().parents[2]/'clients/windows/diagnostics/Test-LegacyNativePorts.ps1'
-DIGEST='ddc838959c3005e5e6e2b20fc5057654a12ef4934fcca923ef336ab9b5628a27'
+DIGEST='71236868b665e188eef63937e7c63531a5bffdc6aed475150fc9782be599b564'
 NAME='Test-LegacyNativePorts-'+DIGEST[:12]+'.ps1'
 ROOT=Path('/var/lib/oracle-proxy-downloads/diagnostics')
 

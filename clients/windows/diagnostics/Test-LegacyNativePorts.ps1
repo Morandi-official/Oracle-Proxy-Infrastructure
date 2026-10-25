@@ -14,7 +14,8 @@ public static class OracleProxyPortDiagnostic {
 }
 '@
 }
-function Invoke-OPFixedControl([ValidateSet('Status','Disconnect','PreferUdp','Connect')][string]$Command){
+function Invoke-OPFixedControl([ValidateSet('Status','Disconnect','PreferUdp','Connect')][string]$Command,[ValidateRange(1,60)][int]$ResponseSeconds=60){
+    if($Command -ne 'Status'){Write-Host ('SERVICE_COMMAND_BEGIN='+$Command)}
     $pipe=[IO.Pipes.NamedPipeClientStream]::new('.', 'OracleProxy.Control.v1', [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous, [Security.Principal.TokenImpersonationLevel]::Impersonation)
     try{
         $pipe.Connect(3000)
@@ -24,19 +25,26 @@ function Invoke-OPFixedControl([ValidateSet('Status','Disconnect','PreferUdp','C
         if($null -eq $service -or $service.State -ne 'Running' -or $serverId -eq 0 -or $service.ProcessId -ne $serverId){throw 'SERVICE_IDENTITY_NOT_VERIFIED'}
         $frame=[Text.Encoding]::UTF8.GetBytes((@{version=1;command=$Command} | ConvertTo-Json -Compress)+"`n")
         $pipe.Write($frame,0,$frame.Length);$pipe.Flush()
-        $buffer=New-Object byte[] 65536;$count=0;$clock=[Diagnostics.Stopwatch]::StartNew()
+        $buffer=New-Object byte[] 65537;$count=0;$clock=[Diagnostics.Stopwatch]::StartNew()
         while($count -lt $buffer.Length){
-            $left=[Math]::Min(12000,60000-[int]$clock.ElapsedMilliseconds)
-            if($left -le 0){throw 'SERVICE_RESPONSE_TIMEOUT'}
-            $read=$pipe.ReadAsync($buffer,$count,1)
-            if(-not $read.Wait($left)){throw 'SERVICE_RESPONSE_TIMEOUT'}
-            if($read.Result -ne 1){throw 'INCOMPLETE_SERVICE_FRAME'}
-            if($buffer[$count] -eq 10){
-                $state=[Text.UTF8Encoding]::new($false,$true).GetString($buffer,0,$count) | ConvertFrom-Json
-                if($state.schema -ne 1 -or $state.ok -ne $true){throw 'FIXED_SERVICE_OPERATION_FAILED'}
+            $left=$ResponseSeconds*1000-[int]$clock.ElapsedMilliseconds
+            if($left -le 0){throw ('SERVICE_RESPONSE_TIMEOUT_'+$Command.ToUpperInvariant())}
+            $read=$pipe.ReadAsync($buffer,$count,[Math]::Min(4096,$buffer.Length-$count))
+            if(-not $read.Wait($left)){throw ('SERVICE_RESPONSE_TIMEOUT_'+$Command.ToUpperInvariant())}
+            if($read.Result -le 0){throw ('INCOMPLETE_SERVICE_FRAME_'+$Command.ToUpperInvariant())}
+            $newline=[Array]::IndexOf($buffer,[byte]10,$count,$read.Result)
+            $count+=$read.Result
+            if($newline -ge 0){
+                if($newline -gt 65536){throw 'SERVICE_FRAME_TOO_LARGE'}
+                $state=[Text.UTF8Encoding]::new($false,$true).GetString($buffer,0,$newline) | ConvertFrom-Json
+                if($state.schema -ne 1 -or $state.ok -ne $true){
+                    if([string]$state.error -match '\A[A-Z0-9_]{1,100}\z'){Write-Host ('SERVICE_ERROR='+$state.error)}
+                    throw ('FIXED_SERVICE_OPERATION_FAILED_'+$Command.ToUpperInvariant())
+                }
+                if($Command -ne 'Status'){Write-Host ('SERVICE_COMMAND_DONE='+$Command)}
                 return $state
             }
-            $count++
+            if($count -gt 65536){throw 'SERVICE_FRAME_TOO_LARGE'}
         }
         throw 'SERVICE_FRAME_TOO_LARGE'
     }finally{$pipe.Dispose()}
@@ -61,6 +69,9 @@ try{
     Write-Host ($report | ConvertTo-Json -Depth 8)
     Write-Host '=== ORACLE_LEGACY_NATIVE_PORTS_END ==='
 }catch{
-    try{$null=Invoke-OPFixedControl 'Disconnect'}catch{Write-Host 'RECOVERY_REQUIRED_USE_GUI'}
+    # A timeout does not cancel the command already executing in the service.
+    # Do not submit an ambiguous second mutation or hide the first failure.
+    Write-Host 'DIAGNOSTIC_STOPPED_NO_AUTOMATIC_RETRY'
+    Write-Host 'Check the client status; use its normal disconnect/recovery action if needed.'
     throw
 }

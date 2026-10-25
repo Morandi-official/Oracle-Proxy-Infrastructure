@@ -9,6 +9,11 @@ PORTS=(51820,443,8443)
 UNITS=('oracle-proxy-quic.service','wg-quick@wg0.service','oracle-proxy-control.service','oracle-proxy-admin-web-firewall.service')
 
 
+def normalize_u32(value):
+    if not isinstance(value,str):return ''
+    return re.sub(r'0[xX][0-9a-fA-F]+|[0-9]+',lambda m:str(int(m[0],16 if m[0].lower().startswith('0x') else 10)),value.replace(' ',''))
+
+
 def firewall_summary(text):
     result={str(p):{'redirect_rules':0,'redirect_packets':0,'input_accept_positions':[]} for p in PORTS}
     table='';position=0;reject=[]
@@ -24,7 +29,7 @@ def firewall_summary(text):
             if item('-j') in ('REJECT','DROP') and all(x not in fields for x in ('-p','-s','-d','-i','-o','-m')):reject.append(position)
             if item('-p')=='udp' and item('--dport') in result and item('-j')=='ACCEPT':result[item('--dport')]['input_accept_positions'].append(position)
         if (table=='nat' and fields[1]=='PREROUTING' and item('-p')=='udp' and item('--dport') in ('443','8443') and
-                item('-j')=='REDIRECT' and item('--to-ports')=='51820' and item('--u32')=='0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000'):
+                item('-j')=='REDIRECT' and item('--to-ports')=='51820' and normalize_u32(item('--u32'))=='0>>22&60@8=16777216,33554432,50331648,67108864'):
             row=result[item('--dport')];row['redirect_rules']+=1;row['redirect_packets']+=packets
     return {'ports':result,'unconditional_input_reject_positions':reject,'reachability':'NOT_PROVEN'}
 

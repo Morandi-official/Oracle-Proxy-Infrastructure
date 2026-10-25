@@ -22,3 +22,11 @@ COMMIT'''
         self.assertEqual(result['ports']['8443']['input_accept_positions'],[3])
         self.assertEqual(result['unconditional_input_reject_positions'],[2])
         self.assertNotIn('192.0.2.10',json.dumps(result));self.assertNotIn('private-label',json.dumps(result))
+
+    def test_iptables_save_hex_normalization_does_not_hide_a_valid_demux(self):
+        a='0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000'
+        b='0x0>>0x16&0x3c@0x8=0x1000000,0x2000000,0x3000000,0x4000000'
+        self.assertEqual(diag.normalize_u32(a),diag.normalize_u32(b))
+        data=diag.firewall_summary('*nat\n[42:12345] -A PREROUTING -p udp --dport 8443 -m u32 --u32 "'+b+'" -j REDIRECT --to-ports 51820\nCOMMIT')
+        self.assertEqual(data['ports']['8443']['redirect_rules'],1)
+        self.assertEqual(data['ports']['8443']['redirect_packets'],42)

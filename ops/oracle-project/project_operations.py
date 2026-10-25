@@ -419,9 +419,13 @@ def enable_https():
 
 
 def status():
+    transport_spec=importlib.util.spec_from_file_location('udp_transport_diagnostics',Path(__file__).with_name('udp_transport_diagnostics.py'))
+    transport=importlib.util.module_from_spec(transport_spec);transport_spec.loader.exec_module(transport)
+    print('UDP_TRANSPORT_BEFORE='+json.dumps(transport.observe(),sort_keys=True),flush=True)
     packet_spec=importlib.util.spec_from_file_location("native_udp_packets",Path(__file__).with_name("native_udp_packets.py"))
     packets=importlib.util.module_from_spec(packet_spec);packet_spec.loader.exec_module(packets)
     print("NATIVE_UDP_PASSIVE_SUMMARY="+json.dumps(packets.observe(),sort_keys=True),flush=True)
+    print("UDP_TRANSPORT_AFTER="+json.dumps(transport.observe(),sort_keys=True),flush=True)
     for unit in (*host.UNIT_NAMES, 'caddy.service', 'wg-quick@wg0.service'):
         result = subprocess.run(['systemctl', 'show', unit, '--property=ActiveState,SubState,User'],
                                 capture_output=True, text=True, check=False)

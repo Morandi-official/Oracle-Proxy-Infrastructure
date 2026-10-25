@@ -41,9 +41,11 @@ class PacketCounts(unittest.TestCase):
 
     def test_summary_has_only_bounded_port_type_counts(self):
         import json
+        self.assertEqual(module.observe.__defaults__,(300,))
+        self.assertEqual(module.MAX_SECONDS,900)
         counts=module.empty();module.increment(counts,module.classify(packet(),False))
         text=json.dumps(counts)
         self.assertNotIn('192.0.2.7',text);self.assertNotIn('198.51.100.8',text)
         self.assertEqual(counts['51820']['in_initiation'],1)
-        for invalid in (0,301,True,-1,'60'):
+        for invalid in (0,module.MAX_SECONDS+1,True,-1,'60'):
             with self.assertRaises(ValueError):module.observe(invalid)

@@ -155,7 +155,6 @@ internal static class Acceptance
   try{
    using var capture=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);long before=capture.Packets();Check(before>0,"BASELINE_RAW_STUN_PHYSICAL_COUNTER_POSITIVE");await ProbePhysical6(adapter);await Task.Delay(500);Check(capture.Packets()>before,"BASELINE_PHYSICAL_IPV6_LINK_LOCAL_UDP_POSITIVE");
    PhysicalAddresses=adapter.GetIPProperties().UnicastAddresses.Select(a=>a.Address).ToArray();
-   StunV6=(await Dns.GetHostAddressesAsync("stun.cloudflare.com")).FirstOrDefault(a=>a.AddressFamily==AddressFamily.InterNetworkV6);
    var login=await Send("Login",Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD"));
    Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME",null);Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD",null);
    if(login["device_registered"]?.GetValue<bool>()!=true)login=await Send("ConfirmDevice","Cloud WebRTC acceptance","confirmed");
@@ -167,6 +166,9 @@ internal static class Acceptance
    await Send("PreferUdp8443");await Send("Connect");var timer=Stopwatch.StartNew();JsonObject state;
    do{await Task.Delay(250);state=await Send("Status");}while(state["mode"]?.GetValue<string>()!="connected"&&timer.ElapsedMilliseconds<30000);
    Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true && state["ipv6_policy"]?.GetValue<string>()=="tunnel" && state["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10" && state["transport_address"]?.GetValue<string>()=="141.147.78.44","PINNED_RC20_DUALSTACK_NATIVE_UDP_GUARD_CONNECTED");
+   // Windows address configuration filters AAAA results before the tunnel exists.
+   StunV6=(await Dns.GetHostAddressesAsync("stun.cloudflare.com")).FirstOrDefault(a=>a.AddressFamily==AddressFamily.InterNetworkV6);
+   Check(StunV6 is not null,"DUALSTACK_TUNNEL_PUBLIC_STUN_IPV6_DNS_READY");
    long connected=capture.Packets();await ProbePhysical(physical);await ProbePhysical6(adapter);try{foreach(string permission in new[]{"prompt","denied","granted","revoked"})await Browser(true,permission);}finally{await Task.Delay(500);long delta=capture.Packets()-connected;Console.WriteLine("RAW_STUN_PHYSICAL_TX_DELTA="+delta);Check(delta==0,"REAL_RAW_STUN_V4_AND_IPV6_LINK_LOCAL_HAVE_ZERO_PHYSICAL_EGRESS_WITH_VPN");}
    using(var child=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe")){
     UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,

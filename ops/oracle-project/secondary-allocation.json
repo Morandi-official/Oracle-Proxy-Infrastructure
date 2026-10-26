@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "source": "owner_oracle_console_record",
+  "oracle_assigned_at": "2026-10-26T01:43:54Z",
+  "primary_private": "10.0.0.6",
+  "primary_public": "152.67.156.100",
+  "secondary_private": "10.0.0.10",
+  "secondary_public": "141.147.78.44"
+}

@@ -20,6 +20,9 @@ LABEL=DEVICE+':optest'
 LEASE_SECONDS=86400
 STATE=Path('/var/lib/oracle-project-ops/secondary-endpoint.json')
 SCRIPT=Path('/usr/local/libexec/oracle-project/secondary_endpoint.py')
+ALLOCATION=Path(__file__).with_name('secondary-allocation.json')
+EXPECTED_ALLOCATION={'schema':1,'source':'owner_oracle_console_record','oracle_assigned_at':'2026-10-26T01:43:54Z',
+                     'primary_private':PRIMARY,'primary_public':'152.67.156.100','secondary_private':SECONDARY,'secondary_public':PUBLIC}
 
 
 def run(argv):
@@ -54,9 +57,32 @@ def metadata():
     return rows
 
 
-def allocated(rows):
-    return any(isinstance(row,dict) and row.get('privateIp')==PRIMARY and
-               isinstance(row.get('secondaryPrivateIps'),list) and SECONDARY in row['secondaryPrivateIps'] for row in rows)
+def owner_confirmation():
+    owned_file(ALLOCATION)
+    if ALLOCATION.stat().st_size>2048 or json.loads(ALLOCATION.read_text())!=EXPECTED_ALLOCATION:
+        raise ValueError('EXACT_OWNER_ALLOCATION_REQUIRED')
+    return True
+
+
+def kernel_mac():return (Path('/sys/class/net')/DEVICE/'address').read_text().strip().lower()
+
+
+def allocation_source(rows):
+    matching=[row for row in rows if isinstance(row,dict) and row.get('privateIp')==PRIMARY]
+    if len(matching)!=1:return None
+    row=matching[0]
+    # An explicitly supplied list is authoritative; never override a conflict.
+    if 'secondaryPrivateIps' in row:
+        return 'IMDS_SECONDARY_LIST' if isinstance(row['secondaryPrivateIps'],list) and SECONDARY in row['secondaryPrivateIps'] else None
+    mac=row.get('macAddr','')
+    if not isinstance(mac,str) or not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}',mac) or mac.lower()!=kernel_mac():return None
+    try:network=ipaddress.ip_network(row.get('subnetCidrBlock',''),strict=False)
+    except ValueError:return None
+    if network.version!=4 or ipaddress.ip_address(PRIMARY) not in network or ipaddress.ip_address(SECONDARY) not in network:return None
+    return 'OWNER_CONSOLE_AND_PRIMARY_IMDS' if owner_confirmation() else None
+
+
+def allocated(rows):return allocation_source(rows) is not None
 
 
 def normalized_routes(rows):
@@ -138,7 +164,8 @@ def arm_rollback(token):
 
 def apply_locked():
     before,alias=snapshot()
-    if not allocated(metadata()):raise ValueError('IMDS_SECONDARY_ALLOCATION_NOT_VERIFIED')
+    source=allocation_source(metadata())
+    if source is None:raise ValueError('SECONDARY_ALLOCATION_NOT_VERIFIED')
     if alias:
         value=load_state()
         if not owned_alias(alias) or value['phase']!='active' or value['baseline']!=before or value['expires_at']<=int(time.time()):
@@ -158,7 +185,7 @@ def apply_locked():
         value['phase']='active';persist(value)
     except Exception:
         rollback_locked(value['lease_id']);raise
-    print('SECONDARY_ENDPOINT=ACTIVE; PUBLIC='+PUBLIC+'; PRIMARY_BASELINE_UNCHANGED=True; EXPIRES_AT='+str(value['expires_at']))
+    print('SECONDARY_ENDPOINT=ACTIVE; PUBLIC='+PUBLIC+'; ALLOCATION_SOURCE='+source+'; PRIMARY_BASELINE_UNCHANGED=True; EXPIRES_AT='+str(value['expires_at']))
 
 
 def lock():
@@ -192,7 +219,8 @@ def observe():
     result={'allocation_confirmed':False,'primary_baseline_ready':False,'alias_present':None,'scope':'OWNER_SECONDARY_TEST_ONLY'}
     try:
         rows=metadata()
-        result['allocation_confirmed']=allocated(rows)
+        result['allocation_source']=allocation_source(rows)
+        result['allocation_confirmed']=result['allocation_source'] is not None
         matching=[row for row in rows if isinstance(row,dict) and row.get('privateIp')==PRIMARY]
         result['matching_primary_rows']=len(matching)
         result['metadata_field_names']=sorted(matching[0]) if len(matching)==1 else []

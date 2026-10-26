@@ -48,7 +48,7 @@ class SecondaryEndpointTests(unittest.TestCase):
 
     def test_unverified_imds_or_foreign_existing_alias_cannot_change_address(self):
         with patch.object(m,'metadata',return_value=[{'privateIp':m.PRIMARY,'secondaryPrivateIps':[]}]):
-            with self.assertRaisesRegex(ValueError,'IMDS'):m.apply_locked()
+            with self.assertRaisesRegex(ValueError,'ALLOCATION'):m.apply_locked()
         self.assertEqual(self.events,[])
         self.addresses.append({'local':m.SECONDARY,'prefixlen':24,'label':m.DEVICE})
         with self.assertRaises((ValueError,OSError)):m.apply_locked()
@@ -76,3 +76,21 @@ class SecondaryEndpointTests(unittest.TestCase):
         self.assertFalse(m.allocated([{'privateIp':'10.0.0.99','secondaryPrivateIps':[m.SECONDARY]}]))
         self.assertFalse(m.allocated([{'privateIp':m.PRIMARY,'secondaryPrivateIps':m.SECONDARY}]))
         self.assertTrue(m.allocated([{'privateIp':m.PRIMARY,'secondaryPrivateIps':[m.SECONDARY]}]))
+
+    def test_absent_list_requires_matching_nic_and_exact_owner_record_but_conflict_is_not_overridden(self):
+        row={'privateIp':m.PRIMARY,'macAddr':'02:00:00:00:00:01','subnetCidrBlock':'10.0.0.0/24'}
+        with patch.object(m,'kernel_mac',return_value='02:00:00:00:00:01'),patch.object(m,'owner_confirmation',return_value=True) as owner:
+            self.assertEqual(m.allocation_source([row]),'OWNER_CONSOLE_AND_PRIMARY_IMDS')
+            owner.assert_called_once();owner.reset_mock()
+            self.assertIsNone(m.allocation_source([dict(row,secondaryPrivateIps=[])]));owner.assert_not_called()
+            self.assertIsNone(m.allocation_source([dict(row,secondaryPrivateIps='wrong')]));owner.assert_not_called()
+            self.assertIsNone(m.allocation_source([dict(row,macAddr='02:00:00:00:00:02')]))
+            self.assertIsNone(m.allocation_source([dict(row,subnetCidrBlock='10.2.0.0/24')]))
+            self.assertIsNone(m.allocation_source([row,row]))
+
+    def test_owner_record_is_exact_not_an_arbitrary_secondary_allowlist(self):
+        path=Path(self.tmp.name)/'allocation.json'
+        with patch.object(m,'ALLOCATION',path):
+            path.write_text(json.dumps(m.EXPECTED_ALLOCATION));self.assertTrue(m.owner_confirmation())
+            path.write_text(json.dumps(dict(m.EXPECTED_ALLOCATION,secondary_private='10.0.0.99')))
+            with self.assertRaisesRegex(ValueError,'EXACT_OWNER'):m.owner_confirmation()

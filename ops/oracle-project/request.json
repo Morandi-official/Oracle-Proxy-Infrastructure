@@ -1,1 +1,4 @@
-{"operation":"enable-https","request_id":"ipv6-owned-ci-slot-release-20261026"}
+{
+  "operation": "enable-https",
+  "request_id": "windows-rc20-downloads-20261026"
+}

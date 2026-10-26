@@ -187,6 +187,7 @@ if($Mode -eq 'Prepare'){
  if(-not $preflight.DeniedByWindows -or $preflight.ConnectionEstablished){throw 'PHYSICAL_DENIAL_NOT_PROVEN_NO_TASK_CREATED'}
  $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
  New-PrivateBootDirectory $BootRoot $sid
+ $adminOwner=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
  Copy-Item -LiteralPath $PSCommandPath -Destination $TrustedScript
  $config=@{schema=1;owner='oracle-proxy-one-shot-boot';previous_boot=(Get-CurrentBoot);armed_utc=[DateTime]::UtcNow.ToString('o');version=$ExpectedVersion;script_sha256=(Get-FileHash $TrustedScript -Algorithm SHA256).Hash}
  $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding UTF8

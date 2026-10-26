@@ -105,9 +105,11 @@ public static class OracleBootReadOnly {
  }
  public static string LastExitError4="NONE",LastExitError6="NONE";
  public static string DefaultExit(int family){
-  try{using(var handler=new HttpClientHandler()){handler.UseProxy=false;handler.UseCookies=false;handler.AllowAutoRedirect=false;
-   using(var client=new HttpClient(handler)){client.Timeout=TimeSpan.FromMilliseconds(3000);var response=client.GetAsync(family==4?"https://1.1.1.1/cdn-cgi/trace":"https://[2606:4700:4700::1111]/cdn-cgi/trace",HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
-    using(response){response.EnsureSuccessStatusCode();using(var stream=response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()){byte[] bytes=new byte[8193];int count=0;var clock=Stopwatch.StartNew();while(count<bytes.Length){int left=3000-(int)clock.ElapsedMilliseconds;if(left<=0)return "UNAVAILABLE";var read=stream.ReadAsync(bytes,count,bytes.Length-count);if(!read.Wait(left))return "UNAVAILABLE";int n=read.Result;if(n==0)break;count+=n;}if(count>8192)return "INVALID_RESPONSE";
+  try{if(family==6){var resolved=Dns.GetHostAddresses("ipv6.icanhazip.com");if(resolved.Length==0||resolved.Any(a=>a.AddressFamily!=AddressFamily.InterNetworkV6))throw new IOException("IPV6_ONLY_RESOLVER_REQUIRED");}
+   using(var handler=new HttpClientHandler()){handler.UseProxy=false;handler.UseCookies=false;handler.AllowAutoRedirect=false;
+   using(var client=new HttpClient(handler)){client.Timeout=TimeSpan.FromMilliseconds(3000);var response=client.GetAsync(family==4?"https://1.1.1.1/cdn-cgi/trace":"https://ipv6.icanhazip.com/",HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
+    using(response){if(!response.IsSuccessStatusCode){string failure="HTTP_"+((int)response.StatusCode).ToString();if(family==4)LastExitError4=failure;else LastExitError6=failure;return "UNAVAILABLE";}using(var stream=response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()){byte[] bytes=new byte[8193];int count=0;var clock=Stopwatch.StartNew();while(count<bytes.Length){int left=3000-(int)clock.ElapsedMilliseconds;if(left<=0)return "UNAVAILABLE";var read=stream.ReadAsync(bytes,count,bytes.Length-count);if(!read.Wait(left))return "UNAVAILABLE";int n=read.Result;if(n==0)break;count+=n;}if(count>8192)return "INVALID_RESPONSE";
+     if(family==6){IPAddress observed;return IPAddress.TryParse(Encoding.UTF8.GetString(bytes,0,count).Trim(),out observed)&&observed.Equals(IPAddress.Parse("2603:c020:c015:8100::10"))?"ORACLE":"OTHER_EXIT";}
      string expected=family==4?"ip=152.67.156.100":"ip=2603:c020:c015:8100::10";return Encoding.UTF8.GetString(bytes,0,count).Split('\n').Any(line=>line.TrimEnd('\r')==expected)?"ORACLE":"OTHER_EXIT";
     }}
    }

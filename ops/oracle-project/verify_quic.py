@@ -23,19 +23,20 @@ class Http3Probe(QuicConnectionProtocol):
         return await asyncio.wait_for(self.status.get(),3)==b'200'
 
 
-async def probe(info):
+async def probe(info, address='152.67.156.100'):
+    if address not in ('152.67.156.100','141.147.78.44'):raise ValueError('FIXED_INGRESS_REQUIRED')
     config = QuicConfiguration(is_client=True, alpn_protocols=['oracle-wireguard-quic-v1'],
                                server_name=HOST, max_datagram_frame_size=1200)
     config.load_verify_locations(cadata=info['certificate'].encode('ascii'))
     async def handshake():
-        async with connect('152.67.156.100',8443,configuration=config): return True
+        async with connect(address,8443,configuration=config): return True
     try:
         await asyncio.wait_for(handshake(),8)
         print('PUBLIC_QUIC_TLS=PASS')
         if not info.get('http3'):
             print('PUBLIC_HTTP3=NOT_ADVERTISED_BY_CURRENT_DEPLOYMENT');return True
         config.alpn_protocols=['h3']
-        async with connect('152.67.156.100',8443,configuration=config,create_protocol=Http3Probe) as client:
+        async with connect(address,8443,configuration=config,create_protocol=Http3Probe) as client:
             if not await client.health(): raise ConnectionError()
         print('PUBLIC_HTTP3_HEALTH=PASS')
         return True

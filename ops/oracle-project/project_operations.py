@@ -356,6 +356,12 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id') in ('secondary-vpn-promote-20261026','secondary-vpn-rollback-20261026'):
+        secondary_spec=importlib.util.spec_from_file_location('secondary_vpn',Path(__file__).with_name('secondary_vpn.py'))
+        secondary=importlib.util.module_from_spec(secondary_spec);secondary_spec.loader.exec_module(secondary)
+        if request['request_id']=='secondary-vpn-promote-20261026':secondary.install()
+        else:secondary.rollback()
+        return
     if request.get('request_id') in ('secondary-endpoint-apply-20261026','secondary-endpoint-rollback-20261026'):
         secondary_spec=importlib.util.spec_from_file_location('secondary_endpoint',Path(__file__).with_name('secondary_endpoint.py'))
         secondary=importlib.util.module_from_spec(secondary_spec);secondary_spec.loader.exec_module(secondary)

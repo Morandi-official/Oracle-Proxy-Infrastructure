@@ -38,5 +38,6 @@ if __name__ == '__main__':
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         stream.write('operation=' + operation + '\n')
         request=json.loads(Path(REQUEST).read_text())
-        secondary=operation=='enable-https' and request.get('request_id')=='secondary-endpoint-apply-20261026'
+        secondary=operation=='enable-https' and request.get('request_id') in ('secondary-endpoint-apply-20261026','secondary-vpn-promote-20261026')
         stream.write('secondary_endpoint='+str(secondary).lower()+'\n')
+        stream.write('secondary_vpn='+str(secondary and request.get('request_id')=='secondary-vpn-promote-20261026').lower()+'\n')

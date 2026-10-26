@@ -87,19 +87,19 @@ public static class OracleBootReadOnly {
    if(!WTSQuerySessionInformation(IntPtr.Zero,row.Id,5,out data,out size))throw new IOException("SESSION_USER_READ_FAILED");try{if(size>2&&!String.IsNullOrEmpty(Marshal.PtrToStringUni(data)))return true;}finally{WTSFreeMemory(data);}
   }return false;}finally{WTSFreeMemory(rows);}
  }
- public sealed class PhysicalResult {public string Error="NONE";public bool AddressPresent,Sent,MatchingReply,Blocked;}
- public static PhysicalResult PhysicalProbe(int family,string target){
+ public sealed class PhysicalResult {public string Error="NONE";public bool AddressPresent,ConnectionEstablished,DeniedByWindows;}
+ public static PhysicalResult PhysicalProbe(int family){
   var result=new PhysicalResult();AddressFamily af=family==4?AddressFamily.InterNetwork:AddressFamily.InterNetworkV6;
   var adapters=NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.OperationalStatus==OperationalStatus.Up&&n.Name!="OracleProxy"&&n.NetworkInterfaceType!=NetworkInterfaceType.Loopback&&n.NetworkInterfaceType!=NetworkInterfaceType.Tunnel&&n.GetIPProperties().GatewayAddresses.Any(g=>g.Address.AddressFamily==AddressFamily.InterNetwork));
   foreach(var adapter in adapters){var local=adapter.GetIPProperties().UnicastAddresses.Select(a=>a.Address).FirstOrDefault(a=>a.AddressFamily==af&&(family==4||!a.IsIPv6LinkLocal&&!a.IsIPv6SiteLocal&&(a.GetAddressBytes()[0]&0xfe)!=0xfc));if(local==null)continue;
-   result.AddressPresent=true;using(var socket=new Socket(af,SocketType.Dgram,ProtocolType.Udp)){
-    try{socket.ReceiveTimeout=750;socket.SendTimeout=750;int index=family==4?adapter.GetIPProperties().GetIPv4Properties().Index:adapter.GetIPProperties().GetIPv6Properties().Index;
+   result.AddressPresent=true;using(var socket=new Socket(af,SocketType.Stream,ProtocolType.Tcp)){
+    try{int index=family==4?adapter.GetIPProperties().GetIPv4Properties().Index:adapter.GetIPProperties().GetIPv6Properties().Index;
      socket.SetSocketOption(family==4?SocketOptionLevel.IP:SocketOptionLevel.IPv6,(SocketOptionName)31,family==4?IPAddress.HostToNetworkOrder(index):index);
-     socket.Bind(new IPEndPoint(local,0));socket.Connect(new IPEndPoint(IPAddress.Parse(target),3478));
-     byte[] request=new byte[20],transaction=new byte[12];using(var rng=RandomNumberGenerator.Create())rng.GetBytes(transaction);request[1]=1;request[4]=0x21;request[5]=0x12;request[6]=0xa4;request[7]=0x42;Buffer.BlockCopy(transaction,0,request,8,12);
-     socket.Send(request);result.Sent=true;byte[] response=new byte[1024];int count=socket.Receive(response);
-     result.MatchingReply=count>=20&&response[0]==1&&response[1]==1&&response.Skip(4).Take(16).SequenceEqual(request.Skip(4).Take(16));return result;
-    }catch(SocketException error){result.Error=error.SocketErrorCode.ToString();result.Blocked=!result.Sent&&error.SocketErrorCode==SocketError.AccessDenied;return result;}
+     socket.Bind(new IPEndPoint(local,0));
+     var pending=socket.ConnectAsync(new IPEndPoint(IPAddress.Parse(family==4?"1.1.1.1":"2606:4700:4700::1111"),443));
+     if(System.Threading.Tasks.Task.WhenAny(pending,System.Threading.Tasks.Task.Delay(1200)).GetAwaiter().GetResult()!=pending){result.Error="TimedOut";return result;}
+     pending.GetAwaiter().GetResult();result.ConnectionEstablished=true;return result;
+    }catch(SocketException error){result.Error=error.SocketErrorCode.ToString();result.DeniedByWindows=error.SocketErrorCode==SocketError.AccessDenied;return result;}
    }
   }result.Error="NO_NATIVE_PHYSICAL_ADDRESS";return result;
  }
@@ -129,9 +129,8 @@ if($Mode -in @('SelfTest','SelfTestConnected')){
  if($Mode -eq 'SelfTestConnected'){
   $state=Read-Status
   if(-not $state -or $state.mode -ne 'connected' -or -not $state.guard -or $counts[0] -lt 16 -or $counts[1] -lt 8){throw 'CONNECTED_READ_ONLY_OBSERVATION_FAILED'}
-  $target=[Net.Dns]::GetHostAddresses('stun.cloudflare.com') | Where-Object AddressFamily -eq InterNetwork | Select-Object -First 1
-  $physical=[OracleBootReadOnly]::PhysicalProbe(4,$target.ToString())
-  if(-not $physical.Blocked -or $physical.Sent){throw 'CONNECTED_PHYSICAL_DENIAL_REQUIRED'}
+  $physical=[OracleBootReadOnly]::PhysicalProbe(4)
+  if(-not $physical.DeniedByWindows -or $physical.ConnectionEstablished){throw 'CONNECTED_PHYSICAL_DENIAL_REQUIRED'}
   $exit4=[OracleBootReadOnly]::DefaultExit(4);$exit6=[OracleBootReadOnly]::DefaultExit(6)
   Write-Host ('OBSERVER_DEFAULT_V4='+$exit4+';V6='+$exit6)
   if($exit4 -ne 'ORACLE' -or $exit6 -ne 'ORACLE'){throw 'CONNECTED_DEFAULT_DUALSTACK_PROBE_FAILED'}
@@ -164,14 +163,8 @@ if($Mode -eq 'Prepare'){
  $state=Read-Status
  if(-not $state -or $state.product_version -ne $ExpectedVersion -or $state.mode -ne 'connected' -or -not $state.intent -or -not $state.guard -or $state.ipv6_policy -ne 'tunnel'){throw 'CONNECT_PINNED_RC20_DUALSTACK_FIRST'}
  $counts=[OracleBootReadOnly]::GuardCounts();if($counts[0] -lt 16 -or $counts[1] -lt 8){throw 'PERSISTENT_BOOT_GUARD_NOT_OBSERVED'}
- $targets=@{};foreach($family in @(4,6)){
-  $af=if($family -eq 4){[Net.Sockets.AddressFamily]::InterNetwork}else{[Net.Sockets.AddressFamily]::InterNetworkV6}
-  $ip=[Net.Dns]::GetHostAddresses('stun.cloudflare.com') | Where-Object AddressFamily -eq $af | Select-Object -First 1
-  if(-not $ip){throw 'PUBLIC_STUN_TARGET_REQUIRED'}
-  $targets["v$family"]=$ip.ToString()
- }
- $preflight=[OracleBootReadOnly]::PhysicalProbe(4,$targets.v4)
- if(-not $preflight.Blocked -or $preflight.Sent){throw 'PHYSICAL_DENIAL_NOT_PROVEN_NO_TASK_CREATED'}
+ $preflight=[OracleBootReadOnly]::PhysicalProbe(4)
+ if(-not $preflight.DeniedByWindows -or $preflight.ConnectionEstablished){throw 'PHYSICAL_DENIAL_NOT_PROVEN_NO_TASK_CREATED'}
  $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
  $acl=New-Object Security.AccessControl.DirectorySecurity
  $acl.SetAccessRuleProtection($true,$false)
@@ -186,7 +179,7 @@ if($Mode -eq 'Prepare'){
  $createdAcl=Get-Acl -LiteralPath $BootRoot
  if(([IO.File]::GetAttributes($BootRoot) -band [IO.FileAttributes]::ReparsePoint) -or $createdAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' -or -not $createdAcl.AreAccessRulesProtected){throw 'SECURE_NEW_DIRECTORY_REQUIRED'}
  Copy-Item -LiteralPath $PSCommandPath -Destination $TrustedScript
- $config=@{schema=1;owner='oracle-proxy-one-shot-boot';previous_boot=(Get-CurrentBoot);armed_utc=[DateTime]::UtcNow.ToString('o');version=$ExpectedVersion;v4=$targets.v4;v6=$targets.v6;script_sha256=(Get-FileHash $TrustedScript -Algorithm SHA256).Hash}
+ $config=@{schema=1;owner='oracle-proxy-one-shot-boot';previous_boot=(Get-CurrentBoot);armed_utc=[DateTime]::UtcNow.ToString('o');version=$ExpectedVersion;script_sha256=(Get-FileHash $TrustedScript -Algorithm SHA256).Hash}
  $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding UTF8
  foreach($protectedFile in @($TrustedScript,$ConfigFile)){
   $fileAcl=Get-Acl -LiteralPath $protectedFile;$fileAcl.SetOwner($adminOwner);Set-Acl -LiteralPath $protectedFile -AclObject $fileAcl
@@ -232,11 +225,11 @@ if($Mode -eq 'Collect'){
   while($clock.Elapsed.TotalSeconds -lt 80){
    $state=Read-Status;$counts=@(-1,-1);try{$counts=[OracleBootReadOnly]::GuardCounts()}catch{}
    $interactive=$true;try{$interactive=[OracleBootReadOnly]::InteractiveUserPresent()}catch{}
-   $v4=[OracleBootReadOnly]::PhysicalProbe(4,$config.v4);$v6=[OracleBootReadOnly]::PhysicalProbe(6,$config.v6)
+   $v4=[OracleBootReadOnly]::PhysicalProbe(4);$v6=[OracleBootReadOnly]::PhysicalProbe(6)
    $rows.Add(@{at_utc=[DateTime]::UtcNow.ToString('o');interactive_user_present=$interactive;persistent_filters=$counts[0];boot_filters=$counts[1];service_mode=if($state){$state.mode}else{'unavailable'};intent=if($state){$state.intent}else{$null};guard=if($state){$state.guard}else{$null};version=if($state){$state.product_version}else{$null};physical_v4=$v4;physical_v6=$v6;default_v4=[OracleBootReadOnly]::DefaultExit(4);default_v6=[OracleBootReadOnly]::DefaultExit(6)})
    Start-Sleep -Seconds 2
   }
-  @{schema=1;owner=$config.owner;boot_changed=$true;pre_login_scope='Only the observed startup-task interval; not all earliest kernel boot traffic';samples=$rows.ToArray()} | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $ReportFile -Encoding UTF8
+  @{schema=1;owner=$config.owner;boot_changed=$true;pre_login_scope='Observed startup-task interval: physical TCP denial and default HTTPS; not all earliest kernel boot traffic or hardware UDP packet capture';samples=$rows.ToArray()} | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $ReportFile -Encoding UTF8
  }catch{
   @{schema=1;owner=$config.owner;boot_changed=$true;collection_error=$_.Exception.GetType().Name;samples=$rows.ToArray()} | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $ReportFile -Encoding UTF8
  }finally{if(Own-Task){Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false}}
@@ -247,9 +240,9 @@ if($Mode -eq 'Report'){
  $report=Get-Content -Raw -LiteralPath $ReportFile | ConvertFrom-Json
  if($report.owner -ne 'oracle-proxy-one-shot-boot' -or $report.schema -ne 1 -or -not $report.boot_changed){throw 'INVALID_BOOT_REPORT'}
  $samples=@($report.samples);$pre=@($samples | Where-Object {-not $_.interactive_user_present})
- $bad=@($samples | Where-Object {$_.physical_v4.Sent -or $_.physical_v6.Sent -or $_.physical_v4.MatchingReply -or $_.physical_v6.MatchingReply -or $_.default_v4 -eq 'OTHER_EXIT' -or $_.default_v6 -eq 'OTHER_EXIT'})
+ $bad=@($samples | Where-Object {$_.physical_v4.ConnectionEstablished -or $_.physical_v6.ConnectionEstablished -or $_.default_v4 -eq 'OTHER_EXIT' -or $_.default_v6 -eq 'OTHER_EXIT'})
  $ready=@($pre | Where-Object {$_.version -eq $ExpectedVersion -and $_.service_mode -eq 'connected' -and $_.intent -and $_.guard -and $_.persistent_filters -ge 16 -and $_.boot_filters -ge 8 -and $_.default_v4 -eq 'ORACLE' -and $_.default_v6 -eq 'ORACLE'})
- $v4=@($pre | Where-Object {$_.physical_v4.AddressPresent -and $_.physical_v4.Blocked})
- $v6=@($pre | Where-Object {$_.physical_v6.AddressPresent -and $_.physical_v6.Blocked})
- @{boot_changed=$report.boot_changed;sample_count=$samples.Count;pre_login_samples=$pre.Count;pre_login_dualstack_ready_samples=$ready.Count;physical_v4_denied_samples=$v4.Count;physical_v6_denied_samples=$v6.Count;potential_egress_samples=$bad.Count;collector_error=$report.collection_error;result=if($report.collection_error -or $bad.Count -gt 0){'REVIEW_REQUIRED'}elseif($pre.Count -eq 0 -or $ready.Count -eq 0 -or $v4.Count -eq 0){'INCONCLUSIVE'}elseif($v6.Count -eq 0){'PASS_OBSERVED_BOOT_SCOPE_NATIVE_PHYSICAL_IPV6_NOT_COVERED'}else{'PASS_OBSERVED_BOOT_SCOPE'};scope='Observed pre-login interval only; a native IPv6 physical address is required for that family coverage';temporary_task_remaining=[bool](Own-Task)} | ConvertTo-Json -Depth 4
+ $v4=@($pre | Where-Object {$_.physical_v4.AddressPresent -and $_.physical_v4.DeniedByWindows})
+ $v6=@($pre | Where-Object {$_.physical_v6.AddressPresent -and $_.physical_v6.DeniedByWindows})
+ @{boot_changed=$report.boot_changed;sample_count=$samples.Count;pre_login_samples=$pre.Count;pre_login_dualstack_ready_samples=$ready.Count;physical_v4_denied_samples=$v4.Count;physical_v6_denied_samples=$v6.Count;potential_egress_samples=$bad.Count;collector_error=$report.collection_error;result=if($report.collection_error -or $bad.Count -gt 0){'REVIEW_REQUIRED'}elseif($pre.Count -eq 0 -or $ready.Count -eq 0 -or $v4.Count -eq 0){'INCONCLUSIVE'}elseif($v6.Count -eq 0){'PASS_OBSERVED_BOOT_SCOPE_NATIVE_PHYSICAL_IPV6_NOT_COVERED'}else{'PASS_OBSERVED_BOOT_SCOPE'};scope='Observed pre-login TCP denial and default HTTPS only; native physical IPv6 requires an address on that interface; this is not hardware UDP packet capture';temporary_task_remaining=[bool](Own-Task)} | ConvertTo-Json -Depth 4
 }

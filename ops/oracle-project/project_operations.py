@@ -356,6 +356,10 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='webrtc-owned-ci-slot-release-v6-20261026':
+        cleanup_spec=importlib.util.spec_from_file_location('rc19_ci_cleanup',Path(__file__).with_name('cleanup_rc19_ci.py'))
+        cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
+        cleanup.apply();return
     if request.get('request_id')=='webrtc-owned-ci-slot-release-v5-20261026':
         cleanup_spec=importlib.util.spec_from_file_location('secondary_ci_cleanup',Path(__file__).with_name('cleanup_secondary_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)

@@ -27,6 +27,7 @@ internal sealed class AccountApi : IDisposable
         if(action is not ("login" or "authenticate" or "enroll" or "presence" or "state" or "logout"))throw new InvalidOperationException();
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);deadline.CancelAfter(TimeSpan.FromSeconds(12));
         using var request=new HttpRequestMessage(body is null?HttpMethod.Get:HttpMethod.Post,"api/client/"+action);
+        request.Headers.Add("X-Oracle-Client-Capabilities","dual-stack-v1");
         if(token.Length>0)request.Headers.Authorization=new("Bearer",token);
         if(body is not null)request.Content=new StringContent(body.ToJsonString(),Encoding.UTF8,"application/json");
         using var result=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,deadline.Token);

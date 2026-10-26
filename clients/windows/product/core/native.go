@@ -18,8 +18,9 @@ import (
 const nativeType = "oracle-native-udp"
 
 type nativeOptions struct {
-	Address string   `json:"address"`
-	Ports   []uint16 `json:"ports"`
+	IPv6Payload bool     `json:"ipv6_payload"`
+	Address     string   `json:"address"`
+	Ports       []uint16 `json:"ports"`
 }
 type nativeOutbound struct {
 	outbound.Adapter
@@ -40,7 +41,7 @@ func newNativeOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogge
 			return nil, e
 		}
 	}
-	physical, e := physicalDialer(ctx)
+	physical, e := physicalDialer(ctx, o.IPv6Payload)
 	if e != nil {
 		return nil, e
 	}

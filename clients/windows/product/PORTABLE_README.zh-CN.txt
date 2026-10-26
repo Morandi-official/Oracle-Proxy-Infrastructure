@@ -1,6 +1,6 @@
-Oracle Proxy 0.3.0-rc18 · Windows 10/11 x64 便携验收包
+Oracle Proxy 0.3.0-rc20 · Windows 10/11 x64 便携验收包
 
-本包为未签名候选版；全部物理重启、IPv6及正式发布验收尚未完成。当前IPv6阻断，IPv4、TCP、UDP与DNS经WireGuard。
+本包为未签名候选版；物理重启与正式发布验收尚未完成。服务器就绪时支持 IPv4 / IPv6 双栈，均经 WireGuard，并共享设备配额与防泄漏保护；服务器未就绪时仍阻断 IPv6。
 
 首次使用与设备确认
 1. 完整解压ZIP，保留三个程序文件在一起，不要直接在ZIP内运行。

@@ -12,6 +12,8 @@ internal static class CoreConfig
         var tunnel=state["tunnel"]!.AsObject();string endpoint=tunnel["endpoint"]!.GetValue<string>();
         if(!endpoint.StartsWith("152.67.156.100:",StringComparison.Ordinal) || !int.TryParse(endpoint[15..],out int port) || port is <1 or >65535)
             throw new IOException("INVALID_SERVER_ENDPOINT");
+        bool dual=tunnel["ipv6_policy"]?.GetValue<string>()=="tunnel";
+        if(dual && tunnel["ipv6_egress"]?.GetValue<string>()!="2603:c020:c015:8100::10")throw new IOException("INVALID_IPV6_EGRESS");
         var addresses=tunnel["addresses"]!.AsArray();if(addresses.Count is <1 or >2)throw new IOException("INVALID_TUNNEL_ADDRESS");
         foreach(var node in addresses){var parts=node!.GetValue<string>().Split('/');
             if(parts.Length!=2 || !IPAddress.TryParse(parts[0],out var ip) || (ip.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork?parts[1]!="32":parts[1]!="128"))throw new IOException("INVALID_TUNNEL_ADDRESS");}
@@ -37,7 +39,7 @@ internal static class CoreConfig
             // the connected path selects the actual IPv4 peer before binding,
             // as the working backup carriers already do. No encapsulation.
             config["endpoints"]![0]!["detour"]="oracle-native-udp";
-            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["address"]=ingress,["tag"]="oracle-native-udp",["ports"]=new JsonArray(port)});
+            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["ipv6_payload"]=dual,["address"]=ingress,["tag"]="oracle-native-udp",["ports"]=new JsonArray(port)});
         }
         if(transport==TunnelTransport.WireGuardUdp && port==51820 && tunnel["native_udp_ports"] is JsonArray ports && ports.Any(n=>n?.GetValue<int>()==443)){
             bool cached443=secret.CarrierHint=="wireguard-udp" && secret.NativeUdpPortHint==443 && secret.CarrierHintUntil>DateTimeOffset.UtcNow.ToUnixTimeSeconds() && secret.CarrierNetworkHash==CarrierMemory.NetworkHash(state);

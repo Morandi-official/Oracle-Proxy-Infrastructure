@@ -47,6 +47,15 @@ internal static class ProductSelfTests
         state["tunnel"]!.AsObject().Remove("transport_address");
         state["tunnel"]!["quic"]!["enabled"]=false;
         try{CoreConfig.Build(state,secret,"synthetic-only",TunnelTransport.WireGuardQuic);return false;}catch(IOException){}
+        state["tunnel"]!["ipv6_policy"]="tunnel";
+        state["tunnel"]!["ipv6_egress"]="2603:c020:c015:8100::10";
+        state["tunnel"]!["addresses"]=new JsonArray("10.200.0.2/32","fd42:6f70:78:77::ac8:2/128");
+        var dual=CoreConfig.Build(state,secret,"synthetic-only");
+        if(dual["endpoints"]?[0]?["mtu"]?.GetValue<int>()!=1280 || dual["outbounds"]?[1]?["ipv6_payload"]?.GetValue<bool>()!=true || dual["dns"]?["strategy"]?.GetValue<string>()!="prefer_ipv4")return false;
+        if(dual["route"]!["rules"]!.AsArray().Any(rule=>rule?["ip_version"]?.GetValue<int>()==6 && rule?["action"]?.GetValue<string>()=="reject"))return false;
+        state["tunnel"]!["ipv6_egress"]="2001:db8::1";
+        try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}
+        state["tunnel"]!["ipv6_policy"]="block";
         state["tunnel"]!["endpoint"]="evil.invalid:443";
         try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}
         CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);return true;

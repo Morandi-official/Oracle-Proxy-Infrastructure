@@ -360,6 +360,10 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='ipv6-owned-ci-slot-release-20261026':
+        cleanup_spec=importlib.util.spec_from_file_location('ipv6_owned_ci_cleanup',Path(__file__).with_name('cleanup_rc19_webrtc_ci.py'))
+        cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
+        cleanup.apply();return
     if request.get('request_id') in ('ipv6-tunnel-base-apply-20261026','ipv6-tunnel-base-rollback-20261026'):
         ipv6_spec=importlib.util.spec_from_file_location('ipv6_tunnel',Path(__file__).with_name('ipv6_tunnel.py'))
         ipv6=importlib.util.module_from_spec(ipv6_spec);ipv6_spec.loader.exec_module(ipv6)

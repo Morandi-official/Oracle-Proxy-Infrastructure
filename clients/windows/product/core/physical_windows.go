@@ -1,7 +1,6 @@
 //go:build windows
 
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 package main
 
 import (
@@ -16,14 +15,14 @@ import (
 	"path/filepath"
 )
 
-func physicalDialer(ctx context.Context) (N.Dialer, error) {
+func physicalDialer(ctx context.Context, allowFragment ...bool) (N.Dialer, error) {
 	user, e := windows.GetCurrentProcessToken().GetTokenUser()
 	if e != nil {
 		return nil, e
 	}
 	// --check parses configurations without starting sockets as an ordinary user.
 	if user.User.Sid.String() != "S-1-5-18" {
-		return dialer.NewDefault(ctx, option.DialerOptions{})
+		return dialer.NewDefault(ctx, option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{UDPFragment: outerFragment(allowFragment)}})
 	}
 	executable, e := os.Executable()
 	if e != nil {
@@ -46,5 +45,5 @@ func physicalDialer(ctx context.Context) (N.Dialer, error) {
 	if e != nil {
 		return nil, e
 	}
-	return dialer.NewDefault(ctx, option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{BindInterface: nic.Name}})
+	return dialer.NewDefault(ctx, option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{BindInterface: nic.Name, UDPFragment: outerFragment(allowFragment)}})
 }

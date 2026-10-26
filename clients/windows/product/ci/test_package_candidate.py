@@ -28,6 +28,7 @@ class PackageBoundaryTests(unittest.TestCase):
             'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
             'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'push',
             'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '1', 'RUNNER_TEMP': str(self.root / 'temp')}))
+        self.put('clients/windows/product/OracleProxy.Product.csproj', '<Project><PropertyGroup><Version>0.3.0-rc20</Version></PropertyGroup></Project>')
         self.put('clients/windows/product/COPYING', 'test GPL notice')
         self.put('clients/windows/product/LICENSE', 'test copyright notice')
         self.put('clients/windows/product/PORTABLE_README.zh-CN.txt', 'test instructions')
@@ -70,11 +71,22 @@ class PackageBoundaryTests(unittest.TestCase):
             self.assertEqual({p for p in names if p.endswith(('.exe', '.dll'))}, set(candidate.PAYLOADS))
             self.assertFalse(any('dpapi' in p for p in names))
             self.assertIn('licenses/nuget/example/1.0/LICENSE', names)
-            self.assertTrue(json.loads(archive.read('BUILD.json'))['real_oracle_acceptance_passed'])
+            metadata=json.loads(archive.read('BUILD.json'))
+            self.assertTrue(metadata['real_oracle_acceptance_passed'])
+            self.assertEqual(metadata['version'],'0.3.0-rc20')
+            self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc20-win-x64-'))
         with zipfile.ZipFile(next(out.glob('*-source.zip'))) as archive:
             self.assertIn('clients/windows/product/core/vendor/example.test/core.go', archive.namelist())
             self.assertFalse(any('obj/' in p or 'secret' in p for p in archive.namelist()))
         self.assertEqual(len((out / 'SHA256SUMS.txt').read_text().splitlines()), 2)
+
+    def test_archive_and_metadata_follow_the_compiled_project_version(self):
+        self.put('clients/windows/product/OracleProxy.Product.csproj', '<Project><PropertyGroup><Version>0.3.0-rc21</Version></PropertyGroup></Project>')
+        self.invoke()
+        bundle=next(p for p in (self.root/'dist/candidate').glob('*.zip') if not p.name.endswith('-source.zip'))
+        self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc21-win-x64-'))
+        with zipfile.ZipFile(bundle) as archive:
+            self.assertEqual(json.loads(archive.read('BUILD.json'))['version'],'0.3.0-rc21')
 
     def test_mismatched_payload_is_rejected(self):
         self.put('dist/product/OracleProxy.Core.exe', 'tampered core')

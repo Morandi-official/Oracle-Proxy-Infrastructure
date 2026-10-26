@@ -25,6 +25,27 @@ internal static class Acceptance
   var result=await CdpCommand(ws,"Runtime.evaluate",new JsonObject{["expression"]=expression,["awaitPromise"]=true,["returnByValue"]=true},id);
   return result["result"]!["value"]!.AsObject();
  }
+ sealed class PermissionOrigin:IDisposable {
+  readonly TcpListener listener=new(IPAddress.Loopback,0);
+  readonly CancellationTokenSource stop=new();
+  readonly Task server;
+  internal string Origin{get;}
+  internal PermissionOrigin(){
+   listener.Start();Origin="http://127.0.0.1:"+((IPEndPoint)listener.LocalEndpoint).Port;
+   server=Task.Run(async()=>{
+    while(!stop.IsCancellationRequested){
+     try{using var client=await listener.AcceptTcpClientAsync(stop.Token);await using var stream=client.GetStream();
+      using var deadline=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);deadline.CancelAfter(TimeSpan.FromSeconds(3));
+      byte[] request=new byte[4096];int count=await stream.ReadAsync(request,deadline.Token);if(count==0)continue;
+      byte[] body=Encoding.UTF8.GetBytes("<!doctype html><html><head><title>Oracle Proxy permission fixture</title></head><body>Cloud-only fake media permission test.</body></html>");
+      byte[] header=Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nPermissions-Policy: camera=(self), microphone=(self)\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "+body.Length+"\r\n\r\n");
+      await stream.WriteAsync(header,deadline.Token);await stream.WriteAsync(body,deadline.Token);
+     }catch(OperationCanceledException){}catch(SocketException)when(stop.IsCancellationRequested){}catch(IOException){}
+    }
+   });
+  }
+  public void Dispose(){stop.Cancel();listener.Stop();try{server.GetAwaiter().GetResult();}catch(OperationCanceledException){}stop.Dispose();}
+ }
  static readonly JsonArray Results=new();
  static IPAddress[] PhysicalAddresses=[];
  static IPAddress? StunV6;
@@ -47,18 +68,29 @@ internal static class Acceptance
    using var ws=new ClientWebSocket();using var connectDeadline=new CancellationTokenSource(TimeSpan.FromSeconds(10));await ws.ConnectAsync(uri,connectDeadline.Token);
    bool ready=false;int call=1;var pageClock=Stopwatch.StartNew();while(pageClock.ElapsedMilliseconds<15000){try{var status=await Cdp(ws,"({ready:location.href==='https://vpn-admin.morandi.dpdns.org/privacy-check/' && document.readyState==='complete' && typeof window.OraclePrivacyResult!=='undefined' && !!document.getElementById('start')})",call++);if(status["ready"]?.GetValue<bool>()==true){ready=true;break;}}catch(IOException error)when(error.Message=="BROWSER_EVALUATION_FAILED"){}await Task.Delay(150);}
    Check(ready,"PUBLIC_EDGE_PRIVACY_DOCUMENT_AND_SCRIPT_READY");if(!checkStun)return;
+   // The public management origin deliberately forbids media capture. Keep
+   // that hardening; use a secure loopback origin for actual media grants.
+   using var fixture=new PermissionOrigin();string origin=fixture.Origin;
+   await CdpCommand(ws,"Page.navigate",new JsonObject{["url"]=origin+"/"},call++);
+   var fixtureClock=Stopwatch.StartNew();bool fixtureReady=false;
+   while(fixtureClock.ElapsedMilliseconds<10000){
+    try{var status=await Cdp(ws,"({ready:location.origin==="+System.Text.Json.JsonSerializer.Serialize(origin)+"&&document.readyState==='complete'&&isSecureContext&&!!navigator.mediaDevices})",call++);if(status["ready"]?.GetValue<bool>()==true){fixtureReady=true;break;}}catch(IOException error)when(error.Message=="BROWSER_EVALUATION_FAILED"){}
+    await Task.Delay(100);
+   }
+   Check(fixtureReady,"SECURE_LOOPBACK_PERMISSION_ORIGIN_READY");
    bool capture=permission is "granted" or "revoked";
    if(capture){
-    await CdpCommand(ws,"Browser.grantPermissions",new JsonObject{["origin"]=Origin,["permissions"]=new JsonArray("audioCapture","videoCapture")},call++);
+    await CdpCommand(ws,"Browser.grantPermissions",new JsonObject{["origin"]=origin,["permissions"]=new JsonArray("audioCapture","videoCapture")},call++);
     var media=await Cdp(ws,"(async()=>{window.testMedia=await navigator.mediaDevices.getUserMedia({audio:true,video:true});return {active:window.testMedia.active,audio:window.testMedia.getAudioTracks().length,video:window.testMedia.getVideoTracks().length};})()",call++);
     Check(media["active"]?.GetValue<bool>()==true && media["audio"]?.GetValue<int>()==1 && media["video"]?.GetValue<int>()==1,"REAL_EDGE_FAKE_MEDIA_CAPTURE_PERMISSION_EXERCISED_"+permission);
    }
    if(permission is "denied" or "revoked"){
     if(permission=="revoked")await Cdp(ws,"(()=>{window.testMedia.getTracks().forEach(track=>track.stop());return {stopped:!window.testMedia.active};})()",call++);
-    foreach(string name in new[]{"camera","microphone"})await CdpCommand(ws,"Browser.setPermission",new JsonObject{["origin"]=Origin,["permission"]=new JsonObject{["name"]=name},["setting"]="denied"},call++);
+    foreach(string name in new[]{"camera","microphone"})await CdpCommand(ws,"Browser.setPermission",new JsonObject{["origin"]=origin,["permission"]=new JsonObject{["name"]=name},["setting"]="denied"},call++);
    }
    var states=await Cdp(ws,"(async()=>({camera:(await navigator.permissions.query({name:'camera'})).state,microphone:(await navigator.permissions.query({name:'microphone'})).state}))()",call++);
    string expected=permission=="prompt"?"prompt":permission=="granted"?"granted":"denied";
+   Console.WriteLine("PERMISSION_STATE="+new JsonObject{["scenario"]=permission,["camera"]=states["camera"]?.DeepClone(),["microphone"]=states["microphone"]?.DeepClone()}.ToJsonString());
    Check(states["camera"]?.GetValue<string>()==expected && states["microphone"]?.GetValue<string>()==expected,"REAL_EDGE_PERMISSION_STATE_"+permission);
    foreach(bool ipv6 in new[]{false,true}){
     if(ipv6 && StunV6 is null)throw new IOException("PUBLIC_STUN_IPV6_DNS_REQUIRED");
@@ -74,7 +106,7 @@ internal static class Acceptance
     bool physicalPrivateExposed=addresses.Any(address=>privateIp(address)&&PhysicalAddresses.Contains(address));
     string wanted=ipv6?"2603:c020:c015:8100::10":"152.67.156.100";
     bool verified=rows.Any(row=>row["type"]?.GetValue<string>()=="srflx"&&IPAddress.TryParse(row["address"]?.GetValue<string>(),out var address)&&address.Equals(IPAddress.Parse(wanted)));
-    var observation=new JsonObject{["permission"]=permission,["stun_family"]=ipv6?6:4,["public_oracle_verified"]=verified,["unexpected_public"]=unexpected,["physical_address_disclosed"]=physicalExposed,["physical_private_address_disclosed"]=physicalPrivateExposed,["literal_private_count"]=addresses.Count(privateIp),["candidate_count"]=rows.Length};
+    var observation=new JsonObject{["origin_scope"]="secure_loopback_fixture",["permission"]=permission,["stun_family"]=ipv6?6:4,["public_oracle_verified"]=verified,["unexpected_public"]=unexpected,["physical_address_disclosed"]=physicalExposed,["physical_private_address_disclosed"]=physicalPrivateExposed,["literal_private_count"]=addresses.Count(privateIp),["candidate_count"]=rows.Length};
     Results.Add(observation);Console.WriteLine("BROWSER_PERMISSION_RESULT="+observation.ToJsonString());
     Check(!unexpected,"REAL_EDGE_NO_FOREIGN_PUBLIC_CANDIDATE_"+permission+"_"+(ipv6?"V6":"V4"));
     Console.WriteLine("BROWSER_FAMILY_COVERAGE_"+(ipv6?"V6":"V4")+"="+(verified?"VERIFIED":"INCONCLUSIVE_NO_SRFLX"));
@@ -130,6 +162,15 @@ internal static class Acceptance
    await Send("PreferUdp8443");await Send("Connect");var timer=Stopwatch.StartNew();JsonObject state;
    do{await Task.Delay(250);state=await Send("Status");}while(state["mode"]?.GetValue<string>()!="connected"&&timer.ElapsedMilliseconds<30000);
    Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true && state["ipv6_policy"]?.GetValue<string>()=="tunnel" && state["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10" && state["transport_address"]?.GetValue<string>()=="141.147.78.44","PINNED_RC20_DUALSTACK_NATIVE_UDP_GUARD_CONNECTED");
+   using(var child=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe")){
+    UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,
+    ArgumentList={"-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",Path.GetFullPath("ops/windows-boot/Test-OracleProxyBoot.ps1"),"-Mode","SelfTestConnected"}
+   })??throw new IOException("BOOT_OBSERVER_START_FAILED")){
+    var output=child.StandardOutput.ReadToEndAsync();var errors=child.StandardError.ReadToEndAsync();
+    await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+    if(child.ExitCode!=0){foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(await errors,@"[A-Z_]{6,80}|CS[0-9]{4}").Take(12))Console.WriteLine("OBSERVER_ERROR_CODE="+match.Value);}
+    Check(child.ExitCode==0 && (await output).Contains("READ_ONLY_BOOT_OBSERVER_ABI_AND_SCOPE=PASS"),"BOOT_OBSERVER_CONNECTED_READ_ONLY_ABI_AND_DUALSTACK_SCOPE");
+   }
    long connected=capture.Packets();await ProbePhysical(physical);await ProbePhysical6(adapter);try{foreach(string permission in new[]{"prompt","denied","granted","revoked"})await Browser(true,permission);}finally{await Task.Delay(500);long delta=capture.Packets()-connected;Console.WriteLine("RAW_STUN_PHYSICAL_TX_DELTA="+delta);Check(delta==0,"REAL_RAW_STUN_V4_AND_IPV6_LINK_LOCAL_HAVE_ZERO_PHYSICAL_EGRESS_WITH_VPN");}
    await Send("Quit");state=await Send("Status");long used=(state["peer_rx_bytes"]?.GetValue<long>()??-1)+(state["peer_tx_bytes"]?.GetValue<long>()??-1)-initial;
    Check(used>=0 && used<=16*1024*1024 && state["intent"]?.GetValue<bool>()==false && state["core_pid"]?.GetValue<uint>()==0,"WEBRTC_ACCEPTANCE_BOUNDED_USAGE_AND_CORE_STOPPED");
@@ -139,6 +180,6 @@ internal static class Acceptance
    bool full=Results.OfType<JsonObject>().All(row=>row["public_oracle_verified"]?.GetValue<bool>()==true && row["physical_address_disclosed"]?.GetValue<bool>()==false);
    Console.WriteLine("BROWSER_PERMISSION_MATRIX_FINAL="+(full?"PASS":"COVERAGE_OR_LOCAL_DISCLOSURE_REQUIRES_REVIEW"));
    return full?0:2;
-  }catch(Exception error){Console.WriteLine("WEBRTC_ACCEPTANCE=FAILED_NO_RAW_BROWSER_OR_ACCOUNT_LOGS");if(System.Text.RegularExpressions.Regex.IsMatch(error.Message,"^[A-Z0-9_]{1,100}$"))Console.WriteLine("FAILED_CHECK="+error.Message);Console.WriteLine("FAILURE_CATEGORY="+error.GetType().Name);return 1;}finally{Directory.CreateDirectory("dist/webrtc-review");File.WriteAllText("dist/webrtc-review/scenarios.json",Results.ToJsonString());}
+  }catch(Exception error){Console.WriteLine("WEBRTC_ACCEPTANCE=FAILED_NO_RAW_BROWSER_OR_ACCOUNT_LOGS");if(System.Text.RegularExpressions.Regex.IsMatch(error.Message,"^[A-Za-z0-9_]{1,100}$"))Console.WriteLine("FAILED_CHECK="+error.Message);Console.WriteLine("FAILURE_CATEGORY="+error.GetType().Name);return 1;}finally{Directory.CreateDirectory("dist/webrtc-review");File.WriteAllText("dist/webrtc-review/scenarios.json",Results.ToJsonString());}
  }
 }

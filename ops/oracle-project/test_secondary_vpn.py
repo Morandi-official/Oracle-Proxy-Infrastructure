@@ -18,7 +18,7 @@ class PersistentIngressTests(unittest.TestCase):
         own=['-A','PREROUTING',*m.RULE]
         for rows,error in [([],True),([native],False),([native,own],False),([own,native],True),
                            ([native,own,own],True),([native,own[:-1]+['10.0.0.99:8443']],True)]:
-            with self.subTest(rows=rows),patch.object(m,'nat_rules',return_value=rows):
+            with self.subTest(rows=rows),patch.object(m,'nat_rules',return_value=rows),patch.object(m.s,'run'):
                 if error:
                     with self.assertRaises(ValueError):m.inspect_nat()
                 else:self.assertEqual(m.inspect_nat(),len(rows)>1)

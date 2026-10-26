@@ -17,6 +17,9 @@ UNIT_PATH=Path('/etc/systemd/system')/UNIT
 COMMENT='oracle-proxy-secondary-quic'
 RULE=['-d',s.SECONDARY+'/32','-p','udp','-m','udp','--dport','8443','-m','comment','--comment',COMMENT,
       '-j','DNAT','--to-destination',s.PRIMARY+':8443']
+NATIVE_RULE=['-p','udp','--dport','8443','-m','addrtype','--dst-type','LOCAL',
+             '-m','u32','--u32','0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000',
+             '-m','comment','--comment','oracle-proxy-native-udp8443','-j','REDIRECT','--to-ports','51820']
 PUBLIC_STATE=Path('/etc/oracle-proxy-quic/transport.json')
 PUBLIC_VALUE={'schema':1,'owner':'oracle-proxy-secondary-endpoint','transport_address':s.PUBLIC}
 
@@ -29,11 +32,8 @@ def inspect_nat():
     rows=nat_rules();owned=[row for row in rows if COMMENT in row]
     if owned and owned!=[['-A','PREROUTING',*RULE]]:raise ValueError('FOREIGN_SECONDARY_NAT_RULE')
     # WireGuard's typed REDIRECT must precede this catch-all QUIC destination rule.
-    native=[i for i,row in enumerate(rows) if 'oracle-proxy-native-udp8443' in row and
-            row[-4:]==['-j','REDIRECT','--to-ports','51820'] and '--u32' in row and
-            re.sub(r'0x[0-9a-f]+',lambda match:hex(int(match[0],16)),row[row.index('--u32')+1].lower())==
-            '0>>22&0x3c@8=0x1000000,0x2000000,0x3000000,0x4000000' and
-            '--dport' in row and row[row.index('--dport')+1]=='8443']
+    s.run(['iptables','-w','5','-t','nat','-C','PREROUTING',*NATIVE_RULE])
+    native=[i for i,row in enumerate(rows) if 'oracle-proxy-native-udp8443' in row]
     if len(native)!=1 or owned and native[0]>=rows.index(owned[0]):raise ValueError('NATIVE_REDIRECT_MUST_PRECEDE_SECONDARY_QUIC')
     return bool(owned)
 

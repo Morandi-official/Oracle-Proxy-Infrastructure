@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Download and verify exact previously accepted rc18 payloads
+      - name: Download and verify exact previously accepted rc19 payloads
         run: python ops/windows-webrtc/prepare.py
       - name: Compile non-shipped real Edge acceptance harness
         run: dotnet publish ops/windows-webrtc/Acceptance.csproj -c Release -p:DebugType=None -o dist/webrtc-tests

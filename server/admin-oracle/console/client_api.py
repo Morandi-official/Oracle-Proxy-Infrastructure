@@ -18,7 +18,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from .transports import quic_info
+from .transports import quic_info, transport_address
 from . import control
 from .models import Audit, ClientAccount, ClientSession, ClientLoginThrottle
 
@@ -100,7 +100,7 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name=''):
         'devices':devices,'devices_history_truncated':len(retired)>8,
         'device':{'public_key':key,'registered':registered,'handshake_at':peer['handshake'] if peer else 0,'usage':peer['usage'] if peer else {'rx':0,'tx':0}},'tunnel':None}
     if registered:
-        data['tunnel']={'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':peer['allowed_ips'],'allowed_ips':['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'block','native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
+        data['tunnel']={'transport_address':transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':peer['allowed_ips'],'allowed_ips':['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'block','native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
     return data
 
 

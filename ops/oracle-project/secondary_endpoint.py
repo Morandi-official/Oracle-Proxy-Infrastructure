@@ -64,7 +64,7 @@ def owner_confirmation():
     return True
 
 
-def kernel_mac():return (Path('/sys/class/net')/DEVICE/'address').read_text().strip().lower()
+def kernel_mac():return json.loads(run(['ip','-j','link','show','dev',DEVICE]).stdout)[0]['address'].lower()
 
 
 def allocation_source(rows):

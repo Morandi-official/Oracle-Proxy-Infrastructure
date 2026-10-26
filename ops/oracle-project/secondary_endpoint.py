@@ -191,7 +191,16 @@ def rollback(expected=None):
 def observe():
     result={'allocation_confirmed':False,'primary_baseline_ready':False,'alias_present':None,'scope':'OWNER_SECONDARY_TEST_ONLY'}
     try:
-        result['allocation_confirmed']=allocated(metadata())
+        rows=metadata()
+        result['allocation_confirmed']=allocated(rows)
+        matching=[row for row in rows if isinstance(row,dict) and row.get('privateIp')==PRIMARY]
+        result['matching_primary_rows']=len(matching)
+        result['metadata_field_names']=sorted(matching[0]) if len(matching)==1 else []
+        result['secondary_field_present']=len(matching)==1 and 'secondaryPrivateIps' in matching[0]
+        if result['secondary_field_present']:
+            values=matching[0]['secondaryPrivateIps']
+            result['secondary_field_is_list']=isinstance(values,list)
+            result['secondary_field_count']=len(values) if isinstance(values,list) else None
         _,alias=snapshot();result['primary_baseline_ready']=True;result['alias_present']=bool(alias)
         if STATE.exists():
             value=load_state();result['phase']=value['phase'];result['expires_at']=value['expires_at']

@@ -324,6 +324,7 @@ def install_control():
     if lock.is_symlink(): raise ValueError('UNTRUSTED_FIREWALL_LOCK')
     lock.touch(exist_ok=True)
     previous = target.read_bytes() if target.exists() else None
+    atomic(target.with_name('ipv6_addresses.py'), (SERVER/'control/ipv6_addresses.py').read_bytes(), 0o644)
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
     atomic(unit,(SERVER/'deploy/oracle-proxy-control.service').read_bytes(),0o644)
     dropin = Path('/etc/systemd/system/wg-quick@wg0.service.d')
@@ -359,6 +360,13 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id') in ('ipv6-tunnel-base-apply-20261026','ipv6-tunnel-base-rollback-20261026'):
+        ipv6_spec=importlib.util.spec_from_file_location('ipv6_tunnel',Path(__file__).with_name('ipv6_tunnel.py'))
+        ipv6=importlib.util.module_from_spec(ipv6_spec);ipv6_spec.loader.exec_module(ipv6)
+        if request['request_id']=='ipv6-tunnel-base-apply-20261026':
+            install_control();ipv6.install()
+        else:run(['systemctl','disable','--now','oracle-proxy-ipv6-tunnel.service'])
+        return
     if request.get('request_id')=='webrtc-owned-ci-slot-release-v6-20261026':
         cleanup_spec=importlib.util.spec_from_file_location('rc19_ci_cleanup',Path(__file__).with_name('cleanup_rc19_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)

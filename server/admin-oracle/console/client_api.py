@@ -3,6 +3,7 @@ import base64
 import fcntl
 from contextlib import contextmanager
 import hashlib
+import ipaddress
 import json
 import re
 import secrets
@@ -18,7 +19,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from .transports import quic_info, transport_address
+from .transports import quic_info, transport_address, ipv6_info
 from . import control
 from .models import Audit, ClientAccount, ClientSession, ClientLoginThrottle
 
@@ -79,7 +80,7 @@ def confirmed(peer):
     return isinstance(receipt,dict) and type(receipt.get('confirmed_at')) is int and receipt['confirmed_at']>0
 
 
-def client_state(snapshot,account,key,allow_legacy=False,proposed_name=''):
+def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_stack=False):
     if key in snapshot.get('deleted_public_keys',[]):raise ValueError('DEVICE_REVOKED')
     user=next((u for u in snapshot['users'] if u['id']==str(account.user_id)),None)
     peer=next((p for p in snapshot['peers'] if p['public_key']==key),None)
@@ -100,7 +101,10 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name=''):
         'devices':devices,'devices_history_truncated':len(retired)>8,
         'device':{'public_key':key,'registered':registered,'handshake_at':peer['handshake'] if peer else 0,'usage':peer['usage'] if peer else {'rx':0,'tx':0}},'tunnel':None}
     if registered:
-        data['tunnel']={'transport_address':transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':peer['allowed_ips'],'allowed_ips':['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'block','native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
+        ipv6 = ipv6_info() if dual_stack else None
+        dual = bool(ipv6 and any(ipaddress.ip_interface(a).version == 6 and ipaddress.ip_interface(a).ip in ipaddress.ip_network(ipv6['prefix']) for a in peer['allowed_ips']))
+        addresses = [a for a in peer['allowed_ips'] if dual or ipaddress.ip_interface(a).version == 4]
+        data['tunnel']={'transport_address':transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':addresses,'allowed_ips':['0.0.0.0/0','::/0'] if dual else ['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'tunnel' if dual else 'block','ipv6_egress':ipv6['egress'] if dual else None,'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
     return data
 
 
@@ -131,7 +135,7 @@ def issue_session(request,value,explicit):
         snapshot=control.call('state',actor(request),{})
         peer=next((p for p in snapshot['peers'] if p['public_key']==key),None)
         if not explicit and not confirmed(peer):return response({'error':'CLIENT_UPDATE_REQUIRED'},409)
-        data=client_state(snapshot,current,key,proposed_name=name)
+        data=client_state(snapshot,current,key,proposed_name=name,dual_stack=request.META.get('HTTP_X_ORACLE_CLIENT_CAPABILITIES')=='dual-stack-v1')
         token=secrets.token_urlsafe(32);now=timezone.now()
         expiry=now+timedelta(days=30) if data['device']['registered'] else now+timedelta(minutes=15)
         with transaction.atomic():
@@ -169,8 +173,8 @@ def session(request):
     return ClientSession.objects.select_related('account').filter(token_hash=hashlib.sha256(authorization[7:].encode()).hexdigest(),expires_at__gt=timezone.now()).first()
 
 
-def state_for(credential,snapshot):
-    return client_state(snapshot,credential.account,credential.public_key,allow_legacy=not credential.enrollment_flow,proposed_name=credential.proposed_name)
+def state_for(credential,snapshot,dual_stack=False):
+    return client_state(snapshot,credential.account,credential.public_key,allow_legacy=not credential.enrollment_flow,proposed_name=credential.proposed_name,dual_stack=dual_stack)
 
 
 @require_GET
@@ -178,7 +182,7 @@ def state(request):
     credential=session(request)
     if not credential:return response({'error':'LOGIN_REQUIRED'},401)
     try:
-        result=state_for(credential,control.call('state',actor(request),{}))
+        result=state_for(credential,control.call('state',actor(request),{}),request.META.get('HTTP_X_ORACLE_CLIENT_CAPABILITIES')=='dual-stack-v1')
         ClientSession.objects.filter(pk=credential.pk).update(last_seen_at=timezone.now())
         return response(result)
     except ValueError as error:return failed(error)
@@ -202,7 +206,7 @@ def enroll(request):
             machine=credential.proposed_name or name
             Audit.objects.create(actor=f'client:{credential.account.user_id}',action='device.confirmation.submitted',resource=fingerprint(credential.public_key))
             snapshot=control.call('peer.enroll',actor(request),{'public_key':credential.public_key,'user_id':str(credential.account.user_id),'name':name,'machine_name':machine,'client_version':version,'confirm':True})
-            result=client_state(snapshot,credential.account,credential.public_key)
+            result=client_state(snapshot,credential.account,credential.public_key,dual_stack=request.META.get('HTTP_X_ORACLE_CLIENT_CAPABILITIES')=='dual-stack-v1')
             if result['registration']['status']!='registered':raise ValueError('DEVICE_CONFIRMATION_REQUIRED')
             ClientSession.objects.filter(pk=credential.pk).update(enrollment_flow=True,expires_at=timezone.now()+timedelta(days=30),last_seen_at=timezone.now(),reported_mode='disconnected')
             return response(result)
@@ -219,7 +223,7 @@ def presence(request):
         value=payload(request,{'mode','transport'})
         if value['mode'] not in ('unknown','pending','disconnected','protected','connected','recovery'):raise ValueError('INVALID_CLIENT_STATUS')
         if value['transport'] not in (None,'wireguard-udp','wireguard-quic','wireguard-https'):raise ValueError('INVALID_CLIENT_STATUS')
-        result=state_for(credential,control.call('state',actor(request),{}))
+        result=state_for(credential,control.call('state',actor(request),{}),request.META.get('HTTP_X_ORACLE_CLIENT_CAPABILITIES')=='dual-stack-v1')
         mode=value['mode'] if result['registration']['status']=='registered' else 'pending'
         transport=value['transport'] if mode=='connected' else ''
         changed=ClientSession.objects.filter(pk=credential.pk).exclude(reported_mode=mode).update(reported_mode=mode)

@@ -39,6 +39,41 @@ class PolicyTests(unittest.TestCase):
  def bind(self,key,user): self.request('peer.assign',{'public_key':key,'user_id':user['id'],'name':'Test PC'})
  def budget(self,**kwargs):
   data={'limit_bytes':10000,'reserve_bytes':1000,'guard_enabled':True,'prior_usage_bytes':100,'confirm_current_period':True};data.update(kwargs);return self.request('budget.set',data)['budget']
+ def test_dualstack_only_migrates_owned_peers_with_exact_server_prefix(self):
+  user=self.user(quota_bytes=1000)
+  self.bind(KEY1,user) # Existing unmanaged peer bound by administrator remains IPv4.
+  self.request('peer.create',{'public_key':KEY3,'user_id':user['id'],'name':'Owned device'})
+  before=self.engine.device_count(user['id'])
+  self.driver.value['networks'].append('fd42:6f70:78:77::1/64')
+  self.engine.tick()
+  owned=self.driver.value['peers'][KEY3]['allowed_ips']
+  self.assertEqual(len(owned),2)
+  self.assertTrue(owned[1].startswith('fd42:6f70:78:77:'))
+  self.assertEqual(self.driver.value['peers'][KEY1]['allowed_ips'],['10.250.0.2/32'])
+  self.assertEqual(self.engine.device_count(user['id']),before)
+  self.assertIn(str(agent.ipaddress.ip_interface(owned[1]).ip),self.driver.allowed)
+  self.user(id=user['id'],quota_bytes=0)
+  self.assertFalse(self.driver.allowed)
+ def test_owned_dualstack_addresses_are_restored_without_a_new_device(self):
+  user=self.user(quota_bytes=1000)
+  self.driver.value['networks'].append('fd42:6f70:78:77::1/64')
+  self.engine.tick()
+  self.request('peer.create',{'public_key':KEY3,'user_id':user['id'],'name':'Owned device'})
+  addresses=self.driver.value['peers'][KEY3]['allowed_ips'][:]
+  self.assertEqual(len(addresses),2)
+  del self.driver.value['peers'][KEY3]
+  self.engine.tick()
+  self.assertEqual(self.driver.value['peers'][KEY3]['allowed_ips'],addresses)
+  self.assertEqual(self.engine.device_count(user['id']),1)
+ def test_ipv6_allocation_is_stable_unique_and_refuses_foreign_address(self):
+  ipv6=agent.ipv6_addresses
+  network=['fd42:6f70:78:77::1/64']
+  a=ipv6.dual_addresses(['10.77.0.2/32'],network)
+  b=ipv6.dual_addresses(['10.77.0.3/32'],network)
+  self.assertNotEqual(a[1],b[1])
+  self.assertEqual(a,ipv6.dual_addresses(a,network))
+  self.assertEqual(ipv6.dual_addresses(['10.77.0.2/32'],[]),['10.77.0.2/32'])
+  with self.assertRaises(ValueError):ipv6.dual_addresses(['10.77.0.2/32','fd42::2/128'],network)
  def test_local_administrator_and_fixed_system_actors_are_accepted_only(self):
   for actor in ('local:1','system:client-api','system:health'):
    self.assertIn('users',self.engine.dispatch({'operation':'state','actor':actor,'data':{}}))

@@ -91,6 +91,8 @@ jobs:
         run: caddy validate --config server/admin-oracle/deploy/Caddyfile --adapter caddyfile
       - name: Real kernel header-only passive UDP observation in isolated namespace
         run: sudo unshare -n python3 ops/oracle-project/ci_native_packet_filter.py
+      - name: Real isolated IPv6 NAT policy ordering and rollback
+        run: sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 ops/oracle-project/ci_ipv6_tunnel.py
       - name: Real isolated physical queue apply and rollback
         run: sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 ops/oracle-project/ci_network_queue.py
       - name: Real namespace UDP443 demux and admin through tunnel routing

@@ -125,8 +125,26 @@ function Own-Task {
  if($task -and ($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne $PowerShellPath -or $task.Actions[0].Arguments -notlike ('*"'+$TrustedScript+'"*'))){throw 'FOREIGN_TASK_REFUSED'}
  return $task
 }
+function New-PrivateBootDirectory([string]$Directory,[Security.Principal.SecurityIdentifier]$sid) {
+ $acl=New-Object Security.AccessControl.DirectorySecurity
+ $acl.SetAccessRuleProtection($true,$false)
+ $adminOwner=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+ $acl.SetOwner($adminOwner)
+ foreach($identifier in @('S-1-5-18','S-1-5-32-544')){
+  $identity=New-Object Security.Principal.SecurityIdentifier($identifier)
+  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
+ }
+ $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow')))
+ [IO.Directory]::CreateDirectory($Directory,$acl) | Out-Null
+ $createdAcl=Get-Acl -LiteralPath $Directory
+ if(([IO.File]::GetAttributes($Directory) -band [IO.FileAttributes]::ReparsePoint) -or $createdAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' -or -not $createdAcl.AreAccessRulesProtected){Write-Host ('NTFS_ADMIN_OWNER='+($createdAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-32-544')+';PROTECTED='+$createdAcl.AreAccessRulesProtected);throw 'SECURE_NEW_DIRECTORY_REQUIRED'}
+}
 if($Mode -in @('SelfTest','SelfTestConnected')){
  if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'HOSTED_SELF_TEST_ONLY'}
+ if($Mode -eq 'SelfTest'){
+  $aclFixture=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) ('OracleProxyBootAclSelfTest-'+[guid]::NewGuid().ToString('N'))
+  try{New-PrivateBootDirectory $aclFixture ([Security.Principal.WindowsIdentity]::GetCurrent().User);Write-Host 'REAL_NTFS_PRIVATE_DIRECTORY_ADMIN_OWNERSHIP=PASS'}finally{if(Test-Path $aclFixture){[IO.Directory]::Delete($aclFixture,$false)}}
+ }
  $counts=[OracleBootReadOnly]::GuardCounts();if($counts.Count -ne 2 -or $counts[0] -lt 0 -or $counts[1] -lt 0){throw 'WFP_ABI_FAILED'}
  [void][OracleBootReadOnly]::InteractiveUserPresent()
  if($Mode -eq 'SelfTestConnected'){
@@ -147,11 +165,10 @@ if($Mode -in @('SelfTest','SelfTestConnected')){
    $observed=Get-Content -Raw -LiteralPath $sameFile | ConvertFrom-Json
    if(-not $observed.not_reboot_acceptance -or -not $observed.service_observed -or $observed.mode -ne 'connected' -or $observed.persistent -lt 16 -or $observed.boot -lt 8 -or (Test-Path $ReportFile)){throw 'SAME_BOOT_MUST_NOT_CREATE_REBOOT_ACCEPTANCE'}
    Write-Host 'REAL_SYSTEM_TASK_CAN_OBSERVE_GUARD_WITHOUT_CLAIMING_REBOOT=PASS'
-  }finally{
+  }catch{if($_.Exception.Message -match '^[A-Z_]{6,80}$'){Write-Host ('ORIGINAL_OBSERVER_ERROR='+$_.Exception.Message)};throw}finally{
    if(Own-Task){Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false}
    if(Test-Path $BootRoot){
-    if(-not (Test-Path $ConfigFile) -or (Get-Content -Raw -LiteralPath $ConfigFile | ConvertFrom-Json).owner -ne 'oracle-proxy-one-shot-boot'){throw 'FOREIGN_FIXTURE_FOLDER_REFUSED'}
-    Remove-Item -LiteralPath $BootRoot -Recurse -Force
+    if((Test-Path $ConfigFile) -and (Get-Content -Raw -LiteralPath $ConfigFile | ConvertFrom-Json).owner -eq 'oracle-proxy-one-shot-boot'){Remove-Item -LiteralPath $BootRoot -Recurse -Force}else{Write-Host 'INCOMPLETE_PRIVATE_FIXTURE_RETAINED_NO_TASK'}
    }
   }
 
@@ -169,18 +186,7 @@ if($Mode -eq 'Prepare'){
  $preflight=[OracleBootReadOnly]::PhysicalProbe(4)
  if(-not $preflight.DeniedByWindows -or $preflight.ConnectionEstablished){throw 'PHYSICAL_DENIAL_NOT_PROVEN_NO_TASK_CREATED'}
  $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
- $acl=New-Object Security.AccessControl.DirectorySecurity
- $acl.SetAccessRuleProtection($true,$false)
- $adminOwner=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
- $acl.SetOwner($adminOwner)
- foreach($identifier in @('S-1-5-18','S-1-5-32-544')){
-  $identity=New-Object Security.Principal.SecurityIdentifier($identifier)
-  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
- }
- $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow')))
- [IO.Directory]::CreateDirectory($BootRoot,$acl) | Out-Null
- $createdAcl=Get-Acl -LiteralPath $BootRoot
- if(([IO.File]::GetAttributes($BootRoot) -band [IO.FileAttributes]::ReparsePoint) -or $createdAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' -or -not $createdAcl.AreAccessRulesProtected){throw 'SECURE_NEW_DIRECTORY_REQUIRED'}
+ New-PrivateBootDirectory $BootRoot $sid
  Copy-Item -LiteralPath $PSCommandPath -Destination $TrustedScript
  $config=@{schema=1;owner='oracle-proxy-one-shot-boot';previous_boot=(Get-CurrentBoot);armed_utc=[DateTime]::UtcNow.ToString('o');version=$ExpectedVersion;script_sha256=(Get-FileHash $TrustedScript -Algorithm SHA256).Hash}
  $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding UTF8

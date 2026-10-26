@@ -167,6 +167,7 @@ internal static class Acceptance
    await Send("PreferUdp8443");await Send("Connect");var timer=Stopwatch.StartNew();JsonObject state;
    do{await Task.Delay(250);state=await Send("Status");}while(state["mode"]?.GetValue<string>()!="connected"&&timer.ElapsedMilliseconds<30000);
    Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true && state["ipv6_policy"]?.GetValue<string>()=="tunnel" && state["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10" && state["transport_address"]?.GetValue<string>()=="141.147.78.44","PINNED_RC20_DUALSTACK_NATIVE_UDP_GUARD_CONNECTED");
+   long connected=capture.Packets();await ProbePhysical(physical);await ProbePhysical6(adapter);try{foreach(string permission in new[]{"prompt","denied","granted","revoked"})await Browser(true,permission);}finally{await Task.Delay(500);long delta=capture.Packets()-connected;Console.WriteLine("RAW_STUN_PHYSICAL_TX_DELTA="+delta);Check(delta==0,"REAL_RAW_STUN_V4_AND_IPV6_LINK_LOCAL_HAVE_ZERO_PHYSICAL_EGRESS_WITH_VPN");}
    using(var child=Process.Start(new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe")){
     UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,
     ArgumentList={"-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",Path.GetFullPath("ops/windows-boot/Test-OracleProxyBoot.ps1"),"-Mode","SelfTestConnected"}
@@ -176,7 +177,6 @@ internal static class Acceptance
     if(child.ExitCode!=0){foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(await errors,@"[A-Z_]{6,80}|CS[0-9]{4}").Take(12))Console.WriteLine("OBSERVER_ERROR_CODE="+match.Value);}
     Check(child.ExitCode==0 && (await output).Contains("READ_ONLY_BOOT_OBSERVER_ABI_AND_SCOPE=PASS"),"BOOT_OBSERVER_CONNECTED_READ_ONLY_ABI_AND_DUALSTACK_SCOPE");
    }
-   long connected=capture.Packets();await ProbePhysical(physical);await ProbePhysical6(adapter);try{foreach(string permission in new[]{"prompt","denied","granted","revoked"})await Browser(true,permission);}finally{await Task.Delay(500);long delta=capture.Packets()-connected;Console.WriteLine("RAW_STUN_PHYSICAL_TX_DELTA="+delta);Check(delta==0,"REAL_RAW_STUN_V4_AND_IPV6_LINK_LOCAL_HAVE_ZERO_PHYSICAL_EGRESS_WITH_VPN");}
    await Send("Quit");state=await Send("Status");long used=(state["peer_rx_bytes"]?.GetValue<long>()??-1)+(state["peer_tx_bytes"]?.GetValue<long>()??-1)-initial;
    Check(used>=0 && used<=16*1024*1024 && state["intent"]?.GetValue<bool>()==false && state["core_pid"]?.GetValue<uint>()==0,"WEBRTC_ACCEPTANCE_BOUNDED_USAGE_AND_CORE_STOPPED");
    await Send("Logout");

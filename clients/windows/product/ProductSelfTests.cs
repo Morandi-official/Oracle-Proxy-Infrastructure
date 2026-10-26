@@ -33,6 +33,18 @@ internal static class ProductSelfTests
         if(TransportPolicy.Next(TunnelTransport.WireGuardUdp,state)!=TunnelTransport.WireGuardQuic || TransportPolicy.Next(TunnelTransport.WireGuardQuic,state)!=TunnelTransport.WireGuardHttps || TransportPolicy.Next(TunnelTransport.WireGuardHttps,state) is not null)return false;
         var quic=CoreConfig.Build(state,secret,"synthetic-only",TunnelTransport.WireGuardQuic);
         if(quic["endpoints"]?[0]?["detour"]?.GetValue<string>()!="oracle-quic-relay" || quic["outbounds"]?[1]?["type"]?.GetValue<string>()!="oracle-quic")return false;
+        string oldScope=CarrierMemory.NetworkHash(state);
+        state["tunnel"]!["transport_address"]="141.147.78.44";
+        foreach(var carrier in new[]{TunnelTransport.WireGuardUdp,TunnelTransport.WireGuardQuic}){
+            var secondary=CoreConfig.Build(state,secret,"synthetic-only",carrier);
+            if(secondary["outbounds"]?[1]?["address"]?.GetValue<string>()!="141.147.78.44" || secondary["endpoints"]?[0]?["peers"]?[0]?["address"]?.GetValue<string>()!="152.67.156.100")return false;
+        }
+        if(CarrierMemory.NetworkHash(state)==oldScope || CoreConfig.Build(state,secret,"synthetic-only",true)["outbounds"]?[1]?["address"] is not null)return false;
+        foreach(JsonNode bad in new JsonNode[]{JsonValue.Create("127.0.0.1")!,JsonValue.Create("141.147.78.44:443")!,JsonValue.Create(123)!,new JsonObject()}){
+            state["tunnel"]!["transport_address"]=bad;
+            try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}
+        }
+        state["tunnel"]!.AsObject().Remove("transport_address");
         state["tunnel"]!["quic"]!["enabled"]=false;
         try{CoreConfig.Build(state,secret,"synthetic-only",TunnelTransport.WireGuardQuic);return false;}catch(IOException){}
         state["tunnel"]!["endpoint"]="evil.invalid:443";

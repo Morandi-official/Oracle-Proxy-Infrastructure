@@ -448,6 +448,9 @@ internal static class ProductTests
         // The released service cannot do this: CI changes its *own* in-memory
         // synthetic configuration to loopback, never a production response.
         config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";
+        // Non-shipped fixture only: its synthetic server is on loopback. The
+        // production configuration separately pins the physical carrier IP.
+        config["outbounds"]![1]!.AsObject().Remove("address");
 
         Process? exit=null,client=null;
         try{

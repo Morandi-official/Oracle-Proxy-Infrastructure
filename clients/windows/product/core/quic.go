@@ -17,6 +17,7 @@ import (
 const quicType = "oracle-quic"
 
 type quicOptions struct {
+	Address     string `json:"address"`
 	Token       string `json:"token"`
 	Certificate string `json:"certificate"`
 }
@@ -27,6 +28,11 @@ type quicOutbound struct {
 }
 
 func newQUICOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options quicOptions) (adapter.Outbound, error) {
+	address, err := ingressAddress(options.Address)
+	if err != nil {
+		return nil, err
+	}
+	options.Address = address
 	if !relayToken.MatchString(options.Token) {
 		return nil, errors.New("QUIC_TOKEN_REJECTED")
 	}
@@ -43,7 +49,7 @@ func (r *quicOutbound) DialContext(ctx context.Context, network string, destinat
 	if N.NetworkName(network) != N.NetworkUDP || destination.String() != "152.67.156.100:51820" {
 		return nil, errors.New("QUIC_DESTINATION_REJECTED")
 	}
-	carrier := M.ParseSocksaddr("152.67.156.100:8443")
+	carrier := M.ParseSocksaddr(net.JoinHostPort(r.options.Address, "8443"))
 	socket, err := r.physical.ListenPacket(ctx, carrier)
 	if err != nil {
 		return nil, err

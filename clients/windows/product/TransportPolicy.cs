@@ -3,6 +3,13 @@ namespace OracleProxy.Product;
 internal enum TunnelTransport { WireGuardUdp, WireGuardQuic, WireGuardHttps }
 internal static class TransportPolicy
 {
+    internal static string IngressAddress(JsonObject? state)
+    {
+        var node=state?["tunnel"]?["transport_address"];
+        if(node is null)return "152.67.156.100";
+        if(node is JsonValue value && value.TryGetValue<string>(out var address) && address is "152.67.156.100" or "141.147.78.44")return address;
+        throw new IOException("INVALID_TRANSPORT_ADDRESS");
+    }
     internal static string Name(TunnelTransport value)=>value switch{
         TunnelTransport.WireGuardUdp=>"wireguard-udp",TunnelTransport.WireGuardQuic=>"wireguard-quic",_=>"wireguard-https"};
     internal static bool Native8443Available(JsonObject? state)=>state?["tunnel"]?["native_udp_ports"] is JsonArray ports && ports.Any(n=>n?.GetValue<int>()==8443);

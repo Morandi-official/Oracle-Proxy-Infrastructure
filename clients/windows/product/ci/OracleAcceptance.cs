@@ -20,9 +20,10 @@ internal static class OracleAcceptance
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_all_loss_begin(out IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_primary_loss_begin(out IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_primary_reply_loss_begin(out IntPtr engine);
-        internal InitialUdpLoss(bool blockQuic=false,bool primaryOnly=false,bool primaryRepliesOnly=false)
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_old_ingress_loss_begin(out IntPtr engine);
+        internal InitialUdpLoss(bool blockQuic=false,bool primaryOnly=false,bool primaryRepliesOnly=false,bool oldIngressOnly=false)
         {
-            uint code=primaryRepliesOnly?fixture_udp_primary_reply_loss_begin(out _engine):primaryOnly?fixture_udp_primary_loss_begin(out _engine):blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
+            uint code=oldIngressOnly?fixture_udp_old_ingress_loss_begin(out _engine):primaryRepliesOnly?fixture_udp_primary_reply_loss_begin(out _engine):primaryOnly?fixture_udp_primary_loss_begin(out _engine):blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
             if(code!=0){Console.WriteLine("INITIAL_UDP_NATIVE_ERROR="+code);throw new Win32Exception((int)code);}
         }
         public void Dispose()
@@ -266,6 +267,7 @@ internal static class OracleAcceptance
             stage="NORMAL_AUTO_NATIVE8443_POLICY";
             await Send("Disconnect");var automatic8443=await Send("PreferAuto8443");
             Check(automatic8443["transport_preference"]?.GetValue<string>()=="auto" && automatic8443["native_udp_port_preference"]?.GetValue<int>()==8443 && automatic8443["native_udp_8443_available"]?.GetValue<bool>()==true,"REAL_NORMAL_AUTO_NATIVE_8443_SELECTION_IS_SERVER_ADVERTISED_AND_PRESERVES_AUTO_POLICY");
+            using(var oldIngressLoss=new InitialUdpLoss(oldIngressOnly:true)){
             stage="FIXED_NATIVE_UDP8443";
             await Send("Disconnect");await Send("PreferUdp8443");
             var native8443Timer=Stopwatch.StartNew();await Send("Connect");var native8443=await Connected();
@@ -275,6 +277,8 @@ internal static class OracleAcceptance
             Check(nativeBuffers?["rcvbuf_after"]?.GetValue<uint>()>=7*1024*1024 && nativeBuffers?["sndbuf_after"]?.GetValue<uint>()>=7*1024*1024,"REAL_OWNED_WINDOWS_UDP_BUFFERS_MATCH_WIREGUARD_POLICY");
             foreach(string key in new[]{"rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after"})Console.WriteLine("REAL_NATIVE_8443_"+key.ToUpperInvariant()+"="+nativeBuffers?[key]);
             stage="NATIVE_8443_LOW_MTU_STABILITY";await StableNative8443(native8443);
+            Check(true,"REAL_SECONDARY_NATIVE_UDP8443_WHILE_ALL_OLD_INGRESS_UDP_PORTS_ARE_BLOCKED");
+            }
             await Send("Disconnect");
             stage="FORCED_COLD_PROTOCOLS";
             foreach(string preference in new[]{"PreferUdp","PreferQuic"}){
@@ -282,11 +286,13 @@ internal static class OracleAcceptance
                 for(int cycle=0;cycle<3;cycle++){
                     await Send("Disconnect");var selected=await Send(preference);
                     Check(selected["core_pid"]?.GetValue<uint>()==0,"REAL_SELECTION_STOPS_OLD_CORE_"+wanted+"_"+cycle);
+                    using var oldIngressLoss=preference=="PreferQuic" && cycle==0?new InitialUdpLoss(oldIngressOnly:true):null;
                     using var primaryLoss=preference=="PreferUdp" && cycle==1?new InitialUdpLoss(primaryOnly:true):null;
                     using var returnLoss=preference=="PreferUdp" && cycle==2?new InitialUdpLoss(primaryRepliesOnly:true):null;
                     var timer=Stopwatch.StartNew();await Send("Connect");var cold=await Connected();long elapsed=timer.ElapsedMilliseconds;
                     Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
                     Check(cold["transport_address"]?.GetValue<string>()=="141.147.78.44" && cold["transport"]?.GetValue<string>()==wanted && elapsed<(preference=="PreferUdp" && cycle>0?12000:6000) && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
+                    if(preference=="PreferQuic" && cycle==0)Check(true,"REAL_SECONDARY_QUIC_WHILE_ALL_OLD_INGRESS_UDP_PORTS_ARE_BLOCKED");
                     Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
                     var metered=await Send("Status");
                     Check(metered["verified_exit_ip"]?.GetValue<string>()=="152.67.156.100" && metered["traffic"]?["sample_ms"]?.GetValue<long>()>0 && metered["traffic"]?["rx_bytes"]?.GetValue<long>()>0 && metered["traffic"]?["tx_bytes"]?.GetValue<long>()>0,"REAL_LOCAL_TUN_UPLOAD_DOWNLOAD_COUNTERS_AND_VERIFIED_EXIT_"+wanted+"_"+cycle);

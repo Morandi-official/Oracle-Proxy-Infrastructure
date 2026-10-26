@@ -83,10 +83,45 @@ internal static class OracleAcceptance
     private static async Task<string> ExitIp()
     {
         using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(10)};
-        string value=await client.GetStringAsync("https://www.cloudflare.com/cdn-cgi/trace");
+        string value=await client.GetStringAsync("https://1.1.1.1/cdn-cgi/trace");
         string? ip=value.Split('\n').FirstOrDefault(v=>v.StartsWith("ip="))?[3..];
         if(value.Length>8192 || !IPAddress.TryParse(ip,out _))throw new IOException("EXIT_PROBE_FAILED");
         return ip;
+    }
+    private static async Task<bool> DualStackExit()
+    {
+        using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(10)};
+        string trace=await client.GetStringAsync("https://[2606:4700:4700::1111]/cdn-cgi/trace");
+        return trace.Length<8192 && trace.Split('\n').Any(line=>line=="ip=2603:c020:c015:8100::10");
+    }
+    private static async Task<bool> Ipv6Stun()
+    {
+        var addresses=await Dns.GetHostAddressesAsync("stun.cloudflare.com");
+        var target=addresses.First(address=>address.AddressFamily==AddressFamily.InterNetworkV6);
+        using var socket=new UdpClient(AddressFamily.InterNetworkV6);
+        socket.Connect(target,3478);
+        byte[] transaction=System.Security.Cryptography.RandomNumberGenerator.GetBytes(12);
+        byte[] message=new byte[20];message[1]=1;message[4]=0x21;message[5]=0x12;message[6]=0xa4;message[7]=0x42;transaction.CopyTo(message,8);
+        await socket.SendAsync(message);
+        using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(6));
+        byte[] response=(await socket.ReceiveAsync(timeout.Token)).Buffer;
+        if(response.Length<20 || response[0]!=1 || response[1]!=1 || !response.AsSpan(4,16).SequenceEqual(message.AsSpan(4,16)))return false;
+        int end=20+(response[2]<<8|response[3]);if(end>response.Length)return false;
+        for(int offset=20;offset+4<=end;){
+            int type=response[offset]<<8|response[offset+1],length=response[offset+2]<<8|response[offset+3];offset+=4;
+            if(offset+length>end)return false;
+            if(type==0x20 && length==20 && response[offset+1]==2){
+                byte[] mapped=new byte[16];for(int i=0;i<16;i++)mapped[i]=(byte)(response[offset+4+i]^message[4+i]);
+                return new IPAddress(mapped).ToString()=="2603:c020:c015:8100::10";
+            }
+            offset+=(length+3)&~3;
+        }
+        return false;
+    }
+    private static async Task<bool> NoUnexpectedIpv6Exit()
+    {
+        try{return await DualStackExit();}
+        catch(Exception error) when(error is HttpRequestException or TaskCanceledException or IOException){return true;}
     }
     private static async Task<JsonObject> Connected()
     {
@@ -197,6 +232,8 @@ internal static class OracleAcceptance
             do{
                 if(round%4==0)await BulkDownload();
                 Console.WriteLine("LOW_MTU_PHASE=HTTPS_EXIT");Check(await ExitIp()=="152.67.156.100","REAL_LOW_MTU_HTTPS_EXIT");
+                Check(await DualStackExit(),"REAL_LOW_MTU_IPV6_HTTPS_ORACLE_EGRESS");
+                Check(await Ipv6Stun(),"REAL_LOW_MTU_IPV6_UDP_STUN_PUBLIC_IP_IS_ORACLE");
                 Console.WriteLine("LOW_MTU_PHASE=NORMAL_DNS");Check(await FreshDns(),"REAL_LOW_MTU_NORMAL_DNS");
                 Console.WriteLine("LOW_MTU_PHASE=UDP9953");Check(await DatagramRoundTrip(pid),"REAL_LOW_MTU_NON_HIJACKED_UDP9953_DATAGRAM_RESPONSE");
                 var state=await Send("Status");RequireStableNative(state,pid);
@@ -276,6 +313,7 @@ internal static class OracleAcceptance
             var nativeBuffers=native8443["native_udp_attempt"]?["ports"]?["8443"];
             Check(nativeBuffers?["rcvbuf_after"]?.GetValue<uint>()>=7*1024*1024 && nativeBuffers?["sndbuf_after"]?.GetValue<uint>()>=7*1024*1024,"REAL_OWNED_WINDOWS_UDP_BUFFERS_MATCH_WIREGUARD_POLICY");
             foreach(string key in new[]{"rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after"})Console.WriteLine("REAL_NATIVE_8443_"+key.ToUpperInvariant()+"="+nativeBuffers?[key]);
+            Check(native8443["ipv6_policy"]?.GetValue<string>()=="tunnel" && await DualStackExit() && await Ipv6Stun(),"REAL_NATIVE_DUALSTACK_IPV6_HTTPS_AND_UDP_STUN");
             stage="NATIVE_8443_LOW_MTU_STABILITY";await StableNative8443(native8443);
             Check(true,"REAL_SECONDARY_NATIVE_UDP8443_WHILE_ALL_OLD_INGRESS_UDP_PORTS_ARE_BLOCKED");
             }
@@ -292,6 +330,7 @@ internal static class OracleAcceptance
                     var timer=Stopwatch.StartNew();await Send("Connect");var cold=await Connected();long elapsed=timer.ElapsedMilliseconds;
                     Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
                     Check(cold["transport_address"]?.GetValue<string>()=="141.147.78.44" && cold["transport"]?.GetValue<string>()==wanted && elapsed<(preference=="PreferUdp" && cycle>0?12000:6000) && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
+                    Check(await DualStackExit() && await Ipv6Stun(),"REAL_FORCED_CARRIER_IPV6_HTTPS_AND_STUN_"+wanted+"_"+cycle);
                     if(preference=="PreferQuic" && cycle==0)Check(true,"REAL_SECONDARY_QUIC_WHILE_ALL_OLD_INGRESS_UDP_PORTS_ARE_BLOCKED");
                     Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
                     var metered=await Send("Status");
@@ -412,12 +451,14 @@ internal static class OracleAcceptance
                 var carrier=await Connected();
                 Check(carrier["transport"]?.GetValue<string>()=="wireguard-https" && await ExitIp()=="152.67.156.100","REAL_AUTOMATIC_HTTPS_WIREGUARD_ORACLE_EXIT_WITH_NATIVE_UDP_BLOCKED");
                 Check(await FreshDns(),"REAL_HTTPS_WIREGUARD_FRESH_UDP_DNS");
+                Check(await DualStackExit() && await Ipv6Stun(),"REAL_HTTPS_FALLBACK_DUALSTACK_IPV6_HTTPS_AND_STUN");
                 Check(await CarrierDirectBlocked() && await AdminThroughVPN(),"REAL_HTTPS_ADMIN_THROUGH_VPN_AND_PHYSICAL_DIRECT_BLOCKED");
                 stage="HTTPS_SERVICE_CRASH_RECOVERY";
                 using(var carrierService=Process.GetProcessesByName("OracleProxy.Service").Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe)){
                     carrierService.Kill(true);await carrierService.WaitForExitAsync();
                 }
                 try{Check(await ExitIp()=="152.67.156.100","REAL_HTTPS_SERVICE_CRASH_NO_DIRECT_EXIT");}catch(IOException){throw;}catch{Console.WriteLine("REAL_HTTPS_SERVICE_CRASH_PROBE_BLOCKED=PASS");}
+                Check(await NoUnexpectedIpv6Exit(),"REAL_SERVICE_CRASH_IPV6_BLOCKED_OR_ORACLE_ONLY");
                 var restored=await Connected();
                 Check(restored["transport"]?.GetValue<string>()=="wireguard-https" && restored["account"]?["device_count"]?.GetValue<int>()==devices && await ExitIp()=="152.67.156.100","REAL_SCM_HTTPS_FALLBACK_RECOVERY_SAME_DEVICE_WHILE_NATIVE_UDP_REMAINS_BLOCKED");
             }

@@ -1,7 +1,6 @@
 //go:build !windows
 
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
 package main
 
 import (
@@ -11,6 +10,6 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
-func physicalDialer(ctx context.Context) (N.Dialer, error) {
-	return dialer.NewDefault(ctx, option.DialerOptions{})
+func physicalDialer(ctx context.Context, allowFragment ...bool) (N.Dialer, error) {
+	return dialer.NewDefault(ctx, option.DialerOptions{AbstractDialerOptions: option.AbstractDialerOptions{UDPFragment: outerFragment(allowFragment)}})
 }

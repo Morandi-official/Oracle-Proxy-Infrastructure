@@ -6,7 +6,7 @@ internal static class EgressProbe
     // Keep one HTTP request alive when this generation has received a WG reply.
     // The outer HTTP/3 200 alone does not qualify. A silent carrier retains its
     // short deadline; progress can extend the total budget only up to 12 seconds.
-    internal static async Task<long> Verify(HttpClient client,int seconds,Func<bool> replyReceived,CancellationToken stop)
+    internal static async Task<long> Verify(HttpClient client,int seconds,Func<bool> replyReceived,CancellationToken stop,string target="https://www.cloudflare.com/cdn-cgi/trace",string expected="152.67.156.100")
     {
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(stop);
         deadline.CancelAfter(TimeSpan.FromSeconds(seconds));
@@ -15,12 +15,12 @@ internal static class EgressProbe
         async Task Read()
         {
             try{
-                using var response=await client.GetAsync("https://www.cloudflare.com/cdn-cgi/trace",HttpCompletionOption.ResponseHeadersRead,probeToken);
+                using var response=await client.GetAsync(target,HttpCompletionOption.ResponseHeadersRead,probeToken);
                 response.EnsureSuccessStatusCode();await using var stream=await response.Content.ReadAsStreamAsync(probeToken);
                 using var memory=new MemoryStream();var buffer=new byte[1024];int read;
                 while((read=await stream.ReadAsync(buffer,probeToken))>0){if(memory.Length+read>8192)throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");memory.Write(buffer,0,read);}
                 string body=System.Text.Encoding.UTF8.GetString(memory.ToArray());
-                if(!body.Split('\n').Any(line=>line=="ip=152.67.156.100"))throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");
+                if(!body.Split('\n').Any(line=>line=="ip="+expected))throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");
             }
             catch(OperationCanceledException error) when(!stop.IsCancellationRequested){throw new IOException("ORACLE_PROBE_TIMEOUT",error);}
             catch(HttpRequestException error){throw new IOException("ORACLE_PROBE_HTTP_FAILED",error);}

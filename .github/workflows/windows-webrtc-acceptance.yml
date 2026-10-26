@@ -1,10 +1,10 @@
 name: Accepted Windows client real browser WebRTC privacy
 on:
   pull_request:
-    paths: ['ops/windows-webrtc/**', '.github/workflows/windows-webrtc-acceptance.yml']
+    paths: ['ops/windows-webrtc/**', 'ops/windows-boot/**', '.github/workflows/windows-webrtc-acceptance.yml']
   push:
     branches: [main]
-    paths: ['ops/windows-webrtc/**', '.github/workflows/windows-webrtc-acceptance.yml']
+    paths: ['ops/windows-webrtc/**', 'ops/windows-boot/**', '.github/workflows/windows-webrtc-acceptance.yml']
 permissions:
   contents: read
   actions: read
@@ -24,6 +24,9 @@ jobs:
         run: python ops/windows-webrtc/prepare.py
       - name: Compile non-shipped real Edge permission matrix harness
         run: dotnet publish ops/windows-webrtc/Acceptance.csproj -c Release -p:DebugType=None -o dist/webrtc-tests
+      - name: Validate Windows PowerShell read-only boot observer ABI
+        shell: powershell
+        run: ./ops/windows-boot/Test-OracleProxyBoot.ps1 -Mode SelfTest
       - name: Check physical counters and public Edge page without accounts
         run: ./dist/webrtc-tests/OracleProxy.WebRtc.Acceptance.exe --counter-self-test
       - name: Wait for exact owned test-slot cleanup SSH stage

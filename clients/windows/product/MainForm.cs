@@ -121,7 +121,7 @@ internal sealed class MainForm : Form
         maintenance.Controls.Add(Tool("卸载",()=>{if(MessageBox.Show(this,"将恢复直连并卸载系统服务、删除本机密钥。服务器仍保留设备记录与用量，请联系管理员撤销旧设备以释放名额。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.Elevate(true);}catch{_detail.Text="卸载未完成，请检查 UAC 提示。";}}}));
         foreach(bool restore in new[]{false,true})maintenance.Controls.Add(Tool(restore?"恢复 UU 权限（UAC）":"修复 UU 权限（UAC）",()=>{try{Installer.ElevateUuPermissions(restore);}catch{_detail.Text="UU 权限维护未启动，请检查 UAC 提示。";}}));
         maintenance.Controls.Add(Tool("恢复直连（UAC）",()=>{if(MessageBox.Show(this,"将停止本产品的隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","紧急恢复",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.ElevateRecovery();}catch{_detail.Text="恢复请求未完成。";}}}));Row(tools,maintenance);
-        Row(tools,new Label{Text="集成候选版 · IPv6 当前阻断；UU 实机故障及重启连续性仍待验收。",AutoSize=false,Height=44,ForeColor=Color.DarkOrange,Margin=new Padding(0,10,0,0)});
+        Row(tools,new Label{Text="集成候选版 · 双栈就绪时使用加密隧道；物理重启与发布签名仍待验收。",AutoSize=false,Height=44,ForeColor=Color.DarkOrange,Margin=new Padding(0,10,0,0)});
         var toolsCard=Card("toolsSection","03   诊断与测试",tools);Row(body,toolsCard);
         foreach(var (title,target) in new[]{("01  当前连接",connectionCard),("02  账号与设备",accountCard),("03  诊断与测试",toolsCard)}){
             var button=new Button{Text=title,Dock=DockStyle.Fill,Height=46,TextAlign=ContentAlignment.MiddleLeft,FlatStyle=FlatStyle.Flat,BackColor=Color.FromArgb(20,31,53),UseVisualStyleBackColor=false,ForeColor=Color.White,Margin=new Padding(0,0,0,8)};button.FlatAppearance.BorderSize=0;button.Click+=(_,_)=>viewport.ScrollControlIntoView(target);Row(navigation,button);
@@ -263,7 +263,7 @@ internal sealed class MainForm : Form
             _latency.Text=mode=="connected" && latency is not null?$"{latency} ms":"—";
             _uu.Text=$"{state["uu_verified_programs"] ?? (JsonNode)0} 个程序已验证";
             UpdateRates(state,mode=="connected" && guard);
-            _telemetry.Text=mode=="connected"?"流量速率来自本机 VPN 网卡；HTTP 延迟包含隧道与目标站点响应时间。":"协议及出口 IP 将在本次连接验证通过后显示。";
+            _telemetry.Text=mode=="connected"?(state["verified_exit_ipv6"] is not null?"IPv4 / IPv6 出口均已验证。 ":"")+"流量速率来自本机 VPN 网卡；HTTP 延迟包含隧道与目标站点响应时间。":"协议及出口 IP 将在本次连接验证通过后显示。";
             _usageUpdated.Text=$"用量更新：{(at is null?"—":DateTimeOffset.FromUnixTimeSeconds(at.Value).ToLocalTime().ToString("HH:mm:ss"))}  ·  {(fresh?"服务器账单统计":"上次读取值，等待刷新")}";
 
     }

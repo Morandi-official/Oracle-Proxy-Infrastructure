@@ -1,4 +1,4 @@
 {
-  "operation": "deploy",
-  "request_id": "secondary-vpn-backend-20261026"
+  "operation": "preflight",
+  "request_id": "secondary-vpn-persistent-proof-20261026"
 }

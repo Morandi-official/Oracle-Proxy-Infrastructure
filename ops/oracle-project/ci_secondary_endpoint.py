@@ -25,6 +25,7 @@ def main():
         script.write_text(source);script.chmod(0o600)
         spec=importlib.util.spec_from_file_location('secondary_ci',script)
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        (root/'secondary-allocation.json').write_text(json.dumps(module.EXPECTED_ALLOCATION))
         original_run=module.run
         def isolated(argv):
             if argv[0]=='ip':argv=['ip','netns','exec',server,*argv]
@@ -66,7 +67,12 @@ for host in ('10.0.0.6','10.0.0.10'):
                 time.sleep(.5)
             assert module.load_state()['phase']=='rolled_back' and not module.snapshot()[1] and module.snapshot()[0]==baseline
             print('REAL_INDEPENDENT_SYSTEMD_LEASE_EXPIRY_REMOVES_ONLY_ALIAS=PASS',flush=True)
+            actual_mac=json.loads(run('ip','-n',server,'-j','link','show','dev','enp0s6').stdout)[0]['address']
+            module.kernel_mac=lambda:json.loads(run('ip','-n',server,'-j','link','show','dev','enp0s6').stdout)[0]['address']
+            module.metadata=lambda:[{'privateIp':module.PRIMARY,'macAddr':actual_mac,'subnetCidrBlock':'10.0.0.0/24'}]
             module.install();second=module.load_state();units.append('oracle-proxy-secondary-'+second['lease_id'])
+            assert module.allocation_source(module.metadata())=='OWNER_CONSOLE_AND_PRIMARY_IMDS'
+            print('REAL_KERNEL_MAC_AND_ROOT_OWNED_OWNER_RECORD_WITHOUT_IMDS_SECONDARY_LIST=PASS',flush=True)
             module.rollback(first['lease_id']);assert module.owned_alias(module.snapshot()[1])
             module.rollback(second['lease_id']);assert not module.snapshot()[1] and module.snapshot()[0]==baseline
             print('REAL_STALE_LEASE_NOOP_AND_EXPLICIT_OWNED_ROLLBACK=PASS',flush=True)

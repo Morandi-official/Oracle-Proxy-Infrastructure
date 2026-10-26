@@ -31,6 +31,7 @@ jobs:
     environment: oracle-ops
     outputs:
       operation: ${{ steps.request.outputs.operation }}
+      secondary_endpoint: ${{ steps.request.outputs.secondary_endpoint }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,6 +113,9 @@ jobs:
           "$quic_venv/bin/pip" install --disable-pip-version-check aioquic==1.3.0
           "$quic_venv/bin/python" ops/oracle-project/verify_quic.py
           "$quic_venv/bin/python" ops/oracle-project/verify_web_http3.py --require-reachable
+          if [[ '${{ steps.request.outputs.secondary_endpoint }}' == true ]]; then
+            "$quic_venv/bin/python" ops/oracle-project/verify_secondary_endpoint.py
+          fi
       - name: Real Chromium and Firefox administrator login acceptance
         if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
         shell: bash
@@ -125,6 +129,48 @@ jobs:
           "$browser_venv/bin/pip" install --disable-pip-version-check playwright==1.56.0
           "$browser_venv/bin/python" -m playwright install --with-deps chromium firefox
           "$browser_venv/bin/python" ops/oracle-project/browser_acceptance.py
+
+  secondary-endpoint-browser:
+    needs: operations
+    if: needs.operations.result == 'success' && needs.operations.outputs.secondary_endpoint == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install playwright==1.56.0
+      - name: Original certificate identity on both addresses with real Edge HTTP3
+        shell: powershell
+        run: |
+          @'
+          import json,re
+          from playwright.sync_api import sync_playwright
+          host='vpn-admin.morandi.dpdns.org'
+          with sync_playwright() as p:
+              results=[]
+              for address in ('152.67.156.100','141.147.78.44'):
+                  browser=p.chromium.launch(channel='msedge',headless=True,args=[
+                      '--no-proxy-server','--enable-quic','--origin-to-force-quic-on='+host+':443',
+                      '--host-resolver-rules=MAP '+host+' '+address])
+                  result={'address':address,'protocol':None,'edge_version':browser.version,'tls_bypass':False}
+                  try:
+                      page=browser.new_page()
+                      response=page.goto('https://'+host+'/privacy-check/',wait_until='domcontentloaded',timeout=20000)
+                      result['protocol']=page.evaluate("performance.getEntriesByType('navigation')[0].nextHopProtocol")
+                      result['http_status']=response.status
+                  except Exception as error:
+                      result['error_category']=type(error).__name__
+                      code=re.search(r'ERR_[A-Z_]+',str(error))
+                      if code:result['error_code']=code[0]
+                  finally:browser.close()
+                  results.append(result)
+                  print('SECONDARY_EDGE_HTTP3='+json.dumps(result,sort_keys=True),flush=True)
+              if any(x.get('protocol')!='h3' or x.get('http_status')!=200 for x in results):raise SystemExit(1)
+          '@ | python -
 
   release-download-links:
     needs: operations

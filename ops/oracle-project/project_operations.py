@@ -131,6 +131,9 @@ def preflight():
     probe_spec=importlib.util.spec_from_file_location('udp_resolver_probe',Path(__file__).with_name('udp_resolver_probe.py'))
     probe=importlib.util.module_from_spec(probe_spec);probe_spec.loader.exec_module(probe)
     value['public_udp_resolver_controls']=probe.observe()
+    secondary_spec=importlib.util.spec_from_file_location('secondary_endpoint',Path(__file__).with_name('secondary_endpoint.py'))
+    secondary=importlib.util.module_from_spec(secondary_spec);secondary_spec.loader.exec_module(secondary)
+    value['secondary_endpoint']=secondary.observe()
     diagnostic_request=json.loads(Path(__file__).with_name('request.json').read_text())
     if diagnostic_request.get('operation')=='preflight' and diagnostic_request.get('request_id','').startswith('network-performance-'):
         try:
@@ -352,6 +355,13 @@ def install_downloads():
 
 
 def enable_https():
+    request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id') in ('secondary-endpoint-apply-20261026','secondary-endpoint-rollback-20261026'):
+        secondary_spec=importlib.util.spec_from_file_location('secondary_endpoint',Path(__file__).with_name('secondary_endpoint.py'))
+        secondary=importlib.util.module_from_spec(secondary_spec);secondary_spec.loader.exec_module(secondary)
+        if request['request_id']=='secondary-endpoint-apply-20261026':secondary.install()
+        else:secondary.rollback()
+        return # No Caddy reload, downloads, DHCP, route, or firewall refresh.
     install_downloads()
     main = CADDY_MAIN
     directory = CADDY_DIRECTORY

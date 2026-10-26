@@ -26,7 +26,7 @@ internal static class Acceptance
   string edge=new[]{Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)}.Select(p=>Path.Combine(p,"Microsoft","Edge","Application","msedge.exe")).FirstOrDefault(File.Exists)??throw new IOException("EDGE_NOT_INSTALLED");
   string profile=Path.Combine(Path.GetTempPath(),"oracle-webrtc-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(profile);
   var start=new ProcessStartInfo(edge){UseShellExecute=false,CreateNoWindow=true};
-  foreach(string arg in new[]{"--headless=new","--no-first-run","--no-default-browser-check","--disable-background-networking","--disable-component-update","--disable-default-apps","--disable-sync","--remote-debugging-port=0","--user-data-dir="+profile,"https://vpn-admin.morandi.dpdns.org/privacy-check/"})start.ArgumentList.Add(arg);
+  foreach(string arg in new[]{"--headless=new","--no-proxy-server","--disable-extensions","--no-first-run","--no-default-browser-check","--disable-background-networking","--disable-component-update","--disable-default-apps","--disable-sync","--remote-debugging-port=0","--user-data-dir="+profile,"https://vpn-admin.morandi.dpdns.org/privacy-check/"})start.ArgumentList.Add(arg);
   using var process=Process.Start(start)??throw new IOException("EDGE_START_FAILED");
   try{
    string portFile=Path.Combine(profile,"DevToolsActivePort");var wait=Stopwatch.StartNew();while(!File.Exists(portFile)&&wait.ElapsedMilliseconds<15000)await Task.Delay(100);
@@ -42,6 +42,7 @@ internal static class Acceptance
    Console.WriteLine("BROWSER_STUN_PUBLIC_CANDIDATE_COUNT="+(result["public_ips"] as JsonArray)?.Count);Console.WriteLine("BROWSER_STUN_UNEXPECTED_PUBLIC="+(result["unexpected_public"]?.GetValue<bool>()==true));
    Check(result["oracle_verified"]?.GetValue<bool>()==true && result["unexpected_public"]?.GetValue<bool>()==false && result["public_ips"]!.AsArray().Any(p=>p?.GetValue<string>()=="152.67.156.100"),"REAL_EDGE_RTCPEERCONNECTION_STUN_PUBLIC_CANDIDATE_IS_ORACLE");
    Console.WriteLine("BROWSER_LOCAL_ICE_LITERAL_EXPOSED="+(result["local_exposed"]?.GetValue<bool>()==true));
+   Check(result["local_exposed"]?.GetValue<bool>()==false,"REAL_EDGE_DEFAULT_MDNS_HAS_NO_LITERAL_LOCAL_ICE");
   }finally{try{if(!process.HasExited)process.Kill(true);process.WaitForExit(5000);}catch{}try{Directory.Delete(profile,true);}catch{}}
  }
  sealed class PacketCounter:IDisposable {
@@ -76,7 +77,7 @@ internal static class Acceptance
    Console.WriteLine("DESCRIPTOR_REFRESH_WAIT_MS="+descriptorClock.ElapsedMilliseconds);
    await Send("PreferUdp8443");await Send("Connect");var timer=Stopwatch.StartNew();JsonObject state;
    do{await Task.Delay(250);state=await Send("Status");}while(state["mode"]?.GetValue<string>()!="connected"&&timer.ElapsedMilliseconds<30000);
-   Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true,"PINNED_RC18_NATIVE_UDP_GUARD_CONNECTED");
+   Check(state["mode"]?.GetValue<string>()=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["guard"]?.GetValue<bool>()==true && state["transport_address"]?.GetValue<string>()=="141.147.78.44","PINNED_RC19_SECONDARY_NATIVE_UDP_GUARD_CONNECTED");
    long connected=capture.Packets();await ProbePhysical(physical);try{await Browser();}finally{await Task.Delay(500);long delta=capture.Packets()-connected;Console.WriteLine("RAW_STUN_PHYSICAL_TX_DELTA="+delta);Check(delta==0,"REAL_RAW_STUN_HAS_ZERO_PHYSICAL_EGRESS_WITH_VPN");}
    await Send("Quit");state=await Send("Status");long used=(state["peer_rx_bytes"]?.GetValue<long>()??-1)+(state["peer_tx_bytes"]?.GetValue<long>()??-1)-initial;
    Check(used>=0 && used<=16*1024*1024 && state["intent"]?.GetValue<bool>()==false && state["core_pid"]?.GetValue<uint>()==0,"WEBRTC_ACCEPTANCE_BOUNDED_USAGE_AND_CORE_STOPPED");

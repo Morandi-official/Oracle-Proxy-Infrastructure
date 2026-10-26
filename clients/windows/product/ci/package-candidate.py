@@ -80,16 +80,19 @@ def main():
     vendor = PRODUCT / 'core/vendor'
     if not (vendor / 'modules.txt').is_file() or not licenses(vendor):
         raise RuntimeError('Complete vendored core sources and notices required')
-    metadata = {'channel': 'unsigned-acceptance-candidate', 'version': '0.3.0-rc19',
+    version = ET.parse(PRODUCT / 'OracleProxy.Product.csproj').findtext('./PropertyGroup/Version')
+    if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+', version):
+        raise RuntimeError('Explicit candidate version required')
+    metadata = {'channel': 'unsigned-acceptance-candidate', 'version': version,
                 'source_revision': revision, 'architecture': 'win-x64',
                 'real_oracle_acceptance_passed': args.acceptance_passed,
                 'workflow_run': os.environ['GITHUB_RUN_ID'], 'workflow_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
                 'publisher_signed': False, 'payload_sha256': hashes,
                 'dotnet_sdk': run('dotnet', '--version'), 'go_toolchain': run('go', 'version'),
                 'remaining_gates': ['live logged-in UU session continuity', 'physical Windows reboot',
-                                    'Oracle IPv6 provisioning and forwarding', 'application publisher signing'],
+                                    'IPv6 WebRTC across real browser permission/network states', 'application publisher signing'],
                 'nuget_packages': packages}
-    tag = 'OracleProxy-0.3.0-rc19-win-x64-' + revision[:12]
+    tag = 'OracleProxy-' + version + '-win-x64-' + revision[:12]
     source_name = tag + '-source.zip'
     metadata['corresponding_source_archive'] = source_name
     tracked = run('git', 'ls-files', 'clients/windows/product', 'clients/windows/service-host/NativeDriverTrust.cs',

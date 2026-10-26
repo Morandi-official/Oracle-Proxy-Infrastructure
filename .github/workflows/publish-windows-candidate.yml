@@ -1,4 +1,4 @@
-name: Publish verified Windows rc18 prerelease
+name: Publish verified Windows rc19 prerelease
 on:
   pull_request:
     paths: ['ops/distribution/**', '.github/workflows/publish-windows-candidate.yml']
@@ -29,7 +29,7 @@ jobs:
       contents: write
       actions: read
     concurrency:
-      group: oracle-proxy-rc18-publication
+      group: oracle-proxy-rc19-publication
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4

@@ -1,4 +1,1 @@
-{
-  "operation": "preflight",
-  "request_id": "ipv6-vnic-assigned-observation-20261026"
-}
+{"operation":"preflight","request_id":"ipv6-cloud-egress-20261026"}

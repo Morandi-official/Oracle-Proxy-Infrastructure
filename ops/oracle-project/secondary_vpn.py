@@ -137,4 +137,5 @@ if __name__=='__main__':
         if len(sys.argv)!=2 or sys.argv[1] not in ('ensure','stop'):raise ValueError('FIXED_SECONDARY_ACTION_REQUIRED')
         locked(ensure_locked if sys.argv[1]=='ensure' else stop_locked)
     except Exception as error:
-        print('SECONDARY_VPN_OPERATION_FAILED='+type(error).__name__,file=sys.stderr);raise SystemExit(2) from None
+        code=str(error) if isinstance(error,ValueError) and re.fullmatch(r'[A-Z_]+',str(error)) else type(error).__name__
+        print('SECONDARY_VPN_OPERATION_FAILED='+code,file=sys.stderr);raise SystemExit(2) from None

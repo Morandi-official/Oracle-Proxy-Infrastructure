@@ -8,7 +8,7 @@ import sys
 import urllib.request
 from aioquic.asyncio import connect
 from aioquic.quic.configuration import QuicConfiguration
-from verify_quic import HOST, Http3Probe, probe
+from verify_quic import HOST, Http3Probe, probe as quic_probe
 
 
 def tcp(address):
@@ -47,7 +47,7 @@ def main():
         print('SECONDARY_PUBLIC_CONTROL='+json.dumps(row,sort_keys=True),flush=True)
         passed=passed and row['tls_tcp'] and row['tls_http3']
         if info is not None:
-            reachable=asyncio.run(probe(info,address))
+            reachable=asyncio.run(quic_probe(info,address))
             print('SECONDARY_VPN_QUIC='+json.dumps({'address':address,'tls_and_h3':reachable}),flush=True)
             passed=passed and reachable
     if not passed:raise SystemExit(1)

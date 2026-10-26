@@ -3,6 +3,7 @@ import base64
 import datetime as dt
 import hashlib
 import ipaddress
+import importlib.util
 import json
 import math
 import os
@@ -22,6 +23,9 @@ SOCKET = '/run/oracle-proxy-control/control.sock'
 TICK = 5
 LEASE = 20
 MAX_BYTES = 10**16
+_ipv6_spec = importlib.util.spec_from_file_location('oracle_ipv6_addresses', Path(__file__).with_name('ipv6_addresses.py'))
+ipv6_addresses = importlib.util.module_from_spec(_ipv6_spec)
+_ipv6_spec.loader.exec_module(ipv6_addresses)
 
 
 def integer(value, maximum=MAX_BYTES):
@@ -298,14 +302,24 @@ class Engine:
                 if row['key'] in observation['peers']:
                     self.driver.remove_peer(row['key']);removed=True
             if removed:observation=self.driver.observe()
-            # New product-owned peers are restored after wg-quick/reboot, without reading/writing wg0.conf.
+            # Reconcile only product-owned, active peers. Persist ownership before
+            # adding addresses, and deny the new family before kernel mutation.
+            changed = False
             for device in self.db.execute('SELECT * FROM devices WHERE owned=1 AND key NOT IN (SELECT key FROM revoked_devices)'):
-                addresses = json.loads(device['addresses'])
-                if device['key'] not in observation['peers']:
-                    occupied = [ipaddress.ip_network(ip) for peer in observation['peers'].values() for ip in peer['allowed_ips']]
+                stored = json.loads(device['addresses'])
+                addresses = ipv6_addresses.dual_addresses(stored, observation['networks'])
+                current = observation['peers'].get(device['key'])
+                if addresses != stored or current is None or set(current['allowed_ips']) != set(addresses):
+                    occupied = [ipaddress.ip_network(ip) for key, peer in observation['peers'].items() if key != device['key'] for ip in peer['allowed_ips']]
+                    occupied.extend(ipaddress.ip_network(ip) for row in self.db.execute('SELECT addresses FROM devices WHERE key!=?', (device['key'],)) for ip in json.loads(row[0]))
                     if any(ipaddress.ip_network(ip).overlaps(other) for ip in addresses for other in occupied if ipaddress.ip_network(ip).version==other.version):
                         raise ValueError('OWNED_PEER_ADDRESS_CONFLICT')
+                    self.driver.leases(set(host_ips(addresses)), set(), not self.budget_state()['guard_blocked'])
+                    self.db.execute('UPDATE devices SET addresses=? WHERE key=?', (json.dumps(addresses), device['key']))
                     self.driver.add_peer(device['key'], addresses)
+                    changed = True
+            if changed:
+                observation = self.driver.observe()
             now = int(self.now()); month = period(now)
             self.db.execute('BEGIN IMMEDIATE')
             try:
@@ -565,7 +579,7 @@ class Engine:
                             selected = str(address)+'/32'; break
                     if selected: break
                 if not selected: raise ValueError('NO_FREE_IPV4_TUNNEL_ADDRESS')
-                addresses = [selected]
+                addresses = ipv6_addresses.dual_addresses([selected], self.observation['networks'])
                 self.driver.leases(set(host_ips(addresses)),set(),not self.budget_state()['guard_blocked'])
                 # Durable ownership precedes the kernel mutation. If interrupted or the
                 # netlink reply is lost, reconciliation retries only this owned peer.

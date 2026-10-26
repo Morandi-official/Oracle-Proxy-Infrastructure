@@ -48,6 +48,25 @@ class ClientApiTests(TestCase):
     def state(self,token,path='/api/client/state'):
         return self.client.get(path,secure=True,HTTP_AUTHORIZATION='Bearer '+token)
 
+    def test_dualstack_capability_preserves_legacy_client_and_device_slot(self):
+        self.driver.value['networks'].append('fd42:6f70:78:77::1/64')
+        self.engine.tick()
+        result=self.login().json();token=result['token']
+        self.assertEqual(result['tunnel']['ipv6_policy'],'block')
+        self.assertEqual(len(result['tunnel']['addresses']),1)
+        info={'schema':1,'owner':'oracle-proxy-ipv6-tunnel','egress':'2603:c020:c015:8100::10','prefix':'fd42:6f70:78:77::/64'}
+        with patch('console.client_api.ipv6_info',return_value=info):
+            modern=self.client.get('/api/client/state',secure=True,HTTP_AUTHORIZATION='Bearer '+token,HTTP_X_ORACLE_CLIENT_CAPABILITIES='dual-stack-v1').json()
+            self.assertEqual(modern['tunnel']['ipv6_policy'],'tunnel')
+            self.assertEqual(modern['tunnel']['ipv6_egress'],info['egress'])
+            self.assertEqual(len(modern['tunnel']['addresses']),2)
+            self.assertEqual(modern['account']['device_count'],1)
+            self.assertEqual(self.state(token).json()['tunnel']['ipv6_policy'],'block')
+        with patch('console.client_api.ipv6_info',return_value=None):
+            unavailable=self.client.get('/api/client/state',secure=True,HTTP_AUTHORIZATION='Bearer '+token,HTTP_X_ORACLE_CLIENT_CAPABILITIES='dual-stack-v1').json()
+            self.assertEqual(unavailable['tunnel']['ipv6_policy'],'block')
+            self.assertEqual(len(unavailable['tunnel']['addresses']),1)
+
     def test_enroll_login_progress_scope_and_no_admin_or_browser_access(self):
         result=self.login();self.assertEqual(result.status_code,200,result.content);value=result.json();token=value['token']
         self.assertEqual(value['account']['device_limit'],3);self.assertEqual(value['account']['device_count'],1)

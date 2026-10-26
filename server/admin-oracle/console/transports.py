@@ -42,3 +42,19 @@ def public_certificate(request):
     result = JsonResponse({'quic':quic_info()})
     result['Cache-Control'] = 'no-store'
     return result
+
+
+IPV6_STATE = Path('/etc/oracle-proxy-quic/ipv6.json')
+
+
+def ipv6_info():
+    try:
+        info = IPV6_STATE.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_size > 2048:
+            return None
+        value = json.loads(IPV6_STATE.read_text('ascii'))
+        if value == {'schema': 1, 'owner': 'oracle-proxy-ipv6-tunnel', 'egress': '2603:c020:c015:8100::10', 'prefix': 'fd42:6f70:78:77::/64'}:
+            return value
+    except (OSError, ValueError):
+        pass
+    return None

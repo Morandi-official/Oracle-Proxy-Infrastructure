@@ -1,11 +1,28 @@
 """Only a public fixed-host TLS trust certificate; never a private key."""
 import stat
+import json
 from pathlib import Path
 
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 
 from relay.settings import PUBLIC_QUIC_ENABLED
+
+
+
+TRANSPORT_STATE=Path('/etc/oracle-proxy-quic/transport.json')
+
+
+def transport_address():
+    # Root-owned public metadata. Missing/invalid/foreign state uses the original
+    # entrance; ordinary GUI input can never supply an arbitrary destination.
+    try:
+        info=TRANSPORT_STATE.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022 or info.st_size>2048:return '152.67.156.100'
+        value=json.loads(TRANSPORT_STATE.read_text('ascii'))
+        if value=={'schema':1,'owner':'oracle-proxy-secondary-endpoint','transport_address':'141.147.78.44'}:return '141.147.78.44'
+    except (OSError,ValueError):pass
+    return '152.67.156.100'
 
 
 def quic_info():

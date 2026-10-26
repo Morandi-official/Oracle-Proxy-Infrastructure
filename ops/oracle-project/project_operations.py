@@ -356,6 +356,10 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='webrtc-owned-ci-slot-release-v5-20261026':
+        cleanup_spec=importlib.util.spec_from_file_location('secondary_ci_cleanup',Path(__file__).with_name('cleanup_secondary_ci.py'))
+        cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
+        cleanup.apply();return
     if request.get('request_id') in ('secondary-vpn-promote-20261026','secondary-vpn-rollback-20261026'):
         secondary_spec=importlib.util.spec_from_file_location('secondary_vpn',Path(__file__).with_name('secondary_vpn.py'))
         secondary=importlib.util.module_from_spec(secondary_spec);secondary_spec.loader.exec_module(secondary)

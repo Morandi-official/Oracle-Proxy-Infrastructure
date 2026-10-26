@@ -176,6 +176,7 @@ internal static class Acceptance
    })??throw new IOException("BOOT_OBSERVER_START_FAILED")){
     var output=child.StandardOutput.ReadToEndAsync();var errors=child.StandardError.ReadToEndAsync();
     await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+    string observerOutput=await output;foreach(string line in observerOutput.Split('\n'))if(System.Text.RegularExpressions.Regex.IsMatch(line.Trim(),@"^(OBSERVER_DEFAULT_[A-Z0-9_=;]+|REAL_SYSTEM_TASK_CAN_OBSERVE_GUARD_WITHOUT_CLAIMING_REBOOT=PASS|READ_ONLY_BOOT_OBSERVER_ABI_AND_SCOPE=PASS)$",System.Text.RegularExpressions.RegexOptions.IgnoreCase))Console.WriteLine(line.Trim());
     if(child.ExitCode!=0){foreach(System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(await errors,@"[A-Z_]{6,80}|CS[0-9]{4}").Take(12))Console.WriteLine("OBSERVER_ERROR_CODE="+match.Value);}
     Check(child.ExitCode==0 && (await output).Contains("READ_ONLY_BOOT_OBSERVER_ABI_AND_SCOPE=PASS"),"BOOT_OBSERVER_CONNECTED_READ_ONLY_ABI_AND_DUALSTACK_SCOPE");
    }

@@ -37,3 +37,6 @@ if __name__ == '__main__':
     operation = choose()
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         stream.write('operation=' + operation + '\n')
+        request=json.loads(Path(REQUEST).read_text())
+        secondary=operation=='enable-https' and request.get('request_id')=='secondary-endpoint-apply-20261026'
+        stream.write('secondary_endpoint='+str(secondary).lower()+'\n')

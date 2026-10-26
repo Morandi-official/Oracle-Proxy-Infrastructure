@@ -4,6 +4,8 @@ import urllib.parse
 import urllib.request
 import http.cookiejar
 import re
+import hashlib
+from pathlib import Path
 
 BASE = 'https://vpn-admin.morandi.dpdns.org'
 
@@ -15,6 +17,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def main():
     opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     csrf = None
+    expected=(Path(__file__).resolve().parents[2]/'server/admin-oracle/static/console/privacy.js').read_bytes()
+    digest=hashlib.sha256(expected).hexdigest()
+    with opener.open(BASE+'/privacy-check.js?verify='+digest,timeout=10) as probe:
+        if probe.code!=200 or probe.read(len(expected)+1)!=expected:raise ValueError('PUBLIC_PRIVACY_CLASSIFIER_SOURCE_MISMATCH')
+    print('PUBLIC_WEBRTC_CLASSIFIER_EXACT_SOURCE=PASS; SHA256='+digest)
     with opener.open(BASE+'/login/',timeout=10) as probe:
         local_login=b'name="password"' in probe.read(65536)
     for path, expected in (('/login/', 200), ('/static/console/style.css', 200),

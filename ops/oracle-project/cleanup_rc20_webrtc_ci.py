@@ -6,11 +6,11 @@ from pathlib import Path
 
 spec=importlib.util.spec_from_file_location('owned_rc20_browser',Path(__file__).with_name('cleanup_webrtc_ci.py'))
 cleanup=importlib.util.module_from_spec(spec);spec.loader.exec_module(cleanup)
-cleanup.REQUEST='webrtc-rc20-owned-slot-release-v4-20261026'
-cleanup.BEGIN=int(dt.datetime(2026,10,26,11,28,30,tzinfo=dt.timezone.utc).timestamp())
-cleanup.END=int(dt.datetime(2026,10,26,11,28,45,tzinfo=dt.timezone.utc).timestamp())
+cleanup.REQUEST='webrtc-rc20-owned-slot-release-v5-20261026'
+cleanup.BEGIN=int(dt.datetime(2026,10,26,11,34,50,tzinfo=dt.timezone.utc).timestamp())
+cleanup.END=int(dt.datetime(2026,10,26,11,35,2,tzinfo=dt.timezone.utc).timestamp())
 cleanup.VERSION='0.3.0-rc20+30f70a05110e5752581eccd8dd2ce1c97dffd682'
-cleanup.MARKER=cleanup.STATE/'webrtc-rc20-owned-slot-release-v4-20261026.json'
+cleanup.MARKER=cleanup.STATE/'webrtc-rc20-owned-slot-release-v5-20261026.json'
 MACHINE='Cloud WebRTC acceptance'
 
 

@@ -103,6 +103,7 @@ public static class OracleBootReadOnly {
    }
   }result.Error="NO_NATIVE_PHYSICAL_ADDRESS";return result;
  }
+ public static string LastExitError4="NONE",LastExitError6="NONE";
  public static string DefaultExit(int family){
   try{using(var handler=new HttpClientHandler()){handler.UseProxy=false;handler.UseCookies=false;handler.AllowAutoRedirect=false;
    using(var client=new HttpClient(handler)){client.Timeout=TimeSpan.FromMilliseconds(3000);var response=client.GetAsync(family==4?"https://1.1.1.1/cdn-cgi/trace":"https://[2606:4700:4700::1111]/cdn-cgi/trace",HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
@@ -110,7 +111,7 @@ public static class OracleBootReadOnly {
      string expected=family==4?"ip=152.67.156.100":"ip=2603:c020:c015:8100::10";return Encoding.UTF8.GetString(bytes,0,count).Split('\n').Any(line=>line.TrimEnd('\r')==expected)?"ORACLE":"OTHER_EXIT";
     }}
    }
-  }}catch{return "UNAVAILABLE";}
+  }}catch(Exception error){string detail=error.GetType().Name+"_"+error.HResult.ToString("X8")+"_"+error.GetBaseException().GetType().Name+"_"+error.GetBaseException().HResult.ToString("X8");if(family==4)LastExitError4=detail;else LastExitError6=detail;return "UNAVAILABLE";}
  }
 }
 '@
@@ -132,7 +133,7 @@ if($Mode -in @('SelfTest','SelfTestConnected')){
   $physical=[OracleBootReadOnly]::PhysicalProbe(4)
   if(-not $physical.DeniedByWindows -or $physical.ConnectionEstablished){throw 'CONNECTED_PHYSICAL_DENIAL_REQUIRED'}
   $exit4=[OracleBootReadOnly]::DefaultExit(4);$exit6=[OracleBootReadOnly]::DefaultExit(6)
-  Write-Host ('OBSERVER_DEFAULT_V4='+$exit4+';V6='+$exit6)
+  Write-Host ('OBSERVER_DEFAULT_V4='+$exit4+';V6='+$exit6+';ERROR4='+[OracleBootReadOnly]::LastExitError4+';ERROR6='+[OracleBootReadOnly]::LastExitError6)
   if($exit4 -ne 'ORACLE' -or $exit6 -ne 'ORACLE'){throw 'CONNECTED_DEFAULT_DUALSTACK_PROBE_FAILED'}
   if(Test-Path $BootRoot){throw 'EXISTING_CLOUD_BOOT_FIXTURE_REFUSED'}
   try{

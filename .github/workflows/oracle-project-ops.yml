@@ -103,6 +103,9 @@ jobs:
             python3 ops/oracle-project/verify_public.py
             python3 ops/oracle-project/verify_downloads.py
           fi
+      - name: Verify pinned owner boot observer download
+        if: steps.request.outputs.boot_observer == 'true'
+        run: python3 ops/oracle-project/verify_boot_observer.py
       - name: External QUIC TLS reachability without client credentials
         if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
         shell: bash

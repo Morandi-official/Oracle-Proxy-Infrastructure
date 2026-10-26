@@ -360,7 +360,7 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
-    if request.get('request_id')=='webrtc-rc20-owned-slot-release-v5-20261026':
+    if request.get('request_id')=='webrtc-rc20-owned-slot-release-v6-20261026':
         cleanup_spec=importlib.util.spec_from_file_location('rc20_browser_ci_cleanup',Path(__file__).with_name('cleanup_rc20_webrtc_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
         cleanup.apply();return
@@ -383,7 +383,7 @@ def enable_https():
         cleanup_spec=importlib.util.spec_from_file_location('rc19_ci_cleanup',Path(__file__).with_name('cleanup_rc19_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
         cleanup.apply();return
-    if request.get('request_id')=='webrtc-owned-ci-slot-release-v5-20261026':
+    if request.get('request_id')=='webrtc-owned-ci-slot-release-v6-20261026':
         cleanup_spec=importlib.util.spec_from_file_location('secondary_ci_cleanup',Path(__file__).with_name('cleanup_secondary_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
         cleanup.apply();return
@@ -457,10 +457,10 @@ def enable_https():
     if action in ('webrtc-owned-ci-slot-release-20261024','webrtc-owned-ci-slot-release-v2-20261024'):
         cleanup_spec=importlib.util.spec_from_file_location('cleanup_webrtc_ci',Path(__file__).with_name('cleanup_webrtc_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()
-    if action=='webrtc-owned-ci-slot-release-v5-20261025':
+    if action=='webrtc-owned-ci-slot-release-v6-20261025':
         cleanup_spec=importlib.util.spec_from_file_location('cleanup_webrtc_ci_oct25',Path(__file__).with_name('cleanup_webrtc_ci_20261025.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()
-    if action=='webrtc-owned-ci-slot-release-v5-20261025':
+    if action=='webrtc-owned-ci-slot-release-v6-20261025':
         cleanup_spec=importlib.util.spec_from_file_location('cleanup_webrtc_ci_0941',Path(__file__).with_name('cleanup_webrtc_ci_0941.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup);cleanup.apply()
     if action in ('publish-native-port-diagnostic-20261025','publish-native-port-diagnostic-v2-20261025','publish-native-port-diagnostic-v3-20261025'):

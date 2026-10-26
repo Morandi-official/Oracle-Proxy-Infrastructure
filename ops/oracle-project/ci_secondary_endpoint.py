@@ -94,7 +94,11 @@ for host in ('10.0.0.6','10.0.0.10'):
                 if argv[0] in ('ip','iptables'):argv=['ip','netns','exec',server,*argv]
                 return original_run(argv)
             vpn.s.run=vpn_isolated
-            vpn.install()
+            try:vpn.install()
+            except Exception:
+                print(run('journalctl','-u',vpn.UNIT,'-n','30','--no-pager').stdout,flush=True)
+                print('CI_UNIT='+vpn.unit_text(),flush=True)
+                raise
             promoted=vpn.s.load_state();assert promoted['mode']=='persistent' and promoted['lease_id']!=third['lease_id']
             module.rollback(third['lease_id']);assert module.owned_alias(module.snapshot()[1])
             echo="""import socket,threading,time

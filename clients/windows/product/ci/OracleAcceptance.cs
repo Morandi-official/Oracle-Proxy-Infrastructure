@@ -270,7 +270,7 @@ internal static class OracleAcceptance
             await Send("Disconnect");await Send("PreferUdp8443");
             var native8443Timer=Stopwatch.StartNew();await Send("Connect");var native8443=await Connected();
             Console.WriteLine("REAL_NATIVE_WIREGUARD_UDP8443_COLD_MS="+native8443Timer.ElapsedMilliseconds);
-            Check(native8443["transport"]?.GetValue<string>()=="wireguard-udp" && native8443["native_udp_selected_port"]?.GetValue<int>()==8443 && native8443Timer.ElapsedMilliseconds<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_WIREGUARD_UDP8443_HTTP_AND_DNS_NO_QUIC_WRAPPER");
+            Check(native8443["transport_address"]?.GetValue<string>()=="141.147.78.44" && native8443["transport"]?.GetValue<string>()=="wireguard-udp" && native8443["native_udp_selected_port"]?.GetValue<int>()==8443 && native8443Timer.ElapsedMilliseconds<6000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_WIREGUARD_UDP8443_HTTP_AND_DNS_NO_QUIC_WRAPPER");
             var nativeBuffers=native8443["native_udp_attempt"]?["ports"]?["8443"];
             Check(nativeBuffers?["rcvbuf_after"]?.GetValue<uint>()>=7*1024*1024 && nativeBuffers?["sndbuf_after"]?.GetValue<uint>()>=7*1024*1024,"REAL_OWNED_WINDOWS_UDP_BUFFERS_MATCH_WIREGUARD_POLICY");
             foreach(string key in new[]{"rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after"})Console.WriteLine("REAL_NATIVE_8443_"+key.ToUpperInvariant()+"="+nativeBuffers?[key]);
@@ -286,7 +286,7 @@ internal static class OracleAcceptance
                     using var returnLoss=preference=="PreferUdp" && cycle==2?new InitialUdpLoss(primaryRepliesOnly:true):null;
                     var timer=Stopwatch.StartNew();await Send("Connect");var cold=await Connected();long elapsed=timer.ElapsedMilliseconds;
                     Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
-                    Check(cold["transport"]?.GetValue<string>()==wanted && elapsed<(preference=="PreferUdp" && cycle>0?12000:6000) && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
+                    Check(cold["transport_address"]?.GetValue<string>()=="141.147.78.44" && cold["transport"]?.GetValue<string>()==wanted && elapsed<(preference=="PreferUdp" && cycle>0?12000:6000) && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
                     Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
                     var metered=await Send("Status");
                     Check(metered["verified_exit_ip"]?.GetValue<string>()=="152.67.156.100" && metered["traffic"]?["sample_ms"]?.GetValue<long>()>0 && metered["traffic"]?["rx_bytes"]?.GetValue<long>()>0 && metered["traffic"]?["tx_bytes"]?.GetValue<long>()>0,"REAL_LOCAL_TUN_UPLOAD_DOWNLOAD_COUNTERS_AND_VERIFIED_EXIT_"+wanted+"_"+cycle);

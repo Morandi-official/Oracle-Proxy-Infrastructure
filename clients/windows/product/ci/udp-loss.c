@@ -28,9 +28,13 @@ static DWORD begin_loss(HANDLE *output,BOOL quic,BOOL primary_only,BOOL replies_
  filter.displayData.name=L"Oracle Proxy disposable fixed Oracle UDP loss";
  filter.weight.type=FWP_UINT64;filter.weight.uint64=&weight;
  filter.action.type=FWP_ACTION_BLOCK;filter.numFilterConditions=4;filter.filterCondition=c;
+ for(int endpoint=0;endpoint<2;endpoint++){
+ c[0].conditionValue.uint32=endpoint?0x8d934e2c:0x98439c64;
+ c[1].conditionValue.uint16=51820;
  e=FwpmFilterAdd0(engine,&filter,NULL,NULL);if(e)goto failed;
  if(!primary_only){c[1].conditionValue.uint16=443;e=FwpmFilterAdd0(engine,&filter,NULL,NULL);if(e)goto failed;}
  if(quic){c[1].conditionValue.uint16=8443;e=FwpmFilterAdd0(engine,&filter,NULL,NULL);if(e)goto failed;}
+ }
  *output=engine;return ERROR_SUCCESS;
 failed:
  FwpmEngineClose0(engine);return e;

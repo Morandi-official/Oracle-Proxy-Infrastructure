@@ -1,7 +1,8 @@
 param([ValidateSet('Prepare','Collect','Report','SelfTest','SelfTestConnected')][string]$Mode='Report')
 $ErrorActionPreference='Stop'
 if(-not [Environment]::Is64BitProcess){throw 'WINDOWS_X64_POWERSHELL_REQUIRED'}
-$BootRoot=Join-Path $env:ProgramData 'OracleProxyBootAcceptance'
+$BootRoot=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'OracleProxyBootAcceptance'
+$PowerShellPath=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::System)) 'WindowsPowerShell\v1.0\powershell.exe'
 $TaskName='OracleProxyOneShotBootAcceptance'
 $TrustedScript=Join-Path $BootRoot 'Test-OracleProxyBoot.ps1'
 $ConfigFile=Join-Path $BootRoot 'config.json'
@@ -118,7 +119,7 @@ function Get-CurrentBoot { ((Get-CimInstance Win32_OperatingSystem).LastBootUpTi
 function Read-Status { try { [OracleBootReadOnly]::Status() | ConvertFrom-Json } catch { $null } }
 function Own-Task {
  $task=Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
- if($task -and ($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -or $task.Actions[0].Arguments -notlike ('*"'+$TrustedScript+'"*'))){throw 'FOREIGN_TASK_REFUSED'}
+ if($task -and ($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne $PowerShellPath -or $task.Actions[0].Arguments -notlike ('*"'+$TrustedScript+'"*'))){throw 'FOREIGN_TASK_REFUSED'}
  return $task
 }
 if($Mode -in @('SelfTest','SelfTestConnected')){
@@ -171,24 +172,44 @@ if($Mode -eq 'Prepare'){
  }
  $preflight=[OracleBootReadOnly]::PhysicalProbe(4,$targets.v4)
  if(-not $preflight.Blocked -or $preflight.Sent){throw 'PHYSICAL_DENIAL_NOT_PROVEN_NO_TASK_CREATED'}
- New-Item -ItemType Directory $BootRoot | Out-Null
  $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
  $acl=New-Object Security.AccessControl.DirectorySecurity
  $acl.SetAccessRuleProtection($true,$false)
+ $adminOwner=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+ $acl.SetOwner($adminOwner)
  foreach($identifier in @('S-1-5-18','S-1-5-32-544')){
   $identity=New-Object Security.Principal.SecurityIdentifier($identifier)
   $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
  }
  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow')))
- Set-Acl $BootRoot $acl
+ [IO.Directory]::CreateDirectory($BootRoot,$acl) | Out-Null
+ $createdAcl=Get-Acl -LiteralPath $BootRoot
+ if(([IO.File]::GetAttributes($BootRoot) -band [IO.FileAttributes]::ReparsePoint) -or $createdAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544' -or -not $createdAcl.AreAccessRulesProtected){throw 'SECURE_NEW_DIRECTORY_REQUIRED'}
  Copy-Item -LiteralPath $PSCommandPath -Destination $TrustedScript
  $config=@{schema=1;owner='oracle-proxy-one-shot-boot';previous_boot=(Get-CurrentBoot);armed_utc=[DateTime]::UtcNow.ToString('o');version=$ExpectedVersion;v4=$targets.v4;v6=$targets.v6;script_sha256=(Get-FileHash $TrustedScript -Algorithm SHA256).Hash}
  $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigFile -Encoding UTF8
- $action=New-ScheduledTaskAction -Execute "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$TrustedScript+'" -Mode Collect')
+ foreach($protectedFile in @($TrustedScript,$ConfigFile)){
+  $fileAcl=Get-Acl -LiteralPath $protectedFile;$fileAcl.SetOwner($adminOwner);Set-Acl -LiteralPath $protectedFile -AclObject $fileAcl
+ }
+ $action=New-ScheduledTaskAction -Execute $PowerShellPath -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$TrustedScript+'" -Mode Collect')
  $trigger=New-ScheduledTaskTrigger -AtStartup
  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 4) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
- try{Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -User SYSTEM -RunLevel Highest -Description 'One-shot read-only Oracle Proxy boot observation; never initiates reboot' | Out-Null}
- catch{Remove-Item -LiteralPath $BootRoot -Recurse -Force;throw}
+ try{
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -User SYSTEM -RunLevel Highest -Description 'One-shot read-only Oracle Proxy boot observation; never initiates reboot' | Out-Null
+  $scheduler=New-Object -ComObject 'Schedule.Service';$scheduler.Connect()
+  $ownedTask=$scheduler.GetFolder('\').GetTask($TaskName)
+  $ownedTask.SetSecurityDescriptor(('O:BAG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GR;;;'+$sid.Value+')'),0)
+  $taskSecurity=New-Object Security.AccessControl.RawSecurityDescriptor($ownedTask.GetSecurityDescriptor(1))
+  if($taskSecurity.Owner.Value -ne 'S-1-5-32-544'){throw 'TASK_ADMIN_OWNERSHIP_REQUIRED'}
+  foreach($protectedFile in @($BootRoot,$TrustedScript,$ConfigFile)){
+   if((Get-Acl -LiteralPath $protectedFile).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544'){throw 'ADMIN_FILE_OWNERSHIP_REQUIRED'}
+  }
+ }catch{
+  if(Own-Task){Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false}
+  if(Own-Task){throw 'TASK_REMAINS_PROTECTED_FOLDER_RETAINED'}
+  Remove-Item -LiteralPath $BootRoot -Recurse -Force;throw
+ }
+
  Write-Host 'BOOT_OBSERVER=ARMED; NO_REBOOT_INITIATED'
  Write-Host 'Keep VPN connected. Restart Windows normally without closing/disconnecting Oracle Proxy. Wait 120 seconds at the sign-in screen, then sign in and run -Mode Report.'
  return

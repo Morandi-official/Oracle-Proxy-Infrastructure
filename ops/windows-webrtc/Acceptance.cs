@@ -59,8 +59,13 @@ internal static class Acceptance
   foreach(string arg in new[]{"--headless=new","--use-fake-device-for-media-stream","--no-proxy-server","--disable-extensions","--no-first-run","--no-default-browser-check","--disable-background-networking","--disable-component-update","--disable-default-apps","--disable-sync","--remote-debugging-port=0","--user-data-dir="+profile,"https://vpn-admin.morandi.dpdns.org/privacy-check/"})start.ArgumentList.Add(arg);
   using var process=Process.Start(start)??throw new IOException("EDGE_START_FAILED");
   try{
-   string portFile=Path.Combine(profile,"DevToolsActivePort");var wait=Stopwatch.StartNew();while(!File.Exists(portFile)&&wait.ElapsedMilliseconds<15000)await Task.Delay(100);
-   int port=int.Parse(File.ReadLines(portFile).First());Check(port is >1024 and <=65535,"EPHEMERAL_BROWSER_DEBUG_PORT");
+   string portFile=Path.Combine(profile,"DevToolsActivePort");var wait=Stopwatch.StartNew();int port=0;
+   while(wait.ElapsedMilliseconds<15000){
+    try{if(File.Exists(portFile)&&int.TryParse(File.ReadLines(portFile).FirstOrDefault(),out port)&&port is >1024 and <=65535)break;}catch(IOException){}
+    if(process.HasExited)throw new IOException("EDGE_EARLY_EXIT");
+    await Task.Delay(100);
+   }
+   Check(port is >1024 and <=65535,"EPHEMERAL_BROWSER_DEBUG_PORT");
    using var http=new HttpClient(new HttpClientHandler{UseProxy=false}){Timeout=TimeSpan.FromSeconds(3)};
    JsonObject? target=null;while(wait.ElapsedMilliseconds<20000){var targets=JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{port}/json/list"))!.AsArray();target=targets.OfType<JsonObject>().FirstOrDefault(t=>t["type"]?.GetValue<string>()=="page" && t["url"]?.GetValue<string>()=="https://vpn-admin.morandi.dpdns.org/privacy-check/");if(target is not null)break;await Task.Delay(100);}
    if(target is null)throw new IOException("PRIVACY_PAGE_NOT_LOADED");
@@ -145,7 +150,7 @@ internal static class Acceptance
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
   long initial=0;
   var adapter=NetworkInterface.GetAllNetworkInterfaces().First(n=>n.OperationalStatus==OperationalStatus.Up && n.GetIPProperties().GatewayAddresses.Any(g=>g.Address.AddressFamily==AddressFamily.InterNetwork));uint physical=(uint)adapter.GetIPProperties().GetIPv4Properties().Index;
-  if(args.SequenceEqual(new[]{"--counter-self-test"})){try{using var preflight=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);long v4=preflight.Packets();Check(v4>0,"REAL_PHYSICAL_STUN_COUNTER_SCHEMA_AND_BASELINE");await ProbePhysical6(adapter);await Task.Delay(500);Check(preflight.Packets()>v4,"REAL_PHYSICAL_IPV6_LINK_LOCAL_UDP_COUNTER_BASELINE");Console.WriteLine("PHYSICAL_V6_BASELINE_SCOPE=LINK_LOCAL_MULTICAST_NOT_PUBLIC_IPV6_INTERNET");await Browser(false);return 0;}catch(Exception error){if(System.Text.RegularExpressions.Regex.IsMatch(error.Message,"^[A-Z0-9_]{1,100}$"))Console.WriteLine("FAILED_PREFLIGHT="+error.Message);return 1;}}
+  if(args.SequenceEqual(new[]{"--counter-self-test"})){try{using var preflight=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);long v4=preflight.Packets();Check(v4>0,"REAL_PHYSICAL_STUN_COUNTER_SCHEMA_AND_BASELINE");await ProbePhysical6(adapter);await Task.Delay(500);Check(preflight.Packets()>v4,"REAL_PHYSICAL_IPV6_LINK_LOCAL_UDP_COUNTER_BASELINE");Console.WriteLine("PHYSICAL_V6_BASELINE_SCOPE=LINK_LOCAL_MULTICAST_NOT_PUBLIC_IPV6_INTERNET");await Browser(false);return 0;}catch(Exception error){if(System.Text.RegularExpressions.Regex.IsMatch(error.Message,"^[A-Za-z0-9_]{1,100}$"))Console.WriteLine("FAILED_PREFLIGHT="+error.Message);Console.WriteLine("PREFLIGHT_FAILURE_CATEGORY="+error.GetType().Name);Console.WriteLine("PREFLIGHT_HRESULT="+error.HResult.ToString("X8"));return 1;}}
   if(args.Length!=0 || Environment.GetEnvironmentVariable("GITHUB_REF")!="refs/heads/main")return 3;
   try{
    using var capture=new PacketCounter(adapter.Name,adapter.Description);await ProbePhysical(physical);await Task.Delay(500);long before=capture.Packets();Check(before>0,"BASELINE_RAW_STUN_PHYSICAL_COUNTER_POSITIVE");await ProbePhysical6(adapter);await Task.Delay(500);Check(capture.Packets()>before,"BASELINE_PHYSICAL_IPV6_LINK_LOCAL_UDP_POSITIVE");

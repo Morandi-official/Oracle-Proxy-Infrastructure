@@ -91,6 +91,7 @@ internal static class ProductTests
     }
     private static async Task<int> ProbeDeadlines()
     {
+        if(!ColdHandshakeRetryPolicy())return 1;
         if(!await OrphanLogDrain(false) || !await OrphanLogDrain(true))return 1;
         Console.WriteLine("ORPHAN_STDERR_DRAINS_LARGE_UNKNOWN_OR_INVALID_LOGS_WITHOUT_PREFIX_MATCH_OR_EARLY_EXIT=PASS");
         foreach(string reason in new[]{"DORMANT_ROUTE_PROTOCOL_NOT_LOCAL","DORMANT_ROUTE_NEXT_HOP_UNSAFE","DORMANT_ROUTE_DESTINATION_UNSAFE"}){
@@ -116,6 +117,61 @@ internal static class ProductTests
         if(bound.Elapsed>TimeSpan.FromSeconds(1))return 1;
         Console.WriteLine("PROBE_IGNORING_HTTP_CANCELLATION_CANNOT_EXCEED_DEADLINE_OR_DELAY_STOP=PASS");
         Console.WriteLine("REAL_ASYNC_SLOW_EXIT_PROBE_RETAINED_ONLY_AFTER_WG_REPLY_AND_REJECTS_WRONG_EXIT=PASS");return 0;
+    }
+    private static bool ColdHandshakeRetryPolicy()
+    {
+        // A fresh WG initiation is sent before adapter READY. Model a two-second
+        // adapter start, three-second HTTP deadlines, and maximum retry jitter:
+        // init 0 / retry 5333 (both lost), next fresh retry 10666 (can recover).
+        // This clock is supplied to the production decision, never wall-clock
+        // sleeps or a second implementation of the fallback condition.
+        var events=new NativeUdpEvidence();
+        if(!events.Record("NATIVE_UDP_51820_SEND_INIT"))return false;
+        bool Decide(long age,bool pending,int failures=2,bool verified=false,bool reply=false)=>CarrierFallbackPolicy.ShouldFallback(TunnelTransport.WireGuardUdp,verified,reply,events.Snapshot(),failures,age,pending);
+        if(Decide(5000,false,1) || CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,false,events.Snapshot()))return false;
+        if(!events.Record("NATIVE_UDP_443_SEND_INIT") || !CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,false,events.Snapshot()))return false;
+        foreach(long age in new[]{7999L,8000,8333,10000,10665,11999})
+            if(Decide(age,false) || Decide(age,true))return false;
+        if(!events.Record("NATIVE_UDP_51820_SEND_INIT"))return false;
+        var silent=events.Snapshot();
+        // A silent black hole stops at 12 seconds, even during a fourth HTTP
+        // request. It cannot keep opening probes through 14 or 15 seconds.
+        foreach(long age in new[]{12000L,12001,13000,15000})
+            if(!Decide(age,false) || !Decide(age,true))return false;
+        if(Decide(12000,true,1))return false;
+        if(!events.Record("NATIVE_UDP_51820_RECV_REPLY"))return false;
+        // A reply on retry 2 can keep the current real HTTP/TLS probe alive;
+        // HTTP verification, not the carrier READY banner, commits success.
+        if(CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,true,events.Snapshot()) || Decide(10666,true,2,reply:true) || Decide(12000,true,2,reply:true) || Decide(12500,false,0,verified:true,reply:true))return false;
+        Console.WriteLine("COLD_WG_RETRY_AFTER_TWO_LOST_FRESH_INITIATIONS_RECOVERS_AT_10666_MS_WITHOUT_EIGHT_SECOND_RESTART=PASS");
+        Console.WriteLine("SILENT_COLD_WG_BLACKHOLE_HAS_TWELVE_SECOND_LIMIT_EVEN_WITH_PENDING_PROBE=PASS");
+        // Existing verified generations, missing retry evidence, socket errors,
+        // and other transports retain their previous pending-probe behavior.
+        bool Baseline(TunnelTransport transport,JsonObject? evidence,bool verified=false,bool reply=false){
+            long limit=transport==TunnelTransport.WireGuardUdp?8000:6000;
+            return !CarrierFallbackPolicy.SilentColdRetry(transport,verified,reply,evidence)
+                && !CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,2,limit-1,false)
+                && CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,2,limit,false)
+                && !CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,1,15000,false)
+                && !CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,2,15000,true);
+        }
+        if(!Baseline(TunnelTransport.WireGuardUdp,silent,verified:true) || !Baseline(TunnelTransport.WireGuardUdp,silent,reply:true) || !Baseline(TunnelTransport.WireGuardUdp,null) || !Baseline(TunnelTransport.WireGuardUdp,new JsonObject()) || !Baseline(TunnelTransport.WireGuardQuic,silent) || !Baseline(TunnelTransport.WireGuardHttps,silent))return false;
+        var one=new NativeUdpEvidence();one.Record("NATIVE_UDP_8443_SEND_INIT");
+        if(!Baseline(TunnelTransport.WireGuardUdp,one.Snapshot()))return false;
+        foreach(string error in new[]{"NATIVE_UDP_51820_READ_ERROR_10054","NATIVE_UDP_443_WRITE_ERROR_10040","NATIVE_UDP_8443_SOCKET_BUFFER_ERROR_10022"}){
+            var socket=new NativeUdpEvidence();socket.Record("NATIVE_UDP_51820_SEND_INIT");socket.Record("NATIVE_UDP_443_SEND_INIT");
+            if(!socket.Record(error) || !Baseline(TunnelTransport.WireGuardUdp,socket.Snapshot()))return false;
+        }
+        foreach(var malformed in new JsonObject[]{
+            new(){["22"]=new JsonObject{["tx_initiations"]=2}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=-2}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]="2"}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["unknown"]=0}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["rx_responses"]=1}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["last_write_error"]=10040}}
+        })if(!Baseline(TunnelTransport.WireGuardUdp,malformed))return false;
+        Console.WriteLine("COLD_RETRY_GRACE_REQUIRES_CURRENT_UNVERIFIED_SILENT_ERROR_FREE_WG_RETRY_EVIDENCE_AND_PRESERVES_OTHER_BASELINES=PASS");
+        return true;
     }
     private static async Task<bool> OrphanLogDrain(bool knownReason)
     {

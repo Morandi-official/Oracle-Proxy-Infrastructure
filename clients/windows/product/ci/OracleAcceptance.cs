@@ -29,7 +29,13 @@ internal static class OracleAcceptance
         public void Dispose()
         {
             if(_engine==IntPtr.Zero)return;
+            long begin=Stopwatch.GetTimestamp();
+            Console.WriteLine("INITIAL_UDP_LOSS_DISPOSE_BEGIN_TICKS="+begin);
             uint code=fixture_udp_loss_end(_engine);_engine=IntPtr.Zero;
+            long end=Stopwatch.GetTimestamp();
+            Console.WriteLine("INITIAL_UDP_LOSS_DISPOSE_END_TICKS="+end);
+            Console.WriteLine("INITIAL_UDP_LOSS_DISPOSE_ELAPSED_MS="+(long)Stopwatch.GetElapsedTime(begin,end).TotalMilliseconds);
+            Console.WriteLine("INITIAL_UDP_LOSS_DISPOSE_NATIVE_ERROR="+code);
             if(code!=0)throw new Win32Exception((int)code);
         }
     }
@@ -202,13 +208,18 @@ internal static class OracleAcceptance
         while((read=await stream.ReadAsync(buffer,timeout.Token))>0){total+=read;if(total>524288)throw new IOException("BULK_RESPONSE_LIMIT_EXCEEDED");}
         Check(total==524288,"REAL_LOW_MTU_BULK_DOWNLOAD_512_KIB");
     }
-    private static void SafeNativeState(JsonObject state)
+    private static void SafeNativeState(JsonObject state,string prefix="STABILITY")
     {
-        foreach(string key in new[]{"mode","error","transport","connection_stage","carrier_stage","core_pid","tun_permitted","guard"})Console.WriteLine("STABILITY_"+key.ToUpperInvariant()+"="+state[key]);
+        foreach(string key in new[]{"mode","error","transport","connection_stage","carrier_stage","core_stage","core_pid","tun_permitted","guard","intent","quick_ready","verified_at"})Console.WriteLine(prefix+"_"+key.ToUpperInvariant()+"="+state[key]);
         if(state["native_udp_attempt"] is JsonObject attempt){
-            foreach(string key in new[]{"selected_port","inner_mtu","probe_result","probe_failures","core_age_ms","verified_after_start_ms"})Console.WriteLine("STABILITY_NATIVE_"+key.ToUpperInvariant()+"="+attempt[key]);
-            if(attempt["ports"]?["8443"] is JsonObject port)foreach(string key in new[]{"tx_initiations","rx_responses","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})Console.WriteLine("STABILITY_PORT_"+key.ToUpperInvariant()+"="+port[key]);
+            foreach(string key in new[]{"endpoint_port","preferred_port","selected_port","started_at","started_without_tun","inner_mtu","probe_result","probe_failures","core_age_ms","verified_after_start_ms"})Console.WriteLine(prefix+"_NATIVE_"+key.ToUpperInvariant()+"="+attempt[key]);
+            foreach(string number in new[]{"51820","443","8443"})
+                if(attempt["ports"]?[number] is JsonObject port)
+                    foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})Console.WriteLine(prefix+"_PORT_"+number+"_"+key.ToUpperInvariant()+"="+port[key]);
         }
+        foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})
+            if(state["carrier_failures"]?[transport] is JsonObject failure)
+                foreach(string key in new[]{"error","carrier_stage","probe_failures","core_uptime_ms","core_pid"})Console.WriteLine(prefix+"_CARRIER_"+transport.Replace('-','_').ToUpperInvariant()+"_"+key.ToUpperInvariant()+"="+failure[key]);
     }
     private static void RequireStableNative(JsonObject state,uint pid)
     {
@@ -389,11 +400,13 @@ internal static class OracleAcceptance
                 foreach(string field in new[]{"mode","error","guard","tun_permitted","core_stage","core_pid","connection_stage"})Console.WriteLine("INITIAL_LOSS_"+field.ToUpperInvariant()+"="+waiting[field]);
                 if(waiting["failure"] is JsonObject failure)foreach(string field in new[]{"category","hresult","native_error","socket_error","http_error","http_status"})Console.WriteLine("INITIAL_LOSS_FAILURE_"+field.ToUpperInvariant()+"="+failure[field]);
                 for(int attempt=0;attempt<12 && waiting["error"]?.GetValue<string>() is not ("ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED");attempt++){await Task.Delay(500);waiting=await Send("Status");}
+                SafeNativeState(waiting,"INITIAL_LOSS_OBSERVED");
                 string code=waiting["error"]?.GetValue<string>() ?? "";
                 Check(waiting["mode"]?.GetValue<string>()=="protected" && waiting["guard"]?.GetValue<bool>()==true && waiting["tun_permitted"]?.GetValue<bool>()==true && waiting["core_stage"]?.GetValue<string>()=="READY" && code is "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED","REAL_INITIAL_PROBE_FAILURE_RETAINS_LIVE_GUARDED_TUNNEL");
                 initialPid=waiting["core_pid"]!.GetValue<uint>();Check(initialPid>0,"REAL_INITIAL_HANDSHAKE_CORE_STAYS_ALIVE");
             }
             stage="CONNECT_AFTER_TRANSIENT_LOSS";var stable=await Connected();
+            SafeNativeState(stable,"INITIAL_LOSS_RECOVERED");
             Check(stable["core_pid"]?.GetValue<uint>()==initialPid,"REAL_ORACLE_HANDSHAKE_RECOVERS_WITHOUT_CORE_RESTART");
             Check((await Send("Status"))["uu_verified_programs"]?.GetValue<int>()==19,"REAL_ORACLE_CONNECTION_WITH_NINETEEN_VERIFIED_NETEASE_PATHS");
             Check(await ExitIp()=="152.67.156.100","REAL_ORDINARY_WINDOWS_HTTP_THROUGH_ORACLE_WIREGUARD_EXIT");
@@ -429,6 +442,8 @@ internal static class OracleAcceptance
                             Console.WriteLine("REPLACEMENT_SAFE_FAILURE_"+key.ToUpperInvariant()+"="+replacementFailure[key]);
                     Check(previousPid>0 && replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["quick_ready"]?.GetValue<bool>()==false && replacement["verified_at"] is null && replacement["transport"]?.GetValue<string>()=="wireguard-udp","REAL_REPLACEMENT_CORE_CANNOT_INHERIT_OLD_EXIT_VERIFICATION");
                     await Send("Connect");var quic=await Connected();
+                    SafeNativeState(quic,"PERMANENT_NATIVE_LOSS");
+                    Check(quic["carrier_failures"]?["wireguard-udp"]?["core_uptime_ms"]?.GetValue<long>() is >=8000 and <=13000,"REAL_PERMANENT_NATIVE_UDP_LOSS_FALLBACK_HAS_THIRTEEN_SECOND_HARD_UPPER_BOUND");
                     Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
                     Check(quic["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && quic["native_udp_attempt"]?["probe_failures"]?.GetValue<int>()>=2 && quic["native_udp_attempt"]?["probe_result"]?.GetValue<string>() is "egress_probe_timeout" or "egress_probe_http_failed","REAL_QUIC_DIAGNOSTICS_RETAIN_NATIVE_UDP_FAILURE_EVIDENCE");
                     Check(await CarrierDirectBlocked() && await AdminThroughVPN(),"REAL_QUIC_ADMIN_THROUGH_VPN_AND_PHYSICAL_DIRECT_BLOCKED");

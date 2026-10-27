@@ -127,7 +127,10 @@ internal sealed class VpnRuntime : IDisposable
                             if(_secret.ConnectIntent)_mode="protected";
                         }else{
                             if(!_initialCarrierSelected){_transport=Preferred();_initialCarrierSelected=true;}
-                            if(_probePending is null && _probeFailures>=2 && System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted)>=TimeSpan.FromSeconds(_transport==TunnelTransport.WireGuardUdp?8:6) && TransportPolicy.Next(_transport,_state!) is TunnelTransport next){
+                            if(_probeFailures>=2 && CarrierFallbackPolicy.ShouldFallback(_transport,_verifiedGeneration==_generation,
+                                _core.HandshakeReplyReceived,_transport==TunnelTransport.WireGuardUdp?_core.NativeEvidence:null,
+                                _probeFailures,(long)System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted).TotalMilliseconds,_probePending is not null)
+                                && TransportPolicy.Next(_transport,_state!) is TunnelTransport next){
                                 if(_transport==TunnelTransport.WireGuardUdp && _nativeUdpAttempt is not null)_nativeUdpAttempt["ports"]=_core.NativeEvidence;
                                 _carrierFailures[TransportPolicy.Name(_transport)]=new JsonObject{["error"]=_error,["carrier_stage"]=_core.CarrierStage,["probe_failures"]=_probeFailures,["core_uptime_ms"]=(long)System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted).TotalMilliseconds,["failed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["core_pid"]=_core.Pid};
                                 _carriers.Failed(_transport);

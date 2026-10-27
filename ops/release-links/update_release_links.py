@@ -41,7 +41,11 @@ def render(body,value):
     source=client[:-4]+'-source.zip'
     oracle=BASE+value['version']+'/'
     github='https://github.com/'+REPO+'/releases/download/'+value['version']+'/'
-    return body.rstrip()+'\n\n'+START+'\n### 下载\n\n'+f'- [Oracle 直链（支持断点续传）]({oracle+client})\n- [GitHub 下载]({github+client})\n- [SHA-256 校验]({oracle}SHA256SUMS.txt) · [配套源码]({oracle+source})\n'+END+'\n'
+    setup=next((item['name'] for item in value['assets'] if item['name'].endswith('-setup.exe')),None)
+    links=f'- 便携版 ZIP：[Oracle 下载]({oracle+client}) · [GitHub 下载]({github+client})\n'
+    if setup:links+=f'- 安装版 EXE：[Oracle 下载]({oracle+setup}) · [GitHub 下载]({github+setup})\n'
+    return body.rstrip()+'\n\n'+START+'\n### 下载\n\n'+links+f'- [SHA-256 校验]({oracle}SHA256SUMS.txt) · [配套源码]({oracle+source})\n'+END+'\n'
+
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

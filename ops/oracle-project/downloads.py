@@ -22,8 +22,9 @@ def manifest():
             not re.fullmatch(r'[a-f0-9]{40}',str(value.get('source_revision','')))):
         raise ValueError('PINNED_DOWNLOAD_MANIFEST_REQUIRED')
     prefix='OracleProxy-'+value['version'][1:]+'-win-x64-'+value['source_revision'][:12]
-    if (len(value['assets']) != 4 or {a['name'] for a in value['assets']} !=
-            {prefix+'.zip',prefix+'-source.zip','BUILD.json','SHA256SUMS.txt'}):
+    names={a['name'] for a in value['assets']}
+    base={prefix+'.zip',prefix+'-source.zip','BUILD.json','SHA256SUMS.txt'}
+    if (len(value['assets'])!=len(names) or names not in (base,base|{prefix+'-setup.exe'})):
         raise ValueError('PINNED_DOWNLOAD_MANIFEST_REQUIRED')
     for item in value['assets']:
         if (type(item['size']) is not int or not 0 < item['size'] <= 512*1024*1024 or

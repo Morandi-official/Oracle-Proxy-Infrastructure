@@ -24,6 +24,16 @@ class MirrorTests(unittest.TestCase):
                 downloads.MANIFEST.write_text(json.dumps(invalid))
                 with self.assertRaises(ValueError):downloads.manifest()
 
+    def test_installer_mirror_requires_the_exact_versioned_setup_name(self):
+        prefix='OracleProxy-0.3.0-rc21-win-x64-'+('a'*12)
+        value={'version':'v0.3.0-rc21','source_revision':'a'*40,'assets':[
+            {'name':name,'size':10,'sha256':'b'*64} for name in
+            (prefix+'.zip',prefix+'-source.zip',prefix+'-setup.exe','BUILD.json','SHA256SUMS.txt')]}
+        with tempfile.TemporaryDirectory() as directory,patch.object(downloads,'MANIFEST',Path(directory)/'manifest.json'):
+            downloads.MANIFEST.write_text(json.dumps(value));self.assertEqual(downloads.manifest(),value)
+            value['assets'][2]['name']='foreign.exe';downloads.MANIFEST.write_text(json.dumps(value))
+            with self.assertRaises(ValueError):downloads.manifest()
+
     def test_download_verifies_size_hash_and_redirect_before_publication(self):
         item={'size':4,'sha256':hashlib.sha256(b'good').hexdigest()}
         class Response(io.BytesIO): url='https://release-assets.githubusercontent.com/public'

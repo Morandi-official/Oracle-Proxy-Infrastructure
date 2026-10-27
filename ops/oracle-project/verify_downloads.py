@@ -25,7 +25,7 @@ def main():
             assert response.status == 206
             assert response.headers['Content-Range'] == f"bytes 0-{min(1023,item['size']-1)}/{item['size']}"
             assert len(response.read(1025)) == min(1024,item['size'])
-        if item['name'].endswith('.zip') and not item['name'].endswith('-source.zip'):
+        if (item['name'].endswith('.zip') and not item['name'].endswith('-source.zip')) or item['name'].endswith('-setup.exe'):
             digest = hashlib.sha256(); size = 0
             with opener.open(url,timeout=30) as response:
                 assert response.status == 200

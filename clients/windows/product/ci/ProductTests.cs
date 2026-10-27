@@ -202,11 +202,6 @@ internal static class ProductTests
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
     private static int Ui()
     {
-        foreach(var status in Enum.GetValues<OperationalStatus>()){
-            if(VpnRuntime.PresentTunnel("OracleProxy",status)!=(status!=OperationalStatus.NotPresent) || VpnRuntime.PresentTunnel("OtherAdapter",status))return 1;
-        }
-        if(!VpnRuntime.PresentTunnel("OracleProxy",(OperationalStatus)int.MaxValue))return 1;
-        Console.WriteLine("TUN_PRESENCE_IGNORES_ONLY_OS_NOT_PRESENT_AND_REJECTS_ALL_PRESENT_OR_UNKNOWN_STATES=PASS");
         OracleAcceptance.VerifyDeviceBudgetFixture();
         var nativeEvents=new NativeUdpEvidence();
         if(!nativeEvents.Record("NATIVE_UDP_443_SEND_INIT") || !nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_10054") || nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_9999999999") || nativeEvents.Record("NATIVE_UDP_443_RECV_REPLY SYNTHETIC_SECRET") || nativeEvents.Record("NATIVE_UDP_22_SEND_INIT") || nativeEvents.Record("NATIVE_UDP_443_SEND_INIT\n"))return 1;
@@ -428,6 +423,7 @@ internal static class ProductTests
     private static async Task Run()
     {
         Require(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"),"DISPOSABLE_NO_PREEXISTING_PRODUCT_TUN");
+        Require(!NativeGuard.TunPresent,"REAL_NATIVE_INTERFACE_TABLE_HAS_NO_PREEXISTING_PRODUCT_TUN");
         Require(await Tcp(),"BASELINE_REAL_PHYSICAL_TCP");Require(await Dns(),"BASELINE_REAL_PHYSICAL_UDP_DNS");
         string[] uuPaths=UuDiscovery.Discover().Paths;
         Require(uuPaths.Length==19,"REAL_SYSTEM_TRUSTS_NINETEEN_SIGNED_NETEASE_PATHS");
@@ -468,6 +464,11 @@ internal static class ProductTests
             Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
             NativeGuard.Clear();
             client=await Launch(config,standby:true);
+            Require(NativeGuard.TunPresent,"REAL_NATIVE_INTERFACE_TABLE_DETECTS_CREATED_STANDBY_ADAPTER");
+            bool presentRefused=false;
+            try{await VpnRuntime.EnsureTunnelRemoved();}
+            catch(IOException error)when(error.Message=="OWNED_TUNNEL_REMOVAL_NOT_VERIFIED"){presentRefused=true;}
+            Require(presentRefused,"REAL_COLD_REMOVAL_PROOF_REJECTS_PRESENT_SESSIONLESS_ADAPTER");
             Require(VpnRuntime.TunnelInactive() && NativeGuard.TunDormant && !NativeGuard.TunPermitted && await Tcp() && await Dns(),"REAL_STANDBY_DORMANT_ADAPTER_HAS_NO_FORWARDING_ROUTES_OR_ROUTABLE_ADDRESSES_AND_ORDINARY_TRAFFIC_REMAINS_DIRECT");
             var warmProxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service","synthetic-probe-only")};
             using(var probe=new HttpClient(new SocketsHttpHandler{Proxy=warmProxy,UseProxy=true,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(8)}){
@@ -478,6 +479,7 @@ internal static class ProductTests
             await client.StandardInput.WriteLineAsync("ACTIVATE");await client.StandardInput.FlushAsync();
             Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="TUN_ACTIVE","REAL_PRIVATE_CORE_ACTIVATE_ACKNOWLEDGED");
             NativeGuard.AuthorizeTun((uint)client.Id);
+            Require(NativeGuard.TunPresent,"REAL_NATIVE_INTERFACE_TABLE_DETECTS_ACTIVE_ADAPTER");
             Evidence.Add("REAL_ISOLATED_PREPARED_SWITCH_MS="+switchTimer.ElapsedMilliseconds);
             Require(await Tcp() && await Dns(),"REAL_PREPARED_DYNAMIC_TUN_HAS_TCP_AND_FRESH_UDP_DNS");
             ulong preparedLuid=NativeGuard.TunLuid();
@@ -545,6 +547,9 @@ internal static class ProductTests
         // No IPv6 or GameViewer proof is manufactured from IPv4 loopback tests.
         saved.Token="";saved.ConnectIntent=true;saved.RecoveryRequired=true;saved.Save();NativeGuard.Apply([]);
         Evidence.Add("PRODUCT_RECOVERY_FIXTURE_GUARDED_WITH_ENCRYPTED_KEY=PASS");
+        uint presenceError=NativeGuard.QueryTunPresence(out uint presence);
+        Evidence.Add("SYSTEM_NATIVE_TUN_PRESENCE_ERROR="+presenceError);
+        Evidence.Add("SYSTEM_NATIVE_TUN_PRESENCE_VALUE="+presence);
         var metadata=NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.Name=="OracleProxy").ToArray();
         Evidence.Add("SYSTEM_TUN_METADATA_COUNT="+metadata.Length);
         foreach(var nic in metadata)

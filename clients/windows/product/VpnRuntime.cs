@@ -325,14 +325,12 @@ internal sealed class VpnRuntime : IDisposable
     }
     // Only the already-running private core can retain a dormant adapter. A new
     // core must never adopt an unrelated/stale adapter merely by its name.
-    // GetAllNetworkInterfaces can also retain an OS NotPresent description
-    // after the device has been removed. Every other state remains present,
-    // including disabled, dormant, testing, and unknown interfaces.
-    internal static bool PresentTunnel(string name,OperationalStatus status)=>name=="OracleProxy" && status!=OperationalStatus.NotPresent;
+    // Managed adapter descriptions are diagnostic metadata. Require a successful
+    // native interface-table query with no fixed-alias row, regardless of state.
     internal static async Task EnsureTunnelRemoved()
     {
         for(int i=0;i<30;i++){
-            if(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>PresentTunnel(n.Name,n.OperationalStatus)))return;
+            if(!NativeGuard.TunPresent)return;
             await Task.Delay(100);
         }
         throw new IOException("OWNED_TUNNEL_REMOVAL_NOT_VERIFIED");

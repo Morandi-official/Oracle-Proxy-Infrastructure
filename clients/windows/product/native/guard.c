@@ -224,6 +224,21 @@ API OpGuardCount(DWORD *persistent,DWORD *boot_count){
  e=enumerate_owned(engine,FALSE,persistent,boot_count);FwpmEngineClose0(engine);return e;
 }
 API OpTunLuid(UINT64 *value){NET_LUID luid={0};DWORD e=ConvertInterfaceAliasToLuid(L"OracleProxy",&luid);if(!e)*value=luid.Value;return e;}
+/* Read-only cold-start/recovery proof. Metadata status is not absence: any
+ * matching OS interface-table row, including Down, remains present. */
+API OpTunPresence(DWORD *present){
+ if(!present)return ERROR_INVALID_PARAMETER;
+ *present=1; /* Unknown/error must never certify that the interface vanished. */
+ MIB_IF_TABLE2 *table=NULL;DWORD e=GetIfTable2(&table);
+ if(e)return e;if(!table)return ERROR_INVALID_DATA;
+ BOOL found=FALSE;
+ for(ULONG i=0;i<table->NumEntries;i++){
+  int match=CompareStringOrdinal(table->Table[i].Alias,-1,L"OracleProxy",-1,TRUE);
+  if(!match){e=GetLastError();FreeMibTable(table);return e?e:ERROR_INVALID_DATA;}
+  if(match==CSTR_EQUAL){found=TRUE;break;}
+ }
+ FreeMibTable(table);*present=found?1:0;return NO_ERROR;
+}
 API OpTunDormant(void){
  NET_LUID luid={0};if(ConvertInterfaceAliasToLuid(L"OracleProxy",&luid)!=0)return 0;
  MIB_IF_ROW2 row={0};row.InterfaceLuid=luid;if(GetIfEntry2(&row)!=0||row.OperStatus==IfOperStatusUp)return 0;

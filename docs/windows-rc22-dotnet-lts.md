@@ -21,11 +21,11 @@ no updater service, heavy packer, runtime download at application startup, or
 machine-wide runtime dependency. Native DLLs retain their protected, explicit
 loading paths; no broad DLL search-path compatibility bypass is introduced.
 
-Recovery cleanup distinguishes an operating-system `NotPresent` interface
-description from an installed tunnel device. Historical descriptions of a
-removed device do not keep recovery blocked; `Up`, `Down`, `Dormant`, `Testing`,
-unknown and all other present states still block cleanup. The three-second
-cleanup bound, owned-interface checks and protection rules remain in force.
+Cold cleanup uses a successful native `GetIfTable2` query as its absence proof.
+Any `OracleProxy` row blocks cleanup, including `Down` or other inactive states;
+query errors also fail closed. Managed interface descriptions remain diagnostic
+metadata and cannot by themselves certify device presence or absence. The
+three-second cleanup bound and protection rules remain in force.
 Recovery failures retain a bounded, sanitized helper reason code for diagnosis.
 
 Self-contained does **not** mean permanently maintenance-free: an installed

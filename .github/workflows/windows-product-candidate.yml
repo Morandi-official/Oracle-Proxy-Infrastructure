@@ -52,6 +52,9 @@ jobs:
       - name: Verify installer payload extraction and metadata boundaries
         shell: pwsh
         run: python -m unittest discover -s clients/windows/product/ci -p test_build_setup.py -v
+      - name: Compile the real installer script with non-executable synthetic inputs
+        shell: pwsh
+        run: python clients/windows/product/ci/check-setup-syntax.py
       - name: Verify bounded download retries and atomic digest failure
         shell: pwsh
         run: ./clients/windows/product/ci/test-official-download.ps1

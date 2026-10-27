@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import subprocess
 import zipfile
 
 spec = importlib.util.spec_from_file_location('setup_build', Path(__file__).with_name('build-setup.py'))
@@ -33,6 +35,19 @@ class SetupBoundary(unittest.TestCase):
             if extra:
                 z.writestr(extra, 'untrusted')
         return path
+
+    def test_iscc_normal_help_exit_one_and_zero_are_identity_only(self):
+        for code in (0, 1):
+            with self.subTest(code=code), patch.object(build.subprocess, 'run', return_value=subprocess.CompletedProcess(['iscc', '/?'], code, 'Inno Setup 6 Command-Line Compiler\nCopyright test\n')) as run:
+                self.assertEqual(build.compiler_identity(Path('ISCC.exe')), 'Inno Setup 6 Command-Line Compiler')
+                self.assertFalse(run.call_args.kwargs['check'])
+                self.assertEqual(run.call_args.kwargs['timeout'], 15)
+
+    def test_iscc_failure_or_non_compiler_output_is_not_accepted(self):
+        for code, output in ((2, 'Inno Setup 6 Command-Line Compiler\n'), (1, 'Error: unsupported command\n'), (0, '')):
+            with self.subTest(code=code, output=output), patch.object(build.subprocess, 'run', return_value=subprocess.CompletedProcess(['iscc', '/?'], code, output)):
+                with self.assertRaisesRegex(ValueError, 'IDENTITY_PROBE_FAILED'):
+                    build.compiler_identity(Path('ISCC.exe'))
 
     def test_exact_pinned_product_payload_and_notices_only(self):
         stage = self.root / 'payload'

@@ -63,6 +63,19 @@ def stage_bundle(bundle, metadata, stage):
     readme.write_text(readme.read_text(encoding='utf-8-sig'), encoding='utf-8-sig')
 
 
+
+def compiler_identity(compiler):
+    # ISCC reports its ordinary command-line help with exit code 1. This is
+    # only a bounded identity probe; actual compilation below remains strict.
+    probe = subprocess.run([str(compiler), '/?'], text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=15, check=False)
+    lines = probe.stdout.lstrip('\ufeff').splitlines()
+    identity = lines[0].strip() if lines else ''
+    if probe.returncode not in (0, 1) or not re.fullmatch(r'Inno Setup [0-9]+(?:\.[0-9]+)* Command-Line Compiler', identity):
+        raise ValueError('INNO_COMPILER_IDENTITY_PROBE_FAILED')
+    return identity
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--iscc', required=True, type=Path)
@@ -100,8 +113,7 @@ def main():
         notices.mkdir()
         shutil.copyfile(license_file, notices / 'LICENSE.txt')
         compiler_hash = digest(compiler)
-        compiler_version = subprocess.check_output([
-            str(compiler), '/?'], text=True, stderr=subprocess.STDOUT).splitlines()[0]
+        compiler_version = compiler_identity(compiler)
         (notices / 'BUILD-TOOL.txt').write_text(
             'Inno Setup compiler/runtime: ' + compiler_version + '\n'
             'Source: https://github.com/jrsoftware/issrc\n'

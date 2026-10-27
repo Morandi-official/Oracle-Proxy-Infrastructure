@@ -95,8 +95,20 @@ if($LASTEXITCODE -ne 0){throw 'Missing encrypted state silently disabled persist
 Write-Host 'REAL_MISSING_ENCRYPTED_STATE_STARTUP_RETAINS_PERSISTENT_GUARD=PASS'
 Stop-Service OracleProxyService
 Move-Item $stateBackup "$env:ProgramData/OracleProxy/state.dpapi" -Force
+function Show-RecoveryFixture([string]$Stage){
+ try{
+  $adapters=@(Get-NetAdapter -Name OracleProxy -IncludeHidden -ErrorAction SilentlyContinue | Select-Object Name,Status,ifIndex)
+  $cores=@(Get-CimInstance Win32_Process -Filter "Name='OracleProxy.Core.exe'" -Property ProcessId,ExecutablePath)
+  $corePath=Join-Path $env:ProgramFiles 'OracleProxy\OracleProxy.Core.exe'
+  $owned=@($cores | Where-Object ExecutablePath -eq $corePath).Count
+  $unknown=@($cores | Where-Object {-not $_.ExecutablePath}).Count
+  $services=@(Get-CimInstance Win32_Service -Filter "Name='OracleProxyService' OR Name='OracleProxyRecovery'" -Property Name,State | Select-Object Name,State)
+  Write-Host ('RECOVERY_FIXTURE_'+$Stage+'='+(@{adapters=$adapters;product_core_count=$owned;unknown_path_core_count=$unknown;scm=$services} | ConvertTo-Json -Depth 4 -Compress))
+ }catch{Write-Host ('RECOVERY_FIXTURE_'+$Stage+'=DIAGNOSTIC_UNAVAILABLE')}
+}
+Show-RecoveryFixture 'BEFORE'
 $recovery=Start-Process $exe -ArgumentList '--recover' -Wait -PassThru
-if($recovery.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};Get-Service OracleProxyService -ErrorAction SilentlyContinue | Select-Object Status,Name;throw 'Public fixed-action SYSTEM recovery failed'}
+if($recovery.ExitCode -ne 0){Show-RecoveryFixture 'FAILED';if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};throw 'Public fixed-action SYSTEM recovery failed'}
 $verification=New-ScheduledTaskAction -Execute $test -Argument '--verify-recovered'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery' -Action $verification -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery'

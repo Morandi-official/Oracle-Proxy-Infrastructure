@@ -154,7 +154,18 @@ internal static class Installer
                 if(helper.Status==ServiceControllerStatus.Stopped && File.Exists(diagnostic)){finished=true;break;}
                 await Task.Delay(250);
             }
-            if(!finished || System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(diagnostic))?["code"]?.GetValue<string>()!="RECOVERED_DIRECT")throw new IOException("RECOVERY_NOT_VERIFIED");
+            if(!finished)throw new IOException("RECOVERY_DEADLINE");
+            // Preserve the one-shot helper's already-sanitized reason when
+            // Program records the outer setup failure. Never export arbitrary
+            // diagnostic content, exception messages, paths, or credentials.
+            string? helperCode=null;
+            try{
+                var value=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(diagnostic))?["code"];
+                if(value is System.Text.Json.Nodes.JsonValue text && text.TryGetValue<string>(out var code))helperCode=code;
+            }catch(System.Text.Json.JsonException){}
+            if(helperCode!="RECOVERED_DIRECT")throw new IOException(
+                helperCode is {Length:>0 and <=48} && helperCode.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')
+                ?"RECOVERY_"+helperCode:"RECOVERY_RESULT_INVALID");
         }finally{
             using var helper=new ServiceController(RecoveryService.Name);
             if(helper.Status==ServiceControllerStatus.Stopped)Sc("delete",RecoveryService.Name);

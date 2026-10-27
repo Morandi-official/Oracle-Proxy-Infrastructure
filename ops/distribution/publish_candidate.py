@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc21 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc22 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc21.json')
+MANIFEST = Path(__file__).with_name('windows-rc22.json')
 
 
 def gh(*args, output=None):
@@ -27,11 +27,11 @@ def api(path): return json.loads(gh('api',f'repos/{REPO}/{path}'))
 
 def validate_manifest(manifest):
     artifacts=manifest.get('artifacts')
-    if (manifest.get('version')!='0.3.0-rc21' or
+    if (manifest.get('version')!='0.3.0-rc22' or
         type(manifest.get('run_id')) is not int or manifest['run_id']<=0 or
         not re.fullmatch(r'[a-f0-9]{40}',str(manifest.get('source_revision',''))) or
         not isinstance(artifacts,list) or len(artifacts)!=2):
-        raise ValueError('COMPLETE_PINNED_RC20_MANIFEST_REQUIRED')
+        raise ValueError('COMPLETE_PINNED_RC22_MANIFEST_REQUIRED')
     ids=[]
     for item in artifacts:
         if (not isinstance(item,dict) or type(item.get('id')) is not int or item['id']<=0 or
@@ -48,6 +48,34 @@ def validate_run(run, manifest):
             run.get('path')=='.github/workflows/windows-product-candidate.yml' and
             run.get('head_repository',{}).get('full_name')==REPO):
         raise ValueError('ACCEPTED_MAIN_WORKFLOW_REQUIRED')
+
+
+def validate_dotnet_runtime(metadata):
+    """Require rc22's actual published self-contained runtime attestation.
+
+    package-candidate.py creates this section from the MSBuild-selected runtime
+    config after exact SDK verification. The outer accepted-artifact digest binds
+    it to the tested payload; a requested TargetFramework alone is not evidence.
+    """
+    runtime = metadata.get('dotnet_runtime')
+    expected_keys = {'target_framework', 'deployment', 'version',
+                     'included_frameworks', 'runtimeconfig_sha256'}
+    if (metadata.get('dotnet_sdk') != '10.0.403' or
+            not isinstance(runtime, dict) or set(runtime) != expected_keys or
+            runtime.get('target_framework') != 'net10.0' or
+            runtime.get('deployment') != 'self-contained' or
+            runtime.get('version') != '10.0.14' or
+            not isinstance(runtime.get('runtimeconfig_sha256'), str) or
+            not re.fullmatch(r'[a-f0-9]{64}', runtime['runtimeconfig_sha256'])):
+        raise ValueError('ACCEPTED_RC22_DOTNET_RUNTIME_METADATA_REQUIRED')
+    frameworks = runtime.get('included_frameworks')
+    if (not isinstance(frameworks, list) or len(frameworks) != 2 or
+            any(not isinstance(item, dict) or set(item) != {'name', 'version'} or
+                not isinstance(item.get('name'), str) or
+                item.get('version') != '10.0.14' for item in frameworks) or
+            {item.get('name') for item in frameworks} !=
+            {'Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App'}):
+        raise ValueError('EXACT_SELF_CONTAINED_CORE_AND_DESKTOP_RUNTIME_REQUIRED')
 
 
 def digest(path):
@@ -103,6 +131,7 @@ def main():
                 metadata.get('real_oracle_acceptance_passed') is True and metadata.get('publisher_signed') is False and
                 metadata.get('channel')=='unsigned-acceptance-candidate' and str(metadata.get('workflow_run'))==str(manifest['run_id'])):
             raise ValueError('CANDIDATE_ATTESTATION_REJECTED')
+        validate_dotnet_runtime(metadata)
         sums={line.split('  ',1)[1]:line.split('  ',1)[0] for line in (assets/'SHA256SUMS.txt').read_text().splitlines()}
         if set(sums)!={prefix+'.zip',prefix+'-source.zip',prefix+'-setup.exe'}: raise ValueError('CHECKSUM_SET_REJECTED')
         for name,value in sums.items():
@@ -113,7 +142,7 @@ def main():
                 not re.fullmatch(r'[a-f0-9]{64}',str(installer.get('compiler_sha256','')))):
             raise ValueError('ACCEPTED_INSTALLER_METADATA_REQUIRED')
         notes=root/'notes.md'
-        notes.write_text(Path(__file__).with_name('windows-rc21-notes.md').read_text(encoding='utf-8')+
+        notes.write_text(Path(__file__).with_name('windows-rc22-notes.md').read_text(encoding='utf-8')+
                          f"\n构建提交：`{manifest['source_revision']}`；[完整云端验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']
         if api('git/matching-refs/tags/'+tag): raise ValueError('EXISTING_RC_TAG_REQUIRES_REVIEW')

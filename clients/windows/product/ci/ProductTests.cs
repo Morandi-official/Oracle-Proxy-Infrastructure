@@ -497,6 +497,31 @@ internal static class ProductTests
         return !state.ConnectIntent && !state.RecoveryRequired && !NativeGuard.Active && !NativeGuard.TunPermitted &&
             File.ReadAllBytes(Path.Combine(Platform.StateRoot,"state.dpapi")).AsSpan().SequenceEqual(cipher);
     }
+    private static async Task RejectDirtyDormantNativeHelper(ulong luid)
+    {
+        // CI-only defense-in-depth test: deliberately bypass the C# creator
+        // gate and require the existing pinned Go helper to reject real dirty
+        // native configuration independently. No new production API is added.
+        if(!Platform.IsSystem)throw new UnauthorizedAccessException();
+        Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);Platform.VerifyBundle(Platform.Root);
+        var start=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,
+            RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        start.ArgumentList.Add("--recover-dormant-adapter");
+        using var child=Process.Start(start)!;
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        Task<string?> errors=TunReceipt.ReadErrors(child.StandardError.BaseStream,deadline.Token);
+        Task<int> output=child.StandardOutput.BaseStream.ReadAsync(new byte[1],deadline.Token).AsTask();
+        try{
+            var input=new JsonObject{["guid"]=TunReceipt.AdapterGuid,["luid"]=luid};
+            await child.StandardInput.WriteLineAsync(input.ToJsonString()).WaitAsync(deadline.Token);child.StandardInput.Close();
+            await child.WaitForExitAsync(deadline.Token);
+            Require(child.ExitCode==3 && await output==0 && await errors=="TUN_OWNER_DORMANT_IP_NOT_EMPTY",
+                "REAL_OFF_DIRTY_NATIVE_HELPER_INDEPENDENTLY_REJECTS_IP_WITH_EXACT_REASON_AND_NO_STDOUT");
+        }finally{
+            if(!child.HasExited){child.Kill();try{await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));}catch{}}
+            deadline.Cancel();try{await errors;}catch{}try{await output;}catch{}
+        }
+    }
     private static async Task OffDormantRecovery(JsonObject config,string[] uuPaths)
     {
         string statePath=Path.Combine(Platform.StateRoot,"state.dpapi");byte[] original=File.ReadAllBytes(statePath);
@@ -522,28 +547,46 @@ internal static class ProductTests
 
             creator=await Launch(config,standby:true);
             ulong dirtyLuid=NativeGuard.TunLuid();byte[] dirtyReceipt=File.ReadAllBytes(TunReceipt.ReceiptPath);
-            creator.Kill(true);await creator.WaitForExitAsync();creator.Dispose();creator=null;
-            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && OffUnchanged(offCipher) &&
-                File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),"REAL_OFF_ORPHAN_DIRTY_CASE_STARTS_WITH_EXITED_CREATOR_AND_RECORDED_NATIVE_IDENTITY");
-            // Windows may remove a live creator's temporary address on death.
-            // Inject only after exit so the negative case actually tests a
-            // configured orphan, rather than assuming that address survives.
             await FixtureDormantAddress(false);
             string dirtyAddresses=FixtureTunAddresses();bool dirtyDormant=NativeGuard.TunDormant;
             Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && dirtyAddresses.Split('|').Contains("198.18.0.2") &&
                 OffUnchanged(offCipher) && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),
-                "REAL_OFF_ORPHAN_DIRTY_IPV4_IS_INSTALLED_ONLY_ON_RECORDED_NATIVE_IDENTITY");
-            bool dirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
+                "REAL_OFF_DIRTY_IPV4_IS_PRESENT_ON_FRESH_PREPARED_CREATOR_NATIVE_IDENTITY");
+            bool liveDirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
             try{await TunReceipt.RecoverDormantOrphan();}
-            catch(IOException error)when(error.Message=="TUN_OWNER_DORMANT_IP_NOT_EMPTY"){dirtyDenied=true;}
-            Require(dirtyDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==dirtyDormant &&
+            catch(IOException error)when(error.Message=="TUN_OWNER_CREATOR_STILL_RUNNING"){liveDirtyDenied=true;}
+            Require(liveDirtyDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==dirtyDormant &&
                 FixtureTunAddresses()==dirtyAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
                 OffUnchanged(offCipher) && await duringTcp && await duringDns && await Tcp() && await Dns(),
-                "REAL_OFF_ORPHAN_DIRTY_DORMANT_RECOVERY_IS_REFUSED_WITHOUT_FLUSH_OR_IDENTITY_POLICY_RECEIPT_CHANGES");
-            // Remove only this fixture's exact injected address. The product's
-            // unguarded recovery itself is forbidden to flush dirty settings.
-            await FixtureDormantAddress(true);
-            await TunReceipt.RecoverDormantOrphan();
+                "REAL_OFF_DIRTY_PARENT_REJECTS_LIVE_CREATOR_WITH_DEVICE_RECEIPT_POLICY_AND_DIRECT_NETWORK_PRESERVED");
+            duringTcp=Tcp();duringDns=Dns();await RejectDirtyDormantNativeHelper(dirtyLuid);
+            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==dirtyDormant &&
+                FixtureTunAddresses()==dirtyAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
+                OffUnchanged(offCipher) && await duringTcp && await duringDns && await Tcp() && await Dns(),
+                "REAL_OFF_DIRTY_NATIVE_REFUSAL_PRESERVES_CONFIGURATION_IDENTITY_RECEIPT_POLICY_AND_DIRECT_NETWORK");
+
+            creator.Kill(true);await creator.WaitForExitAsync();creator.Dispose();creator=null;
+            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && OffUnchanged(offCipher) &&
+                File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),"REAL_OFF_ORPHAN_AFTER_DIRTY_CREATOR_EXIT_RETAINS_RECORDED_NATIVE_IDENTITY");
+            string orphanAddresses=FixtureTunAddresses();bool orphanDormant=NativeGuard.TunDormant,orphanInactive=VpnRuntime.TunnelInactive();
+            bool nativeDirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
+            try{await TunReceipt.RecoverDormantOrphan();}
+            catch(IOException error)when(error.Message=="TUN_OWNER_DORMANT_IP_NOT_EMPTY"){nativeDirtyDenied=true;}
+            if(nativeDirtyDenied){
+                Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==orphanDormant &&
+                    FixtureTunAddresses()==orphanAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
+                    OffUnchanged(offCipher) && await duringTcp && await duringDns && await Tcp() && await Dns(),
+                    "REAL_OFF_ORPHAN_NATIVE_DIRTY_PARENT_REFUSAL_PRESERVES_CONFIGURATION_IDENTITY_RECEIPT_POLICY_AND_DIRECT_NETWORK");
+                // Only remove the exact address this fixture added. Unknown
+                // native errors/configuration never authorize broader cleanup.
+                await FixtureDormantAddress(true);await TunReceipt.RecoverDormantOrphan();
+            }else{
+                // A managed empty list alone is not evidence. The strict Go
+                // native IP/route/DNS audit and final absence proof must pass.
+                Require(orphanDormant && orphanInactive && !NativeGuard.TunPresent && OffUnchanged(offCipher) &&
+                    await duringTcp && await duringDns && await Tcp() && await Dns(),
+                    "OS_REMOVES_FAULT_ON_CREATOR_EXIT_CONFIRMED_BY_STRICT_NATIVE_EMPTY_AUDIT_AND_RECOVERY");
+            }
             Require(!NativeGuard.TunPresent && OffUnchanged(offCipher) && await Tcp() && await Dns(),"REAL_OFF_DORMANT_FIXTURE_TEARDOWN_LEAVES_NO_NATIVE_INTERFACE_AND_DIRECT_NETWORK");
         }finally{
             await Stop(creator);

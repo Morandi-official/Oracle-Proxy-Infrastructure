@@ -98,8 +98,12 @@ Release verification must include:
   without changing the adapter or guard. The actual one-shot SYSTEM recovery
   must remove a receipt-owned hard-kill orphan and preserve the device key.
 - An OFF prepared-core hard kill must recover an empty owned orphan without
-  installing a guard or interrupting ordinary TCP/DNS; a dirty orphan must stay
-  rejected without losing its configuration or receipt.
+  installing a guard or interrupting ordinary TCP/DNS. A real dirty prepared
+  interface must be refused by both the parent's live-creator check and the
+  independent native audit without losing configuration or receipt. After
+  creator death, a remaining dirty state must still be refused; Windows' own
+  removal of the injected address is reported only after native audit and
+  final interface absence succeed.
 - A digest-pinned rc21 .NET 8 payload is installed on a disposable Windows runner
   and upgraded in place. A synthetic, account-free SYSTEM DPAPI state is used;
   the test must retain its owner/device key identity rather than enrolling a new

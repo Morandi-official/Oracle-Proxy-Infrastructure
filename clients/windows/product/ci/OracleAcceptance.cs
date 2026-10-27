@@ -139,10 +139,13 @@ internal static class OracleAcceptance
         if(process.SessionId!=0 || process.MainModule?.FileName!=Platform.Core)throw new IOException("FIXTURE_CORE_IDENTITY_MISMATCH");
         process.Kill(true);await process.WaitForExitAsync();return pid;
     }
-    private static int PhysicalIndex()=>NetworkInterface.GetAllNetworkInterfaces()
+    private static IPv4InterfaceProperties PhysicalIPv4()=>NetworkInterface.GetAllNetworkInterfaces()
         .Where(n=>n.Name!="OracleProxy" && n.OperationalStatus==OperationalStatus.Up && n.NetworkInterfaceType!=NetworkInterfaceType.Loopback)
+        .Where(n=>n.Supports(NetworkInterfaceComponent.IPv4))
         .Where(n=>n.GetIPProperties().GatewayAddresses.Any(a=>a.Address.AddressFamily==AddressFamily.InterNetwork && !a.Address.Equals(IPAddress.Any)))
-        .Select(n=>n.GetIPProperties().GetIPv4Properties().Index).First();
+        .Select(n=>n.GetIPProperties().GetIPv4Properties()).First()
+        ?? throw new IOException("DISPOSABLE_PHYSICAL_IPV4_PROPERTIES_REQUIRED");
+    private static int PhysicalIndex()=>PhysicalIPv4().Index;
     private static async Task<bool> CarrierDirectBlocked()
     {
         using var socket=new TcpClient(AddressFamily.InterNetwork);using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -182,7 +185,9 @@ internal static class OracleAcceptance
         }
         internal PhysicalMtuFixture(){
             if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" || !Platform.IsAdmin)throw new IOException("DISPOSABLE_ADMIN_REQUIRED");
-            _index=PhysicalIndex();_original=NetworkInterface.GetAllNetworkInterfaces().Single(n=>n.GetIPProperties().GetIPv4Properties()?.Index==_index).GetIPProperties().GetIPv4Properties().Mtu;
+            // Only query the selected IPv4-capable gateway interface. Asking
+            // an unrelated IPv6-only interface for IPv4 properties can throw.
+            var physical=PhysicalIPv4();_index=physical.Index;_original=physical.Mtu;
             try{Set(_index,1280);}catch{Set(_index,_original);throw;}
         }
         public void Dispose()=>Set(_index,_original);

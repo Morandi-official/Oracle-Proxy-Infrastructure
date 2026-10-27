@@ -54,7 +54,9 @@ class CleanupRc21(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             state=Path(temporary);marker=state/(m.REQUEST+'.json')
             marker.write_text(json.dumps({'keys':[self.row()['key']],'done':False}))
+            (state/'request.json').write_text(json.dumps({'operation':'enable-https','request_id':m.REQUEST}))
             with mock.patch.object(m.cleanup,'STATE',state),mock.patch.object(m.cleanup,'MARKER',marker),\
+                 mock.patch.object(m.cleanup,'__file__',str(state/'fixture-helper.py')),\
                  mock.patch.object(m.cleanup.os,'geteuid',return_value=0),\
                  mock.patch.object(m.cleanup.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1001,pw_gid=1001)),\
                  mock.patch.object(m.cleanup.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout='REVOKED')) as revoke:
@@ -78,18 +80,24 @@ class CleanupRc21(unittest.TestCase):
                 execute.assert_not_called()
 
     def test_request_dispatch_returns_before_unrelated_https_operations(self):
-        path=Path(__file__).with_name('project_operations.py')
-        method=next(node for node in ast.parse(path.read_text()).body if isinstance(node,ast.FunctionDef) and node.name=='enable_https')
+        # Read the real dispatch implementation, but give it only this test's
+        # temporary fixed request. Repository request.json is active ops state.
+        source=Path(__file__).with_name('project_operations.py')
+        method=next(node for node in ast.parse(source.read_text()).body if isinstance(node,ast.FunctionDef) and node.name=='enable_https')
         module=ast.fix_missing_locations(ast.Module(body=[method],type_ignores=[]));selected=[]
         def load(target):target.apply=lambda:selected.append('only-owned-rc21-revoke')
         fake_spec=SimpleNamespace(loader=SimpleNamespace(exec_module=load))
         hooks=SimpleNamespace(spec_from_file_location=mock.Mock(return_value=fake_spec),module_from_spec=lambda spec:SimpleNamespace())
         forbidden=mock.Mock(side_effect=AssertionError('Unrelated HTTPS operation'))
-        namespace={'__file__':str(path),'Path':Path,'json':json,'importlib':SimpleNamespace(util=hooks),'install_downloads':forbidden}
-        exec(compile(module,str(path),'exec'),namespace);namespace['enable_https']()
-        self.assertEqual(selected,['only-owned-rc21-revoke'])
-        self.assertEqual(hooks.spec_from_file_location.call_args.args[1],path.with_name('cleanup_rc21_ci.py'))
-        forbidden.assert_not_called()
+        with tempfile.TemporaryDirectory() as temporary:
+            target=Path(temporary)/'project_operations.py'
+            target.with_name('request.json').write_text(json.dumps({'operation':'enable-https','request_id':m.REQUEST}))
+            namespace={'__file__':str(target),'Path':Path,'json':json,'importlib':SimpleNamespace(util=hooks),'install_downloads':forbidden}
+            exec(compile(module,str(source),'exec'),namespace);namespace['enable_https']()
+            self.assertEqual(selected,['only-owned-rc21-revoke'])
+            self.assertEqual(hooks.spec_from_file_location.call_args.args[1],target.with_name('cleanup_rc21_ci.py'))
+            forbidden.assert_not_called()
+
 
 
 if __name__=='__main__':unittest.main()

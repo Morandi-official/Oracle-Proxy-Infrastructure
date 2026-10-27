@@ -25,16 +25,15 @@ function Get-VerifiedRuntimeService([int]$Major,[string]$Hash){
  $image='"'+(Join-Path $serviceRoot 'OracleProxy.Service.exe')+'" --service'
  if(-not $service -or $service.State -ne 'Running' -or $service.ProcessId -le 0 -or $service.PathName -cne $image -or $service.StartName -ne 'LocalSystem'){throw 'RUNTIME_UPGRADE_FIXED_SYSTEM_SERVICE_REQUIRED'}
  if((Get-FileHash (Join-Path $serviceRoot 'OracleProxy.Service.exe') -Algorithm SHA256).Hash -ne $Hash -or (Get-Content -Raw (Join-Path $serviceRoot 'owner.sid')).Trim() -cne $owner){throw 'RUNTIME_UPGRADE_SERVICE_PAYLOAD_OR_OWNER_CHANGED'}
- $modules=@((Get-Process -Id $service.ProcessId).Modules | Where-Object ModuleName -eq 'coreclr.dll')
- if($modules.Count -ne 1 -or $modules[0].FileVersionInfo.ProductMajorPart -ne $Major){throw 'ACTUAL_LOADED_CLR_MAJOR_MISMATCH'}
- $cachePrefix=[IO.Path]::GetFullPath((Join-Path $stateRoot 'bundle'))+[IO.Path]::DirectorySeparatorChar
- if(-not [IO.Path]::GetFullPath($modules[0].FileName).StartsWith($cachePrefix,[StringComparison]::OrdinalIgnoreCase)){throw 'ACTUAL_CLR_NOT_FROM_PROTECTED_PRODUCT_BUNDLE'}
+ # Enumerate the SYSTEM service under its own identity. Runner-side remote
+ # module enumeration can return incomplete/unreadable ProcessModule data.
+ Invoke-RuntimeWitness ('Runtime'+$Major) ([uint32]$service.ProcessId)
  return [uint32]$service.ProcessId
 }
-function Invoke-RuntimeWitness([string]$Phase){
+function Invoke-RuntimeWitness([string]$Phase,[uint32]$ExpectedPid=0){
  $result=Join-Path $fixture ('result-'+[Guid]::NewGuid().ToString('N')+'.json')
  $script=Join-Path $fixture 'runtime-upgrade-witness.ps1'
- $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$script+'" -Phase '+$Phase+' -FixtureRoot "'+$fixture+'" -ResultPath "'+$result+'"'
+ $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$script+'" -Phase '+$Phase+' -FixtureRoot "'+$fixture+'" -ResultPath "'+$result+'" -ExpectedPid '+$ExpectedPid
  # Process-scoped policy is only for this checked-in, non-shipped witness.
  # No execution policy, firewall, network binding or OS setting is changed.
  $action=New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
@@ -44,7 +43,12 @@ function Invoke-RuntimeWitness([string]$Phase){
  for($i=0;$i -lt 80 -and -not (Test-Path $result);$i++){Start-Sleep -Milliseconds 250}
  if(-not (Test-Path $result)){throw 'SYSTEM_RUNTIME_WITNESS_DEADLINE'}
  $value=Get-Content -Raw $result | ConvertFrom-Json
- if(-not $value.ok -or -not $value.system_dpapi -or -not $value.synthetic_key_pair_preserved){throw 'SYSTEM_RUNTIME_WITNESS_FAILED'}
+ if($Phase -in @('Runtime8','Runtime10')){
+  # Only bounded numeric fields and booleans leave the protected witness.
+  Write-Host ('LOADED_CLR_OBSERVATION='+($value | ConvertTo-Json -Compress))
+  $major=if($Phase -eq 'Runtime8'){8}else{10}
+  if(-not $value.ok -or -not $value.pid_bound -or -not $value.cache_bound -or $value.module_count -ne 1 -or $value.major -ne $major){throw 'SYSTEM_LOADED_CLR_IDENTITY_NOT_VERIFIED'}
+ }elseif(-not $value.ok -or -not $value.system_dpapi -or -not $value.synthetic_key_pair_preserved){throw 'SYSTEM_RUNTIME_WITNESS_FAILED'}
  for($i=0;$i -lt 40 -and (Get-ScheduledTask -TaskName $task).State -eq 'Running';$i++){Start-Sleep -Milliseconds 100}
  if((Get-ScheduledTask -TaskName $task).State -eq 'Running' -or (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult -ne 0){throw 'SYSTEM_RUNTIME_WITNESS_NOT_COMPLETED'}
 }

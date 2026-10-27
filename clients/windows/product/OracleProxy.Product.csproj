@@ -10,7 +10,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="$(OracleDotNetPackageVersion)" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="$(OracleDotNetPackageVersion)" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <Compile Include="../service-host/NativeDriverTrust.cs" Link="NativeDriverTrust.cs" />
     <Compile Remove="ci/**/*.cs" />

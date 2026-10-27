@@ -1,6 +1,7 @@
 """Build explicit, auditable Windows acceptance bundles; never copy dist wholesale."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,9 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[4]
 PRODUCT = ROOT / 'clients/windows/product'
 PAYLOADS = ('OracleProxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll')
+_policy_spec = importlib.util.spec_from_file_location('runtime_policy', Path(__file__).with_name('dotnet-runtime-policy.py'))
+RUNTIME_POLICY = importlib.util.module_from_spec(_policy_spec)
+_policy_spec.loader.exec_module(RUNTIME_POLICY)
 
 
 def digest(path):
@@ -66,7 +70,7 @@ def runtime_material():
     runtime = props.findtext('./PropertyGroup/RuntimeFrameworkVersion')
     if not isinstance(runtime, str) or not re.fullmatch(r'10\.0\.[0-9]+', runtime):
         raise RuntimeError('Reviewed .NET 10 LTS runtime required')
-    config_path = PRODUCT / 'bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+    config_path = RUNTIME_POLICY.runtime_config_path(PRODUCT)
     config = json.loads(config_path.read_text(encoding='utf-8'))['runtimeOptions']
     included = config.get('includedFrameworks')
     expected = {'Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App'}

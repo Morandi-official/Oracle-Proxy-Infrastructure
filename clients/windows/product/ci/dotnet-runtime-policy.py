@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import subprocess
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -56,16 +57,37 @@ def check_source(product=PRODUCT):
             raise ValueError('ALL_SHIPPED_AND_ACCEPTANCE_PROJECTS_REQUIRE_SELF_CONTAINED_NET10')
         references = {element.get('Include'): element.get('Version')
                       for element in root.iter('PackageReference')}
-        for package in ('System.ServiceProcess.ServiceController',
-                        'System.Security.Cryptography.ProtectedData'):
+        if any(package in references for package in ('System.Security.Cryptography.ProtectedData', 'System.IO.Pipes.AccessControl')):
+            raise ValueError('REDUNDANT_EXPLICIT_FRAMEWORK_PACKAGE_REJECTED')
+        for package in ('System.ServiceProcess.ServiceController',):
             if references.get(package) != '$(OracleDotNetPackageVersion)':
                 raise ValueError('FIRST_PARTY_PACKAGE_MUST_USE_RUNTIME_PIN')
     return current
 
 
+def runtime_config_path(product=PRODUCT):
+    # MSVC sets Platform=x64 on Windows. Ask the same pinned SDK/MSBuild
+    # evaluation used by publish instead of guessing bin/Release vs bin/x64.
+    # A glob could silently pick a stale build, so accept only this one path.
+    raw = subprocess.check_output(
+        ['dotnet', 'msbuild', 'OracleProxy.Product.csproj', '-nologo',
+         '-p:Configuration=Release', '-getProperty:ProjectRuntimeConfigFilePath'],
+        cwd=product, text=True, timeout=30).strip()
+    if not raw or len(raw.splitlines()) != 1:
+        raise ValueError('ONE_MSBUILD_RUNTIME_CONFIG_PATH_REQUIRED')
+    path = Path(raw)
+    if not path.is_absolute():
+        path = product / path
+    path = path.resolve()
+    if (not path.is_relative_to((product / 'bin').resolve()) or
+            path.name != 'OracleProxy.runtimeconfig.json' or not path.is_file()):
+        raise ValueError('SELECTED_PRODUCT_BUILD_RUNTIME_CONFIG_REQUIRED')
+    return path
+
+
 def check_published(product=PRODUCT):
     current = check_source(product)
-    config = product / 'bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+    config = runtime_config_path(product)
     options = json.loads(config.read_text(encoding='utf-8'))['runtimeOptions']
     frameworks = options.get('includedFrameworks', [])
     actual = {item['name']: item['version'] for item in frameworks}

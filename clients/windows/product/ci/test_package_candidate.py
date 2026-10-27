@@ -36,8 +36,10 @@ class PackageBoundaryTests(unittest.TestCase):
         self.runtime_config = {'runtimeOptions': {'tfm': 'net10.0', 'includedFrameworks': [
             {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'},
             {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14'}]}}
-        self.put('clients/windows/product/bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json',
-                 json.dumps(self.runtime_config))
+        self.config_path = self.put('clients/windows/product/bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json',
+                                    json.dumps(self.runtime_config))
+        self.config_selection = self.patches.enter_context(patch.object(
+            candidate.RUNTIME_POLICY, 'runtime_config_path', return_value=self.config_path))
         self.put('clients/windows/product/COPYING', 'test GPL notice')
         self.put('clients/windows/product/LICENSE', 'test copyright notice')
         self.put('clients/windows/product/PORTABLE_README.zh-CN.txt', 'test instructions')
@@ -112,6 +114,16 @@ class PackageBoundaryTests(unittest.TestCase):
         self.put(config_path, json.dumps(self.runtime_config))
         with self.assertRaisesRegex(RuntimeError, 'Actual self-contained'):
             self.invoke()
+
+    def test_packaging_uses_msbuild_selected_runtime_config_not_stale_default(self):
+        selected = self.put('clients/windows/product/bin/x64/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json',
+                            json.dumps(self.runtime_config))
+        self.config_selection.return_value = selected
+        self.config_path.write_text('{"runtimeOptions":{"tfm":"net8.0"}}', encoding='utf-8')
+        self.invoke()
+        metadata = json.loads((self.root / 'dist/candidate/BUILD.json').read_text())
+        self.assertEqual(metadata['dotnet_runtime']['runtimeconfig_sha256'], candidate.digest(selected))
+        self.config_selection.assert_called_once_with(self.product)
 
     def test_sdk_roll_forward_or_unpinned_sdk_are_rejected(self):
         self.put('clients/windows/product/global.json', json.dumps({'sdk': {

@@ -12,6 +12,15 @@ class LinkTests(unittest.TestCase):
         self.assertIn(links.BASE+'v0.3.0-rc15/client.zip',body)
         self.assertIn('https://github.com/'+links.REPO+'/releases/download/v0.3.0-rc15/client.zip',body)
         with self.assertRaises(ValueError):links.render(links.START,value)
+    def test_setup_and_portable_each_get_oracle_and_github_links(self):
+        value=self.value();value['assets'].append({'name':'client-setup.exe','size':5,'sha256':'b'*64})
+        body=links.render('Author notes',value)
+        self.assertIn('便携版 ZIP',body);self.assertIn('安装版 EXE',body)
+        for name in ('client.zip','client-setup.exe'):
+            self.assertIn(links.BASE+value['version']+'/'+name,body)
+            self.assertIn('https://github.com/'+links.REPO+'/releases/download/'+value['version']+'/'+name,body)
+        self.assertEqual(links.render(body,value),body)
+
     def test_rejects_wrong_release_source_or_asset_digest(self):
         value=self.value();release={'draft':False,'target_commitish':'a'*40,'tag_name':value['version'],'assets':[dict(item,digest='sha256:'+item['sha256']) for item in value['assets']]}
         links.verify_release(release,value)

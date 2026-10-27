@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
+using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using Microsoft.Win32;
 namespace OracleProxy.Product;
@@ -25,6 +26,27 @@ internal static class Installer
         // SCM status can become Stopped just before Windows unloads DLLs.
         for(int i=0;i<150;i++){try{using var f=File.Open(Platform.Exe,FileMode.Open,FileAccess.ReadWrite,FileShare.None);return;}catch(IOException){Thread.Sleep(100);}}
         throw new IOException("SERVICE_IMAGE_STILL_IN_USE");
+    }
+    [DllImport("wtsapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+    private static extern bool WTSQuerySessionInformation(IntPtr server,int session,int information,out IntPtr value,out int bytes);
+    [DllImport("wtsapi32.dll")]private static extern void WTSFreeMemory(IntPtr value);
+    private static string InteractiveAccountPart(int session,int information)
+    {
+        if(!WTSQuerySessionInformation(IntPtr.Zero,session,information,out var value,out int size))throw new IOException("INTERACTIVE_OWNER_UNAVAILABLE");
+        try{return size>2?Marshal.PtrToStringUni(value)??"":"";}finally{WTSFreeMemory(value);}
+    }
+    internal static Task InstallInteractive()
+    {
+        // UAC may run Setup under different administrator credentials. Bind
+        // fresh installs to the real desktop session, never USERNAME/env vars.
+        if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
+        int session=Process.GetCurrentProcess().SessionId;
+        if(session==0)throw new IOException("INTERACTIVE_OWNER_UNAVAILABLE");
+        string user=InteractiveAccountPart(session,5),domain=InteractiveAccountPart(session,7);
+        if(string.IsNullOrWhiteSpace(user))throw new IOException("INTERACTIVE_OWNER_UNAVAILABLE");
+        var account=string.IsNullOrWhiteSpace(domain)?new NTAccount(user):new NTAccount(domain,user);
+        var owner=(SecurityIdentifier)account.Translate(typeof(SecurityIdentifier));
+        return Install(owner.Value);
     }
     internal static async Task Install(string owner)
     {

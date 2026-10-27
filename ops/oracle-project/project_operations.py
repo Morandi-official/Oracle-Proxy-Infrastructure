@@ -261,6 +261,11 @@ def enable_web_firewall():
 
 
 def deploy(revision):
+    request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='rc21-console-deploy-20261027':
+        spec=importlib.util.spec_from_file_location('previous_owned_browser_ci',Path(__file__).with_name('cleanup_rc20_webrtc_ci.py'))
+        cleanup=importlib.util.module_from_spec(spec);spec.loader.exec_module(cleanup)
+        cleanup.apply()
     current = host.ROOT / 'current'
     if current.is_symlink() and current.resolve().name == revision:
         run(['systemctl', 'restart', host.UNIT_NAMES[0]])

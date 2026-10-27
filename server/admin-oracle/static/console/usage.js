@@ -29,7 +29,7 @@ function renderUsers(data){
   }
   view.toggle.textContent=(view.open?'▾ ':'▸ ')+u.name;view.toggle.setAttribute('aria-expanded',String(view.open));
   view.meta.textContent=`${u.username || '未分配账号'} · ${states[u.status]} · ${u.device_count}/${u.device_limit} 台`;
-  view.used.textContent=size(u.usage.rx+u.usage.tx);view.remaining.textContent=u.quota===null?'不限':size(u.remaining_bytes);view.expires.textContent=u.expires===null?'长期':time(u.expires);
+  view.row.dataset.status=u.status;view.used.className='numeric';view.remaining.className='numeric';view.used.textContent=size(u.usage.rx+u.usage.tx);view.remaining.textContent=u.quota===null?'不限':size(u.remaining_bytes);view.expires.textContent=u.expires===null?'长期':time(u.expires);
   nodes.push(view.row,view.detail);
   if(view.open){renderUserUsage(u.id);loadUserUsage(u.id);}
  }

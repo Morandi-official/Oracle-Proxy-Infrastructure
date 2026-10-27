@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import base64
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -20,13 +21,18 @@ def main():
    with tempfile.TemporaryDirectory() as temporary:
     driver=fixture.FakeDriver();engine=fixture.agent.Engine(Path(temporary)/'fixture.sqlite3',driver);engine.tick()
     browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='Europe/London');page=context.new_page()
-    accounts={};official_fixture=[None];pending_fixture=[[]];presence_fixture=[False]
+    accounts={};official_fixture=[None];pending_fixture=[[]];presence_fixture=[False];presence_at=[int(time.time())]
     engine.official_usage=lambda:official_fixture[0] or {'status':'NOT_QUERIED'}
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
     def serve(route):
      path=urlsplit(route.request.url).path
      if path=='/':
       body=(SERVER/'templates/dashboard.html').read_text().replace('{% csrf_token %}','<input type="hidden" name="csrfmiddlewaretoken" value="synthetic-browser-only-token">')
+      body=re.sub(r'{% if local_auth %}(.*?){% else %}.*?{% endif %}',r'\1',body,flags=re.S)
+      route.fulfill(status=200,content_type='text/html',body=body)
+     elif path=='/login/':
+      body=(SERVER/'templates/local_login.html').read_text().replace("{% static 'console/style.css' %}",'/style.css').replace('{% csrf_token %}','<input type="hidden" name="csrfmiddlewaretoken" value="synthetic-browser-only-token">')
+      body=re.sub(r'{% load static %}|{% if error %}.*?{% endif %}','',body,flags=re.S)
       route.fulfill(status=200,content_type='text/html',body=body)
      elif path in ('/app.js','/usage.js','/style.css'):
       route.fulfill(status=200,content_type='text/javascript' if path.endswith('.js') else 'text/css',body=(SERVER/'static/console'/path[1:]).read_text())
@@ -51,11 +57,11 @@ def main():
        data['administrator']={'username':'owner-local','device_account_username':'owner-ci'}
        data['pending_devices']=pending_fixture[0]
        for p in data['peers']:
-        if presence_fixture[0] and p['public_key']==fixture.KEY3:p['client_status']={'online':True,'reported_mode':'connected','transport':'wireguard-udp','last_seen_at':int(time.time())}
+        if presence_fixture[0] and p['public_key']==fixture.KEY3:p['client_status']={'online':True,'reported_mode':'connected','transport':'wireguard-udp','last_seen_at':presence_at[0]}
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path.startswith('/api/users/') and path.endswith('/usage'):
        data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
-      elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':None}
+      elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':{'wg_service':'ACTIVE','wg_interface':'PRESENT','udp_listener':'LISTENING','observed_at':int(time.time())}}
       elif path=='/api/audit':data={'entries':[{'occurred_at':int(time.time())-i,'actor':'fixture','action':'test','resource':'fixture'} for i in range(20)],'activity':[{'username':'ci-user01','count':7}]}
       else:route.fulfill(status=404);return
       route.fulfill(status=200,content_type='application/json',body=json.dumps(data))
@@ -99,7 +105,7 @@ def main():
      expect(page.locator('#pending-device-rows tr').filter(has_text='CI Windows PC')).to_contain_text('ci-user01')
      engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{'public_key':fixture.KEY1,'user_id':user['id'],'name':'CI Windows PC','machine_name':'CI-FIRST','client_version':'0.3.0-rc18','confirm':True}})
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
-     expect(page.locator('#peer-rows tr').filter(has_text='CI Windows PC')).to_contain_text(label)
+     expect(page.locator('#peer-rows tr').filter(has_text='CI Windows PC').locator('xpath=preceding-sibling::tr[contains(@class,"device-group")][1]')).to_contain_text(label)
      assert driver.allowed=={'10.250.0.2'}
      assert engine.snapshot()['users'][0]['quota']==1_000_000_000
      engine.dispatch({'operation':'user.save','actor':'github:204281968','data':{'id':user['id'],'name':label,'quota_bytes':1073741824,'expires_at':None,'enabled':True,'device_limit':3}})
@@ -112,10 +118,18 @@ def main():
      page.get_by_role('button',name='保存设备',exact=True).click()
      expect(page.locator('#pending-device-rows tr').filter(has_text='CI New Windows PC')).to_contain_text('无客户端确认记录')
      engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{'public_key':fixture.KEY3,'user_id':user['id'],'name':'CI New Windows PC','machine_name':'CI-DESKTOP','client_version':'0.3.0-rc18','confirm':True}})
-     pending_fixture[0]=[{'public_key':base64.b64encode(bytes([5])*32).decode(),'id':'a'*12,'name':'CI pending <b>literal</b>','user_id':user['id'],'created_at':int(time.time()),'last_seen_at':int(time.time())}];presence_fixture[0]=True
+     pending_fixture[0]=[{'public_key':base64.b64encode(bytes([5])*32).decode(),'id':'a'*12,'name':'CI pending <b>literal</b>','user_id':user['id'],'created_at':int(time.time()),'last_seen_at':presence_at[0]}];presence_fixture[0]=True
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
      confirmed=page.locator('#peer-rows tr').filter(has_text='CI New Windows PC')
      expect(confirmed).to_contain_text('用户已确认');expect(confirmed).to_contain_text('CI-DESKTOP');expect(confirmed).to_contain_text('自报已连接')
+     # Polling retains unchanged action nodes and keyboard focus on changed rows.
+     manage=confirmed.get_by_role('button',name='管理',exact=True);manage.focus();control=manage.element_handle()
+     page.evaluate('refresh()');page.wait_for_timeout(200)
+     assert control.evaluate('(node)=>node.isConnected'), 'Polling replaced unchanged device actions'
+     expect(manage).to_be_focused()
+     driver.value['peers'][fixture.KEY3]['tx']+=1;engine.tick()
+     page.evaluate('refresh()');page.wait_for_timeout(200)
+     expect(confirmed.get_by_role('button',name='管理',exact=True)).to_be_focused()
      expect(page.locator('#pending-device-rows')).to_contain_text('CI pending <b>literal</b>')
      assert page.locator('#pending-device-rows b').count()==0
      assert engine.device_count(user['id'])==2
@@ -130,7 +144,7 @@ def main():
      confirmed.get_by_role('button',name='删除设备',exact=True).click()
      expect(page.locator('#peer-rows')).not_to_contain_text('CI New Windows PC')
      assert fixture.KEY3 not in driver.value['peers'] and engine.device_count(user['id'])==1
-     assert engine.used('user',user['id'])['tx']==8
+     assert engine.used('user',user['id'])['tx']==9
      print(f'SYNTHETIC_{name.upper()}_DIRECT_DEVICE_AND_PENDING_DELETE_RETAIN_USAGE_AND_RELEASE_SLOT=PASS',flush=True)
      print(f'SYNTHETIC_{name.upper()}_PENDING_CONFIRMED_DEVICE_PRESENCE_AND_TEXT_ESCAPE=PASS',flush=True)
      row.get_by_role('button',name='编辑',exact=True).click();page.locator('#user-form [name=enabled]').uncheck()
@@ -180,10 +194,32 @@ def main():
      page.locator('#user-rows tr').filter(has_text='Z owner').locator('.user-toggle').click()
      expect(page.locator('#usage-'+owner+' progress')).not_to_be_visible()
      page.set_viewport_size({'width':390,'height':844})
+     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Mobile layout overflows the page'
+     assert page.locator('#devices thead th').count()==6
+     expect(page.locator('nav a.active')).to_have_count(1)
      mobile_help=page.locator('#users .help-icon').first;mobile_help.click()
      expect(page.locator('#help-users')).to_be_visible()
      bounds=page.locator('#help-users').bounding_box();assert bounds['x']>=0 and bounds['x']+bounds['width']<=390
      print(f'SYNTHETIC_{name.upper()}_HOVER_FOCUS_CLICK_ESCAPE_MOBILE_HELP_AND_PERSISTENT_DAY_WEEK_MONTH_CHART=PASS',flush=True)
+     # Review artifacts use synthetic identities/ledger only, never production data.
+     screenshots=ROOT/'dist/admin-ui-review';screenshots.mkdir(parents=True,exist_ok=True)
+     official_fixture[0]['free_tier_status']='VERIFIED_USAGE_AND_PRICE_TIER'
+     page.keyboard.press('Escape');page.evaluate('refresh()');page.wait_for_timeout(200);page.emulate_media(reduced_motion='reduce');page.mouse.move(0,0);page.evaluate('document.activeElement.blur()')
+     for width in (1440,900,390):
+      page.set_viewport_size({'width':width,'height':1000 if width>700 else 844})
+      page.evaluate('scrollTo(0,0)');page.wait_for_timeout(150)
+      assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Dashboard page overflow at {width}px'
+      page.screenshot(path=str(screenshots/f'{name}-{width}-overview.png'))
+      page.locator('#devices').evaluate('(node)=>scrollTo(0,node.getBoundingClientRect().top+scrollY-24)');page.wait_for_timeout(100)
+      page.screenshot(path=str(screenshots/f'{name}-{width}-devices.png'))
+     page.goto('https://management-fixture.invalid/login/',wait_until='networkidle')
+     for width in (1440,900,390):
+      page.set_viewport_size({'width':width,'height':1000 if width>700 else 844})
+      assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Login page overflow at {width}px'
+      username=page.locator('[name=username]').bounding_box();password=page.locator('[name=password]').bounding_box()
+      assert abs(username['x']-password['x'])<=1 and username['width']>=min(250,width-110), 'Login inputs must share a usable single column'
+      page.screenshot(path=str(screenshots/f'{name}-{width}-login.png'))
+     print(f'SYNTHETIC_{name.upper()}_RESPONSIVE_1440_900_390_LAYOUT_SCREENSHOTS_AND_SINGLE_COLUMN_LOGIN=PASS',flush=True)
      assert not errors, 'Synthetic management UI raised JavaScript errors'
      print(f'SYNTHETIC_{name.upper()}_UI_USER_PEER_QUOTA_EXPIRY_BUDGET_CSRF_HEADER_AND_TEXT_ESCAPE=PASS',flush=True)
     finally:context.close();browser.close();engine.db.close()

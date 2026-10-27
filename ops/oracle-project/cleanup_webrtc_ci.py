@@ -12,6 +12,7 @@ import tempfile
 import time
 
 REQUEST='webrtc-owned-ci-slot-release-v2-20261024'
+OPERATION='enable-https'
 HOSTED=r'(?:fv-az[0-9]+-[0-9]+|runnervm[a-z0-9]{1,32})'
 BEGIN=int(dt.datetime(2026,10,24,15,44,tzinfo=dt.timezone.utc).timestamp())
 END=int(dt.datetime(2026,10,24,16,44,30,tzinfo=dt.timezone.utc).timestamp())
@@ -42,7 +43,7 @@ def save(value):
 def apply():
     if os.geteuid()!=0:raise ValueError('ROOT_ONLY')
     request=json.loads(Path(__file__).with_name('request.json').read_text())
-    if request.get('request_id')!=REQUEST or request.get('operation')!='enable-https':raise ValueError('EXPLICIT_CI_CLEANUP_REQUEST_REQUIRED')
+    if request.get('request_id')!=REQUEST or request.get('operation')!=OPERATION:raise ValueError('EXPLICIT_CI_CLEANUP_REQUEST_REQUIRED')
     if MARKER.is_symlink():raise ValueError('UNTRUSTED_CLEANUP_MARKER')
     if MARKER.exists():
         if MARKER.stat().st_size>4096:raise ValueError('INVALID_CLEANUP_MARKER')

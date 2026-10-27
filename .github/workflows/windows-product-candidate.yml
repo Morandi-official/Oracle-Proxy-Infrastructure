@@ -10,7 +10,7 @@ permissions:
 jobs:
   build-candidate:
     runs-on: windows-2022
-    timeout-minutes: 25
+    timeout-minutes: 35
     environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'windows-client-acceptance' || 'windows-product-build' }}
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +49,9 @@ jobs:
       - name: Verify packaging excludes harnesses and secrets and rejects incomplete licenses
         shell: pwsh
         run: python -m unittest discover -s clients/windows/product/ci -p test_package_candidate.py -v
+      - name: Verify installer payload extraction and metadata boundaries
+        shell: pwsh
+        run: python -m unittest discover -s clients/windows/product/ci -p test_build_setup.py -v
       - name: Verify bounded download retries and atomic digest failure
         shell: pwsh
         run: ./clients/windows/product/ci/test-official-download.ps1
@@ -150,12 +153,30 @@ jobs:
             python ./clients/windows/product/ci/package-candidate.py
           }
           if($LASTEXITCODE -ne 0){throw 'Candidate package validation failed'}
+      - name: Compile conventional EXE setup from the verified portable bundle
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc=Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if(!(Test-Path $iscc)){throw 'Pinned runner Inno Setup compiler unavailable'}
+          python ./clients/windows/product/ci/build-setup.py --iscc $iscc
+          if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
+      - name: Real EXE install upgrade shortcuts ARP and safe uninstall acceptance
+        if: success()
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $setup=@(Get-ChildItem ./dist/candidate/*-setup.exe)
+          if($setup.Count -ne 1){throw 'One exact installer artifact required'}
+          ./clients/windows/product/ci/test-setup.ps1 -SetupPath $setup[0].FullName
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc20-win-x64-unsigned-acceptance-candidate
+          name: OracleProxy-0.3.0-rc21-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
+            dist/candidate/*-setup.exe
             !dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt
             dist/candidate/BUILD.json
@@ -164,7 +185,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc20-corresponding-source
+          name: OracleProxy-0.3.0-rc21-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt

@@ -77,6 +77,13 @@ jobs:
       - run: python -m playwright install --with-deps chromium firefox
       - name: Synthetic management UI with real persistent policy engine
         run: python ops/oracle-project/management_ui_acceptance.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: administrator-ui-synthetic-previews
+          path: dist/admin-ui-review/*.png
+          if-no-files-found: ignore
+          retention-days: 14
   disposable-host-lifecycle:
     if: github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04

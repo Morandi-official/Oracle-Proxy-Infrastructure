@@ -8,8 +8,8 @@ from publish_candidate import REPO, read_archive, validate_run, validate_manifes
 
 
 class PublicationBoundaries(unittest.TestCase):
-    def test_manifest_requires_two_distinct_exact_artifacts_and_rc20_source(self):
-        manifest={'version':'0.3.0-rc20','run_id':42,'source_revision':'a'*40,
+    def test_manifest_requires_two_distinct_exact_artifacts_and_rc21_source(self):
+        manifest={'version':'0.3.0-rc21','run_id':42,'source_revision':'a'*40,
                   'artifacts':[{'id':1,'sha256':'b'*64},{'id':2,'sha256':'c'*64}]}
         validate_manifest(manifest)
         variants=[dict(manifest,artifacts=[]),dict(manifest,artifacts=manifest['artifacts'][:1]),
@@ -39,6 +39,15 @@ class PublicationBoundaries(unittest.TestCase):
             with zipfile.ZipFile(archive,'w') as bundle:
                 entry=zipfile.ZipInfo('BUILD.json');entry.external_attr=(0o120777<<16);bundle.writestr(entry,'/etc/passwd')
             with self.assertRaises(ValueError):read_archive(archive,out,'candidate')
+    def test_exact_setup_is_allowed_but_unrelated_executables_are_not(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);out=root/'out';out.mkdir();archive=root/'outer.zip'
+            with zipfile.ZipFile(archive,'w') as bundle:bundle.writestr('candidate-setup.exe',b'MZfixture')
+            read_archive(archive,out,'candidate')
+            self.assertEqual((out/'candidate-setup.exe').read_bytes(),b'MZfixture')
+            with zipfile.ZipFile(archive,'w') as bundle:bundle.writestr('other-setup.exe',b'MZfixture')
+            with self.assertRaises(ValueError):read_archive(archive,out,'candidate')
+
     def test_source_and_payload_metadata_must_match(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);out=root/'out';out.mkdir();archive=root/'outer.zip'

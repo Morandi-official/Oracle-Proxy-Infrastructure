@@ -39,6 +39,7 @@ internal sealed class MainForm : Form
     private readonly Button _maintenanceToggle=new(){Text="展开系统维护",AutoSize=true};
     private readonly ToolTip _help=new(){ShowAlways=true,InitialDelay=350,ReshowDelay=100,AutoPopDelay=18000};
     private bool _deviceExpanded,_credentialsExpanded,_hasAccount;
+    private bool _deviceDetailsShown=true,_deviceToggleShown=true;
     private static readonly Color Ink=Color.FromArgb(32,47,68),Muted=Color.FromArgb(100,116,139),Accent=Color.FromArgb(10,132,108),Border=Color.FromArgb(222,229,238);
 
     private readonly Button _native8443Test;
@@ -84,8 +85,14 @@ internal sealed class MainForm : Form
         button.MinimumSize=new Size(Math.Max(button.MinimumSize.Width,92),36);button.Padding=new Padding(10,3,10,3);button.AccessibleName=button.Text;
     }
     private void RegistrationDisclosure(){
-        bool expanded=!_deviceRegistered || _deviceExpanded;_deviceDetails.Visible=expanded;_deviceToggle.Visible=_deviceRegistered;
-        _deviceToggle.Text=expanded?"收起设备详情":"展开设备详情";
+        bool expanded=!_deviceRegistered || _deviceExpanded;
+        // Visible includes parent visibility. A hidden/minimized test window can
+        // report false even when this child's own visible bit is already true;
+        // repeat assignments would otherwise relayout every ancestor per poll.
+        if(_deviceDetailsShown!=expanded){_deviceDetailsShown=expanded;_deviceDetails.Visible=expanded;}
+        if(_deviceToggleShown!=_deviceRegistered){_deviceToggleShown=_deviceRegistered;_deviceToggle.Visible=_deviceRegistered;}
+        string caption=expanded?"收起设备详情":"展开设备详情";
+        if(_deviceToggle.Text!=caption)_deviceToggle.Text=caption;
     }
     private static BufferedFlowPanel Actions()=>new(){AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,WrapContents=true,Margin=new Padding(0,6,0,6),Padding=new Padding(0)};
     internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null)

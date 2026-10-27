@@ -46,7 +46,30 @@ internal static class Installer
         if(string.IsNullOrWhiteSpace(user))throw new IOException("INTERACTIVE_OWNER_UNAVAILABLE");
         var account=string.IsNullOrWhiteSpace(domain)?new NTAccount(user):new NTAccount(domain,user);
         var owner=(SecurityIdentifier)account.Translate(typeof(SecurityIdentifier));
-        return Install(owner.Value);
+        return InstallDesktop(owner.Value);
+    }
+    internal static Task InstallDesktop(string owner)
+    {
+        if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
+        _=new SecurityIdentifier(owner);
+        Platform.VerifyBundle(AppContext.BaseDirectory);
+        string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"OracleProxyDesktop");
+        string marker=Path.Combine(root,"desktop.marker");
+        Platform.NoLinks(root);
+        if(Directory.Exists(root)){
+            // A fixed Program Files pathname alone is not a trust boundary.
+            // Never adopt or silently repair another installer's writable tree.
+            Platform.VerifyProtected(root);
+            if(File.Exists(marker)){
+                var file=new FileInfo(marker);
+                if(file.Attributes.HasFlag(FileAttributes.ReparsePoint) || file.Length>64 || File.ReadAllText(marker)!="OracleProxy.Desktop.v1")throw new IOException("DESKTOP_DIRECTORY_COLLISION");
+            }else if(Directory.EnumerateFileSystemEntries(root).Any())throw new IOException("DESKTOP_DIRECTORY_COLLISION");
+        }else{
+            Directory.CreateDirectory(root);
+            Platform.Protect(root,true);
+        }
+        if(!File.Exists(marker))Platform.WriteAtomic(marker,System.Text.Encoding.UTF8.GetBytes("OracleProxy.Desktop.v1"));
+        return Install(owner);
     }
     internal static async Task Install(string owner)
     {

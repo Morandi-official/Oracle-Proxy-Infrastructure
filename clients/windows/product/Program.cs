@@ -14,6 +14,10 @@ internal static class Program
                 if(!Platform.IsAdmin)return 3;
                 Installer.InstallInteractive().GetAwaiter().GetResult();return 0;
             }
+            if(args.Length==2 && args[0]=="--install-desktop"){
+                if(!Platform.IsAdmin)return 3;
+                Installer.InstallDesktop(args[1]).GetAwaiter().GetResult();return 0;
+            }
             if(args.Length==2 && args[0]=="--install"){
                 if(!Platform.IsAdmin)return 3;
                 Installer.Install(args[1]).GetAwaiter().GetResult();return 0;

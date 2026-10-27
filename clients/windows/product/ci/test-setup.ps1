@@ -24,8 +24,12 @@ function Check-Installed {
  if(-not $service -or $service.State -ne 'Running' -or $service.ProcessId -le 0 -or $service.PathName -ne $expected -or $service.StartMode -ne 'Auto'){throw 'FIXED_SERVICE_IMAGE_PID_AUTOSTART_FAILED'}
  foreach($root in @($serviceRoot,$desktopRoot)){
   $acl=Get-Acl $root
-  if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544')){throw 'INSTALLED_DIRECTORY_ADMIN_OWNER_REQUIRED'}
+  if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544') -or -not $acl.AreAccessRulesProtected){throw 'INSTALLED_DIRECTORY_PROTECTED_ADMIN_OWNER_REQUIRED'}
+  foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
+   if($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $rule.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544') -and ($rule.FileSystemRights -band ([Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership)) -ne 0){throw 'INSTALLED_DIRECTORY_UNTRUSTED_WRITER'}
+  }
  }
+ if((Get-Content -Raw (Join-Path $desktopRoot 'desktop.marker')) -ne 'OracleProxy.Desktop.v1'){throw 'DESKTOP_PRODUCT_MARKER_REQUIRED'}
  foreach($name in @('OracleProxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll')){
   if((Get-FileHash (Join-Path $desktopRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.$name){throw 'DESKTOP_PAYLOAD_DIGEST_MISMATCH'}
  }
@@ -67,6 +71,24 @@ public static class SetupAcceptancePipe {
 $started=$false
 try {
  $arguments=@('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/OwnerSid='+$owner))
+ # A different installer's Users-Modify desktop tree must not become the
+ # source of an elevated uninstaller. This directory is created by this test.
+ New-Item -ItemType Directory $desktopRoot | Out-Null
+ $unsafe=New-Object Security.AccessControl.DirectorySecurity
+ $unsafe.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+ $unsafe.SetAccessRuleProtection($true,$false)
+ foreach($sid in @('S-1-5-18','S-1-5-32-544')){
+  $unsafe.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)),'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
+ }
+ $unsafe.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')),'Modify','ContainerInherit,ObjectInherit','None','Allow')))
+ Set-Acl -LiteralPath $desktopRoot -AclObject $unsafe
+ Set-Content -LiteralPath (Join-Path $desktopRoot 'foreign-sentinel.txt') -Value 'DISPOSABLE_FOREIGN_DESKTOP_FIXTURE'
+ $rejected=Start-Process -FilePath $setup -ArgumentList $arguments -PassThru
+ if(-not $rejected.WaitForExit(120000)){Stop-Process -Id $rejected.Id -Force;throw 'UNSAFE_DESKTOP_REJECTION_DEADLINE'}
+ if($rejected.ExitCode -eq 0 -or (Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $desktopRoot 'OracleProxy.exe')) -or (Test-Path (Join-Path $desktopRoot 'desktop.marker')) -or (Test-Path $arp) -or (Get-Content -Raw (Join-Path $desktopRoot 'foreign-sentinel.txt')).Trim() -ne 'DISPOSABLE_FOREIGN_DESKTOP_FIXTURE'){throw 'WRITABLE_FOREIGN_DESKTOP_WAS_ADOPTED'}
+ Remove-Item -LiteralPath (Join-Path $desktopRoot 'foreign-sentinel.txt')
+ [IO.Directory]::Delete($desktopRoot,$false)
+ Write-Host 'REAL_EXE_SETUP_REFUSES_PREEXISTING_USERS_MODIFY_DESKTOP_WITHOUT_SERVICE_OR_FILE_CHANGES=PASS'
  $started=$true
  Invoke-SetupProcess $setup $arguments
  $firstPid=Check-Installed

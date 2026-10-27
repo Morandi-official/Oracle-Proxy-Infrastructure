@@ -59,6 +59,9 @@ Source: "{#PayloadDir}\SHA256SUMS.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\请先阅读.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[UninstallDelete]
+Type: files; Name: "{app}\desktop.marker"
+
 [Icons]
 Name: "{group}\Oracle Proxy"; Filename: "{app}\OracleProxy.exe"
 Name: "{group}\Uninstall Oracle Proxy"; Filename: "{uninstallexe}"
@@ -104,14 +107,14 @@ begin
   ExtractTemporaryFile('OracleProxy.Guard.dll');
   Arguments := '--install-interactive';
   { Administrators may explicitly select an owner for unattended installation.
-    This invokes the same existing fixed --install SID boundary, not a shell. }
+    This invokes the same existing fixed --install-desktop SID boundary, not a shell. }
   OwnerSid := ExpandConstant('{param:OwnerSid|}');
   if OwnerSid <> '' then begin
     if not SafeSid(OwnerSid) then begin
       Result := 'A valid Windows owner SID is required.';
       Exit;
     end;
-    Arguments := '--install ' + OwnerSid;
+    Arguments := '--install-desktop ' + OwnerSid;
   end;
   if not Exec(ExpandConstant('{tmp}\OracleProxy.exe'), Arguments, ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) then begin
     Result := 'The VPN system service could not be installed. No desktop files were changed.';

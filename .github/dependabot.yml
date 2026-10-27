@@ -1,0 +1,50 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /server/admin-oracle
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      compatible-python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: gomod
+    directory: /clients/windows/product/core
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      compatible-core:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: nuget
+    directory: /clients/windows/product
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      compatible-desktop:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      compatible-actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

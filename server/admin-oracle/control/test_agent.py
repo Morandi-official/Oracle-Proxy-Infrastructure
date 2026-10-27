@@ -79,6 +79,40 @@ class PolicyTests(unittest.TestCase):
    self.assertIn('users',self.engine.dispatch({'operation':'state','actor':actor,'data':{}}))
   for actor in ('local:owner','system:shell','local:1;id'):
    with self.assertRaises(ValueError):self.engine.dispatch({'operation':'state','actor':actor,'data':{}})
+ def test_fixed_system_roles_cannot_dispatch_admin_mutations_or_tick(self):
+  blocked=('user.put','user.save','user.enable','user.disable','user.delete','user.limit',
+           'peer.assign','peer.create','peer.revoke','peer.delete',
+           'budget.set','budget.calibrate','usage.history','unknown.operation')
+  for actor in ('system:health','system:client-api'):
+   with patch.object(self.engine,'tick') as tick:
+    for operation in blocked+ (('peer.enroll',) if actor=='system:health' else ()):
+     with self.subTest(actor=actor,operation=operation),self.assertRaisesRegex(ValueError,'ADMINISTRATOR_REQUIRED'):
+      self.engine.dispatch({'operation':operation,'actor':actor,'data':{}})
+    tick.assert_not_called()
+  for actor in ('system:health','system:client-api'):
+   with self.assertRaisesRegex(ValueError,'INVALID_OPERATION'):
+    self.engine.dispatch({'operation':[],'actor':actor,'data':{}})
+
+ def test_native_role_enrolls_owned_device_without_admin_create_rpc(self):
+  user=self.user(quota_bytes=100000)
+  data={'public_key':KEY3,'user_id':user['id'],'name':'Confirmed PC','machine_name':'Actual native client',
+        'client_version':'0.3.0-rc21','confirm':True}
+  with self.assertRaisesRegex(ValueError,'ADMINISTRATOR_REQUIRED'):
+   self.engine.dispatch({'operation':'peer.create','actor':'system:client-api',
+                         'data':{'public_key':KEY3,'user_id':user['id'],'name':'Unconfirmed'}})
+  result=self.engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':data})
+  peer=next(p for p in result['peers'] if p['public_key']==KEY3)
+  self.assertEqual(peer['user_id'],user['id']);self.assertIsNotNone(peer['enrollment'])
+  receipt=peer['enrollment']
+  repeated=self.engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':data})
+  self.assertEqual(next(p for p in repeated['peers'] if p['public_key']==KEY3)['enrollment'],receipt)
+  self.assertEqual(self.engine.device_count(user['id']),1)
+  with self.assertRaisesRegex(ValueError,'DEVICE_CONFIRMATION_REQUIRED'):
+   self.engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':{**data,'confirm':False}})
+  self.request('peer.revoke',{'public_key':KEY3})
+  with self.assertRaisesRegex(ValueError,'DEVICE_REVOKED'):
+   self.engine.dispatch({'operation':'peer.enroll','actor':'system:client-api','data':data})
+
  def test_unmanaged_peers_not_enrolled_or_restricted_by_installation(self):
   self.assertEqual(self.driver.managed,set());self.assertFalse(self.engine.get('budget')['guard_enabled'])
   self.assertEqual(len(self.engine.snapshot()['peers']),2)

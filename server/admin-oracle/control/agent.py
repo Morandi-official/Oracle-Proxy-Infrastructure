@@ -23,6 +23,10 @@ SOCKET = '/run/oracle-proxy-control/control.sock'
 TICK = 5
 LEASE = 20
 MAX_BYTES = 10**16
+SYSTEM_OPERATIONS = {
+    'system:health': frozenset(('state',)),
+    'system:client-api': frozenset(('state', 'peer.enroll')),
+}
 _ipv6_spec = importlib.util.spec_from_file_location('oracle_ipv6_addresses', Path(__file__).with_name('ipv6_addresses.py'))
 ipv6_addresses = importlib.util.module_from_spec(_ipv6_spec)
 _ipv6_spec.loader.exec_module(ipv6_addresses)
@@ -443,11 +447,58 @@ class Engine:
             return value
         except (OSError,ValueError): return {'status':'NOT_QUERIED','remaining_bytes':None}
 
+    def _bind_peer(self, operation, actor, data):
+        expected = {'public_key','user_id','name'}
+        if set(data) != expected: raise ValueError('INVALID_FIELDS')
+        key = public_key(data['public_key']); user_id = identifier(data['user_id'])
+        if self.deleted(user_id): raise ValueError('USER_DELETED')
+        if not self.db.execute('SELECT 1 FROM users WHERE id=?',(user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
+        if not isinstance(data['name'],str) or not 1 <= len(data['name'].strip()) <= 80 or any(ord(c)<32 for c in data['name']): raise ValueError('INVALID_NAME')
+        peer = self.observation['peers'].get(key)
+        existing = self.db.execute('SELECT * FROM devices WHERE key=?',(key,)).fetchone()
+        if self.revoked(key): raise ValueError('DEVICE_REVOKED')
+        if (not existing or existing['user_id'] != user_id) and self.device_count(user_id) >= self.device_limit(user_id):
+            raise ValueError('DEVICE_LIMIT_REACHED')
+        if operation == 'peer.create':
+            if len(self.observation['peers'])>=512: raise ValueError('PEER_LIMIT')
+            if key == self.observation['server_public_key']: raise ValueError('CLIENT_PUBLIC_KEY_EQUALS_SERVER')
+            if peer or existing: raise ValueError('PEER_ALREADY_EXISTS')
+            occupied = [ipaddress.ip_network(a) for p in self.observation['peers'].values() for a in p['allowed_ips']]
+            occupied.extend(ipaddress.ip_network(a) for row in self.db.execute('SELECT addresses FROM devices') for a in json.loads(row[0]))
+            selected = None
+            for value in self.observation['networks']:
+                interface = ipaddress.ip_interface(value)
+                if interface.version != 4 or not interface.is_private or not 16 <= interface.network.prefixlen <= 30: continue
+                for address in interface.network.hosts():
+                    if address != interface.ip and not any(address in network for network in occupied if network.version==4):
+                        selected = str(address)+'/32'; break
+                if selected: break
+            if not selected: raise ValueError('NO_FREE_IPV4_TUNNEL_ADDRESS')
+            addresses = ipv6_addresses.dual_addresses([selected], self.observation['networks'])
+            self.driver.leases(set(host_ips(addresses)),set(),not self.budget_state()['guard_blocked'])
+            # Durable ownership precedes the kernel mutation. If interrupted or the
+            # netlink reply is lost, reconciliation retries only this owned peer.
+            self.db.execute('INSERT INTO devices VALUES (?,?,?,?,1)',
+                            (key,user_id,data['name'].strip(),json.dumps(addresses)))
+            self.driver.add_peer(key, addresses)
+        else:
+            if not peer: raise ValueError('PEER_NOT_FOUND')
+            host_ips(peer['allowed_ips']); addresses = peer['allowed_ips']
+        self.db.execute('INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?)',
+                        (key,user_id,data['name'].strip(),json.dumps(addresses),int(operation=='peer.create' or bool(existing and existing['owned']))))
+        self.audit(actor,operation,hashlib.sha256(key.encode()).hexdigest()[:12])
+        self.tick()
+
     def dispatch(self, request):
         if not isinstance(request, dict) or set(request) != {'operation','actor','data'}: raise ValueError('INVALID_REQUEST')
         operation, actor, data = request['operation'], request['actor'], request['data']
         if not isinstance(actor, str) or not re.fullmatch(r'(?:(?:github|local):[0-9]{1,20}|system:(?:client-api|health))', actor): raise ValueError('INVALID_ACTOR')
         if not isinstance(data, dict): raise ValueError('INVALID_DATA')
+        if not isinstance(operation, str): raise ValueError('INVALID_OPERATION')
+        # The web tier supplies these fixed native/health roles. Do not let
+        # an internal routing mistake promote them to administrator mutations.
+        if actor in SYSTEM_OPERATIONS and operation not in SYSTEM_OPERATIONS[actor]:
+            raise ValueError('ADMINISTRATOR_REQUIRED')
         if operation == 'state' and not data: return self.snapshot()
         if operation == 'usage.history':
             if actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')
@@ -517,7 +568,9 @@ class Engine:
             if self.revoked(key) or (existing and existing['user_id']!=user_id):raise ValueError('DEVICE_REVOKED')
             if not existing:
                 if key in self.observation['peers']:raise ValueError('DEVICE_NOT_MANAGED')
-                self.dispatch({'operation':'peer.create','actor':actor,'data':{'public_key':key,'user_id':user_id,'name':data['name'].strip()}})
+                # Reuse validated creation mechanics without re-entering the
+                # administrator-only peer.create RPC as a native caller.
+                self._bind_peer('peer.create',actor,{'public_key':key,'user_id':user_id,'name':data['name'].strip()})
             else:
                 self.db.execute('UPDATE devices SET name=? WHERE key=?',(data['name'].strip(),key))
             receipt=self.db.execute('SELECT * FROM device_enrollments WHERE key=? AND user_id=?',(key,user_id)).fetchone()
@@ -553,46 +606,7 @@ class Engine:
             self.db.execute('INSERT OR IGNORE INTO revoked_devices VALUES (?)', (key,))
             self.audit(actor,operation,hashlib.sha256(key.encode()).hexdigest()[:12])
         elif operation in ('peer.assign','peer.create'):
-            expected = {'public_key','user_id','name'}
-            if set(data) != expected: raise ValueError('INVALID_FIELDS')
-            key = public_key(data['public_key']); user_id = identifier(data['user_id'])
-            if self.deleted(user_id): raise ValueError('USER_DELETED')
-            if not self.db.execute('SELECT 1 FROM users WHERE id=?',(user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
-            if not isinstance(data['name'],str) or not 1 <= len(data['name'].strip()) <= 80 or any(ord(c)<32 for c in data['name']): raise ValueError('INVALID_NAME')
-            peer = self.observation['peers'].get(key)
-            existing = self.db.execute('SELECT * FROM devices WHERE key=?',(key,)).fetchone()
-            if self.revoked(key): raise ValueError('DEVICE_REVOKED')
-            if (not existing or existing['user_id'] != user_id) and self.device_count(user_id) >= self.device_limit(user_id):
-                raise ValueError('DEVICE_LIMIT_REACHED')
-            if operation == 'peer.create':
-                if len(self.observation['peers'])>=512: raise ValueError('PEER_LIMIT')
-                if key == self.observation['server_public_key']: raise ValueError('CLIENT_PUBLIC_KEY_EQUALS_SERVER')
-                if peer or existing: raise ValueError('PEER_ALREADY_EXISTS')
-                occupied = [ipaddress.ip_network(a) for p in self.observation['peers'].values() for a in p['allowed_ips']]
-                occupied.extend(ipaddress.ip_network(a) for row in self.db.execute('SELECT addresses FROM devices') for a in json.loads(row[0]))
-                selected = None
-                for value in self.observation['networks']:
-                    interface = ipaddress.ip_interface(value)
-                    if interface.version != 4 or not interface.is_private or not 16 <= interface.network.prefixlen <= 30: continue
-                    for address in interface.network.hosts():
-                        if address != interface.ip and not any(address in network for network in occupied if network.version==4):
-                            selected = str(address)+'/32'; break
-                    if selected: break
-                if not selected: raise ValueError('NO_FREE_IPV4_TUNNEL_ADDRESS')
-                addresses = ipv6_addresses.dual_addresses([selected], self.observation['networks'])
-                self.driver.leases(set(host_ips(addresses)),set(),not self.budget_state()['guard_blocked'])
-                # Durable ownership precedes the kernel mutation. If interrupted or the
-                # netlink reply is lost, reconciliation retries only this owned peer.
-                self.db.execute('INSERT INTO devices VALUES (?,?,?,?,1)',
-                                (key,user_id,data['name'].strip(),json.dumps(addresses)))
-                self.driver.add_peer(key, addresses)
-            else:
-                if not peer: raise ValueError('PEER_NOT_FOUND')
-                host_ips(peer['allowed_ips']); addresses = peer['allowed_ips']
-            self.db.execute('INSERT OR REPLACE INTO devices VALUES (?,?,?,?,?)',
-                            (key,user_id,data['name'].strip(),json.dumps(addresses),int(operation=='peer.create' or bool(existing and existing['owned']))))
-            self.audit(actor,operation,hashlib.sha256(key.encode()).hexdigest()[:12])
-            self.tick()
+            self._bind_peer(operation, actor, data)
         elif operation == 'budget.calibrate':
             if set(data)!={'limit_bytes','reserve_bytes','guard_enabled','confirm_current_period'} or data['confirm_current_period'] is not True: raise ValueError('BASELINE_CONFIRMATION_REQUIRED')
             reference=self.official_budget_reference()

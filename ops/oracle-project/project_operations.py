@@ -365,6 +365,10 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='rc22-transient-owned-ci-slot-release-20261027':
+        cleanup_spec=importlib.util.spec_from_file_location('rc22_transient_owned_ci_cleanup',Path(__file__).with_name('cleanup_rc22_transient_ci.py'))
+        cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
+        cleanup.apply();return
     if request.get('request_id')=='rc22-dormant-owned-ci-slot-release-20261027':
         cleanup_spec=importlib.util.spec_from_file_location('rc22_dormant_owned_ci_cleanup',Path(__file__).with_name('cleanup_rc22_dormant_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)

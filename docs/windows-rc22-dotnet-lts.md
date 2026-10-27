@@ -67,6 +67,16 @@ Dirty or unknown interfaces are rejected. Ordinary applications remain direct
 during OFF preparation; old verification and pending-probe generations are
 invalidated before cleanup, including when cleanup fails.
 
+Cold UDP handshakes also have one bounded retry opportunity when the current
+core generation has never verified an Oracle exit, has no WireGuard reply, has
+sent at least two fresh initiations and has no explicit socket errors. The
+silent-handshake limit is 12 seconds, allowing WireGuard's approximately
+five-second retransmission schedule to survive a short initial outage. At the
+limit, an in-flight HTTP probe cannot postpone normal fallback. Established
+connection failure and QUIC/HTTPS budgets stay unchanged. A permanently silent
+cold UDP path can take up to about four seconds longer to fall back; healthy
+warm switching and learned unavailable-carrier avoidance are unchanged.
+
 Self-contained does **not** mean permanently maintenance-free: an installed
 shared .NET security update cannot replace the runtime inside an old application
 bundle. A supported new runtime patch must be incorporated into a new product

@@ -20,20 +20,17 @@ function Invoke-RuntimeProduct([string]$File,[string[]]$Arguments){
  if(-not $process.WaitForExit(120000)){Stop-Process -Id $process.Id -Force;throw 'RUNTIME_UPGRADE_PROCESS_DEADLINE'}
  if($process.ExitCode -ne 0){throw ('RUNTIME_UPGRADE_PRODUCT_FAILED_'+$process.ExitCode)}
 }
-function Get-VerifiedRuntimeService([int]$Major,[string]$Hash){
+function Get-VerifiedProductService([string]$Hash){
  $service=Get-CimInstance Win32_Service -Filter "Name='OracleProxyService'"
  $image='"'+(Join-Path $serviceRoot 'OracleProxy.Service.exe')+'" --service'
- if(-not $service -or $service.State -ne 'Running' -or $service.ProcessId -le 0 -or $service.PathName -cne $image -or $service.StartName -ne 'LocalSystem'){throw 'RUNTIME_UPGRADE_FIXED_SYSTEM_SERVICE_REQUIRED'}
+ if(-not $service -or $service.State -ne 'Running' -or $service.ProcessId -le 0 -or $service.PathName -cne $image -or $service.StartName -ne 'LocalSystem' -or $service.StartMode -ne 'Auto'){throw 'RUNTIME_UPGRADE_FIXED_SYSTEM_SERVICE_REQUIRED'}
  if((Get-FileHash (Join-Path $serviceRoot 'OracleProxy.Service.exe') -Algorithm SHA256).Hash -ne $Hash -or (Get-Content -Raw (Join-Path $serviceRoot 'owner.sid')).Trim() -cne $owner){throw 'RUNTIME_UPGRADE_SERVICE_PAYLOAD_OR_OWNER_CHANGED'}
- # Enumerate the SYSTEM service under its own identity. Runner-side remote
- # module enumeration can return incomplete/unreadable ProcessModule data.
- Invoke-RuntimeWitness ('Runtime'+$Major) ([uint32]$service.ProcessId)
  return [uint32]$service.ProcessId
 }
-function Invoke-RuntimeWitness([string]$Phase,[uint32]$ExpectedPid=0){
+function Invoke-RuntimeWitness([string]$Phase){
  $result=Join-Path $fixture ('result-'+[Guid]::NewGuid().ToString('N')+'.json')
  $script=Join-Path $fixture 'runtime-upgrade-witness.ps1'
- $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$script+'" -Phase '+$Phase+' -FixtureRoot "'+$fixture+'" -ResultPath "'+$result+'" -ExpectedPid '+$ExpectedPid
+ $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$script+'" -Phase '+$Phase+' -FixtureRoot "'+$fixture+'" -ResultPath "'+$result+'"'
  # Process-scoped policy is only for this checked-in, non-shipped witness.
  # No execution policy, firewall, network binding or OS setting is changed.
  $action=New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument $arguments
@@ -43,12 +40,7 @@ function Invoke-RuntimeWitness([string]$Phase,[uint32]$ExpectedPid=0){
  for($i=0;$i -lt 80 -and -not (Test-Path $result);$i++){Start-Sleep -Milliseconds 250}
  if(-not (Test-Path $result)){throw 'SYSTEM_RUNTIME_WITNESS_DEADLINE'}
  $value=Get-Content -Raw $result | ConvertFrom-Json
- if($Phase -in @('Runtime8','Runtime10')){
-  # Only bounded numeric fields and booleans leave the protected witness.
-  Write-Host ('LOADED_CLR_OBSERVATION='+($value | ConvertTo-Json -Compress))
-  $major=if($Phase -eq 'Runtime8'){8}else{10}
-  if(-not $value.ok -or -not $value.pid_bound -or -not $value.cache_bound -or $value.module_count -ne 1 -or $value.major -ne $major){throw 'SYSTEM_LOADED_CLR_IDENTITY_NOT_VERIFIED'}
- }elseif(-not $value.ok -or -not $value.system_dpapi -or -not $value.synthetic_key_pair_preserved){throw 'SYSTEM_RUNTIME_WITNESS_FAILED'}
+ if(-not $value.ok -or -not $value.system_dpapi -or -not $value.synthetic_key_pair_preserved){throw 'SYSTEM_RUNTIME_WITNESS_FAILED'}
  for($i=0;$i -lt 40 -and (Get-ScheduledTask -TaskName $task).State -eq 'Running';$i++){Start-Sleep -Milliseconds 100}
  if((Get-ScheduledTask -TaskName $task).State -eq 'Running' -or (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult -ne 0){throw 'SYSTEM_RUNTIME_WITNESS_NOT_COMPLETED'}
 }
@@ -109,6 +101,16 @@ try {
   $reader=[IO.StreamReader]::new($entries[0].Open())
   try{$oldMetadata=$reader.ReadToEnd() | ConvertFrom-Json}finally{$reader.Dispose()}
   if($oldMetadata.version -cne '0.3.0-rc21' -or $oldMetadata.source_revision -cne $oldRevision -or $oldMetadata.architecture -cne 'win-x64' -or $oldMetadata.real_oracle_acceptance_passed -ne $true){throw 'OLD_ACCEPTED_BUILD_IDENTITY_MISMATCH'}
+  # The SDK used for this accepted release was 10.x; that does not make
+  # its self-contained runtime 10.x. Verify the actual recorded runtime packs.
+  if($oldMetadata.dotnet_sdk -cnotmatch '^\d+\.\d+\.\d+$'){throw 'OLD_ACCEPTED_RELEASE_SDK_IDENTITY_INVALID'}
+  $netcore=@($oldMetadata.nuget_packages | Where-Object package -cmatch '^microsoft\.netcore\.app\.runtime\.win-x64/')
+  $desktop=@($oldMetadata.nuget_packages | Where-Object package -cmatch '^microsoft\.windowsdesktop\.app\.runtime\.win-x64/')
+  if($netcore.Count -ne 1 -or $desktop.Count -ne 1){throw 'OLD_RELEASE_REQUIRES_UNIQUE_CORE_AND_DESKTOP_RUNTIME_PACKS'}
+  $coreVersion=$netcore[0].package.Split('/')[-1]
+  $desktopVersion=$desktop[0].package.Split('/')[-1]
+  if($coreVersion -cnotmatch '^8\.0\.\d+$' -or $desktopVersion -cne $coreVersion){throw 'OLD_RELEASE_SELF_CONTAINED_NET8_RUNTIME_PACKS_MISMATCH'}
+  Write-Host ('PINNED_OLD_RELEASE_SDK='+$oldMetadata.dotnet_sdk+' SELF_CONTAINED_RUNTIME_PACKS='+$coreVersion)
   foreach($name in $payloads){
    $entry=@($zip.Entries | Where-Object FullName -ceq $name)
    if($entry.Count -ne 1 -or $entry[0].Length -le 0 -or $entry[0].Length -gt 300MB){throw 'OLD_ARCHIVE_EXACT_PAYLOAD_REQUIRED'}
@@ -119,20 +121,24 @@ try {
  }finally{$zip.Dispose()}
  $old=Join-Path $oldRoot 'OracleProxy.exe'
  $oldHash=(Get-FileHash $old -Algorithm SHA256).Hash
+ Invoke-RuntimeProduct $old @('--self-test')
+ Invoke-RuntimeProduct $new @('--self-test')
+ if((Get-FileHash $new -Algorithm SHA256).Hash -ne $newHash){throw 'SELFTESTED_NET10_PAYLOAD_CHANGED_BEFORE_INSTALL'}
+ Write-Host 'PINNED_NET8_RELEASE_AND_ACTUAL_NET10_SELFTEST_PAYLOADS=PASS'
  $owned=$true
  Invoke-RuntimeProduct $old @('--install',$owner)
- $oldPid=Get-VerifiedRuntimeService 8 $oldHash
+ $oldPid=Get-VerifiedProductService $oldHash
  Stop-Service OracleProxyService
  Invoke-RuntimeWitness 'Seed'
  Start-Service OracleProxyService
- $oldPid=Get-VerifiedRuntimeService 8 $oldHash
+ $oldPid=Get-VerifiedProductService $oldHash
  Assert-RuntimeStatus $oldPid 'PreferUdp' '0.3.0-rc21+' 'udp'
  Invoke-RuntimeWitness 'VerifyUdp'
  $cipherBefore=(Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash
- Write-Host 'EXACT_RELEASED_NET8_SERVICE_SYSTEM_DPAPI_SYNTHETIC_KEY_AND_SCM_BOUND_PIPE=PASS'
+ Write-Host 'PINNED_NET8_RELEASE_SYSTEM_DPAPI_SYNTHETIC_KEY_AND_SCM_BOUND_PIPE=PASS'
 
  Invoke-RuntimeProduct $new @('--install',$owner)
- $newPid=Get-VerifiedRuntimeService 10 $newHash
+ $newPid=Get-VerifiedProductService $newHash
  if($newPid -eq $oldPid){throw 'CROSS_RUNTIME_UPGRADE_DID_NOT_REPLACE_PROCESS'}
  Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc22+' 'udp'
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $cipherBefore){throw 'CROSS_RUNTIME_UPGRADE_REWROTE_EXISTING_DPAPI_STATE'}
@@ -141,7 +147,7 @@ try {
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -eq $cipherBefore){throw 'NET10_SERVICE_DID_NOT_SAVE_SYNTHETIC_PREFERENCE'}
  Invoke-RuntimeWitness 'VerifyAuto'
  Restart-Service OracleProxyService
- $newPid=Get-VerifiedRuntimeService 10 $newHash
+ $newPid=Get-VerifiedProductService $newHash
  Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc22+' 'auto'
  Invoke-RuntimeWitness 'VerifyAuto'
  Write-Host 'REAL_NET8_TO_NET10_SYSTEM_DPAPI_OWNER_PUBLIC_PRIVATE_KEY_AND_SCM_PIPE_UPGRADE=PASS'

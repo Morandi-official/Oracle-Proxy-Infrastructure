@@ -42,7 +42,17 @@ jobs:
           key: oracle-product-go-${{ runner.os }}-1.27.1-${{ hashFiles('clients/windows/product/core/go.mod') }}
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          global-json-file: clients/windows/product/global.json
+      - name: Verify exact supported LTS source policy
+        shell: pwsh
+        working-directory: clients/windows/product
+        run: |
+          python ci/dotnet-runtime-policy.py check
+          if($LASTEXITCODE -ne 0){throw 'Pinned LTS source policy failed'}
+          $expected=(Get-Content -Raw global.json | ConvertFrom-Json).sdk.version
+          if((dotnet --version).Trim() -ne $expected){throw 'Exact pinned SDK is required'}
+          python -m unittest discover -s ci -p test_dotnet_runtime_policy.py -v
+          if($LASTEXITCODE -ne 0){throw 'Runtime policy regression failed'}
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -98,31 +108,46 @@ jobs:
         run: cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\product\OracleProxy.Guard.dll /DYNAMICBASE /NXCOMPAT /Brepro
       - name: Embed immutable native payload hashes and compile self-contained Windows client
         shell: pwsh
+        working-directory: clients/windows/product
         run: |
           $ErrorActionPreference='Stop'
-          $pins='./clients/windows/product/BuildPins.cs'
+          $pins='./BuildPins.cs'
           $body=Get-Content -Raw $pins
-          $body=$body.Replace('BUILD_MUST_PIN_CORE',(Get-FileHash './dist/product/OracleProxy.Core.exe' -Algorithm SHA256).Hash.ToLowerInvariant())
-          $body=$body.Replace('BUILD_MUST_PIN_GUARD',(Get-FileHash './dist/product/OracleProxy.Guard.dll' -Algorithm SHA256).Hash.ToLowerInvariant())
+          $body=$body.Replace('BUILD_MUST_PIN_CORE',(Get-FileHash '../../../dist/product/OracleProxy.Core.exe' -Algorithm SHA256).Hash.ToLowerInvariant())
+          $body=$body.Replace('BUILD_MUST_PIN_GUARD',(Get-FileHash '../../../dist/product/OracleProxy.Guard.dll' -Algorithm SHA256).Hash.ToLowerInvariant())
           [IO.File]::WriteAllText((Resolve-Path $pins),$body)
-          dotnet publish ./clients/windows/product/OracleProxy.Product.csproj -c Release -p:DebugType=None -o ./dist/product
+          dotnet publish ./OracleProxy.Product.csproj -c Release -p:DebugType=None -o ../../../dist/product
           if($LASTEXITCODE -ne 0){throw 'Product build failed'}
+          python ci/dotnet-runtime-policy.py check-published
+          if($LASTEXITCODE -ne 0){throw 'Bundled runtime does not match exact LTS pins'}
+          $isolatedRuntime=Join-Path $env:RUNNER_TEMP 'oracle-no-shared-dotnet'
+          New-Item -ItemType Directory -Force $isolatedRuntime | Out-Null
+          $env:DOTNET_ROOT=$isolatedRuntime
+          $env:DOTNET_ROOT_X64=$isolatedRuntime
+          $env:DOTNET_MULTILEVEL_LOOKUP='0'
           foreach($case in @(@('--self-test',0),@('--service',3),@('--arbitrary-command',2))){
-            $result=Start-Process -FilePath (Resolve-Path './dist/product/OracleProxy.exe') -ArgumentList $case[0] -Wait -PassThru
+            $result=Start-Process -FilePath (Resolve-Path '../../../dist/product/OracleProxy.exe') -ArgumentList $case[0] -Wait -PassThru
             if($result.ExitCode -ne $case[1]){throw "Product boundary $($case[0]) exited $($result.ExitCode), expected $($case[1])"}
           }
+          Write-Host 'PRODUCT_EXACT_NET10_SELF_CONTAINED_NO_SHARED_DOTNET=PASS'
           Write-Host 'PRODUCT_COMPILE_AND_OFFLINE_BOUNDARIES=PASS'
           exit 0
       - name: Build disposable SYSTEM fixture (not shipped)
         shell: pwsh
+        working-directory: clients/windows/product
         run: |
-          dotnet publish ./clients/windows/product/ci/OracleProxy.Product.Tests.csproj -c Release -p:DebugType=None -o ./dist/product-tests
+          dotnet publish ./ci/OracleProxy.Product.Tests.csproj -c Release -p:DebugType=None -o ../../../dist/product-tests
           if($LASTEXITCODE -ne 0){throw 'Fixture build failed'}
-          cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients/windows/product/ci/udp-loss.c /link /OUT:dist/product-tests/OracleProxy.Fault.dll /DYNAMICBASE /NXCOMPAT /Brepro
+          cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE ci/udp-loss.c /link /OUT:../../../dist/product-tests/OracleProxy.Fault.dll /DYNAMICBASE /NXCOMPAT /Brepro
           if($LASTEXITCODE -ne 0){throw 'Disposable UDP fault build failed'}
-          dotnet publish ./clients/windows/product/ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ./dist/bad-upgrade
+          dotnet publish ./ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ../../../dist/bad-upgrade
           if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
-          Copy-Item ./dist/product/OracleProxy.Core.exe,./dist/product/OracleProxy.Guard.dll ./dist/bad-upgrade
+          Copy-Item ../../../dist/product/OracleProxy.Core.exe,../../../dist/product/OracleProxy.Guard.dll ../../../dist/bad-upgrade
+      - name: Real NET8 to NET10 service and DPAPI identity upgrade acceptance
+        if: github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./clients/windows/product/ci/test-runtime-upgrade.ps1
       - name: Real SCM, SYSTEM DPAPI and isolated WireGuard/WFP fault acceptance
         if: github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
         shell: pwsh
@@ -176,7 +201,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc21-win-x64-unsigned-acceptance-candidate
+          name: OracleProxy-0.3.0-rc22-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             dist/candidate/*-setup.exe
@@ -188,7 +213,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc21-corresponding-source
+          name: OracleProxy-0.3.0-rc22-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt

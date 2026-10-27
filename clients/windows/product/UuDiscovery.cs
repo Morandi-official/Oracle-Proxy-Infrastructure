@@ -131,7 +131,13 @@ internal static class UuDiscovery
     internal static UuIssue? SignatureIssue(string path)
     {
         try{
-            using var certificate=new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
+            // The input is a signed PE executable, not a PEM/DER certificate file.
+            // X509CertificateLoader cannot extract its Authenticode signer. WinVerifyTrust
+            // below remains authoritative for trust; dispose both managed certificate handles.
+#pragma warning disable SYSLIB0057
+            using var signer=X509Certificate.CreateFromSignedFile(path);
+#pragma warning restore SYSLIB0057
+            using var certificate=new X509Certificate2(signer);
             string publisher=certificate.GetNameInfo(X509NameType.SimpleName,false);
             if(publisher is not ("NetEase (Hangzhou) Network Co., Ltd" or "NetEase(Hangzhou) Network Co. Ltd." or "NetEase (Hangzhou) Network Co., Ltd." or "Hangzhou NetEase Leihuo Technology Co., Ltd."))return new(path,"UU_PUBLISHER_UNRECOGNIZED");
             int status=VerifySignature(path);

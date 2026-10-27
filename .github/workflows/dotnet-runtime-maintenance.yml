@@ -1,0 +1,42 @@
+name: Windows .NET LTS runtime maintenance
+on:
+  schedule:
+    - cron: '17 1 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'clients/windows/product/global.json'
+      - 'clients/windows/product/Directory.Build.props'
+      - 'clients/windows/product/**/*.csproj'
+      - 'clients/windows/product/ci/dotnet-runtime-policy.py'
+      - 'clients/windows/product/ci/test_dotnet_runtime_policy.py'
+      - '.github/workflows/dotnet-runtime-maintenance.yml'
+permissions:
+  contents: read
+jobs:
+  runtime-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate exact SDK runtime and all shipped project targets
+        run: python clients/windows/product/ci/dotnet-runtime-policy.py check
+      - name: Verify update boundaries and actual self-contained metadata rejection
+        run: python -m unittest discover -s clients/windows/product/ci -p test_dotnet_runtime_policy.py -v
+      - name: Detect supported LTS patch releases without changing production
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: python clients/windows/product/ci/dotnet-runtime-policy.py check-updates
+      - name: Explain maintenance result
+        if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          This weekly check only reads Microsoft's .NET 10 LTS release metadata.
+          It uses no VPN test account, Oracle deployment credential, or write permission.
+          A newer stable patch or LTS support ending within 180 days fails the check.
+          Refresh pins with `python clients/windows/product/ci/dotnet-runtime-policy.py refresh`,
+          then submit a normal PR and run Windows acceptance before issuing new ZIP/EXE packages.
+          Installed self-contained applications receive runtime fixes through those new packages;
+          this check does not silently update or restart a running VPN.
+          EOF

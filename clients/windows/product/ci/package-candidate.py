@@ -54,6 +54,32 @@ def nuget_material():
     return material, rows
 
 
+
+def runtime_material():
+    """Attest the actual self-contained runtime config, not just the requested TFM."""
+    sdk_policy = json.loads((PRODUCT / 'global.json').read_text(encoding='utf-8'))['sdk']
+    sdk = run('dotnet', '--version', cwd=PRODUCT)
+    if (sdk != sdk_policy.get('version') or sdk_policy.get('rollForward') != 'disable' or
+            sdk_policy.get('allowPrerelease') is not False):
+        raise RuntimeError('Pinned .NET SDK mismatch')
+    props = ET.parse(PRODUCT / 'Directory.Build.props')
+    runtime = props.findtext('./PropertyGroup/RuntimeFrameworkVersion')
+    if not isinstance(runtime, str) or not re.fullmatch(r'10\.0\.[0-9]+', runtime):
+        raise RuntimeError('Reviewed .NET 10 LTS runtime required')
+    config_path = PRODUCT / 'bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+    config = json.loads(config_path.read_text(encoding='utf-8'))['runtimeOptions']
+    included = config.get('includedFrameworks')
+    expected = {'Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App'}
+    if (config.get('tfm') != 'net10.0' or config.get('framework') or config.get('frameworks') or
+            not isinstance(included, list) or len(included) != 2 or
+            {item.get('name') for item in included} != expected or
+            any(item.get('version') != runtime for item in included)):
+        raise RuntimeError('Actual self-contained .NET 10 runtime mismatch')
+    return sdk, {'target_framework': config['tfm'], 'deployment': 'self-contained',
+                 'version': runtime, 'included_frameworks': included,
+                 'runtimeconfig_sha256': digest(config_path)}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--acceptance-passed', action='store_true')
@@ -83,12 +109,13 @@ def main():
     version = ET.parse(PRODUCT / 'OracleProxy.Product.csproj').findtext('./PropertyGroup/Version')
     if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+', version):
         raise RuntimeError('Explicit candidate version required')
+    sdk, runtime = runtime_material()
     metadata = {'channel': 'unsigned-acceptance-candidate', 'version': version,
                 'source_revision': revision, 'architecture': 'win-x64',
                 'real_oracle_acceptance_passed': args.acceptance_passed,
                 'workflow_run': os.environ['GITHUB_RUN_ID'], 'workflow_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
                 'publisher_signed': False, 'payload_sha256': hashes,
-                'dotnet_sdk': run('dotnet', '--version'), 'go_toolchain': run('go', 'version'),
+                'dotnet_sdk': sdk, 'dotnet_runtime': runtime, 'go_toolchain': run('go', 'version'),
                 'remaining_gates': ['hardware regression of this exact candidate payload',
                                     'earliest-boot and pre-login full traffic observation',
                                     'browser media-granted local interface disclosure limitation',

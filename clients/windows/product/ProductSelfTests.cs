@@ -6,6 +6,13 @@ internal static class ProductSelfTests
 {
     internal static bool Run()
     {
+        // This fixed offline check also proves the bundled executable runs the reviewed LTS
+        // runtime when CI points DOTNET_ROOT at an empty directory (no shared installation).
+        string? expectedRuntime=System.Reflection.Assembly.GetExecutingAssembly()
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute),false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>()
+            .SingleOrDefault(value=>value.Key=="OracleDotNetRuntime")?.Value;
+        if(string.IsNullOrEmpty(expectedRuntime) || Environment.Version.ToString()!=expectedRuntime)return false;
         byte[] key=Convert.FromHexString("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a"),pub=new byte[32];
         X25519.GeneratePublicKey(key,0,pub,0);
         if(Convert.ToHexString(pub).ToLowerInvariant()!="8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")return false;

@@ -27,11 +27,14 @@ internal static class TunReceipt
         VerifyFileIfPresent(ReceiptPath);
     }
 
-    internal static async Task RecoverOrphan(CancellationToken cancel=default)
+    internal static Task RecoverOrphan(CancellationToken cancel=default)=>RecoverOwned(false,cancel);
+    internal static Task RecoverDormantOrphan(CancellationToken cancel=default)=>RecoverOwned(true,cancel);
+    private static async Task RecoverOwned(bool dormant,CancellationToken cancel)
     {
         VerifyEnvironment();cancel.ThrowIfCancellationRequested();
+        if(dormant)VerifyRecoveryMode(true);
         if(!NativeGuard.TunPresent)return; // Old installations need no receipt when no adapter exists.
-        if(!NativeGuard.Active)throw new IOException("TUN_OWNER_GUARD_REQUIRED");
+        if(!dormant)VerifyRecoveryMode(false);
         Owner owner=Read();
         if(CurrentLuid()!=owner.Luid)throw new IOException("TUN_OWNER_IDENTITY_MISMATCH");
         VerifyCreatorExited(owner);
@@ -40,10 +43,10 @@ internal static class TunReceipt
         }
         // A fixed pinned child receives only its already-verified adapter identity.
         // No shell, path, executable choice, route or destination comes from the receipt.
-        Platform.VerifyBundle(Platform.Root);
+        Platform.VerifyBundle(Platform.Root);VerifyRecoveryMode(dormant);
         var start=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,
             RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add("--recover-adapter");
+        start.ArgumentList.Add(dormant?"--recover-dormant-adapter":"--recover-adapter");
         using var child=Process.Start(start)??throw new IOException("TUN_OWNER_HELPER_START_FAILED");
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
@@ -59,6 +62,7 @@ internal static class TunReceipt
                 throw new IOException(await errors??"TUN_OWNER_HELPER_NOT_VERIFIED");
             if(await errors is string reason)throw new IOException(reason);
             if(NativeGuard.TunPresent)throw new IOException("TUN_OWNER_REMOVAL_NOT_VERIFIED");
+            VerifyRecoveryMode(dormant);
         }catch(OperationCanceledException error){throw new IOException("TUN_OWNER_HELPER_TIMEOUT",error);}
         catch(IOException error){
             // EOF may precede process exit by a few milliseconds. Collect only
@@ -103,7 +107,33 @@ internal static class TunReceipt
         if(line.SequenceEqual("ORPHAN_DNS_CLEANUP_FAILED"u8))return "TUN_OWNER_ORPHAN_DNS_CLEANUP_FAILED";
         if(line.SequenceEqual("ORPHAN_RECREATE_FAILED"u8))return "TUN_OWNER_ORPHAN_RECREATE_FAILED";
         if(line.SequenceEqual("ORPHAN_VERIFY_FAILED"u8))return "TUN_OWNER_ORPHAN_VERIFY_FAILED";
+        if(line.SequenceEqual("DORMANT_IP_QUERY_FAILED"u8))return "TUN_OWNER_DORMANT_IP_QUERY_FAILED";
+        if(line.SequenceEqual("DORMANT_IP_NOT_EMPTY"u8))return "TUN_OWNER_DORMANT_IP_NOT_EMPTY";
+        if(line.SequenceEqual("DORMANT_ROUTE_QUERY_FAILED"u8))return "TUN_OWNER_DORMANT_ROUTE_QUERY_FAILED";
+        if(line.SequenceEqual("DORMANT_ROUTE_NOT_EMPTY"u8))return "TUN_OWNER_DORMANT_ROUTE_NOT_EMPTY";
+        if(line.SequenceEqual("DORMANT_ROUTE_PROTOCOL_NOT_LOCAL"u8))return "TUN_OWNER_DORMANT_ROUTE_PROTOCOL_NOT_LOCAL";
+        if(line.SequenceEqual("DORMANT_ROUTE_NEXT_HOP_UNSAFE"u8))return "TUN_OWNER_DORMANT_ROUTE_NEXT_HOP_UNSAFE";
+        if(line.SequenceEqual("DORMANT_ROUTE_DESTINATION_UNSAFE"u8))return "TUN_OWNER_DORMANT_ROUTE_DESTINATION_UNSAFE";
+        if(line.SequenceEqual("DORMANT_DNS_QUERY_FAILED"u8))return "TUN_OWNER_DORMANT_DNS_QUERY_FAILED";
+        if(line.SequenceEqual("DORMANT_DNS_NOT_EMPTY"u8))return "TUN_OWNER_DORMANT_DNS_NOT_EMPTY";
+        if(line.SequenceEqual("DORMANT_RECREATE_FAILED"u8))return "TUN_OWNER_DORMANT_RECREATE_FAILED";
+        if(line.SequenceEqual("DORMANT_VERIFY_FAILED"u8))return "TUN_OWNER_DORMANT_VERIFY_FAILED";
         return null;
+    }
+    private static void VerifyRecoveryMode(bool dormant)
+    {
+        if(!dormant){
+            if(!NativeGuard.Active)throw new IOException("TUN_OWNER_GUARD_REQUIRED");
+            return;
+        }
+        // The authorization is the existing SYSTEM-protected durable intent,
+        // never a caller-provided Boolean. A missing/invalid record is not Off.
+        string state=Path.Combine(Platform.StateRoot,"state.dpapi");
+        VerifyFileIfPresent(state,1024*1024);
+        if(!File.Exists(state))throw new IOException("TUN_OWNER_PERSISTENT_OFF_REQUIRED");
+        var saved=DurableState.Load();
+        if(saved.ConnectIntent || saved.RecoveryRequired || NativeGuard.Active || NativeGuard.TunPermitted)
+            throw new IOException("TUN_OWNER_PERSISTENT_OFF_REQUIRED");
     }
     private static void VerifyEnvironment()
     {
@@ -118,13 +148,13 @@ internal static class TunReceipt
             throw new IOException("TUN_OWNER_IDENTITY_MISMATCH");
         return luid;
     }
-    private static void VerifyFileIfPresent(string path)
+    private static void VerifyFileIfPresent(string path,long maximum=4096)
     {
         FileAttributes attributes;
         try{attributes=File.GetAttributes(path);}
         catch(FileNotFoundException){return;}catch(DirectoryNotFoundException){return;}
         var file=new FileInfo(path);
-        if((attributes&(FileAttributes.ReparsePoint|FileAttributes.Directory))!=0 || file.Length>4096)throw new IOException("TUN_OWNER_RECEIPT_INVALID");
+        if((attributes&(FileAttributes.ReparsePoint|FileAttributes.Directory))!=0 || file.Length>maximum)throw new IOException("TUN_OWNER_RECEIPT_INVALID");
         var security=file.GetAccessControl();
         if((security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier)?.Value is not ("S-1-5-18" or "S-1-5-32-544"))
             throw new IOException("TUN_OWNER_RECEIPT_INVALID");

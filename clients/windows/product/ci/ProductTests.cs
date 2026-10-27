@@ -93,6 +93,13 @@ internal static class ProductTests
     {
         if(!await OrphanLogDrain(false) || !await OrphanLogDrain(true))return 1;
         Console.WriteLine("ORPHAN_STDERR_DRAINS_LARGE_UNKNOWN_OR_INVALID_LOGS_WITHOUT_PREFIX_MATCH_OR_EARLY_EXIT=PASS");
+        foreach(string reason in new[]{"DORMANT_ROUTE_PROTOCOL_NOT_LOCAL","DORMANT_ROUTE_NEXT_HOP_UNSAFE","DORMANT_ROUTE_DESTINATION_UNSAFE"}){
+            using var exact=new MemoryStream(Encoding.ASCII.GetBytes(reason+"\n"));
+            if(await TunReceipt.ReadErrors(exact,CancellationToken.None)!="TUN_OWNER_"+reason)return 1;
+            using var untrusted=new MemoryStream(Encoding.ASCII.GetBytes("prefix "+reason+"\n"+reason+" tail\n"));
+            if(await TunReceipt.ReadErrors(untrusted,CancellationToken.None) is not null)return 1;
+        }
+        Console.WriteLine("DORMANT_ROUTE_DIAGNOSTIC_CODES_REQUIRE_EXACT_ALLOWLISTED_LINES=PASS");
         using var client=new HttpClient(new SlowTrace(true)){Timeout=Timeout.InfiniteTimeSpan};
         bool reply=false;var ready=Task.Run(async()=>{await Task.Delay(500);Volatile.Write(ref reply,true);});
         long elapsed=await EgressProbe.Verify(client,3,()=>Volatile.Read(ref reply),CancellationToken.None);await ready;
@@ -472,6 +479,120 @@ internal static class ProductTests
             Require(denied && NativeGuard.Active && NativeGuard.TunPresent && NativeGuard.TunLuid()==expectedLuid && NativeGuard.TunDormant==dormant,evidence);
         }finally{Platform.WriteAtomic(TunReceipt.ReceiptPath,original);}
     }
+    private static async Task FixtureDormantAddress(bool remove)
+    {
+        var start=new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"netsh.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        var args=remove?new[]{"interface","ipv4","delete","address","name=OracleProxy","address=198.18.0.2","store=active"}:
+            new[]{"interface","ipv4","add","address","name=OracleProxy","address=198.18.0.2","mask=255.255.255.255","store=active"};
+        foreach(string arg in args)start.ArgumentList.Add(arg);
+        using var process=Process.Start(start)!;
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Require(process.ExitCode==0,remove?"OFF_DORMANT_FIXTURE_EXACT_IPV4_REMOVED":"OFF_DORMANT_FIXTURE_EXACT_IPV4_ADDED");
+    }
+    private static string FixtureTunAddresses()=>string.Join('|',NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.Name=="OracleProxy")
+        .SelectMany(n=>n.GetIPProperties().UnicastAddresses).Select(a=>a.Address.ToString()).Order(StringComparer.Ordinal));
+    private static bool OffUnchanged(byte[] cipher)
+    {
+        var state=DurableState.Load();
+        return !state.ConnectIntent && !state.RecoveryRequired && !NativeGuard.Active && !NativeGuard.TunPermitted &&
+            File.ReadAllBytes(Path.Combine(Platform.StateRoot,"state.dpapi")).AsSpan().SequenceEqual(cipher);
+    }
+    private static async Task RejectDirtyDormantNativeHelper(ulong luid)
+    {
+        // CI-only defense-in-depth test: deliberately bypass the C# creator
+        // gate and require the existing pinned Go helper to reject real dirty
+        // native configuration independently. No new production API is added.
+        if(!Platform.IsSystem)throw new UnauthorizedAccessException();
+        Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);Platform.VerifyBundle(Platform.Root);
+        var start=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,
+            RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        start.ArgumentList.Add("--recover-dormant-adapter");
+        using var child=Process.Start(start)!;
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        Task<string?> errors=TunReceipt.ReadErrors(child.StandardError.BaseStream,deadline.Token);
+        Task<int> output=child.StandardOutput.BaseStream.ReadAsync(new byte[1],deadline.Token).AsTask();
+        try{
+            var input=new JsonObject{["guid"]=TunReceipt.AdapterGuid,["luid"]=luid};
+            await child.StandardInput.WriteLineAsync(input.ToJsonString()).WaitAsync(deadline.Token);child.StandardInput.Close();
+            await child.WaitForExitAsync(deadline.Token);
+            Require(child.ExitCode==3 && await output==0 && await errors=="TUN_OWNER_DORMANT_IP_NOT_EMPTY",
+                "REAL_OFF_DIRTY_NATIVE_HELPER_INDEPENDENTLY_REJECTS_IP_WITH_EXACT_REASON_AND_NO_STDOUT");
+        }finally{
+            if(!child.HasExited){child.Kill();try{await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));}catch{}}
+            deadline.Cancel();try{await errors;}catch{}try{await output;}catch{}
+        }
+    }
+    private static async Task OffDormantRecovery(JsonObject config,string[] uuPaths)
+    {
+        string statePath=Path.Combine(Platform.StateRoot,"state.dpapi");byte[] original=File.ReadAllBytes(statePath);
+        Process? creator=null;
+        try{
+            NativeGuard.Clear();var off=DurableState.Load();off.Token="";off.ConnectIntent=false;off.RecoveryRequired=false;off.Save();
+            byte[] offCipher=File.ReadAllBytes(statePath);
+            Require(!NativeGuard.TunPresent && OffUnchanged(offCipher) && await Tcp() && await Dns(),"REAL_OFF_DORMANT_BASELINE_HAS_DURABLE_OFF_NO_GUARD_AND_DIRECT_TCP_DNS");
+            creator=await Launch(config,standby:true);
+            Require(NativeGuard.TunPresent && NativeGuard.TunDormant && VpnRuntime.TunnelInactive() && OffUnchanged(offCipher),"REAL_OFF_PREPARED_ADAPTER_IS_UNCONFIGURED_WITH_FRESH_CREATOR_RECEIPT");
+            creator.Kill(true);await creator.WaitForExitAsync();creator.Dispose();creator=null;
+            Require(NativeGuard.TunPresent && NativeGuard.TunDormant && OffUnchanged(offCipher),"REAL_OFF_HARD_KILL_LEAVES_PRESENT_UNCONFIGURED_ORPHAN_WITHOUT_INSTALLING_GUARD");
+            ulong emptyLuid=NativeGuard.TunLuid();byte[] emptyReceipt=File.ReadAllBytes(TunReceipt.ReceiptPath);
+            bool guardedDenied=false;
+            try{await TunReceipt.RecoverOrphan();}
+            catch(IOException error)when(error.Message=="TUN_OWNER_GUARD_REQUIRED"){guardedDenied=true;}
+            Require(guardedDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==emptyLuid && OffUnchanged(offCipher) &&
+                File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(emptyReceipt) && await Tcp() && await Dns(),"REAL_GUARDED_ORPHAN_RECOVERY_STILL_REFUSES_PERSISTENT_OFF_WITHOUT_GUARD");
+            Task<bool> duringTcp=Tcp(),duringDns=Dns();
+            await TunReceipt.RecoverDormantOrphan();
+            Require(await duringTcp && await duringDns && !NativeGuard.TunPresent && OffUnchanged(offCipher) && await Tcp() && await Dns(),
+                "REAL_EMPTY_DORMANT_ORPHAN_RECOVERY_REMOVES_NATIVE_ROW_PRESERVES_OFF_AND_DIRECT_TCP_DNS_BEFORE_DURING_AFTER");
+
+            creator=await Launch(config,standby:true);
+            ulong dirtyLuid=NativeGuard.TunLuid();byte[] dirtyReceipt=File.ReadAllBytes(TunReceipt.ReceiptPath);
+            await FixtureDormantAddress(false);
+            string dirtyAddresses=FixtureTunAddresses();bool dirtyDormant=NativeGuard.TunDormant;
+            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && dirtyAddresses.Split('|').Contains("198.18.0.2") &&
+                OffUnchanged(offCipher) && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),
+                "REAL_OFF_DIRTY_IPV4_IS_PRESENT_ON_FRESH_PREPARED_CREATOR_NATIVE_IDENTITY");
+            bool liveDirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
+            try{await TunReceipt.RecoverDormantOrphan();}
+            catch(IOException error)when(error.Message=="TUN_OWNER_CREATOR_STILL_RUNNING"){liveDirtyDenied=true;}
+            Require(liveDirtyDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==dirtyDormant &&
+                FixtureTunAddresses()==dirtyAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
+                OffUnchanged(offCipher) && await duringTcp && await duringDns && await Tcp() && await Dns(),
+                "REAL_OFF_DIRTY_PARENT_REJECTS_LIVE_CREATOR_WITH_DEVICE_RECEIPT_POLICY_AND_DIRECT_NETWORK_PRESERVED");
+            duringTcp=Tcp();duringDns=Dns();await RejectDirtyDormantNativeHelper(dirtyLuid);
+            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==dirtyDormant &&
+                FixtureTunAddresses()==dirtyAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
+                OffUnchanged(offCipher) && await duringTcp && await duringDns && await Tcp() && await Dns(),
+                "REAL_OFF_DIRTY_NATIVE_REFUSAL_PRESERVES_CONFIGURATION_IDENTITY_RECEIPT_POLICY_AND_DIRECT_NETWORK");
+
+            creator.Kill(true);await creator.WaitForExitAsync();creator.Dispose();creator=null;
+            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && OffUnchanged(offCipher) &&
+                File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),"REAL_OFF_ORPHAN_AFTER_DIRTY_CREATOR_EXIT_RETAINS_RECORDED_NATIVE_IDENTITY");
+            string orphanAddresses=FixtureTunAddresses();bool orphanDormant=NativeGuard.TunDormant,orphanInactive=VpnRuntime.TunnelInactive();
+            bool nativeDirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
+            try{await TunReceipt.RecoverDormantOrphan();}
+            catch(IOException error)when(error.Message=="TUN_OWNER_DORMANT_IP_NOT_EMPTY"){nativeDirtyDenied=true;}
+            if(nativeDirtyDenied){
+                Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==orphanDormant &&
+                    FixtureTunAddresses()==orphanAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
+                    OffUnchanged(offCipher) && await duringTcp && await duringDns && await Tcp() && await Dns(),
+                    "REAL_OFF_ORPHAN_NATIVE_DIRTY_PARENT_REFUSAL_PRESERVES_CONFIGURATION_IDENTITY_RECEIPT_POLICY_AND_DIRECT_NETWORK");
+                // Only remove the exact address this fixture added. Unknown
+                // native errors/configuration never authorize broader cleanup.
+                await FixtureDormantAddress(true);await TunReceipt.RecoverDormantOrphan();
+            }else{
+                // A managed empty list alone is not evidence. The strict Go
+                // native IP/route/DNS audit and final absence proof must pass.
+                Require(orphanDormant && orphanInactive && !NativeGuard.TunPresent && OffUnchanged(offCipher) &&
+                    await duringTcp && await duringDns && await Tcp() && await Dns(),
+                    "OS_REMOVES_FAULT_ON_CREATOR_EXIT_CONFIRMED_BY_STRICT_NATIVE_EMPTY_AUDIT_AND_RECOVERY");
+            }
+            Require(!NativeGuard.TunPresent && OffUnchanged(offCipher) && await Tcp() && await Dns(),"REAL_OFF_DORMANT_FIXTURE_TEARDOWN_LEAVES_NO_NATIVE_INTERFACE_AND_DIRECT_NETWORK");
+        }finally{
+            await Stop(creator);
+            Platform.WriteAtomic(statePath,original);NativeGuard.Apply(uuPaths);
+        }
+    }
     private static async Task Run()
     {
         Require(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"),"DISPOSABLE_NO_PREEXISTING_PRODUCT_TUN");
@@ -509,6 +630,9 @@ internal static class ProductTests
         // Non-shipped fixture only: its synthetic server is on loopback. The
         // production configuration separately pins the physical carrier IP.
         config["outbounds"]![1]!.AsObject().Remove("address");
+
+        await OffDormantRecovery(config,uuPaths);
+        Require(NativeGuard.Active,"REAL_EXISTING_GUARDED_FIXTURE_POLICY_RESTORED_AFTER_OFF_DORMANT_CASES");
 
         Process? exit=null,client=null;
         try{

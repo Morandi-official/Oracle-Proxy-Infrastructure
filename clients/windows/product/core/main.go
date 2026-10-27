@@ -28,7 +28,8 @@ import (
 func run() error {
 	check := len(os.Args) == 2 && os.Args[1] == "--check"
 	standby := len(os.Args) == 2 && os.Args[1] == "--standby"
-	recoverAdapter := len(os.Args) == 2 && os.Args[1] == "--recover-adapter"
+	recoveryMode := parseAdapterRecoveryMode(os.Args[1:])
+	recoverAdapter := recoveryMode != recoveryNone
 	if !check && !standby && !recoverAdapter && len(os.Args) != 1 {
 		return fmt.Errorf("arguments")
 	}
@@ -47,9 +48,18 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("frame")
 		}
-		if err = oracleTun.RecoverOracleAdapter(request.LUID); err != nil {
+		if recoveryMode == recoveryDormant {
+			err = oracleTun.RecoverDormantOracleAdapter(request.LUID)
+		} else {
+			err = oracleTun.RecoverOracleAdapter(request.LUID)
+		}
+		if err != nil {
 			switch err.Error() {
 			case "ORPHAN_IDENTITY_FAILED", "ORPHAN_IP_CLEANUP_FAILED", "ORPHAN_ROUTE_CLEANUP_FAILED", "ORPHAN_DNS_CLEANUP_FAILED", "ORPHAN_RECREATE_FAILED", "ORPHAN_VERIFY_FAILED":
+				fmt.Fprintln(os.Stderr, err.Error())
+			case "DORMANT_IP_QUERY_FAILED", "DORMANT_IP_NOT_EMPTY", "DORMANT_ROUTE_QUERY_FAILED", "DORMANT_ROUTE_NOT_EMPTY", "DORMANT_DNS_QUERY_FAILED", "DORMANT_DNS_NOT_EMPTY", "DORMANT_RECREATE_FAILED", "DORMANT_VERIFY_FAILED":
+				fmt.Fprintln(os.Stderr, err.Error())
+			case "DORMANT_ROUTE_PROTOCOL_NOT_LOCAL", "DORMANT_ROUTE_NEXT_HOP_UNSAFE", "DORMANT_ROUTE_DESTINATION_UNSAFE":
 				fmt.Fprintln(os.Stderr, err.Error())
 			}
 			return fmt.Errorf("adapter-recovery")

@@ -212,6 +212,123 @@ func oracleRecoveryAbsent() (bool, error) {
 }
 
 '''
+DORMANT_RECOVERY = '''// RecoverDormantOracleAdapter handles only a dead creator's unconfigured
+// standby orphan while the authenticated parent is persistently Off. Unlike
+// guarded recovery it never removes addresses, routes or DNS. Native snapshots
+// must prove only Windows-generated local address/route metadata remains
+// before a fresh Create is attempted. A Down row alone never permits recovery.
+func RecoverDormantOracleAdapter(value uint64) error {
+	oracleAdapterMutex.Lock()
+	defer oracleAdapterMutex.Unlock()
+	if value == 0 || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
+	luid := winipcfg.LUID(value)
+	if err := verifyOracleDormantEmpty(luid); err != nil { return err }
+	// A live/existing device or packet session must cause Create to collide.
+	// Never open/adopt it. Only this successful fresh Create grants a creator
+	// handle that this helper may close; no packet session is started here.
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	created, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
+	if err != nil { return fmt.Errorf("DORMANT_RECREATE_FAILED") }
+	fresh := winipcfg.LUID(created.LUID())
+	err = verifyOracleDormantEmpty(fresh)
+	// Always close our own fresh creator, including on a failed native audit.
+	// WintunCloseAdapter has void ABI; inspect the native table independently.
+	created.Close()
+	if err != nil { return err }
+	for attempt := 0; attempt < 30; attempt++ {
+		absent, queryErr := oracleRecoveryAbsent()
+		if queryErr != nil { return fmt.Errorf("DORMANT_VERIFY_FAILED") }
+		if absent { return nil }
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("DORMANT_VERIFY_FAILED")
+}
+
+func verifyOracleDormantEmpty(luid winipcfg.LUID) error {
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	addresses, err := winipcfg.GetUnicastIPAddressTable(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("DORMANT_IP_QUERY_FAILED") }
+	// Windows creates IPv6 link-local metadata even for a fresh sessionless
+	// adapter. Admit only native automatic origins and /64, never manual,
+	// unknown, IPv4, or routable addresses. Keep the exact audited addresses
+	// and prefixes so an unrelated link-local route cannot grant recovery.
+	automaticAddresses := make(map[netip.Addr]bool)
+	automaticPrefixes := make(map[netip.Prefix]bool)
+	for _, entry := range addresses {
+		if entry.InterfaceLUID != luid { continue }
+		// Interface membership comes only from the native exact LUID. Compare
+		// IPv6 bytes without a textual scope; never derive ownership from zone.
+		address := entry.Address.Addr().WithZone("")
+		if entry.Address.Family != windows.AF_INET6 || !address.Is6() || !address.IsLinkLocalUnicast() ||
+			entry.PrefixOrigin != winipcfg.PrefixOriginWellKnown ||
+			(entry.SuffixOrigin != winipcfg.SuffixOriginLinkLayerAddress && entry.SuffixOrigin != winipcfg.SuffixOriginRandom) ||
+			entry.OnLinkPrefixLength != 64 || automaticAddresses[address] {
+			return fmt.Errorf("DORMANT_IP_NOT_EMPTY")
+		}
+		automaticAddresses[address] = true
+		automaticPrefixes[netip.PrefixFrom(address, 64).Masked()] = true
+	}
+	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	routes, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("DORMANT_ROUTE_QUERY_FAILED") }
+	for _, entry := range routes {
+		if entry.InterfaceLUID != luid { continue }
+		prefix := entry.DestinationPrefix.Prefix()
+		nextHop := entry.NextHop.Addr().WithZone("")
+		// MIB_IPPROTO_LOCAL is native RouteProtocolLocal, not NetMgmt/manual.
+		// Reasons are fixed classifications, never raw native route metadata.
+		if entry.Protocol != winipcfg.RouteProtocolLocal { return fmt.Errorf("DORMANT_ROUTE_PROTOCOL_NOT_LOCAL") }
+		if !prefix.IsValid() { return fmt.Errorf("DORMANT_ROUTE_DESTINATION_UNSAFE") }
+		if prefix.Addr().Is4() {
+			if entry.NextHop.Family != windows.AF_INET || !nextHop.Is4() || !nextHop.IsUnspecified() {
+				return fmt.Errorf("DORMANT_ROUTE_NEXT_HOP_UNSAFE")
+			}
+			// A fresh Windows adapter also has these two automatic IPv4 local
+			// routes without any IPv4 unicast address. No subprefix, APIPA,
+			// loopback, ordinary subnet, default or gateway route is admitted.
+			if prefix != netip.PrefixFrom(netip.AddrFrom4([4]byte{224, 0, 0, 0}), 4) &&
+				prefix != netip.PrefixFrom(netip.AddrFrom4([4]byte{255, 255, 255, 255}), 32) {
+				return fmt.Errorf("DORMANT_ROUTE_DESTINATION_UNSAFE")
+			}
+		} else {
+			if entry.NextHop.Family != windows.AF_INET6 || !nextHop.Is6() || !nextHop.IsUnspecified() {
+				return fmt.Errorf("DORMANT_ROUTE_NEXT_HOP_UNSAFE")
+			}
+			// IPv6 remains restricted to exact audited /64 or /128 plus
+			// Windows' automatic interface multicast route ff00::/8.
+			if !prefix.Addr().Is6() || (!automaticPrefixes[prefix] &&
+				!(prefix.Bits() == 128 && automaticAddresses[prefix.Addr()]) &&
+				prefix != netip.PrefixFrom(netip.AddrFrom16([16]byte{0xff}), 8)) {
+				return fmt.Errorf("DORMANT_ROUTE_DESTINATION_UNSAFE")
+			}
+		}
+	}
+	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)
+	if err != nil { return fmt.Errorf("DORMANT_DNS_QUERY_FAILED") }
+	matches := 0
+	for _, entry := range adapters {
+		if entry == nil { return fmt.Errorf("DORMANT_DNS_QUERY_FAILED") }
+		if entry.LUID != luid { continue }
+		matches++
+		if entry.OperStatus != winipcfg.IfOperStatusDown || entry.FriendlyName() != "OracleProxy" ||
+			entry.Description() != "sing-tun Tunnel" || entry.IfType != winipcfg.IfTypePropVirtual {
+			return fmt.Errorf("ORPHAN_IDENTITY_FAILED")
+		}
+		// An owned, Down interface can retain inherited or legacy DNS metadata.
+		// Explicit Off already uses ordinary direct DNS; destroying this stopped
+		// resource neither activates nor migrates that metadata. Do not read it,
+		// use it for routing/execution, or flush/set DNS on any interface here.
+	}
+	// A successful full native snapshot may omit an already detached interface.
+	// Its exact native identity and inactive local-only data path were audited
+	// independently above. This makes no claim about persisted DNS settings.
+	// Duplicate native entries remain ambiguous and must not grant recovery.
+	if matches > 1 { return fmt.Errorf("DORMANT_DNS_QUERY_FAILED") }
+	return verifyOracleRecoveryIdentity(luid)
+}
+
+'''
 BODY = '''func addRouteList(luid winipcfg.LUID, destinations []netip.Prefix, gateway4 netip.Addr, gateway6 netip.Addr, metric uint32) error {
 	row := winipcfg.MibIPforwardRow2{}
 	row.Init()
@@ -272,7 +389,7 @@ def patched(original):
     start = source.index('\tadapter, err := wintun.CreateAdapter(options.Name,')
     end = source.index('\n\tnativeTun :=', start)
     source = source[:start] + '\tadapter, err := openOracleAdapter(options.Name)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n' + source[end:]
-    source = source.replace('func New(options Options)', CACHE + RECOVERY + 'func New(options Options)', 1)
+    source = source.replace('func New(options Options)', CACHE + RECOVERY + DORMANT_RECOVERY + 'func New(options Options)', 1)
     old = '\t\tt.session.End()\n\t\tt.adapter.Close()'
     new = '''\t\tt.session.End()
 		if t.options.Name == "OracleProxy" {

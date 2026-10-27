@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc20 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc21 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc20.json')
+MANIFEST = Path(__file__).with_name('windows-rc21.json')
 
 
 def gh(*args, output=None):
@@ -27,7 +27,7 @@ def api(path): return json.loads(gh('api',f'repos/{REPO}/{path}'))
 
 def validate_manifest(manifest):
     artifacts=manifest.get('artifacts')
-    if (manifest.get('version')!='0.3.0-rc20' or
+    if (manifest.get('version')!='0.3.0-rc21' or
         type(manifest.get('run_id')) is not int or manifest['run_id']<=0 or
         not re.fullmatch(r'[a-f0-9]{40}',str(manifest.get('source_revision',''))) or
         not isinstance(artifacts,list) or len(artifacts)!=2):
@@ -57,7 +57,7 @@ def digest(path):
 def read_archive(archive, output, expected_prefix):
     with zipfile.ZipFile(archive) as bundle:
         names=bundle.namelist()
-        allowed={expected_prefix+'.zip',expected_prefix+'-source.zip','SHA256SUMS.txt','BUILD.json'}
+        allowed={expected_prefix+'.zip',expected_prefix+'-source.zip',expected_prefix+'-setup.exe','SHA256SUMS.txt','BUILD.json'}
         if len(set(names))!=len(names) or not set(names)<=allowed: raise ValueError('ARTIFACT_CONTENTS_REJECTED')
         for entry in bundle.infolist():
             if entry.file_size>512*1024*1024 or entry.is_dir() or (entry.external_attr>>16)&0o170000==0o120000:
@@ -96,7 +96,7 @@ def main():
                 gh('api',f"repos/{REPO}/actions/artifacts/{artifact['id']}/zip",output=stream)
             if digest(archive)!=artifact['sha256']: raise ValueError('ARTIFACT_DIGEST_MISMATCH')
             read_archive(archive,assets,prefix)
-        expected={prefix+'.zip',prefix+'-source.zip','SHA256SUMS.txt','BUILD.json'}
+        expected={prefix+'.zip',prefix+'-source.zip',prefix+'-setup.exe','SHA256SUMS.txt','BUILD.json'}
         if {p.name for p in assets.iterdir()}!=expected: raise ValueError('COMPLETE_SOURCE_AND_PAYLOAD_REQUIRED')
         metadata=json.loads((assets/'BUILD.json').read_text())
         if not (metadata.get('version')==manifest['version'] and metadata.get('source_revision')==manifest['source_revision'] and
@@ -104,11 +104,16 @@ def main():
                 metadata.get('channel')=='unsigned-acceptance-candidate' and str(metadata.get('workflow_run'))==str(manifest['run_id'])):
             raise ValueError('CANDIDATE_ATTESTATION_REJECTED')
         sums={line.split('  ',1)[1]:line.split('  ',1)[0] for line in (assets/'SHA256SUMS.txt').read_text().splitlines()}
-        if set(sums)!={prefix+'.zip',prefix+'-source.zip'}: raise ValueError('CHECKSUM_SET_REJECTED')
+        if set(sums)!={prefix+'.zip',prefix+'-source.zip',prefix+'-setup.exe'}: raise ValueError('CHECKSUM_SET_REJECTED')
         for name,value in sums.items():
             if digest(assets/name)!=value: raise ValueError('PAYLOAD_OR_SOURCE_DIGEST_MISMATCH')
+        installer=metadata.get('installer',{})
+        if (installer.get('filename')!=prefix+'-setup.exe' or installer.get('publisher_signed') is not False or
+                installer.get('sha256')!=digest(assets/(prefix+'-setup.exe')) or
+                not re.fullmatch(r'[a-f0-9]{64}',str(installer.get('compiler_sha256','')))):
+            raise ValueError('ACCEPTED_INSTALLER_METADATA_REQUIRED')
         notes=root/'notes.md'
-        notes.write_text(Path(__file__).with_name('windows-rc20-notes.md').read_text(encoding='utf-8')+
+        notes.write_text(Path(__file__).with_name('windows-rc21-notes.md').read_text(encoding='utf-8')+
                          f"\n构建提交：`{manifest['source_revision']}`；[完整云端验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']
         if api('git/matching-refs/tags/'+tag): raise ValueError('EXISTING_RC_TAG_REQUIRES_REVIEW')

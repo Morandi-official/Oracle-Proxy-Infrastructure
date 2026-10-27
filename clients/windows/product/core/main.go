@@ -28,7 +28,8 @@ import (
 func run() error {
 	check := len(os.Args) == 2 && os.Args[1] == "--check"
 	standby := len(os.Args) == 2 && os.Args[1] == "--standby"
-	if !check && !standby && len(os.Args) != 1 {
+	recoverAdapter := len(os.Args) == 2 && os.Args[1] == "--recover-adapter"
+	if !check && !standby && !recoverAdapter && len(os.Args) != 1 {
 		return fmt.Errorf("arguments")
 	}
 	if !check {
@@ -36,6 +37,25 @@ func run() error {
 		if err != nil || user.User.Sid.String() != "S-1-5-18" {
 			return fmt.Errorf("identity")
 		}
+	}
+	if recoverAdapter {
+		var session uint32
+		if windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &session) != nil || session != 0 {
+			return fmt.Errorf("identity")
+		}
+		request, err := readAdapterRecoveryRequest(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("frame")
+		}
+		if err = oracleTun.RecoverOracleAdapter(request.LUID); err != nil {
+			switch err.Error() {
+			case "ORPHAN_IDENTITY_FAILED", "ORPHAN_IP_CLEANUP_FAILED", "ORPHAN_ROUTE_CLEANUP_FAILED", "ORPHAN_DNS_CLEANUP_FAILED", "ORPHAN_RECREATE_FAILED", "ORPHAN_VERIFY_FAILED":
+				fmt.Fprintln(os.Stderr, err.Error())
+			}
+			return fmt.Errorf("adapter-recovery")
+		}
+		fmt.Println("ADAPTER_RECOVERED")
+		return nil
 	}
 	defer oracleTun.ClosePreparedOracleAdapter()
 	input := bufio.NewReaderSize(os.Stdin, 65536)
@@ -172,6 +192,8 @@ func main() {
 			stage = "CORE_START_FAILED"
 		case "close":
 			stage = "CORE_CLOSE_FAILED"
+		case "adapter-recovery":
+			stage = "CORE_ADAPTER_RECOVERY_FAILED"
 		}
 		fmt.Fprintln(os.Stderr, stage)
 		os.Exit(3)

@@ -1,8 +1,9 @@
-"""Apply the owned, exact-preimage Windows route creation optimization.
+"""Apply pinned Windows route/lifecycle and receipt-bound recovery changes.
 
-No prefix, gateway, metric or policy changes. All route creations must complete
-before activation; an error still tears down the newly created owned adapter.
-The actual modified dependency source is included in corresponding-source.zip.
+Normal routing prefixes, gateways, metrics and policy are unchanged. Recovery
+can only clear the exact fixed-GUID/LUID orphan validated by the SYSTEM parent;
+it never adopts an existing adapter by name or uninstalls a driver. The modified
+dependency source is included in corresponding-source.zip.
 """
 import hashlib
 from pathlib import Path
@@ -26,9 +27,7 @@ func openOracleAdapter(name string) (*wintun.Adapter, error) {
 		}
 	}
 	adapter, err := wintun.CreateAdapter(name, TunnelType, generateGUIDByDeviceName(name))
-	if err != nil && errors.Is(err, os.ErrExist) {
-		return wintun.OpenAdapter(name)
-	}
+	// A cold caller must never adopt an unrelated same-name adapter.
 	return adapter, err
 }
 
@@ -86,6 +85,130 @@ func (t *NativeTun) prepareOracleAdapter() error {
 	}
 	oraclePreparedAdapter = t.adapter
 	return nil
+}
+
+'''
+RECOVERY = '''// RecoverOracleAdapter is reachable only through the pinned SYSTEM recovery
+// child. Its parent supplies a protected fresh-creation receipt after proving
+// the creator exited. This function independently fences every mutation to the
+// fixed GUID, exact LUID, alias, type and down state. It never opens an adapter
+// by name, deletes a driver, or accepts a general interface target.
+func RecoverOracleAdapter(value uint64) error {
+	oracleAdapterMutex.Lock()
+	defer oracleAdapterMutex.Unlock()
+	if value == 0 || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
+	luid := winipcfg.LUID(value)
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	flushErr := flushOracleRecoveryInterface(luid)
+	if flushErr != nil && flushErr.Error() == "ORPHAN_IDENTITY_FAILED" { return flushErr }
+	absent, err := oracleRecoveryAbsent()
+	if err != nil { return fmt.Errorf("ORPHAN_VERIFY_FAILED") }
+	if absent { return nil }
+	// A crashed creator may leave IP-stack references after its device is gone.
+	// Only a successful fresh Create gives this process deletion ownership. A
+	// Create collision is refused; OpenAdapter is deliberately never a fallback.
+	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	created, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
+	if err != nil { return fmt.Errorf("ORPHAN_RECREATE_FAILED") }
+	fresh := winipcfg.LUID(created.LUID())
+	err = verifyOracleRecoveryIdentity(fresh)
+	if err == nil { err = flushOracleRecoveryInterface(fresh) }
+	// WintunCloseAdapter has void ABI. The wrapper's nominal error is not an
+	// absence proof. Close only this successful Create's own creator handle.
+	created.Close()
+	if err != nil && err.Error() == "ORPHAN_IDENTITY_FAILED" { return err }
+	// Auto-generated routes or a detached device's DNS API may reject a flush.
+	// That never grants success while a row remains. A successful independent
+	// table query after closing our creator is the sole completion proof.
+	for attempt := 0; attempt < 30; attempt++ {
+		absent, queryErr := oracleRecoveryAbsent()
+		if queryErr != nil { return fmt.Errorf("ORPHAN_VERIFY_FAILED") }
+		if absent { return nil }
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil { return err }
+	if flushErr != nil { return flushErr }
+	return fmt.Errorf("ORPHAN_VERIFY_FAILED")
+}
+
+func verifyOracleRecoveryIdentity(luid winipcfg.LUID) error {
+	fail := fmt.Errorf("ORPHAN_IDENTITY_FAILED")
+	expected := generateGUIDByDeviceName("OracleProxy")
+	guid, err := luid.GUID()
+	if err != nil || *guid != *expected { return fail }
+	roundTrip, err := winipcfg.LUIDFromGUID(expected)
+	if err != nil || roundTrip != luid { return fail }
+	row, err := luid.Interface()
+	if err != nil || row.InterfaceLUID != luid || row.InterfaceGUID != *expected ||
+		row.Alias() != "OracleProxy" || row.Description() != "sing-tun Tunnel" ||
+		row.Type != winipcfg.IfTypePropVirtual || row.OperStatus != winipcfg.IfOperStatusDown { return fail }
+	rows, err := winipcfg.GetIfTable2Ex(winipcfg.MibIfEntryNormal)
+	if err != nil { return fail }
+	matches := 0
+	for _, entry := range rows {
+		if entry.Alias() == "OracleProxy" || entry.InterfaceGUID == *expected {
+			if entry.InterfaceLUID != luid || entry.InterfaceGUID != *expected || entry.Alias() != "OracleProxy" { return fail }
+			matches++
+		}
+	}
+	if matches != 1 { return fail }
+	return nil
+}
+
+func flushOracleRecoveryInterface(luid winipcfg.LUID) error {
+	// Revalidate the same immutable interface identity before each phase.
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	addresses, err := winipcfg.GetUnicastIPAddressTable(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("ORPHAN_IP_CLEANUP_FAILED") }
+	for i := range addresses {
+		if addresses[i].InterfaceLUID == luid {
+			if err = addresses[i].Delete(); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) { return fmt.Errorf("ORPHAN_IP_CLEANUP_FAILED") }
+		}
+	}
+	if absent, queryErr := oracleRecoveryAbsent(); queryErr == nil && absent { return nil }
+	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	routes, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("ORPHAN_ROUTE_CLEANUP_FAILED") }
+	for i := range routes {
+		if routes[i].InterfaceLUID == luid {
+			if err = routes[i].Delete(); err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) { return fmt.Errorf("ORPHAN_ROUTE_CLEANUP_FAILED") }
+		}
+	}
+	if absent, queryErr := oracleRecoveryAbsent(); queryErr == nil && absent { return nil }
+	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	// Recovery requires the Windows 10 1809+ DNS API directly. Do not fall back
+	// to netsh/PowerShell or execute any command based on interface metadata.
+	empty, err := windows.UTF16PtrFromString("")
+	if err != nil { return fmt.Errorf("ORPHAN_DNS_CLEANUP_FAILED") }
+	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
+		settings := &winipcfg.DnsInterfaceSettings{Version: winipcfg.DnsInterfaceSettingsVersion1,
+			Flags: winipcfg.DnsInterfaceSettingsFlagNameserver | winipcfg.DnsInterfaceSettingsFlagSearchList,
+			NameServer: empty, SearchList: empty}
+		if family == windows.AF_INET6 { settings.Flags |= winipcfg.DnsInterfaceSettingsFlagIPv6 }
+		if err = winipcfg.SetInterfaceDnsSettings(*generateGUIDByDeviceName("OracleProxy"), settings); err != nil {
+			if absent, queryErr := oracleRecoveryAbsent(); queryErr == nil && absent { return nil }
+			return fmt.Errorf("ORPHAN_DNS_CLEANUP_FAILED")
+		}
+	}
+	addresses, err = winipcfg.GetUnicastIPAddressTable(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("ORPHAN_IP_CLEANUP_FAILED") }
+	for _, entry := range addresses { if entry.InterfaceLUID == luid { return fmt.Errorf("ORPHAN_IP_CLEANUP_FAILED") } }
+	routes, err = winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("ORPHAN_ROUTE_CLEANUP_FAILED") }
+	for _, entry := range routes { if entry.InterfaceLUID == luid { return fmt.Errorf("ORPHAN_ROUTE_CLEANUP_FAILED") } }
+	servers, err := luid.DNS()
+	if err != nil || len(servers) != 0 { return fmt.Errorf("ORPHAN_DNS_CLEANUP_FAILED") }
+	return nil
+}
+
+func oracleRecoveryAbsent() (bool, error) {
+	rows, err := winipcfg.GetIfTable2Ex(winipcfg.MibIfEntryNormal)
+	if err != nil { return false, err }
+	expected := generateGUIDByDeviceName("OracleProxy")
+	for _, row := range rows {
+		if row.Alias() == "OracleProxy" || row.InterfaceGUID == *expected { return false, nil }
+	}
+	return true, nil
 }
 
 '''
@@ -149,7 +272,7 @@ def patched(original):
     start = source.index('\tadapter, err := wintun.CreateAdapter(options.Name,')
     end = source.index('\n\tnativeTun :=', start)
     source = source[:start] + '\tadapter, err := openOracleAdapter(options.Name)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n' + source[end:]
-    source = source.replace('func New(options Options)', CACHE + 'func New(options Options)', 1)
+    source = source.replace('func New(options Options)', CACHE + RECOVERY + 'func New(options Options)', 1)
     old = '\t\tt.session.End()\n\t\tt.adapter.Close()'
     new = '''\t\tt.session.End()
 		if t.options.Name == "OracleProxy" {

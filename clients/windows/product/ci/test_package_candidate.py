@@ -29,6 +29,17 @@ class PackageBoundaryTests(unittest.TestCase):
             'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'push',
             'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '1', 'RUNNER_TEMP': str(self.root / 'temp')}))
         self.put('clients/windows/product/OracleProxy.Product.csproj', '<Project><PropertyGroup><Version>0.3.0-rc20</Version></PropertyGroup></Project>')
+        self.put('clients/windows/product/global.json', json.dumps({'sdk': {
+            'version': '10.0.403', 'rollForward': 'disable', 'allowPrerelease': False}}))
+        self.put('clients/windows/product/Directory.Build.props',
+                 '<Project><PropertyGroup><RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion></PropertyGroup></Project>')
+        self.runtime_config = {'runtimeOptions': {'tfm': 'net10.0', 'includedFrameworks': [
+            {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'},
+            {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14'}]}}
+        self.config_path = self.put('clients/windows/product/bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json',
+                                    json.dumps(self.runtime_config))
+        self.config_selection = self.patches.enter_context(patch.object(
+            candidate.RUNTIME_POLICY, 'runtime_config_path', return_value=self.config_path))
         self.put('clients/windows/product/COPYING', 'test GPL notice')
         self.put('clients/windows/product/LICENSE', 'test copyright notice')
         self.put('clients/windows/product/PORTABLE_README.zh-CN.txt', 'test instructions')
@@ -50,7 +61,7 @@ class PackageBoundaryTests(unittest.TestCase):
                   'project': {'frameworks': {}}}
         self.put('clients/windows/product/obj/project.assets.json', json.dumps(assets))
         tracked = '\n'.join('clients/windows/product/' + p for p in ('COPYING', 'LICENSE', 'BuildPins.cs', 'PORTABLE_README.zh-CN.txt'))
-        self.patches.enter_context(patch.object(candidate, 'run', side_effect=lambda *args, **kw: ('a' * 40 if args[1] == 'rev-parse' else tracked) if args[0] == 'git' else 'test-tool-version'))
+        self.patches.enter_context(patch.object(candidate, 'run', side_effect=lambda *args, **kw: ('a' * 40 if args[1] == 'rev-parse' else tracked) if args[0] == 'git' else ('10.0.403' if args[0] == 'dotnet' else 'test-tool-version')))
 
     def put(self, name, value):
         path = self.root / name
@@ -74,6 +85,10 @@ class PackageBoundaryTests(unittest.TestCase):
             metadata=json.loads(archive.read('BUILD.json'))
             self.assertTrue(metadata['real_oracle_acceptance_passed'])
             self.assertEqual(metadata['version'],'0.3.0-rc20')
+            self.assertEqual(metadata['dotnet_sdk'], '10.0.403')
+            self.assertEqual(metadata['dotnet_runtime']['deployment'], 'self-contained')
+            self.assertEqual(metadata['dotnet_runtime']['version'], '10.0.14')
+            self.assertEqual(len(metadata['dotnet_runtime']['included_frameworks']), 2)
             self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc20-win-x64-'))
         with zipfile.ZipFile(next(out.glob('*-source.zip'))) as archive:
             self.assertIn('clients/windows/product/core/vendor/example.test/core.go', archive.namelist())
@@ -87,6 +102,38 @@ class PackageBoundaryTests(unittest.TestCase):
         self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc21-win-x64-'))
         with zipfile.ZipFile(bundle) as archive:
             self.assertEqual(json.loads(archive.read('BUILD.json'))['version'],'0.3.0-rc21')
+
+    def test_shared_runtime_and_wrong_bundled_patch_are_rejected(self):
+        config_path = 'clients/windows/product/bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+        self.runtime_config['runtimeOptions']['framework'] = {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'}
+        self.put(config_path, json.dumps(self.runtime_config))
+        with self.assertRaisesRegex(RuntimeError, 'Actual self-contained'):
+            self.invoke()
+        self.runtime_config['runtimeOptions'].pop('framework')
+        self.runtime_config['runtimeOptions']['includedFrameworks'][0]['version'] = '8.0.25'
+        self.put(config_path, json.dumps(self.runtime_config))
+        with self.assertRaisesRegex(RuntimeError, 'Actual self-contained'):
+            self.invoke()
+
+    def test_packaging_uses_msbuild_selected_runtime_config_not_stale_default(self):
+        selected = self.put('clients/windows/product/bin/x64/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json',
+                            json.dumps(self.runtime_config))
+        self.config_selection.return_value = selected
+        self.config_path.write_text('{"runtimeOptions":{"tfm":"net8.0"}}', encoding='utf-8')
+        self.invoke()
+        metadata = json.loads((self.root / 'dist/candidate/BUILD.json').read_text())
+        self.assertEqual(metadata['dotnet_runtime']['runtimeconfig_sha256'], candidate.digest(selected))
+        self.config_selection.assert_called_once_with(self.product)
+
+    def test_sdk_roll_forward_or_unpinned_sdk_are_rejected(self):
+        self.put('clients/windows/product/global.json', json.dumps({'sdk': {
+            'version': '10.0.403', 'rollForward': 'latestFeature', 'allowPrerelease': False}}))
+        with self.assertRaisesRegex(RuntimeError, 'Pinned .NET SDK mismatch'):
+            self.invoke()
+        self.put('clients/windows/product/global.json', json.dumps({'sdk': {
+            'version': '10.0.402', 'rollForward': 'disable', 'allowPrerelease': False}}))
+        with self.assertRaisesRegex(RuntimeError, 'Pinned .NET SDK mismatch'):
+            self.invoke()
 
     def test_mismatched_payload_is_rejected(self):
         self.put('dist/product/OracleProxy.Core.exe', 'tampered core')

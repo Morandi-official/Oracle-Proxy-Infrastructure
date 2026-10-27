@@ -11,6 +11,7 @@
 #include <iphlpapi.h>
 #include <netioapi.h>
 #include <stdint.h>
+#include <string.h>
 #include <wchar.h>
 #pragma comment(lib,"fwpuclnt.lib")
 #pragma comment(lib,"advapi32.lib")
@@ -23,6 +24,8 @@ static HANDLE tun_engine=NULL,tun_process=NULL;
 static UINT64 tun_value=0,tun_filters[8]={0};
 static const GUID provider={0x4936aef1,0x9f84,0x4291,{0x88,0x72,0x36,0x47,0x19,0x80,0x21,0xa1}};
 static const GUID sublayer={0xbb18a732,0x9015,0x4871,{0x92,0x01,0xc1,0x62,0xa1,0x40,0x77,0x92}};
+/* Must match the fixed Wintun GUID fenced by TunReceipt and the owned core. */
+static const GUID oracle_tun_guid={0x62e2af98,0x7089,0x6f2c,{0x24,0x6b,0x4a,0x59,0x60,0xcf,0xc9,0x78}};
 static const GUID *ale[]={&FWPM_LAYER_ALE_AUTH_CONNECT_V4,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,&FWPM_LAYER_ALE_AUTH_CONNECT_V6,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6};
 static const GUID *boot[]={&FWPM_LAYER_OUTBOUND_TRANSPORT_V4,&FWPM_LAYER_INBOUND_TRANSPORT_V4,&FWPM_LAYER_OUTBOUND_TRANSPORT_V6,&FWPM_LAYER_INBOUND_TRANSPORT_V6};
 static BOOL system_only(void){
@@ -224,6 +227,21 @@ API OpGuardCount(DWORD *persistent,DWORD *boot_count){
  e=enumerate_owned(engine,FALSE,persistent,boot_count);FwpmEngineClose0(engine);return e;
 }
 API OpTunLuid(UINT64 *value){NET_LUID luid={0};DWORD e=ConvertInterfaceAliasToLuid(L"OracleProxy",&luid);if(!e)*value=luid.Value;return e;}
+/* Read-only cold-start/recovery proof. Metadata status is not absence: any
+ * matching OS interface-table row, including Down, remains present. */
+API OpTunPresence(DWORD *present){
+ if(!present)return ERROR_INVALID_PARAMETER;
+ *present=1; /* Unknown/error must never certify that the interface vanished. */
+ MIB_IF_TABLE2 *table=NULL;DWORD e=GetIfTable2(&table);
+ if(e)return e;if(!table)return ERROR_INVALID_DATA;
+ BOOL found=FALSE;
+ for(ULONG i=0;i<table->NumEntries;i++){
+  int match=CompareStringOrdinal(table->Table[i].Alias,-1,L"OracleProxy",-1,TRUE);
+  if(!match){e=GetLastError();FreeMibTable(table);return e?e:ERROR_INVALID_DATA;}
+  if(match==CSTR_EQUAL||memcmp(&table->Table[i].InterfaceGuid,&oracle_tun_guid,sizeof(GUID))==0){found=TRUE;break;}
+ }
+ FreeMibTable(table);*present=found?1:0;return NO_ERROR;
+}
 API OpTunDormant(void){
  NET_LUID luid={0};if(ConvertInterfaceAliasToLuid(L"OracleProxy",&luid)!=0)return 0;
  MIB_IF_ROW2 row={0};row.InterfaceLuid=luid;if(GetIfEntry2(&row)!=0||row.OperStatus==IfOperStatusUp)return 0;

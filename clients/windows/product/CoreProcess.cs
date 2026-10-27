@@ -61,6 +61,9 @@ internal sealed class CoreProcess : IDisposable
             try{await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));}catch{}
             throw new IOException(SafeStage.StartsWith("CORE_",StringComparison.Ordinal)?SafeStage:"CORE_START_FAILED");
         }
+        // Only the cold standby preparation guarantees fresh CreateAdapter;
+        // never manufacture ownership from a by-name OpenAdapter fallback.
+        if(standby)TunReceipt.Record(owned);
         Volatile.Write(ref _safeStage,"READY");
     }
     private async Task CoreCommand(string command,string expected)

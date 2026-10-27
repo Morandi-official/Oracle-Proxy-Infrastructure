@@ -125,7 +125,13 @@ internal static class Installer
             string path=Path.Combine(Platform.Root,name);if(File.Exists(path)){if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");File.Delete(path);}}
         string previous=Path.Combine(Platform.Root,"previous");if(Directory.Exists(previous)){Platform.VerifyProtected(previous);foreach(string name in Files)File.Delete(Path.Combine(previous,name));if(!Directory.EnumerateFileSystemEntries(previous).Any())Directory.Delete(previous);}
         Platform.VerifyProtected(Platform.StateRoot);
-        foreach(string name in new[]{"state.dpapi","state.dpapi.pending"})File.Delete(Path.Combine(Platform.StateRoot,name));
+        foreach(string name in new[]{"state.dpapi","state.dpapi.pending","tun-owner.json","tun-owner.json.pending"}){
+            string path=Path.Combine(Platform.StateRoot,name);
+            if(File.Exists(path)){
+                if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");
+                File.Delete(path);
+            }
+        }
         foreach(string path in Directory.EnumerateFiles(Platform.StateRoot,"state.recovery-*.dpapi")){
             if(System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path),@"^state\.recovery-[a-f0-9]{32}\.dpapi$")){
                 if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");File.Delete(path);
@@ -149,12 +155,34 @@ internal static class Installer
         try{
             Sc("start",RecoveryService.Name);
             bool finished=false;
-            for(int i=0;i<80;i++){
+            // Fixed adapter recovery has its own 20s child deadline, followed by
+            // the unchanged 3s native absence audit and DPAPI commit. Give this
+            // complete local operation 45s, not the former 20s polling budget.
+            for(int i=0;i<180;i++){
                 using var helper=new ServiceController(RecoveryService.Name);
                 if(helper.Status==ServiceControllerStatus.Stopped && File.Exists(diagnostic)){finished=true;break;}
                 await Task.Delay(250);
             }
-            if(!finished || System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(diagnostic))?["code"]?.GetValue<string>()!="RECOVERED_DIRECT")throw new IOException("RECOVERY_NOT_VERIFIED");
+            if(!finished){
+                using var helper=new ServiceController(RecoveryService.Name);
+                if(helper.Status!=ServiceControllerStatus.Stopped){
+                    helper.Stop();helper.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(12));
+                }
+                // Stop waits for cancellation/child exit. A commit that won the
+                // race may already be complete; verify its fixed result below.
+                if(!File.Exists(diagnostic))throw new IOException("RECOVERY_DEADLINE");
+            }
+            // Preserve the one-shot helper's already-sanitized reason when
+            // Program records the outer setup failure. Never export arbitrary
+            // diagnostic content, exception messages, paths, or credentials.
+            string? helperCode=null;
+            try{
+                var value=System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(diagnostic))?["code"];
+                if(value is System.Text.Json.Nodes.JsonValue text && text.TryGetValue<string>(out var code))helperCode=code;
+            }catch(System.Text.Json.JsonException){}
+            if(helperCode!="RECOVERED_DIRECT")throw new IOException(
+                helperCode is {Length:>0 and <=48} && helperCode.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')
+                ?"RECOVERY_"+helperCode:"RECOVERY_RESULT_INVALID");
         }finally{
             using var helper=new ServiceController(RecoveryService.Name);
             if(helper.Status==ServiceControllerStatus.Stopped)Sc("delete",RecoveryService.Name);

@@ -171,7 +171,9 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
         if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
-        _stage="TUN_CLEANUP";await EnsureTunnelRemoved();
+        _stage="TUN_CLEANUP";
+        if(_secret.ConnectIntent && NativeGuard.Active && NativeGuard.TunPresent)await TunReceipt.RecoverOrphan();
+        await EnsureTunnelRemoved();
         if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
             _stage="CORE_START";_probeFailures=0;_generation++;_verified=default;_verifiedGeneration=-1;_latency=null;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();
@@ -325,10 +327,12 @@ internal sealed class VpnRuntime : IDisposable
     }
     // Only the already-running private core can retain a dormant adapter. A new
     // core must never adopt an unrelated/stale adapter merely by its name.
+    // Managed adapter descriptions are diagnostic metadata. Require a successful
+    // native interface-table query with no fixed-alias row, regardless of state.
     internal static async Task EnsureTunnelRemoved()
     {
         for(int i=0;i<30;i++){
-            if(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"))return;
+            if(!NativeGuard.TunPresent)return;
             await Task.Delay(100);
         }
         throw new IOException("OWNED_TUNNEL_REMOVAL_NOT_VERIFIED");

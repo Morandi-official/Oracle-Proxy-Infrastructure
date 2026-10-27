@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <!-- Self-contained clients ship this reviewed LTS patch; do not silently roll forward. -->
+    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
+    <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+    <OracleDotNetPackageVersion>10.0.14</OracleDotNetPackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="OracleDotNetRuntime" Value="$(RuntimeFrameworkVersion)" />
+  </ItemGroup>
+</Project>

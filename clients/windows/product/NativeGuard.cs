@@ -7,6 +7,7 @@ internal static class NativeGuard
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint ClearDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint CountDelegate(out uint persistent,out uint boot);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint LuidDelegate(out ulong value);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint PresenceDelegate(out uint present);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl,CharSet=CharSet.Unicode)]private delegate uint AuthorizeDelegate(string core,ulong luid,uint pid);
     private static T Function<T>(string name)where T:Delegate
     {
@@ -32,6 +33,15 @@ internal static class NativeGuard
     }
     internal static bool TunPermitted=>Function<ClearDelegate>("OpGuardTunReady")()==1;
     internal static bool TunDormant=>Function<ClearDelegate>("OpTunDormant")()==1;
+    internal static uint QueryTunPresence(out uint present)=>Function<PresenceDelegate>("OpTunPresence")(out present);
+    internal static bool TunPresent{
+        get{
+            uint error=QueryTunPresence(out uint value);
+            if(error!=0)throw new IOException("TUN_PRESENCE_NATIVE_"+error);
+            if(value>1)throw new IOException("TUN_PRESENCE_RESULT_INVALID");
+            return value==1;
+        }
+    }
     internal static void SuspendTun(){if(Function<ClearDelegate>("OpGuardSuspendTun")()!=0)throw new IOException("TUN_PERMIT_RELEASE_FAILED");}
     internal static bool Active{
         get{uint e=Function<CountDelegate>("OpGuardCount")(out uint persistent,out uint boot);return e==0 && persistent>=16 && boot>=8;}

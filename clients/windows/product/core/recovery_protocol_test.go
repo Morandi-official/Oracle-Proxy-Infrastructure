@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestAdapterRecoveryModeIsFixedAndSeparate(t *testing.T) {
+	if parseAdapterRecoveryMode([]string{"--recover-adapter"}) != recoveryGuarded {
+		t.Fatal("guarded mode unavailable")
+	}
+	if parseAdapterRecoveryMode([]string{"--recover-dormant-adapter"}) != recoveryDormant {
+		t.Fatal("dormant mode unavailable")
+	}
+	for _, arguments := range [][]string{
+		nil, {"--recover"}, {"--recover-adapter=123"},
+		{"--recover-adapter", "--recover-dormant-adapter"},
+		{"--recover-dormant-adapter", "OracleProxy"},
+		{"--recover-dormant-adapter", "--guid", recoveryGUID},
+	} {
+		if parseAdapterRecoveryMode(arguments) != recoveryNone {
+			t.Fatalf("unsafe recovery argv accepted: %q", arguments)
+		}
+	}
+}
+
 func TestAdapterRecoveryFrameBoundary(t *testing.T) {
 	valid := "{\"guid\":\"" + recoveryGUID + "\",\"luid\":123456789}\n"
 	got, err := readAdapterRecoveryRequest(strings.NewReader(valid))
@@ -22,6 +41,7 @@ func TestAdapterRecoveryFrameBoundary(t *testing.T) {
 		strings.Replace(valid, "123456789", "\"123456789\"", 1),
 		strings.Replace(valid, "123456789}", "123456789,\"luid\":4}", 1),
 		strings.Replace(valid, "123456789}", "123456789,\"path\":\"C:\\\\Windows\"}", 1),
+		strings.Replace(valid, "123456789}", "123456789,\"mode\":\"dormant\"}", 1),
 		strings.Replace(valid, recoveryGUID, "00000000-0000-0000-0000-000000000000", 1),
 		strings.Replace(valid, "123456789}", "123456789,\"guid\":\""+recoveryGUID+"\"}", 1),
 		"[]\n", "null\n", strings.Repeat(" ", 1024) + valid,

@@ -212,6 +212,77 @@ func oracleRecoveryAbsent() (bool, error) {
 }
 
 '''
+DORMANT_RECOVERY = '''// RecoverDormantOracleAdapter handles only a dead creator's unconfigured
+// standby orphan while the authenticated parent is persistently Off. Unlike
+// guarded recovery it never removes addresses, routes or DNS. Every native
+// snapshot must prove emptiness before a fresh Create is attempted. A Down
+// row alone is never an absence proof or permission to clear configuration.
+func RecoverDormantOracleAdapter(value uint64) error {
+	oracleAdapterMutex.Lock()
+	defer oracleAdapterMutex.Unlock()
+	if value == 0 || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
+	luid := winipcfg.LUID(value)
+	if err := verifyOracleDormantEmpty(luid); err != nil { return err }
+	// A live/existing device or packet session must cause Create to collide.
+	// Never open/adopt it. Only this successful fresh Create grants a creator
+	// handle that this helper may close; no packet session is started here.
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	created, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
+	if err != nil { return fmt.Errorf("DORMANT_RECREATE_FAILED") }
+	fresh := winipcfg.LUID(created.LUID())
+	err = verifyOracleDormantEmpty(fresh)
+	// Always close our own fresh creator, including on a failed native audit.
+	// WintunCloseAdapter has void ABI; inspect the native table independently.
+	created.Close()
+	if err != nil { return err }
+	for attempt := 0; attempt < 30; attempt++ {
+		absent, queryErr := oracleRecoveryAbsent()
+		if queryErr != nil { return fmt.Errorf("DORMANT_VERIFY_FAILED") }
+		if absent { return nil }
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("DORMANT_VERIFY_FAILED")
+}
+
+func verifyOracleDormantEmpty(luid winipcfg.LUID) error {
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	addresses, err := winipcfg.GetUnicastIPAddressTable(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("DORMANT_IP_QUERY_FAILED") }
+	// Even automatic link-local rows are refused. A future exception requires
+	// separate native evidence and must never admit a routable address.
+	for _, entry := range addresses {
+		if entry.InterfaceLUID == luid { return fmt.Errorf("DORMANT_IP_NOT_EMPTY") }
+	}
+	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	routes, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
+	if err != nil { return fmt.Errorf("DORMANT_ROUTE_QUERY_FAILED") }
+	for _, entry := range routes {
+		if entry.InterfaceLUID == luid { return fmt.Errorf("DORMANT_ROUTE_NOT_EMPTY") }
+	}
+	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)
+	if err != nil { return fmt.Errorf("DORMANT_DNS_QUERY_FAILED") }
+	matches := 0
+	for _, entry := range adapters {
+		if entry == nil { return fmt.Errorf("DORMANT_DNS_QUERY_FAILED") }
+		if entry.LUID != luid { continue }
+		matches++
+		if entry.OperStatus != winipcfg.IfOperStatusDown || entry.FriendlyName() != "OracleProxy" ||
+			entry.Description() != "sing-tun Tunnel" || entry.IfType != winipcfg.IfTypePropVirtual {
+			return fmt.Errorf("ORPHAN_IDENTITY_FAILED")
+		}
+		if entry.FirstDNSServerAddress != nil || entry.DNSSuffix() != "" || entry.FirstDNSSuffix != nil {
+			return fmt.Errorf("DORMANT_DNS_NOT_EMPTY")
+		}
+	}
+	// A successful full native snapshot with no matching LUID proves no current
+	// effective DNS association. This is not a claim about persisted registry
+	// settings. Duplicate entries are ambiguous and must not grant recovery.
+	if matches > 1 { return fmt.Errorf("DORMANT_DNS_QUERY_FAILED") }
+	return verifyOracleRecoveryIdentity(luid)
+}
+
+'''
 BODY = '''func addRouteList(luid winipcfg.LUID, destinations []netip.Prefix, gateway4 netip.Addr, gateway6 netip.Addr, metric uint32) error {
 	row := winipcfg.MibIPforwardRow2{}
 	row.Init()
@@ -272,7 +343,7 @@ def patched(original):
     start = source.index('\tadapter, err := wintun.CreateAdapter(options.Name,')
     end = source.index('\n\tnativeTun :=', start)
     source = source[:start] + '\tadapter, err := openOracleAdapter(options.Name)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n' + source[end:]
-    source = source.replace('func New(options Options)', CACHE + RECOVERY + 'func New(options Options)', 1)
+    source = source.replace('func New(options Options)', CACHE + RECOVERY + DORMANT_RECOVERY + 'func New(options Options)', 1)
     old = '\t\tt.session.End()\n\t\tt.adapter.Close()'
     new = '''\t\tt.session.End()
 		if t.options.Name == "OracleProxy" {

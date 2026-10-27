@@ -422,6 +422,11 @@ internal static class OracleAcceptance
                         if(replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["core_pid"]!.GetValue<uint>()!=previousPid)break;
                         await Task.Delay(200);
                     }
+                    foreach(string key in new[]{"mode","error","core_pid","transport","quick_ready","verified_at","connection_stage"})
+                        Console.WriteLine("REPLACEMENT_SAFE_"+key.ToUpperInvariant()+"="+replacement[key]);
+                    if(replacement["failure"] is JsonObject replacementFailure)
+                        foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage"})
+                            Console.WriteLine("REPLACEMENT_SAFE_FAILURE_"+key.ToUpperInvariant()+"="+replacementFailure[key]);
                     Check(previousPid>0 && replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["quick_ready"]?.GetValue<bool>()==false && replacement["verified_at"] is null && replacement["transport"]?.GetValue<string>()=="wireguard-udp","REAL_REPLACEMENT_CORE_CANNOT_INHERIT_OLD_EXIT_VERIFICATION");
                     await Send("Connect");var quic=await Connected();
                     Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");

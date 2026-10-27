@@ -10,6 +10,28 @@ import (
 
 const recoveryGUID = "62e2af98-7089-6f2c-246b-4a5960cfc978"
 
+type adapterRecoveryMode uint8
+
+const (
+	recoveryNone adapterRecoveryMode = iota
+	recoveryGuarded
+	recoveryDormant
+)
+
+// Mode selection is a fixed private child argv, never an input-frame field or
+// a caller-supplied target. Additional arguments invalidate both entry points.
+func parseAdapterRecoveryMode(arguments []string) adapterRecoveryMode {
+	if len(arguments) == 1 {
+		switch arguments[0] {
+		case "--recover-adapter":
+			return recoveryGuarded
+		case "--recover-dormant-adapter":
+			return recoveryDormant
+		}
+	}
+	return recoveryNone
+}
+
 type adapterRecoveryRequest struct {
 	GUID string
 	LUID uint64

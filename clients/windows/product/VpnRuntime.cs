@@ -160,7 +160,8 @@ internal sealed class VpnRuntime : IDisposable
         _generation++;
         var pending=_probePending;_probePending=null;
         if(pending is not null)_=pending.ContinueWith(t=>{_ = t.Exception;},CancellationToken.None,TaskContinuationOptions.OnlyOnFaulted|TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
-        await _core.Stop();_verified=default;_runningProfile="";_nextProbe=default;
+        _verified=default;_verifiedGeneration=-1;_latency=null;_runningProfile="";_nextProbe=default;
+        await _core.Stop();
     }
     private void AdoptNativePort(){
         if(_secret.NativeUdpPortPreference==0 && (_secret.TransportPreference is "auto" or "udp") && TransportPolicy.Native8443Available(_state)){_secret.NativeUdpPortPreference=8443;_secret.Save();}
@@ -171,8 +172,15 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
         if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
+        // A dead prepared core's proof cannot survive cleanup failure or be
+        // inherited by a replacement. Dispose it and invalidate its generation
+        // before inspecting any persistent adapter identity.
+        await StopCore();
         _stage="TUN_CLEANUP";
-        if(_secret.ConnectIntent && NativeGuard.Active && NativeGuard.TunPresent)await TunReceipt.RecoverOrphan();
+        if(NativeGuard.TunPresent){
+            if(_secret.ConnectIntent && NativeGuard.Active)await TunReceipt.RecoverOrphan();
+            else if(standby && !_secret.ConnectIntent && !_secret.RecoveryRequired)await TunReceipt.RecoverDormantOrphan();
+        }
         await EnsureTunnelRemoved();
         if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{

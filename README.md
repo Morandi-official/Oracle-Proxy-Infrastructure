@@ -1,36 +1,42 @@
 # Oracle Proxy Infrastructure
 
-**Status: experimental Windows VPN source and cloud test infrastructure. NOT a
-released VPN product.** Do not use these development binaries to replace
-WireSock or for important UU remote sessions.
+Oracle-hosted VPN service, administrator-only web console and independent Windows
+client. Current distributions are **unsigned acceptance candidates, not a GA
+release**. The Windows product embeds its WireGuard/TUN core and uses an
+authenticated SYSTEM service for everyday connect/disconnect; no WireSock,
+official WireGuard GUI, FlClash or daily SSH commands are required.
 
-Latest product assessment and next delivery milestones (2026-10-20):
-[Windows + Oracle product delivery status](docs/product-delivery-status-20261020.md).
-The R114 experimental portable build contains the embedded native engine and
-offline key generation; it is separate from the default read-only preview below.
-The [Oracle self-hosted administrator console](server/admin-oracle/README.md)
-uses GitHub OAuth plus TOTP MFA, local SQLite, a non-root systemd service,
-and Caddy HTTPS. A [one-time project CI authorization](ops/oracle-project/README.md)
-enables trusted-main administrator deployment and maintenance while keeping the web process unprivileged. Cloudflare is used only for existing DNS hosting; no Zero
-Trust, D1, Workers or card binding is required. The console is deployed on Oracle.
-Its [policy controller](server/admin-oracle/CONTROL.md) supports users, devices,
-monthly quotas, expiry/disable enforcement and a persistent outbound budget ledger.
-The web account has no sudo; fixed authenticated local RPC controls kernel leases.
-Unknown billing history stays unknown; OCI billing API and the final Windows
-client integration remain pending. Final delivery requires both the independent
-Windows portable distribution and a functioning server management console.
+- [Windows portable ZIP and standard EXE releases](https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/releases)
+- [Product source and acceptance boundaries](clients/windows/product/README.md)
+- [.NET 10 LTS runtime, upgrade and maintenance policy](docs/windows-rc22-dotnet-lts.md)
+- [Oracle administrator console](server/admin-oracle/README.md)
+- [Controlled main-branch operations and verified Oracle downloads](ops/oracle-project/README.md)
 
-This repository now hosts the working source baseline consolidated from the
-previous stacked engineering branches. The default Windows GUI build is
-read-only for network effects, not a production connect/disconnect client.
-The GUI can send administrator-authenticated fixed-profile connect/disconnect
-**safety-check requests** to a real LocalSystem service, but the manager
-unconditionally rejects any network mutation until real OS WFP fail-close
-is implemented and verified. Working tunnel controls remain isolated to
-explicit disposable GitHub CI labs.
-The CI-only administration build must not be redistributed.
+Since rc22, both Windows distribution forms bundle .NET 10 LTS; users do not need
+a shared .NET installation. A weekly check detects new stable runtime patches
+and approaching support expiry; installed clients receive fixes through tested
+product releases. Historical .NET 8 lab/preview projects below are not included
+in either current product distribution.
 
-## Verified engineering capabilities (cloud labs only)
+The console runs on Oracle behind Caddy HTTPS, with a fixed local administrator
+login and an unprivileged Python web service. Administrator-created VPN accounts,
+explicit device enrollment, monthly quota/expiry limits, live server counters,
+and delayed OCI billing observations have separate roles. Official billing data
+is delayed and must not be presented as a real-time free-allowance meter.
+Cloudflare provides existing DNS hosting; Zero Trust, D1, Workers and card
+binding are not required.
+
+Current Windows/Oracle acceptance verifies actual carriers and dual-stack
+Oracle egress, authenticated control, fail-closed faults, owned recovery and
+installer lifecycle. Trusted publisher signing and complete earliest/pre-login
+packet observation remain separate limits; prior user hardware evidence is
+version-specific. See the release's exact successful main workflow and BUILD.json.
+
+The remainder records historical read-only previews and disposable cloud labs.
+Those lab binaries and CI administration harnesses must not be redistributed as
+the current client or run on a production PC.
+
+## Historical engineering capabilities (cloud labs only)
 
 | Gate | Narrow result | Critical limitation |
 | --- | --- | --- |
@@ -47,7 +53,7 @@ Evidence is linked in docs/source-baseline-status.md.
 
 ## Build and safety
 
-Windows manager and GUI projects (Windows 11 x64, .NET 8):
+Historical manager and preview GUI projects (Windows 11 x64, .NET 8; not shipped in current releases):
 
 - clients/windows/manager/OracleProxy.LabManager.csproj
 - clients/windows/app/OracleProxy.Windows.Preview.csproj

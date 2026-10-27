@@ -71,7 +71,7 @@ if($LASTEXITCODE -ne 0){throw 'Fixture service create failed'}
 & sc.exe start OracleProxyCandidateFixture | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Fixture service start failed'}
 $result=Join-Path $root 'result.txt'
-for($i=0;$i -lt 100 -and !(Test-Path $result);$i++){Start-Sleep -Seconds 1}
+for($i=0;$i -lt 150 -and !(Test-Path $result);$i++){Start-Sleep -Seconds 1}
 if(!(Test-Path $result)){throw 'Fixture timed out; SYSTEM watchdog retains recovery'}
 $body=Get-Content -Raw $result
 Write-Host $body

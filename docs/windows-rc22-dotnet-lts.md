@@ -40,6 +40,19 @@ kept until native enumeration proves the adapter is absent; the existing
 three-second absence audit remains in force after bounded orphan recovery.
 Recovery failures retain a bounded, sanitized helper reason code for diagnosis.
 
+An explicitly disconnected prepared core has a separate fixed dormant recovery
+mode. It requires the existing protected encrypted OFF state, no recovery flag,
+no active guard or TUN permit, the same creator receipt and a verified exited
+creator. Independent native queries must find a Down interface with no IP
+addresses, routes or effective DNS association, both before and after obtaining
+a fresh creator handle. A successful complete DNS-adapter snapshot with no
+matching LUID means no effective association, not proof about registry settings.
+This mode never flushes IP/routes/DNS, starts a packet session or changes WFP.
+It only closes its own fresh creator and still requires native absence proof.
+Dirty or unknown interfaces are rejected. Ordinary applications remain direct
+during OFF preparation; old verification and pending-probe generations are
+invalidated before cleanup, including when cleanup fails.
+
 Self-contained does **not** mean permanently maintenance-free: an installed
 shared .NET security update cannot replace the runtime inside an old application
 bundle. A supported new runtime patch must be incorporated into a new product
@@ -70,6 +83,9 @@ Release verification must include:
 - Live adapter creators and invalid/foreign ownership receipts must be rejected
   without changing the adapter or guard. The actual one-shot SYSTEM recovery
   must remove a receipt-owned hard-kill orphan and preserve the device key.
+- An OFF prepared-core hard kill must recover an empty owned orphan without
+  installing a guard or interrupting ordinary TCP/DNS; a dirty orphan must stay
+  rejected without losing its configuration or receipt.
 - A digest-pinned rc21 .NET 8 payload is installed on a disposable Windows runner
   and upgraded in place. A synthetic, account-free SYSTEM DPAPI state is used;
   the test must retain its owner/device key identity rather than enrolling a new

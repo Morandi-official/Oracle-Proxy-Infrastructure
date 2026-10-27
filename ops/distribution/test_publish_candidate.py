@@ -4,12 +4,59 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from publish_candidate import REPO, read_archive, validate_run, validate_manifest
+from publish_candidate import REPO, read_archive, validate_run, validate_manifest, validate_dotnet_runtime
 
 
 class PublicationBoundaries(unittest.TestCase):
-    def test_manifest_requires_two_distinct_exact_artifacts_and_rc21_source(self):
-        manifest={'version':'0.3.0-rc21','run_id':42,'source_revision':'a'*40,
+    def runtime_metadata(self):
+        return {'dotnet_sdk': '10.0.403', 'dotnet_runtime': {
+            'target_framework': 'net10.0', 'deployment': 'self-contained',
+            'version': '10.0.14', 'runtimeconfig_sha256': 'a'*64,
+            'included_frameworks': [
+                {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'},
+                {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14'}]}}
+
+    def test_runtime_metadata_requires_actual_exact_rc22_sdk_and_runtime(self):
+        metadata = self.runtime_metadata()
+        validate_dotnet_runtime(metadata)
+        reversed_frameworks = copy.deepcopy(metadata)
+        reversed_frameworks['dotnet_runtime']['included_frameworks'].reverse()
+        validate_dotnet_runtime(reversed_frameworks)
+        for sdk in (None, '8.0.426', '10.0.402', '10.0.404', '10.0.403-preview.1'):
+            candidate = copy.deepcopy(metadata); candidate['dotnet_sdk'] = sdk
+            with self.subTest(sdk=sdk), self.assertRaises(ValueError):
+                validate_dotnet_runtime(candidate)
+        for runtime in (None, {}, '10.0.14', {'target_framework': 'net10.0'}):
+            candidate = copy.deepcopy(metadata); candidate['dotnet_runtime'] = runtime
+            with self.subTest(runtime=runtime), self.assertRaises(ValueError):
+                validate_dotnet_runtime(candidate)
+        for field, value in [('target_framework', 'net8.0'), ('deployment', 'framework-dependent'),
+                             ('version', '8.0.32'), ('version', '10.0.13'), ('version', '10.0.15'),
+                             ('runtimeconfig_sha256', 'A'*64), ('runtimeconfig_sha256', 'a'*63),
+                             ('runtimeconfig_sha256', None)]:
+            candidate = copy.deepcopy(metadata); candidate['dotnet_runtime'][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                validate_dotnet_runtime(candidate)
+        candidate = copy.deepcopy(metadata)
+        candidate['dotnet_runtime']['frameworks'] = candidate['dotnet_runtime']['included_frameworks']
+        with self.assertRaises(ValueError): validate_dotnet_runtime(candidate)
+
+    def test_runtime_metadata_rejects_missing_duplicate_wrong_or_shared_frameworks(self):
+        valid = self.runtime_metadata()
+        frameworks = valid['dotnet_runtime']['included_frameworks']
+        variants = [None, {}, [], frameworks[:1], frameworks*2, [frameworks[0], frameworks[0]],
+                    [frameworks[0], {'name': 'Microsoft.AspNetCore.App', 'version': '10.0.14'}],
+                    [frameworks[0], {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.13'}],
+                    [frameworks[0], {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14', 'rollForward': 'LatestPatch'}],
+                    [frameworks[0], 'Microsoft.WindowsDesktop.App/10.0.14'],
+                    [frameworks[0], {'name': ['Microsoft.WindowsDesktop.App'], 'version': '10.0.14'}]]
+        for value in variants:
+            candidate = copy.deepcopy(valid); candidate['dotnet_runtime']['included_frameworks'] = value
+            with self.subTest(frameworks=value), self.assertRaises(ValueError):
+                validate_dotnet_runtime(candidate)
+
+    def test_manifest_requires_two_distinct_exact_artifacts_and_rc22_source(self):
+        manifest={'version':'0.3.0-rc22','run_id':42,'source_revision':'a'*40,
                   'artifacts':[{'id':1,'sha256':'b'*64},{'id':2,'sha256':'c'*64}]}
         validate_manifest(manifest)
         variants=[dict(manifest,artifacts=[]),dict(manifest,artifacts=manifest['artifacts'][:1]),

@@ -33,6 +33,11 @@ internal static class ProductTests
         }
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--udp-loss-self-test"}))return OracleAcceptance.VerifyUdpFaultSession();
+        if(args.SequenceEqual(new[]{"--tun-presence-diagnostic"})){
+            var value=new JsonArray(NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.Name=="OracleProxy").Select(n=>(JsonNode?)new JsonObject{
+                ["name"]=n.Name,["status"]=n.OperationalStatus.ToString(),["type"]=n.NetworkInterfaceType.ToString()}).ToArray());
+            Console.WriteLine("DOTNET_TUN_PRESENCE="+value.ToJsonString());return 0;
+        }
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
         if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--native-denial"})){
@@ -197,6 +202,11 @@ internal static class ProductTests
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
     private static int Ui()
     {
+        foreach(var status in Enum.GetValues<OperationalStatus>()){
+            if(VpnRuntime.PresentTunnel("OracleProxy",status)!=(status!=OperationalStatus.NotPresent) || VpnRuntime.PresentTunnel("OtherAdapter",status))return 1;
+        }
+        if(!VpnRuntime.PresentTunnel("OracleProxy",(OperationalStatus)int.MaxValue))return 1;
+        Console.WriteLine("TUN_PRESENCE_IGNORES_ONLY_OS_NOT_PRESENT_AND_REJECTS_ALL_PRESENT_OR_UNKNOWN_STATES=PASS");
         OracleAcceptance.VerifyDeviceBudgetFixture();
         var nativeEvents=new NativeUdpEvidence();
         if(!nativeEvents.Record("NATIVE_UDP_443_SEND_INIT") || !nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_10054") || nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_9999999999") || nativeEvents.Record("NATIVE_UDP_443_RECV_REPLY SYNTHETIC_SECRET") || nativeEvents.Record("NATIVE_UDP_22_SEND_INIT") || nativeEvents.Record("NATIVE_UDP_443_SEND_INIT\n"))return 1;
@@ -535,6 +545,10 @@ internal static class ProductTests
         // No IPv6 or GameViewer proof is manufactured from IPv4 loopback tests.
         saved.Token="";saved.ConnectIntent=true;saved.RecoveryRequired=true;saved.Save();NativeGuard.Apply([]);
         Evidence.Add("PRODUCT_RECOVERY_FIXTURE_GUARDED_WITH_ENCRYPTED_KEY=PASS");
+        var metadata=NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.Name=="OracleProxy").ToArray();
+        Evidence.Add("SYSTEM_TUN_METADATA_COUNT="+metadata.Length);
+        foreach(var nic in metadata)
+            Evidence.Add("SYSTEM_TUN_METADATA_NAME_OracleProxy_STATUS_"+nic.OperationalStatus+"_TYPE_"+nic.NetworkInterfaceType);
         Evidence.Add("REAL_GAMEVIEWER_CONTINUITY=NOT_TESTED");Evidence.Add("ACTUAL_OS_REBOOT=NOT_TESTED");Evidence.Add("PHYSICAL_IPV6=NOT_TESTED");
     }
 }

@@ -104,6 +104,8 @@ function Show-RecoveryFixture([string]$Stage){
   $unknown=@($cores | Where-Object {-not $_.ExecutablePath}).Count
   $services=@(Get-CimInstance Win32_Service -Filter "Name='OracleProxyService' OR Name='OracleProxyRecovery'" -Property Name,State | Select-Object Name,State)
   Write-Host ('RECOVERY_FIXTURE_'+$Stage+'='+(@{adapters=$adapters;product_core_count=$owned;unknown_path_core_count=$unknown;scm=$services} | ConvertTo-Json -Depth 4 -Compress))
+  & $test --tun-presence-diagnostic
+  if($LASTEXITCODE -ne 0){Write-Host ('RECOVERY_DOTNET_TUN_'+$Stage+'=DIAGNOSTIC_UNAVAILABLE')}
  }catch{Write-Host ('RECOVERY_FIXTURE_'+$Stage+'=DIAGNOSTIC_UNAVAILABLE')}
 }
 Show-RecoveryFixture 'BEFORE'

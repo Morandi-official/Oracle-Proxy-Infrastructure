@@ -521,19 +521,25 @@ internal static class ProductTests
                 "REAL_EMPTY_DORMANT_ORPHAN_RECOVERY_REMOVES_NATIVE_ROW_PRESERVES_OFF_AND_DIRECT_TCP_DNS_BEFORE_DURING_AFTER");
 
             creator=await Launch(config,standby:true);
-            await FixtureDormantAddress(false);
-            Require(FixtureTunAddresses().Split('|').Contains("198.18.0.2") && OffUnchanged(offCipher),"REAL_OFF_DORMANT_DIRTY_IPV4_IS_INSTALLED_ONLY_ON_FRESH_OWNED_ADAPTER");
+            ulong dirtyLuid=NativeGuard.TunLuid();byte[] dirtyReceipt=File.ReadAllBytes(TunReceipt.ReceiptPath);
             creator.Kill(true);await creator.WaitForExitAsync();creator.Dispose();creator=null;
-            ulong dirtyLuid=NativeGuard.TunLuid();string dirtyAddresses=FixtureTunAddresses();bool dirtyDormant=NativeGuard.TunDormant;
-            byte[] dirtyReceipt=File.ReadAllBytes(TunReceipt.ReceiptPath);
-            Require(NativeGuard.TunPresent && dirtyAddresses.Split('|').Contains("198.18.0.2") && OffUnchanged(offCipher),"REAL_OFF_DIRTY_ORPHAN_RETAINS_ROUTABLE_IPV4_AFTER_CREATOR_EXIT");
+            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && OffUnchanged(offCipher) &&
+                File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),"REAL_OFF_ORPHAN_DIRTY_CASE_STARTS_WITH_EXITED_CREATOR_AND_RECORDED_NATIVE_IDENTITY");
+            // Windows may remove a live creator's temporary address on death.
+            // Inject only after exit so the negative case actually tests a
+            // configured orphan, rather than assuming that address survives.
+            await FixtureDormantAddress(false);
+            string dirtyAddresses=FixtureTunAddresses();bool dirtyDormant=NativeGuard.TunDormant;
+            Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && dirtyAddresses.Split('|').Contains("198.18.0.2") &&
+                OffUnchanged(offCipher) && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),
+                "REAL_OFF_ORPHAN_DIRTY_IPV4_IS_INSTALLED_ONLY_ON_RECORDED_NATIVE_IDENTITY");
             bool dirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
             try{await TunReceipt.RecoverDormantOrphan();}
             catch(IOException error)when(error.Message=="TUN_OWNER_DORMANT_IP_NOT_EMPTY"){dirtyDenied=true;}
             Require(dirtyDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==dirtyDormant &&
                 FixtureTunAddresses()==dirtyAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
                 OffUnchanged(offCipher) && await duringTcp && await duringDns && await Tcp() && await Dns(),
-                "REAL_OFF_DIRTY_DORMANT_ORPHAN_IS_REFUSED_WITHOUT_FLUSH_OR_IDENTITY_POLICY_RECEIPT_CHANGES");
+                "REAL_OFF_ORPHAN_DIRTY_DORMANT_RECOVERY_IS_REFUSED_WITHOUT_FLUSH_OR_IDENTITY_POLICY_RECEIPT_CHANGES");
             // Remove only this fixture's exact injected address. The product's
             // unguarded recovery itself is forbidden to flush dirty settings.
             await FixtureDormantAddress(true);

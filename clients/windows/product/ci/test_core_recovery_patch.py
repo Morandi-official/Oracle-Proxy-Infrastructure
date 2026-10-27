@@ -70,7 +70,8 @@ func generateGUIDByDeviceName(name string) {}
         self.assertLess(source.index('verifyOracleDormantEmpty(fresh)'),source.index('created.Close()'))
         self.assertLess(source.index('created.Close()'),source.index('oracleRecoveryAbsent()'))
         for forbidden in ('OpenAdapter(','.Delete(','.Flush','SetInterfaceDnsSettings','StartSession(',
-                          'exec.Command','os.Open','registry.','WFP','Uninstall('):
+                          'exec.Command','os.Open','registry.','WFP','Uninstall(',
+                          'entry.FirstDNSServerAddress','entry.DNSSuffix()', 'entry.FirstDNSSuffix'):
             self.assertNotIn(forbidden,source)
 
     def test_dormant_native_snapshot_boundaries_execute_the_patched_audit(self):
@@ -114,7 +115,7 @@ type fakeAdapter struct {
 }
 func (a *fakeAdapter) FriendlyName() string { return a.name }
 func (a *fakeAdapter) Description() string { return a.description }
-func (a *fakeAdapter) DNSSuffix() string { return a.suffix }
+func (a *fakeAdapter) DNSSuffix() string { panic("dormant recovery must not consume DNS metadata") }
 var addresses, routes []fakeRow
 var adapters []*fakeAdapter
 var addressErr, routeErr, dnsErr error
@@ -198,9 +199,17 @@ func TestNativeSnapshotBoundaries(t *testing.T) {
   {"DNS query error",func(){dnsErr=errors.New("native")},"DORMANT_DNS_QUERY_FAILED"},
   {"malformed native DNS row",func(){adapters=[]*fakeAdapter{nil}},"DORMANT_DNS_QUERY_FAILED"},
   {"duplicate LUID",func(){adapters=[]*fakeAdapter{empty(),empty()}},"DORMANT_DNS_QUERY_FAILED"},
-  {"DNS server present",func(){a:=empty();a.FirstDNSServerAddress=new(int);adapters=[]*fakeAdapter{a}},"DORMANT_DNS_NOT_EMPTY"},
-  {"DNS suffix present",func(){a:=empty();a.suffix="example.test";adapters=[]*fakeAdapter{a}},"DORMANT_DNS_NOT_EMPTY"},
-  {"DNS suffix list present",func(){a:=empty();a.FirstDNSSuffix=new(int);adapters=[]*fakeAdapter{a}},"DORMANT_DNS_NOT_EMPTY"},
+  {"Down residual DNS server metadata",func(){a:=empty();a.FirstDNSServerAddress=new(int);adapters=[]*fakeAdapter{a}},""},
+  {"Down inherited DNS suffix metadata",func(){a:=empty();a.suffix="example.test";adapters=[]*fakeAdapter{a}},""},
+  {"Down inherited DNS suffix-list metadata",func(){a:=empty();a.FirstDNSSuffix=new(int);adapters=[]*fakeAdapter{a}},""},
+  {"Down legacy DNS and suffix metadata",func(){adapters=[]*fakeAdapter{legacyDNS()}},""},
+  {"Up with legacy DNS remains refused",func(){a:=legacyDNS();a.OperStatus=1;adapters=[]*fakeAdapter{a}},"ORPHAN_IDENTITY_FAILED"},
+  {"duplicate LUID with legacy DNS refused",func(){adapters=[]*fakeAdapter{legacyDNS(),empty()}},"DORMANT_DNS_QUERY_FAILED"},
+  {"query error with legacy DNS refused",func(){adapters=[]*fakeAdapter{legacyDNS()};dnsErr=errors.New("native")},"DORMANT_DNS_QUERY_FAILED"},
+  {"identity conflict with legacy DNS refused",func(){a:=legacyDNS();a.name="other";adapters=[]*fakeAdapter{a}},"ORPHAN_IDENTITY_FAILED"},
+  {"dirty IPv4 with legacy DNS refused",func(){a:=autoLLA("198.18.0.1");a.Address.Family=2;a.PrefixOrigin=1;addresses=[]fakeRow{a};adapters=[]*fakeAdapter{legacyDNS()}},"DORMANT_IP_NOT_EMPTY"},
+  {"manual route with legacy DNS refused",func(){r:=localRoute4("224.0.0.0/4");r.Protocol=3;routes=[]fakeRow{r};adapters=[]*fakeAdapter{legacyDNS()}},"DORMANT_ROUTE_PROTOCOL_NOT_LOCAL"},
+  {"gateway route with legacy DNS refused",func(){r:=localRoute4("224.0.0.0/4");r.NextHop.value=netip.MustParseAddr("192.168.1.1");routes=[]fakeRow{r};adapters=[]*fakeAdapter{legacyDNS()}},"DORMANT_ROUTE_NEXT_HOP_UNSAFE"},
   {"Up rejected",func(){a:=empty();a.OperStatus=1;adapters=[]*fakeAdapter{a}},"ORPHAN_IDENTITY_FAILED"},
   {"alias conflict",func(){a:=empty();a.name="other";adapters=[]*fakeAdapter{a}},"ORPHAN_IDENTITY_FAILED"},
   {"description conflict",func(){a:=empty();a.description="other";adapters=[]*fakeAdapter{a}},"ORPHAN_IDENTITY_FAILED"},
@@ -219,6 +228,7 @@ func TestNativeSnapshotBoundaries(t *testing.T) {
  })}
 }
 func empty() *fakeAdapter {return &fakeAdapter{LUID:7,OperStatus:2,IfType:53,name:"OracleProxy",description:"sing-tun Tunnel"}}
+func legacyDNS() *fakeAdapter {a:=empty();a.FirstDNSServerAddress=new(int);a.FirstDNSSuffix=new(int);a.suffix="legacy.example.test";return a}
 func autoLLA(ip string) fakeRow {return fakeRow{InterfaceLUID:7,Address:fakeSockaddr{Family:23,value:netip.MustParseAddr(ip)},PrefixOrigin:2,SuffixOrigin:5,OnLinkPrefixLength:64}}
 func localRoute(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,DestinationPrefix:fakePrefix{netip.MustParsePrefix(prefix)},NextHop:fakeSockaddr{Family:23,value:netip.IPv6Unspecified()},Protocol:2}}
 func localRoute4(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,DestinationPrefix:fakePrefix{netip.MustParsePrefix(prefix)},NextHop:fakeSockaddr{Family:2,value:netip.IPv4Unspecified()},Protocol:2}}

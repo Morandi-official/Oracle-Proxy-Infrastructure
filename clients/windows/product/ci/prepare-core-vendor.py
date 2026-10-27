@@ -315,13 +315,15 @@ func verifyOracleDormantEmpty(luid winipcfg.LUID) error {
 			entry.Description() != "sing-tun Tunnel" || entry.IfType != winipcfg.IfTypePropVirtual {
 			return fmt.Errorf("ORPHAN_IDENTITY_FAILED")
 		}
-		if entry.FirstDNSServerAddress != nil || entry.DNSSuffix() != "" || entry.FirstDNSSuffix != nil {
-			return fmt.Errorf("DORMANT_DNS_NOT_EMPTY")
-		}
+		// An owned, Down interface can retain inherited or legacy DNS metadata.
+		// Explicit Off already uses ordinary direct DNS; destroying this stopped
+		// resource neither activates nor migrates that metadata. Do not read it,
+		// use it for routing/execution, or flush/set DNS on any interface here.
 	}
-	// A successful full native snapshot with no matching LUID proves no current
-	// effective DNS association. This is not a claim about persisted registry
-	// settings. Duplicate entries are ambiguous and must not grant recovery.
+	// A successful full native snapshot may omit an already detached interface.
+	// Its exact native identity and inactive local-only data path were audited
+	// independently above. This makes no claim about persisted DNS settings.
+	// Duplicate native entries remain ambiguous and must not grant recovery.
 	if matches > 1 { return fmt.Errorf("DORMANT_DNS_QUERY_FAILED") }
 	return verifyOracleRecoveryIdentity(luid)
 }

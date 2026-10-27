@@ -44,7 +44,7 @@ An explicitly disconnected prepared core has a separate fixed dormant recovery
 mode. It requires the existing protected encrypted OFF state, no recovery flag,
 no active guard or TUN permit, the same creator receipt and a verified exited
 creator. Independent native queries must find a Down interface with no routable
-configuration or effective DNS association, both before and after obtaining
+configuration, both before and after obtaining
 a fresh creator handle. The only address exception is Windows-generated IPv6
 link-local with WellKnown prefix origin, LinkLayer/Random suffix origin and a
 /64. Associated routes require the native Local protocol and an unspecified
@@ -53,8 +53,14 @@ and ff00::/8. Windows' exact IPv4 224.0.0.0/4 and 255.255.255.255/32
 routes are also permitted only with native Local protocol and an unspecified
 IPv4 next hop. IPv4 addresses, other IPv4 destinations, manual origins,
 default routes and custom gateways are refused.
-A successful complete DNS-adapter snapshot with no
-matching LUID means no effective association, not proof about registry settings.
+A successful complete DNS-adapter snapshot must agree with that identity and
+Down state when the target LUID is present; ambiguity or a query error is refused.
+Windows may retain default/inherited DNS servers and suffix metadata on a Down
+interface. This metadata grants no authorization, is never used as a route or
+destination, and is not interpreted or migrated by the helper. Its presence does
+not prevent disposing of a receipt-owned, inactive, non-routable interface while
+the protected persisted intent is explicitly OFF. This makes no claim about
+registry settings and never changes another interface's DNS configuration.
 This mode never flushes IP/routes/DNS, starts a packet session or changes WFP.
 It only closes its own fresh creator and still requires native absence proof.
 Dirty or unknown interfaces are rejected. Ordinary applications remain direct

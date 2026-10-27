@@ -1,1 +1,4 @@
-{"operation":"enable-https","request_id":"rc22-transient-owned-ci-slot-release-20261027"}
+{
+  "operation": "enable-https",
+  "request_id": "windows-rc22-dotnet10-mirror-20261027"
+}

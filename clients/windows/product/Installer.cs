@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
+using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using Microsoft.Win32;
 namespace OracleProxy.Product;
@@ -25,6 +26,50 @@ internal static class Installer
         // SCM status can become Stopped just before Windows unloads DLLs.
         for(int i=0;i<150;i++){try{using var f=File.Open(Platform.Exe,FileMode.Open,FileAccess.ReadWrite,FileShare.None);return;}catch(IOException){Thread.Sleep(100);}}
         throw new IOException("SERVICE_IMAGE_STILL_IN_USE");
+    }
+    [DllImport("wtsapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+    private static extern bool WTSQuerySessionInformation(IntPtr server,int session,int information,out IntPtr value,out int bytes);
+    [DllImport("wtsapi32.dll")]private static extern void WTSFreeMemory(IntPtr value);
+    private static string InteractiveAccountPart(int session,int information)
+    {
+        if(!WTSQuerySessionInformation(IntPtr.Zero,session,information,out var value,out int size))throw new IOException("INTERACTIVE_OWNER_UNAVAILABLE");
+        try{return size>2?Marshal.PtrToStringUni(value)??"":"";}finally{WTSFreeMemory(value);}
+    }
+    internal static Task InstallInteractive()
+    {
+        // UAC may run Setup under different administrator credentials. Bind
+        // fresh installs to the real desktop session, never USERNAME/env vars.
+        if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
+        int session=Process.GetCurrentProcess().SessionId;
+        if(session==0)throw new IOException("INTERACTIVE_OWNER_UNAVAILABLE");
+        string user=InteractiveAccountPart(session,5),domain=InteractiveAccountPart(session,7);
+        if(string.IsNullOrWhiteSpace(user))throw new IOException("INTERACTIVE_OWNER_UNAVAILABLE");
+        var account=string.IsNullOrWhiteSpace(domain)?new NTAccount(user):new NTAccount(domain,user);
+        var owner=(SecurityIdentifier)account.Translate(typeof(SecurityIdentifier));
+        return InstallDesktop(owner.Value);
+    }
+    internal static Task InstallDesktop(string owner)
+    {
+        if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
+        _=new SecurityIdentifier(owner);
+        Platform.VerifyBundle(AppContext.BaseDirectory);
+        string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"OracleProxyDesktop");
+        string marker=Path.Combine(root,"desktop.marker");
+        Platform.NoLinks(root);
+        if(Directory.Exists(root)){
+            // A fixed Program Files pathname alone is not a trust boundary.
+            // Never adopt or silently repair another installer's writable tree.
+            Platform.VerifyProtected(root);
+            if(File.Exists(marker)){
+                var file=new FileInfo(marker);
+                if(file.Attributes.HasFlag(FileAttributes.ReparsePoint) || file.Length>64 || File.ReadAllText(marker)!="OracleProxy.Desktop.v1")throw new IOException("DESKTOP_DIRECTORY_COLLISION");
+            }else if(Directory.EnumerateFileSystemEntries(root).Any())throw new IOException("DESKTOP_DIRECTORY_COLLISION");
+        }else{
+            Directory.CreateDirectory(root);
+            Platform.Protect(root,true);
+        }
+        if(!File.Exists(marker))Platform.WriteAtomic(marker,System.Text.Encoding.UTF8.GetBytes("OracleProxy.Desktop.v1"));
+        return Install(owner);
     }
     internal static async Task Install(string owner)
     {

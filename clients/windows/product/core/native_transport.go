@@ -21,19 +21,20 @@ type nativeRead struct {
 }
 type nativeConn struct {
 	relayConn
-	sockets   []net.Conn
-	ports     []uint16
-	incoming  chan nativeRead
-	free      chan *[4096]byte
-	done      chan struct{}
-	mu        sync.Mutex
-	winner    int
-	attempt   int
-	sentIndex int
-	lastInit  []byte
-	once      sync.Once
-	eventMu   sync.Mutex
-	events    map[string]int
+	sockets     []net.Conn
+	ports       []uint16
+	incoming    chan nativeRead
+	free        chan *[4096]byte
+	done        chan struct{}
+	readChanged chan struct{}
+	mu          sync.Mutex
+	winner      int
+	attempt     int
+	sentIndex   int
+	lastInit    []byte
+	once        sync.Once
+	eventMu     sync.Mutex
+	events      map[string]int
 }
 
 // Fixed, bounded diagnostic events only: no addresses, packet bytes or keys.
@@ -58,7 +59,7 @@ func nativeError(err error) uint32 {
 }
 
 func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
-	c := &nativeConn{sockets: sockets, ports: ports, incoming: make(chan nativeRead, 16), free: make(chan *[4096]byte, 16+len(sockets)), done: make(chan struct{}), winner: -1, attempt: -1, sentIndex: -1}
+	c := &nativeConn{sockets: sockets, ports: ports, incoming: make(chan nativeRead, 16), free: make(chan *[4096]byte, 16+len(sockets)), done: make(chan struct{}), readChanged: make(chan struct{}), winner: -1, attempt: -1, sentIndex: -1}
 	// One frame per queued delivery plus one per socket reader. Ownership
 	// moves reader -> incoming -> Read -> free; never reuse a queued frame.
 	for i := 0; i < cap(c.free); i++ {
@@ -131,64 +132,135 @@ func (c *nativeConn) recycle(b *[4096]byte) {
 	case <-c.done:
 	}
 }
+
+// Native UDP reads do not need a per-packet cancellation context. Wake a
+// blocked read only when its absolute deadline changes or the socket closes;
+// the normal no-deadline packet path allocates no timer or context.
+func (c *nativeConn) nextRead() (nativeRead, error) {
+	for {
+		c.access.Lock()
+		at, changed := c.readAt, c.readChanged
+		c.access.Unlock()
+		var timer *time.Timer
+		var expiry <-chan time.Time
+		if !at.IsZero() {
+			left := time.Until(at)
+			if left <= 0 {
+				if c.readExpired(changed) {
+					return nativeRead{}, os.ErrDeadlineExceeded
+				}
+				continue
+			}
+			timer = time.NewTimer(left)
+			expiry = timer.C
+		}
+		var packet nativeRead
+		var err error
+		retry := false
+		select {
+		case packet = <-c.incoming:
+		case <-changed:
+			retry = true
+		case <-expiry:
+			if c.readExpired(changed) {
+				err = os.ErrDeadlineExceeded
+			} else {
+				retry = true
+			}
+		case <-c.done:
+			err = net.ErrClosed
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		if retry {
+			continue
+		}
+		return packet, err
+	}
+}
+
+// A changed deadline and its old timer can become ready together. Never let
+// select's random choice turn a cancelled/extended deadline into a timeout.
+func (c *nativeConn) readExpired(generation <-chan struct{}) bool {
+	c.access.Lock()
+	defer c.access.Unlock()
+	return generation == c.readChanged && !c.readAt.IsZero() && !time.Now().Before(c.readAt)
+}
+func (c *nativeConn) SetReadDeadline(at time.Time) error {
+	c.access.Lock()
+	if !at.Equal(c.readAt) {
+		c.readAt = at
+		close(c.readChanged)
+		c.readChanged = make(chan struct{})
+	}
+	c.access.Unlock()
+	return nil
+}
+func (c *nativeConn) SetDeadline(at time.Time) error {
+	c.access.Lock()
+	c.writeAt = at
+	if !at.Equal(c.readAt) {
+		c.readAt = at
+		close(c.readChanged)
+		c.readChanged = make(chan struct{})
+	}
+	c.access.Unlock()
+	return nil
+}
 func (c *nativeConn) Read(b []byte) (int, error) {
-	ctx, cancel := c.operation(true)
-	defer cancel()
 	failed := map[int]bool{}
 	for {
-		select {
-		case <-ctx.Done():
-			return 0, os.ErrDeadlineExceeded
-		case <-c.done:
-			return 0, net.ErrClosed
-		case p := <-c.incoming:
-			c.mu.Lock()
-			winner := c.winner
-			if p.err != nil {
-				c.recycle(p.data)
-				c.mu.Unlock()
-				failed[p.index] = true
-				if winner == p.index || len(failed) == len(c.sockets) {
-					return 0, p.err
-				}
-				continue
-			}
-			if winner >= 0 && winner != p.index {
-				c.recycle(p.data)
-				c.mu.Unlock()
-				continue
-			}
-			// A reply to the previous initiation can arrive after WG has
-			// generated a fresh one on the other port. It must not pin the
-			// socket to an obsolete handshake and discard the current reply.
-			// A reconnected socket can resume an existing WG crypto session
-			// with data before another initiation. Accept the socket actually
-			// written, not only sockets selected by a new handshake. WG still
-			// authenticates all returned bytes; unsolicited sockets stay rejected.
-			if winner < 0 && (c.sentIndex < 0 || p.index != c.sentIndex) {
-				c.event(p.index, "RECV_OBSOLETE")
-				c.recycle(p.data)
-				c.mu.Unlock()
-				continue
-			}
-			if winner < 0 {
-				c.winner = p.index
-				fmt.Fprintln(os.Stderr, fmt.Sprintf("CARRIER_NATIVE_%d", c.ports[p.index]))
-				for i, s := range c.sockets {
-					if i != p.index {
-						s.Close()
-					}
-				}
-			}
-			c.mu.Unlock()
-			if len(b) < p.size {
-				c.recycle(p.data)
-				return 0, io.ErrShortBuffer
-			}
-			n := copy(b, p.data[:p.size])
-			c.recycle(p.data)
-			return n, nil
+		p, err := c.nextRead()
+		if err != nil {
+			return 0, err
 		}
+		c.mu.Lock()
+		winner := c.winner
+		if p.err != nil {
+			c.recycle(p.data)
+			c.mu.Unlock()
+			failed[p.index] = true
+			if winner == p.index || len(failed) == len(c.sockets) {
+				return 0, p.err
+			}
+			continue
+		}
+		if winner >= 0 && winner != p.index {
+			c.recycle(p.data)
+			c.mu.Unlock()
+			continue
+		}
+		// A reply to the previous initiation can arrive after WG has
+		// generated a fresh one on the other port. It must not pin the
+		// socket to an obsolete handshake and discard the current reply.
+		// A reconnected socket can resume an existing WG crypto session
+		// with data before another initiation. Accept the socket actually
+		// written, not only sockets selected by a new handshake. WG still
+		// authenticates all returned bytes; unsolicited sockets stay rejected.
+		if winner < 0 && (c.sentIndex < 0 || p.index != c.sentIndex) {
+			c.event(p.index, "RECV_OBSOLETE")
+			c.recycle(p.data)
+			c.mu.Unlock()
+			continue
+		}
+		if winner < 0 {
+			c.winner = p.index
+			fmt.Fprintln(os.Stderr, fmt.Sprintf("CARRIER_NATIVE_%d", c.ports[p.index]))
+			for i, s := range c.sockets {
+				if i != p.index {
+					s.Close()
+				}
+			}
+		}
+		c.mu.Unlock()
+		if len(b) < p.size {
+			c.recycle(p.data)
+			return 0, io.ErrShortBuffer
+		}
+		n := copy(b, p.data[:p.size])
+		c.recycle(p.data)
+		return n, nil
 	}
 }
 func (c *nativeConn) Write(b []byte) (int, error) {

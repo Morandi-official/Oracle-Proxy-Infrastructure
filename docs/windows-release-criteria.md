@@ -52,10 +52,10 @@ signed upstream release.
 
 | Requirement | Evidence still needed |
 | --- | --- |
-| Real Oracle end-to-end | Dedicated account secrets must reach the main job and every asserted stage must pass. |
-| UU compatibility | Logged-in controller and controlled-device sessions must stay usable during connect, peer loss, core/service failure and reconnect. Current core direct outbound alone does not prove survival of core failure. No fixed user installation path is permitted. |
-| Boot protection | Actual Windows restart and pre-login traffic behavior, durable connection intent and recovery on a locally recoverable computer. Same-boot filter inspection does not prove this. |
-| IPv6 | Oracle VCN/VNIC, routing, forwarding and policy readiness plus real IPv6 transfer/leak tests. The current server descriptor blocks IPv6 and must not be described as dual-stack forwarding. |
+| Real Oracle end-to-end | rc20 passed accepted main run40302397587; changed rc21 payloads must pass a new full main run. |
+| UU compatibility | Owner reports actual UU sessions stayed usable through rc20 core/service failures and recovery. Retain discovery/signature/ACL checks and real-device regression; never depend on a fixed installation path. |
+| Boot protection | Owner verified rc20 restoration after a physical restart and post-login dual-stack STUN on 2026-10-27. The entire pre-login/earliest-boot traffic interval still needs independent observation. |
+| IPv6 | rc20 verifies Oracle IPv6 HTTPS/STUN through all carriers; owner observed the expected Oracle IPv6. Media grants can expose local ICE addresses. Native physical public IPv6 and changed rc21 binaries need appropriate coverage. |
 | Update trust | Fixed payload hash checks and rollback are implemented; application publisher signing and a reviewed signed-update distribution mechanism remain outstanding. |
 | Oracle allowance | Actual official API access and reviewed metric coverage/SKU units. Local counters or a denied query do not establish remaining monthly free allowance. |
 

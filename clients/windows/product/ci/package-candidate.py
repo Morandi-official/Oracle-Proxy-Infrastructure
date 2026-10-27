@@ -89,8 +89,10 @@ def main():
                 'workflow_run': os.environ['GITHUB_RUN_ID'], 'workflow_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
                 'publisher_signed': False, 'payload_sha256': hashes,
                 'dotnet_sdk': run('dotnet', '--version'), 'go_toolchain': run('go', 'version'),
-                'remaining_gates': ['live logged-in UU session continuity', 'physical Windows reboot',
-                                    'IPv6 WebRTC across real browser permission/network states', 'application publisher signing'],
+                'remaining_gates': ['hardware regression of this exact candidate payload',
+                                    'earliest-boot and pre-login full traffic observation',
+                                    'browser media-granted local interface disclosure limitation',
+                                    'application publisher signing'],
                 'nuget_packages': packages}
     tag = 'OracleProxy-' + version + '-win-x64-' + revision[:12]
     source_name = tag + '-source.zip'

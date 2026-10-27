@@ -117,6 +117,7 @@ Start-ScheduledTask -TaskName 'OracleProxyCandidateVerifyRecovery'
 for($i=0;$i -lt 30 -and !(Test-Path "$root/recovery-verified");$i++){Start-Sleep -Milliseconds 250}
 if(!(Test-Path "$root/recovery-verified") -or (Get-Content -Raw "$root/recovery-verified") -ne 'KEY_AND_SAFE_OFF_PRESERVED'){throw 'Recovery lost encrypted key or failed to commit safe Off'}
 Write-Host 'REAL_PRODUCT_UAC_SYSTEM_RECOVERY_PRESERVES_KEY_AND_COMMITS_SAFE_OFF=PASS' 
+Write-Host 'REAL_FIXED_UAC_RECOVERY_REMOVES_RECEIPT_OWNED_KERNEL_ORPHAN_BEFORE_SAFE_OFF=PASS'
 Copy-Item "$env:ProgramData/OracleProxy/state.dpapi" "$env:ProgramData/OracleProxy/state.recovery-$([Guid]::NewGuid().ToString('N')).dpapi"
 Remove-Item "$env:ProgramData/OracleProxy/state.dpapi"
 $oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash

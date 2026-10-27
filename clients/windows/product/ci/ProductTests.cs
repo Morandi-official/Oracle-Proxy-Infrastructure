@@ -64,7 +64,7 @@ internal static class ProductTests
         if(!Platform.IsSystem || !File.Exists(Path.Combine(Root,"authorized")))return 3;
         if(args.SequenceEqual(new[]{"--verify-recovered"})){
             var value=DurableState.Load();string digest=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.PublicKey)));
-            bool valid=!value.ConnectIntent && !value.RecoveryRequired && value.Token=="" && value.PrivateKey.Length==44 && digest==File.ReadAllText(Path.Combine(Root,"public-sha256")) && !NativeGuard.Active;
+            bool valid=!value.ConnectIntent && !value.RecoveryRequired && value.Token=="" && value.PrivateKey.Length==44 && digest==File.ReadAllText(Path.Combine(Root,"public-sha256")) && !NativeGuard.Active && !NativeGuard.TunPresent;
             File.WriteAllText(Path.Combine(Root,"recovery-verified"),valid?"KEY_AND_SAFE_OFF_PRESERVED":"FAIL");return valid?0:1;
         }
         if(args.SequenceEqual(new[]{"--oracle-watchdog"})){Thread.Sleep(TimeSpan.FromMinutes(9));Rescue();return 0;}
@@ -91,6 +91,8 @@ internal static class ProductTests
     }
     private static async Task<int> ProbeDeadlines()
     {
+        if(!await OrphanLogDrain(false) || !await OrphanLogDrain(true))return 1;
+        Console.WriteLine("ORPHAN_STDERR_DRAINS_LARGE_UNKNOWN_OR_INVALID_LOGS_WITHOUT_PREFIX_MATCH_OR_EARLY_EXIT=PASS");
         using var client=new HttpClient(new SlowTrace(true)){Timeout=Timeout.InfiniteTimeSpan};
         bool reply=false;var ready=Task.Run(async()=>{await Task.Delay(500);Volatile.Write(ref reply,true);});
         long elapsed=await EgressProbe.Verify(client,3,()=>Volatile.Read(ref reply),CancellationToken.None);await ready;
@@ -107,6 +109,39 @@ internal static class ProductTests
         if(bound.Elapsed>TimeSpan.FromSeconds(1))return 1;
         Console.WriteLine("PROBE_IGNORING_HTTP_CANCELLATION_CANNOT_EXCEED_DEADLINE_OR_DELAY_STOP=PASS");
         Console.WriteLine("REAL_ASYNC_SLOW_EXIT_PROBE_RETAINED_ONLY_AFTER_WG_REPLY_AND_REJECTS_WRONG_EXIT=PASS");return 0;
+    }
+    private static async Task<bool> OrphanLogDrain(bool knownReason)
+    {
+        // A real bounded pipe catches early-return readers: the producer would
+        // fill its buffer and hit the deadline instead of silently losing logs.
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        string name="OracleProxy-Log-"+Guid.NewGuid().ToString("N");
+        using var input=new NamedPipeServerStream(name,PipeDirection.In,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous,4096,4096);
+        using var output=new NamedPipeClientStream(".",name,PipeDirection.Out,PipeOptions.Asynchronous);
+        var accepted=input.WaitForConnectionAsync(deadline.Token);
+        await output.ConnectAsync(3000,deadline.Token);await accepted;
+        Task<string?> reader=TunReceipt.ReadErrors(input,deadline.Token);
+        async Task Produce()
+        {
+            try{
+                await output.WriteAsync("native-log-prefix ORPHAN_IDENTITY_FAILED\nORPHAN_VERIFY_FAILED trailing-data\n"u8.ToArray(),deadline.Token);
+                await output.WriteAsync(new byte[]{0xff,0xfe,0xc0,0xaf},deadline.Token);
+                await output.WriteAsync("ORPHAN_ROUTE_CLEANUP_FAILED\n"u8.ToArray(),deadline.Token);
+                // Reuse a small block; the test never constructs a giant log.
+                byte[] noise=Enumerable.Repeat((byte)'x',8192).ToArray();
+                for(int i=0;i<128;i++)await output.WriteAsync(noise,deadline.Token);
+                await output.WriteAsync("\n"u8.ToArray(),deadline.Token);
+                if(knownReason){
+                    await output.WriteAsync("ORPHAN_VERIFY_FAILED\r\n"u8.ToArray(),deadline.Token);
+                    // Even a recognized reason must not stop stderr draining.
+                    for(int i=0;i<128;i++)await output.WriteAsync(noise,deadline.Token);
+                }
+                await output.WriteAsync("\nordinary Wintun informational output\n"u8.ToArray(),deadline.Token);
+            }finally{output.Dispose();}
+        }
+        Task producer=Produce();
+        await Task.WhenAll(producer,reader).WaitAsync(deadline.Token);
+        return await reader==(knownReason?"TUN_OWNER_ORPHAN_VERIFY_FAILED":null);
     }
     private static int UuTrustSigned()
     {
@@ -404,6 +439,8 @@ internal static class ProductTests
     private static (string Private,string Public) KeyPair(){byte[] k=RandomNumberGenerator.GetBytes(32),p=new byte[32];k[0]&=248;k[31]&=127;k[31]|=64;try{X25519.GeneratePublicKey(k,0,p,0);return(Convert.ToBase64String(k),Convert.ToBase64String(p));}finally{CryptographicOperations.ZeroMemory(k);CryptographicOperations.ZeroMemory(p);}}
     private static async Task<Process> Launch(JsonObject config,bool standby=false)
     {
+        bool createsTun=standby || config["inbounds"] is JsonArray inbounds && inbounds.Any(item=>item?["type"]?.GetValue<string>()=="tun" && item?["interface_name"]?.GetValue<string>()=="OracleProxy");
+        if(createsTun)Require(!NativeGuard.TunPresent,"FRESH_FIXTURE_TUN_LAUNCH_REQUIRES_NATIVE_ABSENCE");
         var start=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=Platform.Root};
         if(standby)start.ArgumentList.Add("--standby");
         config["log"]=new JsonObject{["level"]="debug",["timestamp"]=false};
@@ -413,12 +450,27 @@ internal static class ProductTests
                 if(value.Contains(category))CoreEvents.AddOrUpdate(category,1,(_,count)=>count+1);
         };p.BeginErrorReadLine();
         await p.StandardInput.WriteLineAsync(config.ToJsonString());await p.StandardInput.FlushAsync();
-        if(await p.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))!="READY")throw new IOException("SYNTHETIC_CORE_START_FAILED");return p;
+        try{
+            if(await p.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))!="READY")throw new IOException("SYNTHETIC_CORE_START_FAILED");
+            if(createsTun){TunReceipt.Record(p);Require(File.Exists(TunReceipt.ReceiptPath),"FRESH_SYSTEM_TUN_CREATOR_RECEIPT_RECORDED");}
+            return p;
+        }catch{await Stop(p);throw;}
     }
     private static async Task Stop(Process? p)
     {
         if(p is null)return;
         if(!p.HasExited){p.StandardInput.Close();try{await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(8));}catch{p.Kill(true);await p.WaitForExitAsync();}}p.Dispose();
+    }
+    private static async Task RejectOrphanReceipt(JsonObject modified,ulong expectedLuid,string evidence)
+    {
+        byte[] original=File.ReadAllBytes(TunReceipt.ReceiptPath);bool dormant=NativeGuard.TunDormant;
+        try{
+            Platform.WriteAtomic(TunReceipt.ReceiptPath,Encoding.UTF8.GetBytes(modified.ToJsonString()));
+            bool denied=false;
+            try{await TunReceipt.RecoverOrphan();}
+            catch(IOException error)when(error.Message=="TUN_OWNER_RECEIPT_INVALID"){denied=true;}
+            Require(denied && NativeGuard.Active && NativeGuard.TunPresent && NativeGuard.TunLuid()==expectedLuid && NativeGuard.TunDormant==dormant,evidence);
+        }finally{Platform.WriteAtomic(TunReceipt.ReceiptPath,original);}
     }
     private static async Task Run()
     {
@@ -483,6 +535,10 @@ internal static class ProductTests
             Evidence.Add("REAL_ISOLATED_PREPARED_SWITCH_MS="+switchTimer.ElapsedMilliseconds);
             Require(await Tcp() && await Dns(),"REAL_PREPARED_DYNAMIC_TUN_HAS_TCP_AND_FRESH_UDP_DNS");
             ulong preparedLuid=NativeGuard.TunLuid();
+            bool liveCreatorDenied=false;
+            try{await TunReceipt.RecoverOrphan();}
+            catch(IOException error)when(error.Message=="TUN_OWNER_CREATOR_STILL_RUNNING"){liveCreatorDenied=true;}
+            Require(liveCreatorDenied && NativeGuard.Active && NativeGuard.TunPresent && NativeGuard.TunLuid()==preparedLuid,"REAL_ORPHAN_RECOVERY_REJECTS_LIVE_CREATOR_WITH_GUARD_AND_DEVICE_PRESERVED");
             NativeGuard.SuspendTun();await client.StandardInput.WriteLineAsync("DEACTIVATE");await client.StandardInput.FlushAsync();
             Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="STANDBY_READY","REAL_PRIVATE_CORE_DEACTIVATE_ACKNOWLEDGED");
             await VpnRuntime.EnsureTunnelInactive();
@@ -540,6 +596,13 @@ internal static class ProductTests
             Require((NativeGuard.CoreLifecycle&1)==0 && !NativeGuard.TunPermitted,"REAL_DEAD_TUN_CANNOT_AUTHORIZE_A_STALE_PERMIT");
             Require(!await Tcp(),"REAL_CORE_CRASH_NO_DIRECT_TCP_FALLBACK");
             Require(!await Dns(),"REAL_CORE_CRASH_NO_DIRECT_DNS_FALLBACK");
+            Require(NativeGuard.TunPresent,"REAL_HARD_KILLED_CREATOR_LEAVES_NATIVE_ORPHAN_FOR_FIXED_RECOVERY");
+            ulong orphanLuid=NativeGuard.TunLuid();
+            var recorded=JsonNode.Parse(File.ReadAllBytes(TunReceipt.ReceiptPath))!.AsObject();
+            var foreign=(JsonObject)recorded.DeepClone();foreign["guid"]="11223344-5566-7788-99aa-bbccddeeff00";
+            await RejectOrphanReceipt(foreign,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_FOREIGN_GUID_WITH_GUARD_AND_DEVICE_PRESERVED");
+            var unknown=(JsonObject)recorded.DeepClone();unknown["unexpected_command"]="not-an-interface-operation";
+            await RejectOrphanReceipt(unknown,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_UNKNOWN_RECEIPT_FIELDS_WITH_GUARD_AND_DEVICE_PRESERVED");
         }finally{await Stop(client);await Stop(exit);}
         NativeGuard.Clear();
         Require(await Tcp(),"REAL_EXPLICIT_OFF_PHYSICAL_TCP_RESTORED");Require(await Dns(),"REAL_EXPLICIT_OFF_PHYSICAL_UDP_DNS_RESTORED");

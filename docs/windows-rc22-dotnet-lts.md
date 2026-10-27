@@ -15,17 +15,29 @@ published end-of-support date is **2028-11-14**. The SDK is pinned in
 versions are pinned in that directory's `Directory.Build.props`. Production,
 fault-test and bad-upgrade projects use the same runtime policy.
 
-This changes the Windows .NET host, not WireGuard, the Go packet-processing core,
-Oracle endpoints, traffic restrictions, device limit or login protocol. It adds
+This updates the Windows .NET host and fixed adapter lifecycle without changing
+WireGuard packet processing, Oracle endpoints, traffic restrictions, device
+limits or the login protocol. It adds
 no updater service, heavy packer, runtime download at application startup, or
 machine-wide runtime dependency. Native DLLs retain their protected, explicit
 loading paths; no broad DLL search-path compatibility bypass is introduced.
 
 Cold cleanup uses a successful native `GetIfTable2` query as its absence proof.
-Any `OracleProxy` row blocks cleanup, including `Down` or other inactive states;
+Any `OracleProxy` row remains present, including `Down` or other inactive states;
 query errors also fail closed. Managed interface descriptions remain diagnostic
-metadata and cannot by themselves certify device presence or absence. The
-three-second cleanup bound and protection rules remain in force.
+metadata and cannot by themselves certify device presence or absence.
+
+A successful fresh TUN creation records its fixed GUID, native LUID and creator
+PID/start time in a small SYSTEM/admin-protected receipt. Normal creation no
+longer adopts an existing adapter by name. Crash recovery requires the receipt
+to match the current native identity, the recorded creator to have exited, no
+other live product core, and active fail-closed protection. Only the pinned core's
+fixed recovery mode may flush that verified adapter's own IP/routes/DNS and
+complete its Wintun lifecycle; it cannot select another interface, arbitrary
+command or executable. Unknown receipts, foreign GUIDs and live creators remain
+rejected. No driver deletion or global PnP cleanup is introduced. Protection is
+kept until native enumeration proves the adapter is absent; the existing
+three-second absence audit remains in force after bounded orphan recovery.
 Recovery failures retain a bounded, sanitized helper reason code for diagnosis.
 
 Self-contained does **not** mean permanently maintenance-free: an installed
@@ -55,6 +67,9 @@ Release verification must include:
 - Real WinForms rendering/idle-layout, SCM-authenticated IPC, SYSTEM DPAPI,
   protected extraction cache, WFP/driver loading, recovery and failed-upgrade
   rollback continue to pass.
+- Live adapter creators and invalid/foreign ownership receipts must be rejected
+  without changing the adapter or guard. The actual one-shot SYSTEM recovery
+  must remove a receipt-owned hard-kill orphan and preserve the device key.
 - A digest-pinned rc21 .NET 8 payload is installed on a disposable Windows runner
   and upgraded in place. A synthetic, account-free SYSTEM DPAPI state is used;
   the test must retain its owner/device key identity rather than enrolling a new

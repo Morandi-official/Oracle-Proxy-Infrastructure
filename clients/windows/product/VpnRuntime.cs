@@ -171,7 +171,9 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
         if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
-        _stage="TUN_CLEANUP";await EnsureTunnelRemoved();
+        _stage="TUN_CLEANUP";
+        if(_secret.ConnectIntent && NativeGuard.Active && NativeGuard.TunPresent)await TunReceipt.RecoverOrphan();
+        await EnsureTunnelRemoved();
         if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
             _stage="CORE_START";_probeFailures=0;_generation++;_verified=default;_verifiedGeneration=-1;_latency=null;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();

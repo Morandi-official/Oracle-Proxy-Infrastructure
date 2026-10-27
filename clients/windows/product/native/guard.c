@@ -11,6 +11,7 @@
 #include <iphlpapi.h>
 #include <netioapi.h>
 #include <stdint.h>
+#include <string.h>
 #include <wchar.h>
 #pragma comment(lib,"fwpuclnt.lib")
 #pragma comment(lib,"advapi32.lib")
@@ -23,6 +24,8 @@ static HANDLE tun_engine=NULL,tun_process=NULL;
 static UINT64 tun_value=0,tun_filters[8]={0};
 static const GUID provider={0x4936aef1,0x9f84,0x4291,{0x88,0x72,0x36,0x47,0x19,0x80,0x21,0xa1}};
 static const GUID sublayer={0xbb18a732,0x9015,0x4871,{0x92,0x01,0xc1,0x62,0xa1,0x40,0x77,0x92}};
+/* Must match the fixed Wintun GUID fenced by TunReceipt and the owned core. */
+static const GUID oracle_tun_guid={0x62e2af98,0x7089,0x6f2c,{0x24,0x6b,0x4a,0x59,0x60,0xcf,0xc9,0x78}};
 static const GUID *ale[]={&FWPM_LAYER_ALE_AUTH_CONNECT_V4,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,&FWPM_LAYER_ALE_AUTH_CONNECT_V6,&FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6};
 static const GUID *boot[]={&FWPM_LAYER_OUTBOUND_TRANSPORT_V4,&FWPM_LAYER_INBOUND_TRANSPORT_V4,&FWPM_LAYER_OUTBOUND_TRANSPORT_V6,&FWPM_LAYER_INBOUND_TRANSPORT_V6};
 static BOOL system_only(void){
@@ -235,7 +238,7 @@ API OpTunPresence(DWORD *present){
  for(ULONG i=0;i<table->NumEntries;i++){
   int match=CompareStringOrdinal(table->Table[i].Alias,-1,L"OracleProxy",-1,TRUE);
   if(!match){e=GetLastError();FreeMibTable(table);return e?e:ERROR_INVALID_DATA;}
-  if(match==CSTR_EQUAL){found=TRUE;break;}
+  if(match==CSTR_EQUAL||memcmp(&table->Table[i].InterfaceGuid,&oracle_tun_guid,sizeof(GUID))==0){found=TRUE;break;}
  }
  FreeMibTable(table);*present=found?1:0;return NO_ERROR;
 }

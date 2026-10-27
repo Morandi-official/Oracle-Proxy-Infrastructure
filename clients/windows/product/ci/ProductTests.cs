@@ -93,6 +93,13 @@ internal static class ProductTests
     {
         if(!await OrphanLogDrain(false) || !await OrphanLogDrain(true))return 1;
         Console.WriteLine("ORPHAN_STDERR_DRAINS_LARGE_UNKNOWN_OR_INVALID_LOGS_WITHOUT_PREFIX_MATCH_OR_EARLY_EXIT=PASS");
+        foreach(string reason in new[]{"DORMANT_ROUTE_PROTOCOL_NOT_LOCAL","DORMANT_ROUTE_NEXT_HOP_UNSAFE","DORMANT_ROUTE_DESTINATION_UNSAFE"}){
+            using var exact=new MemoryStream(Encoding.ASCII.GetBytes(reason+"\n"));
+            if(await TunReceipt.ReadErrors(exact,CancellationToken.None)!="TUN_OWNER_"+reason)return 1;
+            using var untrusted=new MemoryStream(Encoding.ASCII.GetBytes("prefix "+reason+"\n"+reason+" tail\n"));
+            if(await TunReceipt.ReadErrors(untrusted,CancellationToken.None) is not null)return 1;
+        }
+        Console.WriteLine("DORMANT_ROUTE_DIAGNOSTIC_CODES_REQUIRE_EXACT_ALLOWLISTED_LINES=PASS");
         using var client=new HttpClient(new SlowTrace(true)){Timeout=Timeout.InfiniteTimeSpan};
         bool reply=false;var ready=Task.Run(async()=>{await Task.Delay(500);Volatile.Write(ref reply,true);});
         long elapsed=await EgressProbe.Verify(client,3,()=>Volatile.Read(ref reply),CancellationToken.None);await ready;

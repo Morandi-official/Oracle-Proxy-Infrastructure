@@ -215,8 +215,8 @@ func oracleRecoveryAbsent() (bool, error) {
 DORMANT_RECOVERY = '''// RecoverDormantOracleAdapter handles only a dead creator's unconfigured
 // standby orphan while the authenticated parent is persistently Off. Unlike
 // guarded recovery it never removes addresses, routes or DNS. Native snapshots
-// must prove only Windows-generated IPv6 link-local state remains before a
-// fresh Create is attempted. A Down row alone never permits recovery.
+// must prove only Windows-generated local address/route metadata remains
+// before a fresh Create is attempted. A Down row alone never permits recovery.
 func RecoverDormantOracleAdapter(value uint64) error {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
@@ -276,13 +276,31 @@ func verifyOracleDormantEmpty(luid winipcfg.LUID) error {
 		prefix := entry.DestinationPrefix.Prefix()
 		nextHop := entry.NextHop.Addr().WithZone("")
 		// MIB_IPPROTO_LOCAL is native RouteProtocolLocal, not NetMgmt/manual.
-		// Require a valid IPv6 on-link next-hop and an exact audited /64 or
-		// /128. ff00::/8 is Windows' automatic interface multicast route.
-		if entry.NextHop.Family != windows.AF_INET6 || !nextHop.Is6() || !nextHop.IsUnspecified() ||
-			entry.Protocol != winipcfg.RouteProtocolLocal || !prefix.IsValid() || !prefix.Addr().Is6() ||
-			(!automaticPrefixes[prefix] && !(prefix.Bits() == 128 && automaticAddresses[prefix.Addr()]) &&
+		// Reasons are fixed classifications, never raw native route metadata.
+		if entry.Protocol != winipcfg.RouteProtocolLocal { return fmt.Errorf("DORMANT_ROUTE_PROTOCOL_NOT_LOCAL") }
+		if !prefix.IsValid() { return fmt.Errorf("DORMANT_ROUTE_DESTINATION_UNSAFE") }
+		if prefix.Addr().Is4() {
+			if entry.NextHop.Family != windows.AF_INET || !nextHop.Is4() || !nextHop.IsUnspecified() {
+				return fmt.Errorf("DORMANT_ROUTE_NEXT_HOP_UNSAFE")
+			}
+			// A fresh Windows adapter also has these two automatic IPv4 local
+			// routes without any IPv4 unicast address. No subprefix, APIPA,
+			// loopback, ordinary subnet, default or gateway route is admitted.
+			if prefix != netip.PrefixFrom(netip.AddrFrom4([4]byte{224, 0, 0, 0}), 4) &&
+				prefix != netip.PrefixFrom(netip.AddrFrom4([4]byte{255, 255, 255, 255}), 32) {
+				return fmt.Errorf("DORMANT_ROUTE_DESTINATION_UNSAFE")
+			}
+		} else {
+			if entry.NextHop.Family != windows.AF_INET6 || !nextHop.Is6() || !nextHop.IsUnspecified() {
+				return fmt.Errorf("DORMANT_ROUTE_NEXT_HOP_UNSAFE")
+			}
+			// IPv6 remains restricted to exact audited /64 or /128 plus
+			// Windows' automatic interface multicast route ff00::/8.
+			if !prefix.Addr().Is6() || (!automaticPrefixes[prefix] &&
+				!(prefix.Bits() == 128 && automaticAddresses[prefix.Addr()]) &&
 				prefix != netip.PrefixFrom(netip.AddrFrom16([16]byte{0xff}), 8)) {
-			return fmt.Errorf("DORMANT_ROUTE_NOT_EMPTY")
+				return fmt.Errorf("DORMANT_ROUTE_DESTINATION_UNSAFE")
+			}
 		}
 	}
 	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }

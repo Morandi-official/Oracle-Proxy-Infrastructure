@@ -49,7 +49,10 @@ a fresh creator handle. The only address exception is Windows-generated IPv6
 link-local with WellKnown prefix origin, LinkLayer/Random suffix origin and a
 /64. Associated routes require the native Local protocol and an unspecified
 next hop; destinations are limited to those exact /64s, audited address /128s
-and ff00::/8. IPv4, manual origins, default routes and custom gateways are refused.
+and ff00::/8. Windows' exact IPv4 224.0.0.0/4 and 255.255.255.255/32
+routes are also permitted only with native Local protocol and an unspecified
+IPv4 next hop. IPv4 addresses, other IPv4 destinations, manual origins,
+default routes and custom gateways are refused.
 A successful complete DNS-adapter snapshot with no
 matching LUID means no effective association, not proof about registry settings.
 This mode never flushes IP/routes/DNS, starts a packet session or changes WFP.

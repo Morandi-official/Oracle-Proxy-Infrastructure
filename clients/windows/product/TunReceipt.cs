@@ -111,6 +111,9 @@ internal static class TunReceipt
         if(line.SequenceEqual("DORMANT_IP_NOT_EMPTY"u8))return "TUN_OWNER_DORMANT_IP_NOT_EMPTY";
         if(line.SequenceEqual("DORMANT_ROUTE_QUERY_FAILED"u8))return "TUN_OWNER_DORMANT_ROUTE_QUERY_FAILED";
         if(line.SequenceEqual("DORMANT_ROUTE_NOT_EMPTY"u8))return "TUN_OWNER_DORMANT_ROUTE_NOT_EMPTY";
+        if(line.SequenceEqual("DORMANT_ROUTE_PROTOCOL_NOT_LOCAL"u8))return "TUN_OWNER_DORMANT_ROUTE_PROTOCOL_NOT_LOCAL";
+        if(line.SequenceEqual("DORMANT_ROUTE_NEXT_HOP_UNSAFE"u8))return "TUN_OWNER_DORMANT_ROUTE_NEXT_HOP_UNSAFE";
+        if(line.SequenceEqual("DORMANT_ROUTE_DESTINATION_UNSAFE"u8))return "TUN_OWNER_DORMANT_ROUTE_DESTINATION_UNSAFE";
         if(line.SequenceEqual("DORMANT_DNS_QUERY_FAILED"u8))return "TUN_OWNER_DORMANT_DNS_QUERY_FAILED";
         if(line.SequenceEqual("DORMANT_DNS_NOT_EMPTY"u8))return "TUN_OWNER_DORMANT_DNS_NOT_EMPTY";
         if(line.SequenceEqual("DORMANT_RECREATE_FAILED"u8))return "TUN_OWNER_DORMANT_RECREATE_FAILED";

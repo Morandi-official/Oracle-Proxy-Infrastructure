@@ -59,6 +59,8 @@ func run() error {
 				fmt.Fprintln(os.Stderr, err.Error())
 			case "DORMANT_IP_QUERY_FAILED", "DORMANT_IP_NOT_EMPTY", "DORMANT_ROUTE_QUERY_FAILED", "DORMANT_ROUTE_NOT_EMPTY", "DORMANT_DNS_QUERY_FAILED", "DORMANT_DNS_NOT_EMPTY", "DORMANT_RECREATE_FAILED", "DORMANT_VERIFY_FAILED":
 				fmt.Fprintln(os.Stderr, err.Error())
+			case "DORMANT_ROUTE_PROTOCOL_NOT_LOCAL", "DORMANT_ROUTE_NEXT_HOP_UNSAFE", "DORMANT_ROUTE_DESTINATION_UNSAFE":
+				fmt.Fprintln(os.Stderr, err.Error())
 			}
 			return fmt.Errorf("adapter-recovery")
 		}

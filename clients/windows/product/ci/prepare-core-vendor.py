@@ -214,9 +214,9 @@ func oracleRecoveryAbsent() (bool, error) {
 '''
 DORMANT_RECOVERY = '''// RecoverDormantOracleAdapter handles only a dead creator's unconfigured
 // standby orphan while the authenticated parent is persistently Off. Unlike
-// guarded recovery it never removes addresses, routes or DNS. Every native
-// snapshot must prove emptiness before a fresh Create is attempted. A Down
-// row alone is never an absence proof or permission to clear configuration.
+// guarded recovery it never removes addresses, routes or DNS. Native snapshots
+// must prove only Windows-generated IPv6 link-local state remains before a
+// fresh Create is attempted. A Down row alone never permits recovery.
 func RecoverDormantOracleAdapter(value uint64) error {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
@@ -248,16 +248,42 @@ func verifyOracleDormantEmpty(luid winipcfg.LUID) error {
 	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
 	addresses, err := winipcfg.GetUnicastIPAddressTable(windows.AF_UNSPEC)
 	if err != nil { return fmt.Errorf("DORMANT_IP_QUERY_FAILED") }
-	// Even automatic link-local rows are refused. A future exception requires
-	// separate native evidence and must never admit a routable address.
+	// Windows creates IPv6 link-local metadata even for a fresh sessionless
+	// adapter. Admit only native automatic origins and /64, never manual,
+	// unknown, IPv4, or routable addresses. Keep the exact audited addresses
+	// and prefixes so an unrelated link-local route cannot grant recovery.
+	automaticAddresses := make(map[netip.Addr]bool)
+	automaticPrefixes := make(map[netip.Prefix]bool)
 	for _, entry := range addresses {
-		if entry.InterfaceLUID == luid { return fmt.Errorf("DORMANT_IP_NOT_EMPTY") }
+		if entry.InterfaceLUID != luid { continue }
+		// Interface membership comes only from the native exact LUID. Compare
+		// IPv6 bytes without a textual scope; never derive ownership from zone.
+		address := entry.Address.Addr().WithZone("")
+		if entry.Address.Family != windows.AF_INET6 || !address.Is6() || !address.IsLinkLocalUnicast() ||
+			entry.PrefixOrigin != winipcfg.PrefixOriginWellKnown ||
+			(entry.SuffixOrigin != winipcfg.SuffixOriginLinkLayerAddress && entry.SuffixOrigin != winipcfg.SuffixOriginRandom) ||
+			entry.OnLinkPrefixLength != 64 || automaticAddresses[address] {
+			return fmt.Errorf("DORMANT_IP_NOT_EMPTY")
+		}
+		automaticAddresses[address] = true
+		automaticPrefixes[netip.PrefixFrom(address, 64).Masked()] = true
 	}
 	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
 	routes, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
 	if err != nil { return fmt.Errorf("DORMANT_ROUTE_QUERY_FAILED") }
 	for _, entry := range routes {
-		if entry.InterfaceLUID == luid { return fmt.Errorf("DORMANT_ROUTE_NOT_EMPTY") }
+		if entry.InterfaceLUID != luid { continue }
+		prefix := entry.DestinationPrefix.Prefix()
+		nextHop := entry.NextHop.Addr().WithZone("")
+		// MIB_IPPROTO_LOCAL is native RouteProtocolLocal, not NetMgmt/manual.
+		// Require a valid IPv6 on-link next-hop and an exact audited /64 or
+		// /128. ff00::/8 is Windows' automatic interface multicast route.
+		if entry.NextHop.Family != windows.AF_INET6 || !nextHop.Is6() || !nextHop.IsUnspecified() ||
+			entry.Protocol != winipcfg.RouteProtocolLocal || !prefix.IsValid() || !prefix.Addr().Is6() ||
+			(!automaticPrefixes[prefix] && !(prefix.Bits() == 128 && automaticAddresses[prefix.Addr()]) &&
+				prefix != netip.PrefixFrom(netip.AddrFrom16([16]byte{0xff}), 8)) {
+			return fmt.Errorf("DORMANT_ROUTE_NOT_EMPTY")
+		}
 	}
 	if err = verifyOracleRecoveryIdentity(luid); err != nil { return err }
 	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)

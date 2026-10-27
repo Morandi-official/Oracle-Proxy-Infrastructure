@@ -82,17 +82,30 @@ func generateGUIDByDeviceName(name string) {}
         source='func verifyOracleDormantEmpty('+source
         replacements={
             'winipcfg.LUID':'fakeLUID','windows.AF_UNSPEC':'0',
+            'windows.AF_INET6':'23',
             'winipcfg.GetUnicastIPAddressTable':'getAddresses',
             'winipcfg.GetIPForwardTable2':'getRoutes',
             'winipcfg.GetAdaptersAddresses':'getAdapters',
             'winipcfg.GAAFlagIncludeAll':'1',
             'winipcfg.IfOperStatusDown':'2','winipcfg.IfTypePropVirtual':'53',
+            'winipcfg.PrefixOriginWellKnown':'2',
+            'winipcfg.SuffixOriginLinkLayerAddress':'4',
+            'winipcfg.SuffixOriginRandom':'5',
+            'winipcfg.RouteProtocolLocal':'2',
         }
         for original,replacement in replacements.items():source=source.replace(original,replacement)
         declarations='''package dormantcheck
-import "fmt"
+import ("fmt"; "net/netip")
 type fakeLUID uint64
-type fakeRow struct { InterfaceLUID fakeLUID }
+type fakeSockaddr struct { Family int; value netip.Addr }
+func (a *fakeSockaddr) Addr() netip.Addr { return a.value }
+type fakePrefix struct { value netip.Prefix }
+func (p *fakePrefix) Prefix() netip.Prefix { return p.value }
+type fakeRow struct {
+ InterfaceLUID fakeLUID; Address fakeSockaddr
+ PrefixOrigin, SuffixOrigin, OnLinkPrefixLength int
+ DestinationPrefix fakePrefix; NextHop fakeSockaddr; Protocol int
+}
 type fakeAdapter struct {
  LUID fakeLUID; OperStatus int; IfType int
  FirstDNSServerAddress *int; FirstDNSSuffix *int
@@ -115,16 +128,53 @@ func verifyOracleRecoveryIdentity(fakeLUID) error {
 }
 '''
         checks='''package dormantcheck
-import ("errors"; "testing")
+import ("errors"; "net/netip"; "testing")
 func TestNativeSnapshotBoundaries(t *testing.T) {
  tests:=[]struct{name string; setup func(); want string}{
   {"successful snapshot without DNS association",func(){},""},
   {"one empty adapter",func(){adapters=[]*fakeAdapter{empty()}},""},
-  {"unrelated LUID untouched",func(){addresses=[]fakeRow{{8}};routes=[]fakeRow{{8}};a:=empty();a.LUID=8;a.FirstDNSServerAddress=new(int);adapters=[]*fakeAdapter{a}},""},
+  {"unrelated LUID untouched",func(){addresses=[]fakeRow{{InterfaceLUID:8}};routes=[]fakeRow{{InterfaceLUID:8}};a:=empty();a.LUID=8;a.FirstDNSServerAddress=new(int);adapters=[]*fakeAdapter{a}},""},
   {"IP query error",func(){addressErr=errors.New("native")},"DORMANT_IP_QUERY_FAILED"},
-  {"any own address including automatic linklocal",func(){addresses=[]fakeRow{{7}}},"DORMANT_IP_NOT_EMPTY"},
+  {"automatic random IPv6 linklocal",func(){addresses=[]fakeRow{autoLLA("fe80::1234")}},""},
+  {"automatic linklayer IPv6 linklocal",func(){a:=autoLLA("fe80::1234");a.SuffixOrigin=4;addresses=[]fakeRow{a}},""},
+  {"only audited local routes",func(){addresses=[]fakeRow{autoLLA("fe80::1234")};routes=[]fakeRow{localRoute("fe80::/64"),localRoute("fe80::1234/128"),localRoute("ff00::/8")}},""},
+  {"scoped LLA normalized to exact native bytes",func(){addresses=[]fakeRow{autoLLA("fe80::1234%7")};routes=[]fakeRow{localRoute("fe80::/64"),localRoute("fe80::1234/128")}},""},
+  {"zone text cannot override target LUID",func(){addresses=[]fakeRow{autoLLA("fe80::1234%other-name")};routes=[]fakeRow{localRoute("fe80::1234/128")}},""},
+  {"automatic multicast without LLA",func(){routes=[]fakeRow{localRoute("ff00::/8")}},""},
+  {"manual origin same linklocal IP",func(){a:=autoLLA("fe80::1234");a.PrefixOrigin=1;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"unknown origin same linklocal IP",func(){a:=autoLLA("fe80::1234");a.PrefixOrigin=0;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"DHCP origin linklocal",func(){a:=autoLLA("fe80::1234");a.PrefixOrigin=3;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"RA origin linklocal",func(){a:=autoLLA("fe80::1234");a.PrefixOrigin=4;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"manual suffix same linklocal IP",func(){a:=autoLLA("fe80::1234");a.SuffixOrigin=1;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"unknown suffix linklocal",func(){a:=autoLLA("fe80::1234");a.SuffixOrigin=0;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"wellknown suffix linklocal",func(){a:=autoLLA("fe80::1234");a.SuffixOrigin=2;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"DHCP suffix linklocal",func(){a:=autoLLA("fe80::1234");a.SuffixOrigin=3;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"different linklocal prefix length",func(){a:=autoLLA("fe80::1234");a.OnLinkPrefixLength=128;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"global IPv6 despite automatic origins",func(){addresses=[]fakeRow{autoLLA("2001:db8::1234")}},"DORMANT_IP_NOT_EMPTY"},
+  {"ULA despite automatic origins",func(){addresses=[]fakeRow{autoLLA("fd00::1234")}},"DORMANT_IP_NOT_EMPTY"},
+  {"IPv4 linklocal refused",func(){a:=autoLLA("169.254.1.2");a.Address.Family=2;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"dirty manual IPv4 refused",func(){a:=autoLLA("198.18.0.1");a.Address.Family=2;a.PrefixOrigin=1;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"malformed address family refused",func(){a:=autoLLA("fe80::1234");a.Address.Family=0;addresses=[]fakeRow{a}},"DORMANT_IP_NOT_EMPTY"},
+  {"duplicate automatic address refused",func(){addresses=[]fakeRow{autoLLA("fe80::1234"),autoLLA("fe80::1234")}},"DORMANT_IP_NOT_EMPTY"},
+  {"different zones cannot hide duplicate native address",func(){addresses=[]fakeRow{autoLLA("fe80::1234%7"),autoLLA("fe80::1234%8")}},"DORMANT_IP_NOT_EMPTY"},
   {"route query error",func(){routeErr=errors.New("native")},"DORMANT_ROUTE_QUERY_FAILED"},
-  {"any own route including multicast",func(){routes=[]fakeRow{{7}}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"route without audited LLA",func(){routes=[]fakeRow{localRoute("fe80::/64")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"same scoped bytes on another LUID cannot authorize target prefix",func(){a:=autoLLA("fe80::1234%7");a.InterfaceLUID=8;addresses=[]fakeRow{a};routes=[]fakeRow{localRoute("fe80::/64")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"same bytes with another LUID and zone cannot authorize target host",func(){a:=autoLLA("fe80::1234%8");a.InterfaceLUID=8;addresses=[]fakeRow{a};routes=[]fakeRow{localRoute("fe80::1234/128")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"local default route refused",func(){routes=[]fakeRow{localRoute("::/0")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"global local-protocol route refused",func(){routes=[]fakeRow{localRoute("2001:db8::1/128")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"broader linklocal route refused",func(){addresses=[]fakeRow{autoLLA("fe80::1234")};routes=[]fakeRow{localRoute("fe80::/10")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"unrelated linklocal prefix refused",func(){addresses=[]fakeRow{autoLLA("fe80::1234")};routes=[]fakeRow{localRoute("fe80:1::/64")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"unaudited linklocal host refused",func(){addresses=[]fakeRow{autoLLA("fe80::1234")};routes=[]fakeRow{localRoute("fe80::4321/128")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"noncanonical prefix refused",func(){addresses=[]fakeRow{autoLLA("fe80::1234")};routes=[]fakeRow{localRoute("fe80::4321/64")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"multicast subprefix refused",func(){routes=[]fakeRow{localRoute("ff00::/16")}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"manual route protocol refused",func(){r:=localRoute("ff00::/8");r.Protocol=3;routes=[]fakeRow{r}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"unknown route protocol refused",func(){r:=localRoute("ff00::/8");r.Protocol=0;routes=[]fakeRow{r}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"gateway linklocal refused",func(){r:=localRoute("ff00::/8");r.NextHop.value=netip.MustParseAddr("fe80::1");routes=[]fakeRow{r}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"unspecified IPv4 next-hop refused",func(){r:=localRoute("ff00::/8");r.NextHop=fakeSockaddr{Family:2,value:netip.MustParseAddr("0.0.0.0")};routes=[]fakeRow{r}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"unknown next-hop family refused",func(){r:=localRoute("ff00::/8");r.NextHop.Family=0;routes=[]fakeRow{r}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"invalid destination prefix refused",func(){r:=localRoute("ff00::/8");r.DestinationPrefix=fakePrefix{};routes=[]fakeRow{r}},"DORMANT_ROUTE_NOT_EMPTY"},
+  {"IPv4 route refused",func(){routes=[]fakeRow{localRoute("169.254.0.0/16")}},"DORMANT_ROUTE_NOT_EMPTY"},
   {"DNS query error",func(){dnsErr=errors.New("native")},"DORMANT_DNS_QUERY_FAILED"},
   {"malformed native DNS row",func(){adapters=[]*fakeAdapter{nil}},"DORMANT_DNS_QUERY_FAILED"},
   {"duplicate LUID",func(){adapters=[]*fakeAdapter{empty(),empty()}},"DORMANT_DNS_QUERY_FAILED"},
@@ -149,6 +199,8 @@ func TestNativeSnapshotBoundaries(t *testing.T) {
  })}
 }
 func empty() *fakeAdapter {return &fakeAdapter{LUID:7,OperStatus:2,IfType:53,name:"OracleProxy",description:"sing-tun Tunnel"}}
+func autoLLA(ip string) fakeRow {return fakeRow{InterfaceLUID:7,Address:fakeSockaddr{Family:23,value:netip.MustParseAddr(ip)},PrefixOrigin:2,SuffixOrigin:5,OnLinkPrefixLength:64}}
+func localRoute(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,DestinationPrefix:fakePrefix{netip.MustParsePrefix(prefix)},NextHop:fakeSockaddr{Family:23,value:netip.IPv6Unspecified()},Protocol:2}}
 '''
         configured=Path('/workspace/tools/go1.27/go/bin/go')
         go=str(configured) if configured.is_file() else shutil.which('go')

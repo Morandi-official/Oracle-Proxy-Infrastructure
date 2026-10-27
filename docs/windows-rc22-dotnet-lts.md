@@ -43,9 +43,14 @@ Recovery failures retain a bounded, sanitized helper reason code for diagnosis.
 An explicitly disconnected prepared core has a separate fixed dormant recovery
 mode. It requires the existing protected encrypted OFF state, no recovery flag,
 no active guard or TUN permit, the same creator receipt and a verified exited
-creator. Independent native queries must find a Down interface with no IP
-addresses, routes or effective DNS association, both before and after obtaining
-a fresh creator handle. A successful complete DNS-adapter snapshot with no
+creator. Independent native queries must find a Down interface with no routable
+configuration or effective DNS association, both before and after obtaining
+a fresh creator handle. The only address exception is Windows-generated IPv6
+link-local with WellKnown prefix origin, LinkLayer/Random suffix origin and a
+/64. Associated routes require the native Local protocol and an unspecified
+next hop; destinations are limited to those exact /64s, audited address /128s
+and ff00::/8. IPv4, manual origins, default routes and custom gateways are refused.
+A successful complete DNS-adapter snapshot with no
 matching LUID means no effective association, not proof about registry settings.
 This mode never flushes IP/routes/DNS, starts a packet session or changes WFP.
 It only closes its own fresh creator and still requires native absence proof.

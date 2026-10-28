@@ -12,7 +12,7 @@ namespace OracleProxy.Product;
 // Explicit UAC maintenance only. There is no path-bearing control-pipe command.
 // Unlike the legacy root-only repair, every v2 write is object-local: the
     // MAXIMUM_ALLOWED directory handles suppress child propagation; files use
-    // only READ_CONTROL/WRITE_DAC because they have no children to propagate to.
+    // READ_DATA/READ_CONTROL/WRITE_DAC because they have no child propagation.
 internal static partial class UuAclRepair
 {
     private sealed record PathObject(string Role,string Path,bool Directory,string Volume,string Identity,string Before,string After);
@@ -111,10 +111,12 @@ internal static partial class UuAclRepair
             Platform.NoLinks(directory?path:System.IO.Path.GetDirectoryName(path)!);
             // A different directory access mask would re-enable inheritance
             // propagation. Never fall back if this documented mode is refused.
-            // During an actual transaction, exclude already-open WRITE_DATA
-            // handles too. Tightening a DACL cannot revoke their existing rights.
+            // READ_DATA is required for Windows data-sharing checks to reject
+            // an already-open WRITE_DATA handle; READ_CONTROL/WRITE_DAC alone
+            // do not participate. No data-write permission is requested.
+            // Tightening a DACL cannot revoke an existing writer's rights.
             uint share=writable && !directory?1u:3u;
-            _handle=CreateFile(path,writable?(directory?0x02000000u:0x00060000u):0x00020000u,share,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
+            _handle=CreateFile(path,writable?(directory?0x02000000u:0x00060001u):0x00020000u,share,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
             if(_handle.IsInvalid){
                 int error=Marshal.GetLastWin32Error();_handle.Dispose();
                 throw new IOException(error is 32 or 33?"UU_PATH_FILES_IN_USE":error==5?"UU_PATH_ACCESS_DENIED":"UU_PATH_OBJECT_LOCK_FAILED");

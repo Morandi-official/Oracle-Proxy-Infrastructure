@@ -388,7 +388,7 @@ internal static class OracleAcceptance
             var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();
             var quick=await Send("Connect");long clickMs=click.ElapsedMilliseconds;
             Console.WriteLine("REAL_WARM_CONNECT_CLICK_MS="+clickMs);
-            foreach(string phase in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})Console.WriteLine("REAL_WARM_"+phase.ToUpperInvariant()+"="+quick["switch_timings"]?[phase]);
+            foreach(string phase in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})Console.WriteLine("REAL_WARM_"+phase.ToUpperInvariant()+"="+quick["switch_timings"]?[phase]);
             Check(quick["mode"]?.GetValue<string>()=="connected" && quick["core_pid"]?.GetValue<uint>()==warmPid && quick["guard"]?.GetValue<bool>()==true && quick["tun_permitted"]?.GetValue<bool>()==true && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_PREPARED_CORE_SWITCH_AND_FRESH_WINDOWS_HTTP_UDP_DNS");
             Check(clickMs<1000,"REAL_WARM_CLICK_TO_GUARDED_PROXY_UNDER_ONE_SECOND");
             await Send("Disconnect");

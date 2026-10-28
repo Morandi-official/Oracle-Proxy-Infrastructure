@@ -25,6 +25,7 @@ internal static class ProductTests
     private static void Require(bool condition,string message){if(!condition)throw new IOException(message);Evidence.Add(message+"=PASS");}
     [STAThread]internal static int Main(string[] args)
     {
+        if(args.Length==3 && args[0]=="--uu-path-protection-self-test")return UuPathProtectionTests.Run(args[1],args[2]);
         if(args.SequenceEqual(new[]{"--uu-trust-signed"}))return UuTrustSigned();
         if(args.SequenceEqual(new[]{"--uu-maintenance-probe"})){
             if(!Platform.IsAdmin)return 3;
@@ -219,6 +220,8 @@ internal static class ProductTests
         new FileInfo(path).SetAccessControl(acl);
         try{
             if(!UuDiscovery.Trusted(path))return 1;
+            UuSignatureObjectCache(root,path);
+            if(!UuDiscovery.Trusted(path))return 1;
             DateTime originalWrite=File.GetLastWriteTimeUtc(path);int originalByte;
             using(var file=new FileStream(path,FileMode.Open,FileAccess.ReadWrite,FileShare.Read)){file.Position=1024;originalByte=file.ReadByte();file.Position=1024;file.WriteByte((byte)(originalByte^1));file.Flush(true);}
             File.SetLastWriteTimeUtc(path,originalWrite);
@@ -235,6 +238,47 @@ internal static class ProductTests
             UuAclRoundtrip(root,path);
             Console.WriteLine("REAL_NETEASE_SIGNATURE_ACCEPTED_AND_WRITABLE_EXECUTABLE_EXCEPTION_DENIED=PASS");return 0;
         }finally{File.Delete(path);Directory.Delete(root);}
+    }
+    private static void UuSignatureObjectCache(string root,string executable)
+    {
+        string alias=Path.Combine(root,"GameViewer-same-object.exe"),unsafeDirectory=Path.Combine(root,"GameViewer-unsafe-alias"),unsafeAlias=Path.Combine(unsafeDirectory,"GameViewer.exe");
+        if(File.Exists(alias) || Directory.Exists(unsafeDirectory))throw new IOException("PREEXISTING_SIGNATURE_CACHE_FIXTURE_REFUSED");
+        Directory.CreateDirectory(unsafeDirectory);Platform.Protect(unsafeDirectory,true);
+        try{
+            // Create every alias first: adding/removing a hard link legitimately
+            // changes the file's ChangeTime and must invalidate older verdicts.
+            if(!CreateHardLink(alias,executable,IntPtr.Zero) || !CreateHardLink(unsafeAlias,executable,IntPtr.Zero))throw new IOException("UU_SIGNATURE_HARDLINK_FIXTURE_FAILED");
+            const System.Reflection.BindingFlags hidden=System.Reflection.BindingFlags.Static|System.Reflection.BindingFlags.NonPublic;
+            string Identity(string path)=>(string)typeof(UuDiscovery).GetMethod("SignatureIdentity",hidden)!.Invoke(null,[path])!;
+            string identity=Identity(executable);
+            if(identity!=Identity(alias) || identity!=Identity(unsafeAlias))throw new IOException("UU_SIGNATURE_HARDLINK_OBJECT_IDENTITY_NOT_EQUAL");
+            var cache=(Dictionary<string,long>)typeof(UuDiscovery).GetField("Signatures",hidden)!.GetValue(null)!;
+            // Mutate only this fixture object's cache deadline. No production
+            // configuration or clock injection can bypass the real verifier.
+            lock(cache)cache.Remove(identity);
+            long start=UuDiscovery.SignatureVerificationCount;
+            if(!UuDiscovery.Trusted(executable) || !UuDiscovery.Trusted(alias) || UuDiscovery.SignatureVerificationCount!=start+1)throw new IOException("UU_SIGNATURE_OBJECT_CACHE_DID_NOT_SHARE_SUCCESS");
+            long until;lock(cache)until=cache[identity];
+            long now=Environment.TickCount64;
+            if(until<=now || until-now>60_000)throw new IOException("UU_SIGNATURE_CACHE_FIXED_TTL_NOT_VERIFIED");
+            Thread.Sleep(40);
+            if(Environment.TickCount64<=now || !UuDiscovery.Trusted(alias) || !UuDiscovery.Trusted(executable))throw new IOException("UU_SIGNATURE_CACHE_HIT_NOT_VERIFIED");
+            lock(cache)if(cache[identity]!=until)throw new IOException("UU_SIGNATURE_CACHE_HIT_EXTENDED_TTL");
+            if(UuDiscovery.SignatureVerificationCount!=start+1)throw new IOException("UU_SIGNATURE_CACHE_HIT_REVERIFIED");
+            Console.WriteLine("REAL_SIGNED_HARDLINK_ALIASES_SHARE_ONE_AUTHENTICODE_SUCCESS_WITHOUT_SLIDING_TTL=PASS");
+            lock(cache)cache[identity]=Environment.TickCount64-1;
+            if(!UuDiscovery.Trusted(alias) || !UuDiscovery.Trusted(executable) || UuDiscovery.SignatureVerificationCount!=start+2)throw new IOException("UU_SIGNATURE_CACHE_EXPIRY_DID_NOT_REVERIFY_ONCE");
+            Console.WriteLine("REAL_EXPIRED_OBJECT_SIGNATURE_CACHE_REVERIFIES_ONCE_FOR_MULTIPLE_PATHS=PASS");
+            var directory=new DirectoryInfo(unsafeDirectory);var acl=directory.GetAccessControl();
+            acl.AddAccessRule(new FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier("S-1-5-32-545"),FileSystemRights.Modify,AccessControlType.Allow));directory.SetAccessControl(acl);
+            long beforeUnsafe=UuDiscovery.SignatureVerificationCount;
+            if(UuDiscovery.Trusted(unsafeAlias) || UuDiscovery.Inspect(unsafeAlias)?.Code!="UU_DIRECTORY_WRITABLE" || !UuDiscovery.Trusted(alias) || UuDiscovery.SignatureVerificationCount!=beforeUnsafe)throw new IOException("UU_SIGNATURE_OBJECT_CACHE_BYPASSED_ALIAS_PARENT_PERMISSIONS");
+            Console.WriteLine("REAL_SHARED_SIGNATURE_CACHE_STILL_REJECTS_WRITABLE_PARENT_OF_ANOTHER_HARDLINK_PATH=PASS");
+        }finally{
+            if(File.Exists(unsafeAlias))File.Delete(unsafeAlias);
+            if(File.Exists(alias))File.Delete(alias);
+            Directory.Delete(unsafeDirectory);
+        }
     }
     private static void UuAclRoundtrip(string root,string executable)
     {

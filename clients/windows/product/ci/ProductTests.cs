@@ -38,7 +38,7 @@ internal static class ProductTests
                 ["name"]=n.Name,["status"]=n.OperationalStatus.ToString(),["type"]=n.NetworkInterfaceType.ToString()}).ToArray());
             Console.WriteLine("DOTNET_TUN_PRESENCE="+value.ToJsonString());return 0;
         }
-        if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
+        if(args.SequenceEqual(new[]{"--ui-self-test"}))return UiOnMessageLoop();
         if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--native-denial"})){
             IntPtr module=NativeLibrary.Load(Platform.Guard);return Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))()==5?0:1;
@@ -298,6 +298,24 @@ internal static class ProductTests
         }
     }
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
+    private static int UiOnMessageLoop()
+    {
+        // Closing forms outside Application.Run can tear down the thread's
+        // WinForms marshaling context between cases. Keep a real application
+        // lifetime while exercising async deadlines and deliberate closes.
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+        using var host=new Form{Text="Oracle Proxy UI fixture host",ShowInTaskbar=false,Opacity=0,Size=new Size(1,1)};
+        int result=1;
+        host.Shown+=(_,_)=>host.BeginInvoke((Action)(()=>{
+            try{result=Ui();}
+            catch(Exception error){
+                string code=error.Message.Length<=160 && error.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?error.Message:error.GetType().Name;
+                Console.WriteLine("UI_FIXTURE_FAILURE="+code);Console.WriteLine(error.StackTrace);
+            }finally{host.Close();}
+        }));
+        Application.Run(host);return result;
+    }
     private static int Ui()
     {
         OracleAcceptance.VerifyDeviceBudgetFixture();
@@ -339,8 +357,8 @@ internal static class ProductTests
         if(form.DownloadRate!="采样中…" || form.UploadRate!="采样中…")return 1;
         snapshot["mode"]="protected";form.Display(snapshot);if(form.DownloadRate!="—" || form.UploadRate!="—")return 1;
         Console.WriteLine("LOCAL_TUN_RATES_USE_MONOTONIC_DELTAS_RESET_ON_COUNTER_RESTART_AND_NEVER_USE_BILLING_TOTALS=PASS");
-        foreach(var size in new[]{new Size(1120,860),new Size(900,620)}){
-            form.ClientSize=size;form.Show();Application.DoEvents();form.PerformLayout();
+        foreach(var size in new[]{new Size(1080,820),new Size(900,600)}){
+            form.Size=size;form.Show();Application.DoEvents();StopUiPolling(form);form.PerformLayout();
             using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));
             var viewport=Descendants(form).Single(c=>c.Name=="viewport");
             var sections=Descendants(form).OfType<GroupBox>().Where(c=>c.Name.EndsWith("Section",StringComparison.Ordinal)).OrderBy(c=>c.Top).ToArray();
@@ -349,6 +367,7 @@ internal static class ProductTests
             Directory.CreateDirectory("dist/review");image.Save($"dist/review/windows-client-{size.Width}x{size.Height}-synthetic.png");
         }
         Console.WriteLine("THREE_ALIGNED_SECTIONS_FIT_NORMAL_AND_MINIMUM_WINDOW_WITHOUT_HORIZONTAL_SCROLL=PASS");
+        UiLayoutRegression(snapshot);
         var toolsViewport=(ScrollableControl)Descendants(form).Single(c=>c.Name=="viewport");
         toolsViewport.ScrollControlIntoView(Descendants(form).Single(c=>c.Name=="toolsSection"));Application.DoEvents();
         using(var toolImage=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(toolImage,new Rectangle(Point.Empty,form.Size));toolImage.Save("dist/review/windows-client-tools-synthetic.png");}
@@ -356,7 +375,8 @@ internal static class ProductTests
         snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
         snapshot["mode"]="disconnected";snapshot["guard"]=false;snapshot["preparing"]=true;snapshot["quick_ready"]=true;
         snapshot["error"]="";snapshot["transport"]="wireguard-quic";
-        using var idle=new MainForm((_,_,_)=>Task.FromResult((JsonObject)snapshot.DeepClone()));
+        var pollCalls=new List<string>();
+        using var idle=new MainForm((command,_,_)=>{pollCalls.Add(command);return Task.FromResult((JsonObject)snapshot.DeepClone());});
         idle.Display(snapshot);idle.CreateControl();idle.PerformLayout();
         IEnumerable<Control> Descendants(Control parent){foreach(Control control in parent.Controls){yield return control;foreach(var child in Descendants(control))yield return child;}}
         var protocolChoices=Descendants(idle).OfType<ComboBox>().Single();
@@ -374,16 +394,18 @@ internal static class ProductTests
         int preparingChanges=textChanges;
         for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
         if(textChanges!=preparingChanges || buttonChanges!=0){Console.WriteLine($"PREPARING_POLL_MUTATION text={textChanges} before={preparingChanges} buttons={buttonChanges}");return 1;}
+        if(pollCalls.Count!=40 || pollCalls.Any(command=>command!="Status"))return 1;
         Console.WriteLine("IDLE_AND_PREPARING_POLLS_DO_NOT_REWRITE_TEXT_OR_TOGGLE_BUTTONS=PASS");
+        Console.WriteLine("PASSIVE_STATUS_POLL_IS_READ_ONLY_AND_NEVER_REPEATS_PREPARE=PASS");
         var pendingRead=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls=new List<string>();
-        using var queued=new MainForm((command,_,_)=>{calls.Add(command);return command=="Prepare"?pendingRead.Task:Task.FromResult((JsonObject)snapshot.DeepClone());});
+        using var queued=new MainForm((command,_,_)=>{calls.Add(command);return command=="Status"?pendingRead.Task:Task.FromResult((JsonObject)snapshot.DeepClone());});
         Task read=queued.Act("Status"),click=queued.Act("Connect");
         if(calls.Count!=1 || click.IsCompleted)return 1;
         pendingRead.SetResult((JsonObject)snapshot.DeepClone());
         var deadline=Stopwatch.StartNew();
         while((!read.IsCompleted || !click.IsCompleted) && deadline.Elapsed<TimeSpan.FromSeconds(5)){Application.DoEvents();Thread.Sleep(5);}
-        if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Prepare","Connect"}))return 1;
+        if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Status","Connect"}))return 1;
         Console.WriteLine("CONNECT_CLICK_DURING_PASSIVE_READ_IS_QUEUED_AND_EXECUTED=PASS");
         var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";preferenceState["native_udp_8443_available"]=true;
         var preferenceCalls=new List<string>();
@@ -450,7 +472,218 @@ internal static class ProductTests
         using var refusedExit=new MainForm((_,_,_)=>Task.FromResult(new JsonObject{["ok"]=false,["intent"]=true,["core_pid"]=123U,["mode"]="protected"}));
         if(refusedExit.QuitClient().GetAwaiter().GetResult() || refusedExit.IsDisposed)return 1;
         Console.WriteLine("EXPLICIT_UI_QUIT_REQUESTS_FIXED_SERVICE_OPERATION_AND_REFUSES_UNVERIFIED_DISCONNECT=PASS");
+        UiRequestDeadlineRegression(snapshot);
+        RuntimeQueuedCancellationRegression();
+        ControlPipeCancellationRegression();
         return 0;
+    }
+    private static IEnumerable<Control> UiDescendants(Control root)
+    {
+        foreach(Control child in root.Controls){yield return child;foreach(var nested in UiDescendants(child))yield return nested;}
+    }
+    private static void StopUiPolling(MainForm form)
+    {
+        // The fixture drives polling explicitly; a real WinForms message pump
+        // remains active, without unrelated timer ticks polluting command order.
+        var timer=(System.Windows.Forms.Timer)typeof(MainForm).GetField("_timer",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(form)!;
+        timer.Stop();
+    }
+    private static void UiPumpUntil(Func<bool> completed,string failure,int milliseconds=2500)
+    {
+        var deadline=Stopwatch.StartNew();
+        while(!completed() && deadline.ElapsedMilliseconds<milliseconds){Application.DoEvents();Thread.Sleep(5);}
+        if(!completed())throw new IOException(failure);
+        Application.DoEvents();
+    }
+    private static void UiPumpFor(int milliseconds)
+    {
+        var elapsed=Stopwatch.StartNew();while(elapsed.ElapsedMilliseconds<milliseconds){Application.DoEvents();Thread.Sleep(5);}
+    }
+    private static void UiAssert(bool condition,string failure){if(!condition)throw new IOException(failure);}
+    private static Button UiButton(Control root,string name)=>UiDescendants(root).OfType<Button>().Single(button=>button.Name==name);
+    private static JsonObject UiReady(JsonObject original)
+    {
+        var value=(JsonObject)original.DeepClone();value["ok"]=true;value["intent"]=false;value["guard"]=false;value["tun_permitted"]=false;
+        value["mode"]="disconnected";value["error"]="";value["core_pid"]=0U;value["quick_ready"]=true;value["preparing"]=false;
+        value["native_udp_8443_available"]=true;value["native_udp_port_preference"]=8443;value["transport_preference"]="udp";
+        long now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();value["received_at"]=now;value["observed_at"]=now;return value;
+    }
+    private static void UiShow(MainForm form)
+    {
+        form.Show();Application.DoEvents();StopUiPolling(form);form.PerformLayout();Application.DoEvents();
+    }
+    private static void UiRecoveryReachable(MainForm form,string evidence)
+    {
+        var recovery=UiButton(form,"emergency-recovery");
+        UiAssert(form.Enabled && recovery.Visible && recovery.Enabled && recovery.CanSelect,evidence+"_RECOVERY_DISABLED");
+        Rectangle button=recovery.RectangleToScreen(recovery.ClientRectangle);
+        UiAssert(button.Width>0 && button.Height>0,evidence+"_RECOVERY_EMPTY");
+        for(Control? ancestor=recovery.Parent;ancestor is not null;ancestor=ancestor.Parent)
+            UiAssert(ancestor.RectangleToScreen(ancestor.ClientRectangle).Contains(button),evidence+"_RECOVERY_CLIPPED_BY_"+ancestor.Name);
+        var center=new Point(button.Left+button.Width/2,button.Top+button.Height/2);
+        UiAssert(recovery.Parent!.GetChildAtPoint(recovery.Parent.PointToClient(center),GetChildAtPointSkip.Invisible|GetChildAtPointSkip.Disabled)==recovery,evidence+"_RECOVERY_HIT_TEST_BLOCKED");
+    }
+    private static void UiLayoutRegression(JsonObject source)
+    {
+        var state=UiReady(source);
+        using var form=new MainForm((_,_,_)=>Task.FromResult((JsonObject)state.DeepClone()));
+        UiShow(form);
+        var viewport=(ScrollableControl)UiDescendants(form).Single(control=>control.Name=="viewport");
+        var maintenance=UiDescendants(form).Single(control=>control.Name=="system-maintenance");
+        var details=UiDescendants(form).Single(control=>control.Name=="deviceDetails");
+        var maintenanceToggle=UiButton(form,"maintenance-toggle");
+        var deviceToggle=UiButton(form,"device-details-toggle");
+        Directory.CreateDirectory("dist/review");
+        foreach(var size in new[]{new Size(900,600),new Size(1080,820)}){
+            form.Size=size;
+            foreach(bool pending in new[]{false,true}){
+                state["device_registered"]=!pending;state["registration"]!["status"]=pending?"pending":"registered";
+                form.Display(state);Application.DoEvents();
+                foreach(bool expandedDetails in pending?new[]{true}:new[]{false,true}){
+                    if(!pending && details.Visible!=expandedDetails){viewport.ScrollControlIntoView(deviceToggle);deviceToggle.PerformClick();Application.DoEvents();}
+                    UiAssert(details.Visible==expandedDetails,"REGISTRATION_DISCLOSURE_DID_NOT_CHANGE");
+                    foreach(bool expandedMaintenance in new[]{false,true}){
+                        if(maintenance.Visible!=expandedMaintenance){viewport.ScrollControlIntoView(maintenanceToggle);maintenanceToggle.PerformClick();Application.DoEvents();}
+                        form.PerformLayout();Application.DoEvents();
+                        UiAssert(maintenance.Visible==expandedMaintenance,"MAINTENANCE_DISCLOSURE_DID_NOT_CHANGE");
+                        UiAssert(!UiDescendants(form).OfType<ScrollableControl>().Any(control=>control.AutoScroll && control.HorizontalScroll.Visible),"EXPANDED_UI_HAS_HORIZONTAL_SCROLL");
+                        if(expandedMaintenance){
+                            var actions=UiDescendants(maintenance).OfType<Button>().ToArray();
+                            UiAssert(actions.Length>=4,"MAINTENANCE_ACTIONS_MISSING");
+                            foreach(var action in actions){
+                                UiAssert(action.Visible && action.Enabled && action.Parent!.ClientRectangle.Contains(action.Bounds),"MAINTENANCE_CHILD_CLIPPED_"+action.Text);
+                                viewport.ScrollControlIntoView(action);Application.DoEvents();
+                                var visible=action.RectangleToScreen(action.ClientRectangle);
+                                for(Control? ancestor=action.Parent;ancestor is not null;ancestor=ancestor.Parent)
+                                    UiAssert(ancestor.RectangleToScreen(ancestor.ClientRectangle).Contains(visible),"MAINTENANCE_ACTION_UNREACHABLE_"+action.Text);
+                            }
+                        }
+                        viewport.ScrollControlIntoView(maintenanceToggle);Application.DoEvents();
+                        UiRecoveryReachable(form,"LAYOUT");
+                        var recovery=UiButton(form,"emergency-recovery");
+                        Console.WriteLine($"UI_LAYOUT_RECT dpi={form.DeviceDpi} size={form.Width}x{form.Height} pending={pending} deviceDetails={expandedDetails} maintenance={expandedMaintenance} panel={maintenance.Width}x{maintenance.Height} recovery={recovery.Bounds}");
+                        if(expandedMaintenance && expandedDetails){using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save($"dist/review/windows-maintenance-{size.Width}x{size.Height}-pending-{pending}-dpi-{form.DeviceDpi}.png");}
+                    }
+                }
+            }
+        }
+        form.Hide();Console.WriteLine("MINIMUM_AND_NORMAL_WINDOWS_KEEP_EXPANDED_MAINTENANCE_AND_REGISTRATION_REACHABLE_WITHOUT_HORIZONTAL_SCROLL=PASS");
+    }
+    private static void UiRequestDeadlineRegression(JsonObject source)
+    {
+        var ready=UiReady(source);var connected=(JsonObject)ready.DeepClone();connected["mode"]="connected";connected["intent"]=true;connected["guard"]=true;connected["tun_permitted"]=true;connected["core_pid"]=234U;connected["transport"]="wireguard-udp";connected["product_version"]="fixture-current-response";
+        var budget=TimeSpan.FromMilliseconds(150);
+        var oldRead=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);bool armed=false;var calls=new List<string>();
+        using(var form=new MainForm((command,_,_)=>{calls.Add(command);if(armed && command=="Status")return oldRead.Task;return Task.FromResult((JsonObject)(command=="Connect"?connected:ready).DeepClone());},budget,budget)){
+            UiShow(form);UiAssert(calls.SequenceEqual(new[]{"Status","Prepare"}),"STARTUP_DID_NOT_PREPARE_EXACTLY_ONCE");calls.Clear();armed=true;
+            Task poll=form.Act("Status");int heartbeat=0;form.BeginInvoke((Action)(()=>heartbeat++));
+            UiPumpUntil(()=>poll.IsCompleted && heartbeat==1,"PASSIVE_STATUS_TIMEOUT_BLOCKED_UI");
+            UiAssert(poll.IsCompletedSuccessfully && calls.SequenceEqual(new[]{"Status"}),"PASSIVE_STATUS_TIMEOUT_REPEATED_PREPARE");UiRecoveryReachable(form,"PASSIVE_TIMEOUT");
+            Task click=form.Act("Connect");UiPumpUntil(()=>click.IsCompleted,"CONNECT_AFTER_STATUS_TIMEOUT_WAS_LOST");
+            UiAssert(click.IsCompletedSuccessfully && calls.SequenceEqual(new[]{"Status","Connect"}),"CONNECT_AFTER_STATUS_TIMEOUT_NOT_SENT");
+            var stale=(JsonObject)ready.DeepClone();stale["product_version"]="fixture-stale-response";oldRead.SetResult(stale);UiPumpFor(100);
+            UiAssert(form.ConnectionReport.Contains("fixture-current-response") && !form.ConnectionReport.Contains("fixture-stale-response"),"LATE_STATUS_OVERWROTE_NEW_CONNECT_STATE");
+        }
+        Console.WriteLine("STATUS_HAS_BOUNDED_WAIT_UI_HEARTBEAT_AND_LATE_STATUS_CANNOT_OVERWRITE_CONNECT=PASS");
+        var oldConnect=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);armed=false;
+        using(var form=new MainForm((command,_,_)=>armed && command=="Connect"?oldConnect.Task:Task.FromResult((JsonObject)ready.DeepClone()),budget,budget)){
+            UiShow(form);armed=true;Task click=form.Act("Connect");UiPumpFor(20);UiRecoveryReachable(form,"ACTIVE_PENDING");
+            int heartbeat=0;form.BeginInvoke((Action)(()=>heartbeat++));UiPumpUntil(()=>click.IsCompleted && heartbeat==1,"ACTIVE_CONNECT_TIMEOUT_BLOCKED_UI");
+            UiAssert(click.IsCompletedSuccessfully && form.Enabled,"ACTIVE_CONNECT_TIMEOUT_LEFT_UI_BUSY");
+            UiAssert(!UiDescendants(form).OfType<Button>().Single(button=>button.Text=="连接").Enabled,"UNCERTAIN_CONNECT_ALLOWED_ANOTHER_MUTATION_BEFORE_STATUS");UiRecoveryReachable(form,"ACTIVE_TIMEOUT");
+            Task status=form.Act("Status");UiPumpUntil(()=>status.IsCompleted,"POST_TIMEOUT_STATUS_DID_NOT_COMPLETE");
+            UiAssert(UiDescendants(form).OfType<Button>().Single(button=>button.Text=="连接").Enabled,"FRESH_STATUS_DID_NOT_RESTORE_NORMAL_ACTIONS");
+            string authoritative=form.ConnectionReport;oldConnect.SetResult((JsonObject)connected.DeepClone());UiPumpFor(100);
+            UiAssert(form.ConnectionReport==authoritative,"LATE_CONNECT_OVERWROTE_NEW_STATUS");
+        }
+        Console.WriteLine("CONNECT_HAS_BOUNDED_WAIT_EMERGENCY_RECOVERY_STAYS_REACHABLE_AND_LATE_RESPONSE_IS_IGNORED=PASS");
+        var delayedQuit=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);armed=false;bool acknowledge=false;
+        using(var form=new MainForm((command,_,_)=>command=="Quit" && armed && !acknowledge?delayedQuit.Task:Task.FromResult((JsonObject)ready.DeepClone()),budget,budget)){
+            UiShow(form);armed=true;Task<bool> quit=form.QuitClient();UiPumpFor(20);UiRecoveryReachable(form,"QUIT_PENDING");
+            UiPumpUntil(()=>quit.IsCompleted,"QUIT_TIMEOUT_BLOCKED_UI");UiAssert(!quit.Result && !form.IsDisposed,"QUIT_TIMEOUT_CLOSED_WITHOUT_SAFE_ACK");UiRecoveryReachable(form,"QUIT_TIMEOUT");
+            delayedQuit.SetResult((JsonObject)ready.DeepClone());UiPumpFor(100);UiAssert(!form.IsDisposed,"LATE_QUIT_ACK_CLOSED_WINDOW_WITHOUT_RETRY");
+            acknowledge=true;Task<bool> retry=form.QuitClient();UiPumpUntil(()=>retry.IsCompleted,"QUIT_RETRY_DID_NOT_FINISH");UiAssert(retry.Result && form.IsDisposed,"FRESH_SAFE_ACK_DID_NOT_ALLOW_EXPLICIT_EXIT");
+        }
+        Console.WriteLine("QUIT_TIMEOUT_KEEPS_WINDOW_AND_RECOVERY_OPEN_LATE_ACK_IGNORED_FRESH_SAFE_ACK_REQUIRED=PASS");
+        var closeAck=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);int closeRequests=0;armed=false;
+        using(var form=new MainForm((command,_,_)=>{if(armed && command=="Quit"){closeRequests++;return closeAck.Task;}return Task.FromResult((JsonObject)ready.DeepClone());},budget,budget)){
+            UiShow(form);armed=true;form.Close();
+            UiAssert(closeRequests==1 && !form.IsDisposed,"WINDOW_CLOSE_DID_NOT_WAIT_FOR_SERVICE_ACK");UiRecoveryReachable(form,"WINDOW_CLOSE_PENDING");
+            closeAck.SetResult((JsonObject)ready.DeepClone());UiPumpUntil(()=>form.IsDisposed,"WINDOW_CLOSE_DID_NOT_FINISH_AFTER_SAFE_ACK");
+            UiAssert(closeRequests==1,"WINDOW_CLOSE_RECURSIVELY_SENT_MULTIPLE_QUIT_COMMANDS");
+        }
+        Console.WriteLine("REAL_FORM_CLOSING_EVENT_DEFERS_DISPOSAL_UNTIL_SAFE_SERVICE_ACK=PASS");
+        var pendingMutation=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);var barrier=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);armed=false;calls.Clear();
+        using(var form=new MainForm((command,_,_)=>{calls.Add(command);if(armed && command=="Connect")return pendingMutation.Task;if(armed && command=="Status")return barrier.Task;return Task.FromResult((JsonObject)ready.DeepClone());},budget,budget)){
+            UiShow(form);calls.Clear();armed=true;Task click=form.Act("Connect");UiPumpFor(20);Task<bool> quit=form.QuitClient();
+            UiPumpUntil(()=>click.IsCompleted && quit.IsCompleted,"CLOSE_DURING_CONNECT_TIMEOUT_BLOCKED_UI");
+            UiAssert(!quit.Result && !form.IsDisposed && calls.Contains("Connect") && calls.Contains("Status") && !calls.Contains("Quit"),"UNCONFIRMED_MUTATION_SKIPPED_STATUS_BARRIER_ON_EXIT");UiRecoveryReachable(form,"QUIT_BARRIER_TIMEOUT");
+            pendingMutation.SetResult((JsonObject)connected.DeepClone());barrier.SetResult((JsonObject)ready.DeepClone());UiPumpFor(100);
+            UiAssert(!form.IsDisposed && !calls.Contains("Quit"),"LATE_BARRIER_TRIGGERED_UNREQUESTED_QUIT");
+        }
+        Console.WriteLine("CLOSE_DURING_CONNECT_REQUIRES_A_FRESH_SERIAL_SERVICE_BARRIER_AND_NEVER_ASSUMES_SAFE_OFF=PASS");
+    }
+    private static void RuntimeQueuedCancellationRegression()
+    {
+        using var runtime=new VpnRuntime();
+        var gate=(SemaphoreSlim)typeof(VpnRuntime).GetField("_gate",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(runtime)!;
+        static JsonObject Status()=>new(){["version"]=1,["command"]="Status"};
+        gate.Wait();using(var cancel=new CancellationTokenSource()){
+            Task<JsonObject> pending=runtime.Command(Status(),cancel.Token);UiAssert(!pending.IsCompleted,"RUNTIME_GATE_FIXTURE_DID_NOT_QUEUE");cancel.Cancel();
+            UiPumpUntil(()=>pending.IsCompleted,"CANCELLED_RUNTIME_COMMAND_REMAINED_QUEUED");
+            UiAssert(pending.IsCanceled && gate.CurrentCount==0,"QUEUED_RUNTIME_CANCELLATION_EXECUTED_OR_RELEASED_AN_UNOWNED_GATE");
+        }
+        gate.Release();using(var cancelled=new CancellationTokenSource()){
+            cancelled.Cancel();Task<JsonObject> pending=runtime.Command(Status(),cancelled.Token);UiPumpUntil(()=>pending.IsCompleted,"PRE_CANCELLED_RUNTIME_COMMAND_DID_NOT_CANCEL");
+            UiAssert(pending.IsCanceled && gate.CurrentCount==1,"PRE_CANCELLED_RUNTIME_COMMAND_EXECUTED_OR_CORRUPTED_GATE");
+        }
+        Console.WriteLine("REAL_RUNTIME_GATE_REJECTS_QUEUED_AND_PRE_CANCELLED_COMMANDS_WITHOUT_EXECUTING_STATUS_OR_RELEASING_UNOWNED_GATE=PASS");
+        void Set(string name,object value)=>typeof(VpnRuntime).GetField(name,System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.SetValue(runtime,value);
+        bool Preparing()=>(bool)typeof(VpnRuntime).GetProperty("Preparing",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(runtime)!;
+        bool CanCreate()=>(bool)typeof(VpnRuntime).GetProperty("CanCreateCore",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(runtime)!;
+        Set("_secret",new DurableState{Token="synthetic-in-memory-only",ConnectIntent=false});
+        Set("_state",new JsonObject{["registration"]=new JsonObject{["status"]="registered"},["device"]=new JsonObject{["registered"]=true},["tunnel"]=new JsonObject()});
+        Set("_prepareUntil",DateTimeOffset.UtcNow.AddMinutes(5));Set("_prepareMayStartCore",true);Set("_prepareRetryAfter",DateTimeOffset.UtcNow.AddMinutes(1));
+        UiAssert(!Preparing() && !CanCreate(),"FAILED_PREPARE_IGNORED_RETRY_BACKOFF");
+        Set("_prepareRetryAfter",DateTimeOffset.UtcNow.AddSeconds(-1));UiAssert(Preparing() && CanCreate(),"EXPLICIT_PREPARE_NEVER_RESUMES_AFTER_BACKOFF");
+        Set("_prepareMayStartCore",false);UiAssert(!Preparing() && !CanCreate(),"EXPLICIT_OFF_DEAD_CORE_WAS_RECREATED_BY_PASSIVE_PREPARING_STATE");
+        Set("_secret",new DurableState{Token="synthetic-in-memory-only",ConnectIntent=true});
+        UiAssert(CanCreate(),"ACTIVE_CONNECTION_RECOVERY_WAS_BLOCKED_BY_COLD_PREPARE_PERMISSION");
+        Console.WriteLine("REAL_RUNTIME_PREPARE_BACKOFF_AND_EXPLICIT_OFF_DO_NOT_RESTART_A_DEAD_STANDBY_CORE=PASS");
+    }
+    private static void ControlPipeCancellationRegression()
+    {
+        foreach(string ending in new[]{"eof","extra-byte","observer-stop"}){
+            string name="OracleProxyUiFixture-"+Guid.NewGuid().ToString("N");
+            using var server=new NamedPipeServerStream(name,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly,4096,4096);
+            using var client=new NamedPipeClientStream(".",name,PipeDirection.InOut,PipeOptions.Asynchronous);
+            using var connection=new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            Task accept=server.WaitForConnectionAsync(connection.Token),connect=client.ConnectAsync(connection.Token);
+            UiPumpUntil(()=>accept.IsCompleted && connect.IsCompleted,"FIXTURE_PIPE_CONNECT_TIMEOUT");
+            UiAssert(accept.IsCompletedSuccessfully && connect.IsCompletedSuccessfully,"FIXTURE_PIPE_CONNECT_FAILED");
+            using var frameDeadline=new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            Task<string> read=ControlPipe.ReadFrame(server,32,frameDeadline.Token);
+            Task write=ControlPipe.WriteFrame(client,"fixture-frame",32,frameDeadline.Token);
+            UiPumpUntil(()=>read.IsCompleted && write.IsCompleted,"REAL_PIPE_FRAME_DID_NOT_FINISH");
+            UiAssert(write.IsCompletedSuccessfully && read.IsCompletedSuccessfully && read.Result=="fixture-frame","REAL_PIPE_FRAME_BOUNDARY_INVALID");
+            Task oversized=ControlPipe.WriteFrame(client,new string('x',33),32,CancellationToken.None);
+            UiPumpUntil(()=>oversized.IsCompleted,"OVERSIZED_PIPE_WRITE_DID_NOT_REFUSE");
+            UiAssert(oversized.Exception?.GetBaseException() is IOException {Message:"FRAME_TOO_LARGE"},"OVERSIZED_PIPE_WRITE_WAS_NOT_REFUSED");
+            using var withdrawn=new CancellationTokenSource();withdrawn.Cancel();
+            Task cancelledWrite=ControlPipe.WriteFrame(client,"must-not-write",32,withdrawn.Token);
+            UiPumpUntil(()=>cancelledWrite.IsCompleted,"PRE_CANCELLED_PIPE_WRITE_DID_NOT_STOP");
+            UiAssert(cancelledWrite.IsCanceled,"PRE_CANCELLED_PIPE_WRITE_IGNORED_CANCELLATION");
+            using var admission=new CancellationTokenSource();using var stop=new CancellationTokenSource();
+            Task observer=ControlPipe.ObserveClientEnd(server,admission,stop.Token);
+            if(ending=="eof")client.Dispose();
+            else if(ending=="extra-byte"){
+                Task extra=client.WriteAsync(new byte[]{65},frameDeadline.Token).AsTask();
+                UiPumpUntil(()=>extra.IsCompleted,"FIXTURE_EXTRA_PIPE_BYTE_DID_NOT_WRITE");UiAssert(extra.IsCompletedSuccessfully,"FIXTURE_EXTRA_PIPE_BYTE_FAILED");
+            }else stop.Cancel();
+            UiPumpUntil(()=>observer.IsCompleted,"REAL_PIPE_CLIENT_END_OBSERVER_DID_NOT_FINISH");
+            UiAssert(observer.IsCompletedSuccessfully && admission.IsCancellationRequested==(ending!="observer-stop"),"CLIENT_END_ADMISSION_CANCELLATION_INVALID_"+ending);
+            Console.WriteLine("REAL_DISPOSABLE_PIPE_FRAME_AND_ADMISSION_"+ending.ToUpperInvariant().Replace('-','_')+"=PASS");
+        }
     }
     private static async Task<int> RoguePipe()
     {

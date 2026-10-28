@@ -189,10 +189,23 @@ internal static class Installer
         }
         Sc("start",Platform.Service);
     }
-    internal static void ElevateUuPermissions(bool restore)
+    internal static async Task<int> ElevateUuPermissionsAsync(bool restore,CancellationToken cancel=default)
     {
+        cancel.ThrowIfCancellationRequested();
         var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};
-        info.ArgumentList.Add(restore?"--restore-uu-permissions":"--repair-uu-permissions");Process.Start(info);
+        info.ArgumentList.Add(restore?"--restore-uu-permissions":"--repair-uu-permissions");
+        Process process;
+        try{process=Process.Start(info) ?? throw new IOException("UU_MAINTENANCE_NOT_STARTED");}
+        catch(System.ComponentModel.Win32Exception error) when(error.NativeErrorCode==1223){return 4;}
+        using(process){
+            using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);
+            deadline.CancelAfter(TimeSpan.FromMinutes(2));
+            // This is an elevated, transactional ACL operation. Stop waiting on
+            // cancellation, but never kill it halfway through its rollback.
+            try{await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);}
+            catch(OperationCanceledException){throw new IOException("UU_MAINTENANCE_RESULT_PENDING");}
+            return process.ExitCode;
+        }
     }
     internal static void ElevateRecovery()
     {

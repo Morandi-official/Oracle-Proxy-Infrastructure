@@ -140,15 +140,15 @@ try {
  Invoke-RuntimeProduct $new @('--install',$owner)
  $newPid=Get-VerifiedProductService $newHash
  if($newPid -eq $oldPid){throw 'CROSS_RUNTIME_UPGRADE_DID_NOT_REPLACE_PROCESS'}
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc22+' 'udp'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc23+' 'udp'
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $cipherBefore){throw 'CROSS_RUNTIME_UPGRADE_REWROTE_EXISTING_DPAPI_STATE'}
  Invoke-RuntimeWitness 'VerifyUdp'
- Assert-RuntimeStatus $newPid 'PreferAuto' '0.3.0-rc22+' 'auto'
+ Assert-RuntimeStatus $newPid 'PreferAuto' '0.3.0-rc23+' 'auto'
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -eq $cipherBefore){throw 'NET10_SERVICE_DID_NOT_SAVE_SYNTHETIC_PREFERENCE'}
  Invoke-RuntimeWitness 'VerifyAuto'
  Restart-Service OracleProxyService
  $newPid=Get-VerifiedProductService $newHash
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc22+' 'auto'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc23+' 'auto'
  Invoke-RuntimeWitness 'VerifyAuto'
  Write-Host 'REAL_NET8_TO_NET10_SYSTEM_DPAPI_OWNER_PUBLIC_PRIVATE_KEY_AND_SCM_PIPE_UPGRADE=PASS'
  Invoke-RuntimeProduct $new @('--uninstall')

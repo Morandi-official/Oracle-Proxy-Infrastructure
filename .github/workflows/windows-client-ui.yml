@@ -1,0 +1,37 @@
+name: Windows client layout and response regression
+on:
+  pull_request:
+    paths: ['clients/windows/product/**', '.github/workflows/windows-client-ui.yml']
+  push:
+    branches: [main]
+    paths: ['clients/windows/product/**', '.github/workflows/windows-client-ui.yml']
+permissions:
+  contents: read
+jobs:
+  real-windows-ui:
+    runs-on: windows-2022
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: clients/windows/product
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: clients/windows/product/global.json
+      - name: Build non-shipped UI and pipe fixture
+        run: dotnet publish ci/OracleProxy.Product.Tests.csproj -c Release -o dist/ui-fixture
+      - name: Real message-loop layout timeout and admission regression
+        run: |
+          & ./dist/ui-fixture/OracleProxy.Product.Tests.exe --ui-self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Real Windows UI regression failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-client-UI-regression-review
+          path: clients/windows/product/dist/review/*.png
+          if-no-files-found: ignore
+          retention-days: 7

@@ -32,7 +32,7 @@ internal static class Program
             }
             if(args.SequenceEqual(new[]{"--repair-uu-permissions"}) || args.SequenceEqual(new[]{"--restore-uu-permissions"})){
                 if(!Platform.IsAdmin)return 3;
-                UuAclRepair.RunInteractive(args[0]=="--restore-uu-permissions");return 0;
+                return UuAclRepair.RunInteractive(args[0]=="--restore-uu-permissions")?0:4;
             }
             if(args.SequenceEqual(new[]{"--uninstall"})){
                 if(!Platform.IsAdmin)return 3;

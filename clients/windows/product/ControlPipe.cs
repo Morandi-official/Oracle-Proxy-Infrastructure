@@ -16,6 +16,27 @@ internal static class ControlPipe
         while(count<=maximum){int n=await stream.ReadAsync(data.AsMemory(count,1),token);if(n==0)throw new IOException("INCOMPLETE_FRAME");if(data[count]==10)return new UTF8Encoding(false,true).GetString(data,0,count);count++;}
         throw new IOException("FRAME_TOO_LARGE");
     }
+    internal static async Task WriteFrame(Stream stream,string frame,int maximum,CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        byte[] data=new UTF8Encoding(false,true).GetBytes(frame+"\n");
+        if(data.Length>maximum+1)throw new IOException("FRAME_TOO_LARGE");
+        // Pipe writes are unbuffered: no uncancellable writer disposal flush.
+        await stream.WriteAsync(data,token);
+    }
+    internal static async Task ObserveClientEnd(Stream stream,CancellationTokenSource admission,CancellationToken stop)
+    {
+        try{
+            var extra=new byte[1];
+            int received=await stream.ReadAsync(extra,stop);
+            if(received is <0 or >1)throw new IOException("INVALID_PIPE_READ");
+            // One frame per connection. EOF or appended bytes revoke only a
+            // queued request; an admitted mutation still completes in order.
+            if(!stop.IsCancellationRequested)admission.Cancel();
+        }catch(OperationCanceledException)when(stop.IsCancellationRequested){}
+        catch(IOException){if(!stop.IsCancellationRequested)admission.Cancel();}
+        catch(ObjectDisposedException){if(!stop.IsCancellationRequested)admission.Cancel();}
+    }
     internal static async Task Serve(VpnRuntime runtime,CancellationToken cancel)
     {
         var owner=new SecurityIdentifier(File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim());
@@ -36,22 +57,39 @@ internal static class ControlPipe
                 if(document.RootElement.ValueKind!=JsonValueKind.Object)throw new IOException("INVALID_FRAME");
                 var names=new HashSet<string>();foreach(var field in document.RootElement.EnumerateObject())if(!names.Add(field.Name))throw new IOException("DUPLICATE_FIELD");
                 var value=JsonNode.Parse(frame)!.AsObject();
-                var response=await runtime.Command(value);
-                await using var writer=new StreamWriter(pipe,new UTF8Encoding(false),8192,true){AutoFlush=true};
-                await writer.WriteLineAsync(response.ToJsonString());
+                using var admission=CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                admission.CancelAfter(TimeSpan.FromSeconds(55));
+                using var observing=CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                Task observer=ObserveClientEnd(pipe,admission,observing.Token);
+                JsonObject response;
+                try{
+                    // Cancellation withdraws queued admission, not a mutation
+                    // already executing. Never detach a timed-out command.
+                    response=await runtime.Command(value,admission.Token);
+                }finally{
+                    observing.Cancel();
+                    await observer;
+                }
+                using var responseDeadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                responseDeadline.CancelAfter(TimeSpan.FromSeconds(4));
+                await WriteFrame(pipe,response.ToJsonString(),65536,responseDeadline.Token);
             }catch{ /* Drop malformed/unauthorized frames; never echo secrets. */ }
         }
     }
-    internal static async Task<JsonObject> Send(string command,string? username=null,string? password=null)
+    internal static Task<JsonObject> Send(string command,string? username=null,string? password=null)=>
+        Send(command,username,password,CancellationToken.None);
+    internal static async Task<JsonObject> Send(string command,string? username,string? password,CancellationToken cancel)
     {
-        using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        cancel.ThrowIfCancellationRequested();
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
         using var pipe=new NamedPipeClientStream(".",Platform.Pipe,PipeDirection.InOut,PipeOptions.Asynchronous,TokenImpersonationLevel.Impersonation);
         await pipe.ConnectAsync(3000,timeout.Token);
         // Authenticate the server through the SCM-owned process, before sending
         // credentials. A pipe DACL alone authenticates only its client.
         if(!BoundToService(pipe))throw new IOException("SERVICE_IDENTITY_NOT_VERIFIED");
         var frame=new JsonObject{["version"]=1,["command"]=command};if(command=="Login"){frame["username"]=username;frame["password"]=password;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
-        await using var writer=new StreamWriter(pipe,new UTF8Encoding(false),8192,true){AutoFlush=true};await writer.WriteLineAsync(frame.ToJsonString());
+        await WriteFrame(pipe,frame.ToJsonString(),8192,timeout.Token);
         var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");return result;
     }

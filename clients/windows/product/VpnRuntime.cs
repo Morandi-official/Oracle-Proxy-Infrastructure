@@ -276,7 +276,9 @@ internal sealed class VpnRuntime : IDisposable
                 if(!_secret.ConnectIntent && !reusable){await StopCore();_transport=Preferred();_probeFailures=0;}
                 using var uuMaintenance=UuAclRepair.AcquireMaintenance();
                 if(_carriers.Observe(CarrierMemory.Scope(_state))){await StopCore();_transport=TransportPolicy.First(_secret.TransportPreference,_state);_probeFailures=0;warm=false;reusable=false;}
+                long signatureChecks=UuDiscovery.SignatureVerificationCount;
                 _stage="UU_DISCOVERY";var inventory=UuDiscovery.Discover();_uuInventory=inventory;_switchTimings["uu_discovery_ms"]=timer.ElapsedMilliseconds;
+                _switchTimings["uu_signature_verifications"]=UuDiscovery.SignatureVerificationCount-signatureChecks;
                 if(inventory.Candidates>0 && inventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 // Process exceptions are part of the prepared configuration.
                 if(reusable && !_secret.UuPaths.SequenceEqual(inventory.Paths,StringComparer.OrdinalIgnoreCase)){await StopCore();warm=false;reusable=false;_transport=Preferred();}

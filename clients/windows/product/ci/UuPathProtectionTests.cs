@@ -223,11 +223,21 @@ internal static class UuPathProtectionTests
             Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"OCCUPIED_DIRECTORY_READONLY_PREVIEW_FAILED");
             RefusedWithoutWrites(before,"OCCUPIED_NO_DELETE_SHARE_DIRECTORY","UU_PATH_FILES_IN_USE");
         }
+        foreach(uint directoryWrite in new[]{0x00000002u,0x00000004u}){
+            // A preexisting data-write directory handle can share DELETE and
+            // therefore evade a no-delete-only lock. Tightening an ACL cannot
+            // revoke FILE_ADD_FILE / FILE_ADD_SUBDIRECTORY already granted.
+            using var occupied=Open(Path.Combine(_uu,"config"),directoryWrite,7);
+            string code=directoryWrite==2?"HELD_DIRECTORY_ADD_FILE":"HELD_DIRECTORY_ADD_SUBDIRECTORY";
+            Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),code+"_READONLY_PREVIEW_FAILED");
+            RefusedWithoutWrites(before,code,"UU_PATH_FILES_IN_USE");
+        }
         using(var occupied=Open(Path.Combine(_uu,"config","remote.ini"),0x00000002)){
             Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"HELD_WRITE_DATA_READONLY_PREVIEW_FAILED");
             RefusedWithoutWrites(before,"HELD_WRITE_DATA_FILE","UU_PATH_FILES_IN_USE");
         }
         Pass("REAL_OCCUPIED_UU_DIRECTORY_REFUSED_BEFORE_WRITES_WITHOUT_FALLBACK_OR_PROCESS_TERMINATION");
+        Pass("REAL_EXISTING_DIRECTORY_ADD_FILE_AND_ADD_SUBDIRECTORY_SHARE_ALL_HANDLES_REFUSED_BEFORE_ANY_WRITE");
         Pass("REAL_EXISTING_WRITE_DATA_HANDLE_REFUSED_BEFORE_WRITES_OR_JOURNAL_CREATION");
     }
     private static void ZeroWriteRefusals(Dictionary<string,State> before)

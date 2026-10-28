@@ -115,7 +115,9 @@ internal static partial class UuAclRepair
             // an already-open WRITE_DATA handle; READ_CONTROL/WRITE_DAC alone
             // do not participate. No data-write permission is requested.
             // Tightening a DACL cannot revoke an existing writer's rights.
-            uint share=writable && !directory?1u:3u;
+            // Existing directory ADD_FILE/ADD_SUBDIRECTORY handles are writers
+            // too: no write sharing on any object modified by this transaction.
+            uint share=writable?1u:3u;
             _handle=CreateFile(path,writable?(directory?0x02000000u:0x00060001u):0x00020000u,share,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
             if(_handle.IsInvalid){
                 int error=Marshal.GetLastWin32Error();_handle.Dispose();

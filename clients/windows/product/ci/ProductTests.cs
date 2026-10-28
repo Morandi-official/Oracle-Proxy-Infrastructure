@@ -38,7 +38,7 @@ internal static class ProductTests
                 ["name"]=n.Name,["status"]=n.OperationalStatus.ToString(),["type"]=n.NetworkInterfaceType.ToString()}).ToArray());
             Console.WriteLine("DOTNET_TUN_PRESENCE="+value.ToJsonString());return 0;
         }
-        if(args.SequenceEqual(new[]{"--ui-self-test"}))return Ui();
+        if(args.SequenceEqual(new[]{"--ui-self-test"}))return UiOnMessageLoop();
         if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--native-denial"})){
             IntPtr module=NativeLibrary.Load(Platform.Guard);return Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))()==5?0:1;
@@ -298,6 +298,24 @@ internal static class ProductTests
         }
     }
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
+    private static int UiOnMessageLoop()
+    {
+        // Closing forms outside Application.Run can tear down the thread's
+        // WinForms marshaling context between cases. Keep a real application
+        // lifetime while exercising async deadlines and deliberate closes.
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+        using var host=new Form{Text="Oracle Proxy UI fixture host",ShowInTaskbar=false,Opacity=0,Size=new Size(1,1)};
+        int result=1;
+        host.Shown+=(_,_)=>host.BeginInvoke((Action)(()=>{
+            try{result=Ui();}
+            catch(Exception error){
+                string code=error.Message.Length<=160 && error.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?error.Message:error.GetType().Name;
+                Console.WriteLine("UI_FIXTURE_FAILURE="+code);Console.WriteLine(error.StackTrace);
+            }finally{host.Close();}
+        }));
+        Application.Run(host);return result;
+    }
     private static int Ui()
     {
         OracleAcceptance.VerifyDeviceBudgetFixture();

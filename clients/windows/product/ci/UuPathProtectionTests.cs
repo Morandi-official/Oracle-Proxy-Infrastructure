@@ -35,7 +35,10 @@ internal static class UuPathProtectionTests
             registered=true;
             Check(ReadOnlyGenericIoPresent(_programs) && ReadOnlyGenericIoPresent(_vendor),"REAL_PARENT_RAW_GENERIC_READ_EXECUTE_IO_NOT_REPRODUCED");
             Check(UuDiscovery.SignatureIssue(_exe) is null,"FIXED_OFFICIAL_NETEASE_SIGNATURE_NOT_ACCEPTED");
-            Check(UuDiscovery.Inspect(_exe)?.Code=="UU_DIRECTORY_WRITABLE","INHERITED_PARENT_MODIFY_NOT_REPRODUCED");
+            Check(UuDiscovery.UnsafeWriter(new DirectoryInfo(_programs).GetAccessControl()) && UuDiscovery.UnsafeWriter(new DirectoryInfo(_vendor).GetAccessControl()),"REAL_PROGRAM_FILES_AND_VENDOR_MODIFY_NOT_REPRODUCED");
+            string? initialIssue=UuDiscovery.Inspect(_exe)?.Code;
+            Console.WriteLine("INITIAL_UU_UNSAFE_CODE="+(initialIssue is "UU_EXECUTABLE_WRITABLE" or "UU_DIRECTORY_WRITABLE"?initialIssue:"UNEXPECTED"));
+            Check(initialIssue is "UU_EXECUTABLE_WRITABLE" or "UU_DIRECTORY_WRITABLE" && !UuDiscovery.Trusted(_exe),"INHERITED_PARENT_MODIFY_NOT_REPRODUCED");
             Check(UuAclRepair.EligibleRoots().Length==0,"LEGACY_REPAIR_UNEXPECTEDLY_ACCEPTED_UNSAFE_ANCESTORS");
             Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"ADVANCED_ROOT_NOT_ELIGIBLE");
             Check(UuAclRepair.AdvancedAncestors(_uu).SequenceEqual(new[]{_programs,_vendor},StringComparer.OrdinalIgnoreCase),"ADVANCED_ANCESTORS_NOT_EXACT");

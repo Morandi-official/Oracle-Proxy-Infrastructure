@@ -220,7 +220,8 @@ internal static partial class UuAclRepair
                     // Shared ancestors may only have the exact separate
                     // current-object M and inherit-only OI/CI M layout.
                     if(ancestor && (ace.AceFlags&~AceFlags.Inherited)!=AceFlags.None)throw new IOException("UU_PATH_ANCESTOR_PATTERN_REFUSED");
-                    ace.AccessMask=(int)FileSystemRights.ReadAndExecute|(ace.AccessMask&(int)FileSystemRights.Synchronize);
+                    ace.AccessMask=(int)FileSystemRights.ReadAndExecute|
+                        (mask==0xE0010000u?(int)FileSystemRights.Synchronize:(ace.AccessMask&(int)FileSystemRights.Synchronize));
                 }
                 if(ancestor && known && ace.AceFlags.HasFlag(AceFlags.InheritOnly) &&
                     (ace.AceFlags&~AceFlags.Inherited)!=(AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly))throw new IOException("UU_PATH_ANCESTOR_PATTERN_REFUSED");

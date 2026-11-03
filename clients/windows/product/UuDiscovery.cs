@@ -75,9 +75,17 @@ internal static class UuDiscovery
         }catch{}
     }
     internal static bool Trusted(string path)=>Inspect(path) is null;
+    internal static bool MutableDataExecutable(string path)
+    {
+        for(var dir=new FileInfo(path).Directory;dir?.Parent is not null;dir=dir.Parent)
+            if(dir.Parent.Name.Equals("GameViewer",StringComparison.OrdinalIgnoreCase) &&
+               (dir.Name.Equals("config",StringComparison.OrdinalIgnoreCase)||dir.Name.Equals("log",StringComparison.OrdinalIgnoreCase)))return true;
+        return false;
+    }
     internal static UuIssue? Inspect(string path)
     {
         try{
+            if(MutableDataExecutable(path))return new(path,"UU_MUTABLE_DATA_EXECUTABLE");
             var file=new FileInfo(path);if(!file.Exists||file.Length is <1024 or >300_000_000)return new(path,"UU_EXECUTABLE_UNREADABLE");
             if(file.Attributes.HasFlag(FileAttributes.ReparsePoint))return new(path,"UU_REPARSE_POINT");
             Platform.NoLinks(file.DirectoryName!);

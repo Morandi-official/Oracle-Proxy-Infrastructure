@@ -49,12 +49,12 @@ internal static class UuPathProtectionTests
             var before=CaptureTree();
             OccupiedDirectoryRefusal(before);
             ZeroWriteRefusals(before);
-            UuAclRepair.ApplyAdvanced(new[]{_uu});
+            using(var liveLogWriter=Open(Path.Combine(_uu,@"log\client\Log\session.log"),0x00000002,7))UuAclRepair.ApplyAdvanced(new[]{_uu});
             Check(ReadOnlyGenericIoPresent(_programs) && ReadOnlyGenericIoPresent(_vendor),"READONLY_GENERIC_IO_WAS_MAPPED_OR_REMOVED");
             Check(UuDiscovery.Trusted(_exe),"LEGACY_UU_TRUST_DID_NOT_PASS_AFTER_ADVANCED_PROTECTION");
             SameSiblings(before,"ADVANCED_APPLY_CHANGED_SIBLING_SECURITY");
             Check(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(_exe)))==Digest,"UU_BYTES_CHANGED");
-            OrdinaryUserProof();
+            OrdinaryUserProof();MutableDataProof();
             UuAclRepair.Restore();SameTree(before,"ADVANCED_EXACT_ROLLBACK_FAILED");RemoveOwnedJournal();
             Pass("REAL_APPLY_PASSES_EXISTING_UU_TRUST_PRESERVES_SIBLING_BINARY_SECURITY_AND_ROLLS_BACK_EXACTLY");
             FaultAndCasProof(before);
@@ -140,10 +140,12 @@ internal static class UuPathProtectionTests
         // change when rollback genuinely re-enables inheritance.
         Directory.CreateDirectory(_programs);Write(_programs,AncestorTemplate(Read(_programs)));
         Directory.CreateDirectory(_vendor);Write(_vendor,AncestorTemplate(Read(_vendor)));
-        Directory.CreateDirectory(Path.Combine(_uu,"config"));Directory.CreateDirectory(Path.Combine(_other,"nested"));Directory.CreateDirectory(Path.Combine(_volume,"OtherRootApp"));
+        Directory.CreateDirectory(Path.Combine(_uu,"assets"));Directory.CreateDirectory(Path.Combine(_other,"nested"));Directory.CreateDirectory(Path.Combine(_volume,"OtherRootApp"));
         string source=Path.Combine(_volume,"official.exe");File.Copy(source,_exe);File.Delete(source);
-        File.WriteAllText(Path.Combine(_uu,"config","remote.ini"),"synthetic config; no credentials");File.WriteAllText(Path.Combine(_other,"nested","data.txt"),"sibling");File.WriteAllText(Path.Combine(_volume,"OtherRootApp","data.txt"),"other root sibling");
+        File.WriteAllText(Path.Combine(_uu,"assets","binary.cfg"),"synthetic config; no credentials");File.WriteAllText(Path.Combine(_other,"nested","data.txt"),"sibling");File.WriteAllText(Path.Combine(_volume,"OtherRootApp","data.txt"),"other root sibling");
+        Directory.CreateDirectory(Path.Combine(_uu,"config"));Directory.CreateDirectory(Path.Combine(_uu,"log"));
         foreach(string path in Paths())SetOwner(path,Admin);
+        BuildMutableData();
         var markerAcl=new FileSecurity();markerAcl.SetOwner(Admin);markerAcl.SetAccessRuleProtection(true,false);
         foreach(string sid in new[]{"S-1-5-18","S-1-5-32-544"})markerAcl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid),FileSystemRights.FullControl,AccessControlType.Allow));
         new FileInfo(Path.Combine(_volume,".oracle-uu-vhd-fixture.json")).SetAccessControl(markerAcl);
@@ -167,7 +169,7 @@ internal static class UuPathProtectionTests
     }
     private static void SameSiblings(Dictionary<string,State> expected,string failure)
     {
-        foreach(var entry in expected.Where(entry=>entry.Key.Equals(_volume,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(_other,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_volume,"OtherRootApp"),StringComparison.OrdinalIgnoreCase)))Check(Read(entry.Key)==entry.Value,failure);
+        foreach(var entry in expected.Where(entry=>entry.Key.Equals(_volume,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(_other,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_uu,"config")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || entry.Key.Equals(Path.Combine(_uu,"config"),StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_uu,"log")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || entry.Key.Equals(Path.Combine(_uu,"log"),StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_volume,"OtherRootApp"),StringComparison.OrdinalIgnoreCase)))Check(Read(entry.Key)==entry.Value,failure);
     }
     private static SafeFileHandle Open(string path,uint access,uint share=3)
     {
@@ -274,7 +276,7 @@ internal static class UuPathProtectionTests
     }
     private static void OccupiedDirectoryRefusal(Dictionary<string,State> before)
     {
-        using(var occupied=Open(Path.Combine(_uu,"config"),0x00020001)){
+        using(var occupied=Open(Path.Combine(_uu,"assets"),0x00020001)){
             Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"OCCUPIED_DIRECTORY_READONLY_PREVIEW_FAILED");
             RefusedWithoutWrites(before,"OCCUPIED_NO_DELETE_SHARE_DIRECTORY","UU_PATH_FILES_IN_USE");
         }
@@ -282,12 +284,12 @@ internal static class UuPathProtectionTests
             // A preexisting data-write directory handle can share DELETE and
             // therefore evade a no-delete-only lock. Tightening an ACL cannot
             // revoke FILE_ADD_FILE / FILE_ADD_SUBDIRECTORY already granted.
-            using var occupied=Open(Path.Combine(_uu,"config"),directoryWrite,7);
+            using var occupied=Open(Path.Combine(_uu,"assets"),directoryWrite,7);
             string code=directoryWrite==2?"HELD_DIRECTORY_ADD_FILE":"HELD_DIRECTORY_ADD_SUBDIRECTORY";
             Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),code+"_READONLY_PREVIEW_FAILED");
             RefusedWithoutWrites(before,code,"UU_PATH_FILES_IN_USE");
         }
-        using(var occupied=Open(Path.Combine(_uu,"config","remote.ini"),0x00000002)){
+        using(var occupied=Open(Path.Combine(_uu,"assets","binary.cfg"),0x00000002)){
             Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"HELD_WRITE_DATA_READONLY_PREVIEW_FAILED");
             RefusedWithoutWrites(before,"HELD_WRITE_DATA_FILE","UU_PATH_FILES_IN_USE");
         }
@@ -313,6 +315,25 @@ internal static class UuPathProtectionTests
         try{_ = UuAclRepair.AdvancedAncestors(unexpected);}catch(IOException){layoutRefused=true;}
         Check(layoutRefused,"UNKNOWN_ANCESTOR_LAYOUT_ACCEPTED");SameTree(before,"UNKNOWN_ANCESTOR_LAYOUT_WROTE_OBJECTS");
         SubstRefusal(before);
+        string codeFile=Path.Combine(_uu,"assets","binary.cfg");
+        SetOwner(codeFile,WindowsIdentity.GetCurrent().User!);
+        object?[] refusalArguments={null};
+        var preflight=typeof(UuAclRepair).GetMethod("EligibleAdvancedRoots",System.Reflection.BindingFlags.Static|System.Reflection.BindingFlags.NonPublic,null,new[]{typeof(IOException).MakeByRefType()},null)!;
+        var rejected=(string[])preflight.Invoke(null,refusalArguments)!;var reason=refusalArguments[0] as IOException;
+        Check(rejected.Length==0 && reason?.Message=="UU_REPAIR_OWNER_REFUSED" && reason.Data["uu.path"] as string==codeFile && reason.Data["uu.owner"] as string==WindowsIdentity.GetCurrent().User!.Value,"CODE_OWNER_REFUSAL_MISSING_PRECISE_LOCAL_DIAGNOSTIC");
+        RefusedWithoutWrites(CaptureTree(),"USER_OWNED_PROGRAM_FILE","UU_REPAIR_SELECTION_CHANGED");
+        SetOwner(codeFile,Admin);SameTree(before,"CODE_OWNER_REFUSAL_CHANGED_DATA_OR_PROGRAMS");
+        string heldMain=Path.Combine(_uu,"held-main.bin");File.Move(_exe,heldMain);
+        try{RefusedWithoutWrites(CaptureTree(),"DATA_ONLY_SIGNED_MAIN_MUST_NOT_AUTHORIZE_REPAIR","UU_REPAIR_SELECTION_CHANGED");}
+        finally{File.Move(heldMain,_exe);}
+        SameTree(before,"DATA_SIGNED_MAIN_REFUSAL_CHANGED_TREE");
+        string dataRoot=Path.Combine(_uu,"config"),heldData=Path.Combine(_volume,"held-config-data");Directory.Move(dataRoot,heldData);
+        try{
+            Directory.CreateSymbolicLink(dataRoot,_other);
+            try{RefusedWithoutWrites(CaptureTree(),"MUTABLE_DATA_ROOT_LINK_MUST_NOT_BE_FOLLOWED","UU_REPAIR_SELECTION_CHANGED");}
+            finally{Directory.Delete(dataRoot);}
+        }finally{Directory.Move(heldData,dataRoot);}
+        SameTree(before,"DATA_ROOT_LINK_REFUSAL_CHANGED_TREE");
         var old=new UuAclRepair.Journal(1,"applied",new[]{_uu},new[]{new UuAclRepair.Entry(_uu,true,before[_uu].Identity,new RawSecurityDescriptor(Convert.FromBase64String(before[_uu].Binary),0).GetSddlForm(AccessControlSections.Access),"")});
         Platform.WriteAtomic(Backup,JsonSerializer.SerializeToUtf8Bytes(old));RefusedWithoutWrites(before,"OLD_ACTIVE_JOURNAL");RemoveOwnedJournal();
         Pass("REAL_ADVANCED_PREFLIGHT_REJECTS_UNKNOWN_OWNER_PRINCIPAL_FULL_CONTROL_REPARSE_AND_ACTIVE_V1_JOURNAL_WITH_ZERO_WRITES");
@@ -333,6 +354,40 @@ internal static class UuPathProtectionTests
             Check(DefineDosDevice(1|2|4,letter!,target),"OWNED_SUBST_REMOVE_FAILED");
         }
         Pass("REAL_SUBST_DRIVE_ALIAS_REJECTED_WITHOUT_WRITES_OR_TOUCHING_OTHER_MAPPINGS");
+    }
+    private static void AsOrdinaryUser(Action action)
+    {
+        string name=Environment.GetEnvironmentVariable("ORACLE_UU_PATH_FIXTURE_USERNAME")??"",password=Environment.GetEnvironmentVariable("ORACLE_UU_PATH_FIXTURE_PASSWORD")??"";
+        Check(name.StartsWith("opuu",StringComparison.Ordinal) && name.Length==14 && password.Length>=40,"ORDINARY_FIXTURE_ACCOUNT_REQUIRED");
+        Check(LogonUser(name,".",password,2,0,out var token),"ORDINARY_FIXTURE_LOGON_FAILED");
+        using(token)WindowsIdentity.RunImpersonated(token,action);
+    }
+    private static void BuildMutableData()
+    {
+        AsOrdinaryUser(()=>{
+            foreach(string relative in new[]{@"config\popup",@"config\streamer",@"config\sensor",@"log\client\Log",@"log\launcher",@"log\uuyc-cli"})Directory.CreateDirectory(Path.Combine(_uu,relative));
+            File.WriteAllText(Path.Combine(_uu,@"config\popup\popup.ini"),"fixture setting");
+            File.WriteAllText(Path.Combine(_uu,@"config\streamer\cache.json"),"{}");
+            File.WriteAllText(Path.Combine(_uu,@"log\client\Log\session.log"),"fixture log");
+            File.Copy(_exe,Path.Combine(_uu,@"config\streamer\GameViewer.exe"));
+        });
+    }
+    private static void MutableDataProof()
+    {
+        string config=Path.Combine(_uu,@"config\popup\popup.ini"),log=Path.Combine(_uu,@"log\client\Log\session.log"),dataExe=Path.Combine(_uu,@"config\streamer\GameViewer.exe");
+        Check(Read(config).Owner!=Admin.Value && !new[]{"S-1-5-18",Admin.Value}.Contains(Read(log).Owner),"ORDINARY_OWNED_DATA_NOT_REPRODUCED");
+        Check(File.ReadAllText(config)=="fixture setting" && File.ReadAllText(log)=="fixture log","DATA_CONTENT_CHANGED_BY_REPAIR");
+        Check(UuDiscovery.Inspect(dataExe)?.Code=="UU_MUTABLE_DATA_EXECUTABLE" && !UuDiscovery.Discover().Paths.Contains(dataExe,StringComparer.OrdinalIgnoreCase),"DATA_EXECUTABLE_GAINED_UU_TRUST");
+        AsOrdinaryUser(()=>{
+            foreach(string dir in new[]{Path.GetDirectoryName(config)!,Path.GetDirectoryName(log)!}){
+                string fresh=Path.Combine(dir,"post-repair-write.tmp");File.WriteAllText(fresh,"runtime data still writable");File.Delete(fresh);
+                string nested=Path.Combine(dir,"post-repair-dir");Directory.CreateDirectory(nested);Directory.Delete(nested);
+            }
+        });
+        using(var writer=Open(log,0x00000002,7)){
+            Check(UuDiscovery.Trusted(_exe),"DATA_LOG_WRITER_INVALIDATED_PROGRAM_TRUST");
+        }
+        Pass("REAL_ORDINARY_OWNED_CONFIG_LOG_ACL_OWNER_CONTENT_AND_RUNTIME_WRITES_PRESERVED_DATA_EXE_NEVER_TRUSTED");
     }
     private static void OrdinaryUserProof()
     {
@@ -359,7 +414,7 @@ internal static class UuPathProtectionTests
         bool locksProved=false;UuAclRepair.AdvancedTestHook=stage=>{if(stage!="before_first_write")return;bool a=false,b=false;try{Directory.Move(_vendor,_vendor+"-swap");}catch(IOException){a=true;}try{File.Move(_exe,_exe+".swap");}catch(IOException){b=true;}Check(a&&b,"CAPTURED_OBJECTS_NOT_LOCKED_AGAINST_DELETE_RENAME");locksProved=true;};
         try{UuAclRepair.ApplyAdvanced(new[]{_uu});}finally{UuAclRepair.AdvancedTestHook=null;}
         Check(locksProved,"LOCK_PROOF_HOOK_NOT_REACHED");UuAclRepair.Restore();SameTree(before,"LOCK_PROOF_ROLLBACK_FAILED");RemoveOwnedJournal();
-        UuAclRepair.ApplyAdvanced(new[]{_uu});var after=CaptureTree();string file=Path.Combine(_uu,"config","remote.ini");
+        UuAclRepair.ApplyAdvanced(new[]{_uu});var after=CaptureTree();string file=Path.Combine(_uu,"assets","binary.cfg");
         var changed=new FileInfo(file).GetAccessControl();changed.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-19"),FileSystemRights.ReadAttributes,AccessControlType.Allow));new FileInfo(file).SetAccessControl(changed);
         var external=CaptureTree();State journal=Read(Backup);string hash=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Backup)));bool cas=false;
         try{UuAclRepair.Restore();}catch(IOException){cas=true;}

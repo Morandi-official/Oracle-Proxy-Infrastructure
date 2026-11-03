@@ -185,7 +185,8 @@ internal static partial class UuAclRepair
     {
         var descriptor=DecodeDescriptor(sddl);
         if(EncodeDescriptor(descriptor)!=sddl)throw new IOException("UU_PATH_DESCRIPTOR_INVALID");
-        if(!TrustedSid(descriptor.Owner) || !descriptor.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclPresent) || descriptor.DiscretionaryAcl is null)throw new IOException("UU_REPAIR_OWNER_REFUSED");
+        if(!TrustedSid(descriptor.Owner))throw new IOException("UU_REPAIR_OWNER_REFUSED");
+        if(!descriptor.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclPresent) || descriptor.DiscretionaryAcl is null)throw new IOException("UU_REPAIR_DACL_REQUIRED");
         return descriptor;
     }
     private static void CheckVolumeSource(string sddl)
@@ -261,8 +262,15 @@ internal static partial class UuAclRepair
             if(volume==PathVolume(System.IO.Path.GetPathRoot(Environment.SystemDirectory)!))throw new IOException("UU_PATH_VOLUME_REFUSED");
             PathObject Add(string path,string role,bool directory,bool write,bool narrow){
                 var item=new PathLocked(path,directory,write,volume);Objects.Add(path,item);
-                string before=item.Read();CheckedDescriptor(before);
-                return new(role,path,directory,volume,item.Identity,before,narrow?NarrowDescriptor(before,role is "program-files" or "vendor"):before);
+                string before=item.Read();
+                try{
+                    CheckedDescriptor(before);
+                    return new(role,path,directory,volume,item.Identity,before,narrow?NarrowDescriptor(before,role is "program-files" or "vendor"):before);
+                }catch(IOException error){
+                    error.Data["uu.path"]=path;
+                    error.Data["uu.owner"]=DecodeDescriptor(before).Owner?.Value ?? "UNKNOWN";
+                    throw;
+                }
             }
             try{
                 var source=Add(drive,"volume-root",true,false,false);CheckVolumeSource(source.Before);
@@ -282,13 +290,21 @@ internal static partial class UuAclRepair
     }
     private static string[] TreePaths(string root)
     {
-        var paths=new List<string>{root};
-        var options=new EnumerationOptions{RecurseSubdirectories=true,IgnoreInaccessible=false,AttributesToSkip=0,MaxRecursionDepth=16};
-        foreach(string path in Directory.EnumerateFileSystemEntries(root,"*",options)){
+        var paths=new List<string>{root};var pending=new Queue<(string Path,int Depth)>();pending.Enqueue((root,0));
+        var options=new EnumerationOptions{RecurseSubdirectories=false,IgnoreInaccessible=false,AttributesToSkip=0};
+        while(pending.TryDequeue(out var node))foreach(string path in Directory.EnumerateFileSystemEntries(node.Path,"*",options)){
+            var attributes=File.GetAttributes(path);bool directory=attributes.HasFlag(FileAttributes.Directory);
+            if(attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("UU_REPAIR_LINK_REFUSED");
+            // Native writes to code directories do not propagate. Leave these
+            // fixed top-level runtime-data trees entirely outside the transaction:
+            // no traversal, locks, ACL/owner writes, or journal rollback targets.
+            if(node.Depth==0 && directory && (Path.GetFileName(path).Equals("config",StringComparison.OrdinalIgnoreCase)||Path.GetFileName(path).Equals("log",StringComparison.OrdinalIgnoreCase)))continue;
             if(paths.Count>=MaximumObjects || path.Length>2048)throw new IOException("UU_REPAIR_TREE_LIMIT");
-            if(File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))throw new IOException("UU_REPAIR_LINK_REFUSED");
             paths.Add(path);
-            if(Directory.Exists(path) && Path.GetRelativePath(root,path).Count(c=>c==Path.DirectorySeparatorChar)>=15 && Directory.EnumerateFileSystemEntries(path).Any())throw new IOException("UU_REPAIR_TREE_LIMIT");
+            if(directory){
+                if(node.Depth>=15){if(Directory.EnumerateFileSystemEntries(path,"*",options).Any())throw new IOException("UU_REPAIR_TREE_LIMIT");}
+                else pending.Enqueue((path,node.Depth+1));
+            }
         }
         return paths.OrderBy(path=>path.Count(c=>c==Path.DirectorySeparatorChar)).ThenBy(path=>path,StringComparer.OrdinalIgnoreCase).ToArray();
     }
@@ -296,28 +312,29 @@ internal static partial class UuAclRepair
     {
         int count=0;var options=new EnumerationOptions{RecurseSubdirectories=true,MaxRecursionDepth=4,IgnoreInaccessible=false,AttributesToSkip=FileAttributes.ReparsePoint};
         foreach(string path in Directory.EnumerateFiles(root,"GameViewer.exe",options)){
+            if(UuDiscovery.MutableDataExecutable(path))continue;
             if(++count>32)throw new IOException("UU_INVENTORY_LIMIT");
             if(UuDiscovery.SignatureIssue(path) is null)return true;
         }
         return false;
     }
     internal static string[] EligibleAdvancedRoots()=>EligibleAdvancedRoots(out _);
-    private static string[] EligibleAdvancedRoots(out string? refusal)
+    private static string[] EligibleAdvancedRoots(out IOException? refusal)
     {
         var roots=new List<string>();refusal=null;
         foreach(string root in UuDiscovery.InstallationRoots().Distinct(StringComparer.OrdinalIgnoreCase)){
             try{AdvancedAncestors(root);}catch{continue;}
             try{using var plan=new PathCapture(root,false);roots.Add(root);}
-            catch(UnauthorizedAccessException){refusal??="UU_PATH_ACCESS_DENIED";}
-            catch(IOException error){refusal??=PathRefusal(error.Message);}
-            catch{refusal??="UU_PATH_INSPECTION_FAILED";}
+            catch(UnauthorizedAccessException){refusal??=new IOException("UU_PATH_ACCESS_DENIED");}
+            catch(IOException error){refusal??=PathRefusal(error.Message)==error.Message?error:new IOException(PathRefusal(error.Message));}
+            catch{refusal??=new IOException("UU_PATH_INSPECTION_FAILED");}
         }
         if(roots.Count>1)throw new IOException("UU_PATH_ROOTS_REFUSED");
         return roots.ToArray();
     }
     private static string PathRefusal(string value)=>value switch{
         "UU_PATH_FILES_IN_USE" or "UU_PATH_ACCESS_DENIED" or "UU_PATH_OBJECT_LOCK_FAILED" or
-        "UU_PATH_VOLUME_REFUSED" or "UU_PATH_VOLUME_AUTHORITY_REFUSED" or "UU_REPAIR_OWNER_REFUSED" or
+        "UU_PATH_VOLUME_REFUSED" or "UU_PATH_VOLUME_AUTHORITY_REFUSED" or "UU_REPAIR_OWNER_REFUSED" or "UU_REPAIR_DACL_REQUIRED" or
         "UU_PATH_ACL_PATTERN_REFUSED" or "UU_PATH_ANCESTOR_PATTERN_REFUSED" or "UU_PATH_SIGNED_MAIN_REQUIRED" or
         "UU_REPAIR_LINK_REFUSED" or "UU_REPAIR_TREE_LIMIT" or "UU_PATH_DESCRIPTOR_LIMIT" or "UU_PATH_DESCRIPTOR_INVALID" or
         "UU_PATH_FINAL_PATH_MISMATCH" or "UU_PATH_IDENTITY_UNAVAILABLE" or "UU_PATH_ANCESTORS_ALREADY_SAFE" or

@@ -44,8 +44,8 @@ internal static class UuPathProtectionTests
             Check(UuAclRepair.AdvancedAncestors(_uu).SequenceEqual(new[]{_programs,_vendor},StringComparer.OrdinalIgnoreCase),"ADVANCED_ANCESTORS_NOT_EXACT");
             Pass("REAL_CUSTOM_DRIVE_PARENT_INHERITED_MODIFY_REPRODUCED_WITH_SIGNED_NEVER_EXECUTED_UU");
             NativePropagationContract();
-            GenericModifyProof();
             ExactFieldDescriptorProof();
+            GenericModifyProof();
             var before=CaptureTree();
             OccupiedDirectoryRefusal(before);
             ZeroWriteRefusals(before);
@@ -215,6 +215,10 @@ internal static class UuPathProtectionTests
     private static void GenericModifyProof()
     {
         var original=CaptureTree();
+        var source=Read(_volume);var sourceRaw=new RawSecurityDescriptor(Convert.FromBase64String(source.Binary),0);
+        foreach(var ace in sourceRaw.DiscretionaryAcl!.OfType<CommonAce>())
+            if(ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly))ace.AccessMask=unchecked((int)0xA0000000u);
+        var sourceBytes=new byte[sourceRaw.BinaryLength];sourceRaw.GetBinaryForm(sourceBytes,0);Write(_volume,source with{Binary=Convert.ToBase64String(sourceBytes)});
         foreach(string parent in new[]{_programs,_vendor}){
             var state=Read(parent);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);bool changed=false;
             foreach(var ace in raw.DiscretionaryAcl!.OfType<CommonAce>()){

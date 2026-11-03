@@ -393,7 +393,13 @@ internal static partial class UuAclRepair
     {
         handle.Revalidate();
         if(handle.Identity!=item.Identity || handle.Volume!=item.Volume)throw new IOException("UU_REPAIR_OBJECT_CHANGED");
-        if(handle.Read()!=expected)throw new IOException("UU_REPAIR_ACL_CHANGED");
+        string actual=handle.Read();
+        if(actual!=expected){
+#if ORACLE_PRODUCT_TESTS
+            Console.WriteLine("UU_FIXTURE_ACL_DIFF_ROLE="+item.Role+" EXPECTED="+DecodeDescriptor(expected).GetSddlForm(AccessControlSections.All)+" ACTUAL="+DecodeDescriptor(actual).GetSddlForm(AccessControlSections.All));
+#endif
+            throw new IOException("UU_REPAIR_ACL_CHANGED");
+        }
     }
     private static void VerifySource(PathJournal journal,Dictionary<string,PathLocked> objects)
     {

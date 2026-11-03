@@ -4,7 +4,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from publish_candidate import REPO, read_archive, validate_run, validate_manifest, validate_dotnet_runtime
+from publish_candidate import REPO, read_archive, validate_run, validate_path_run, validate_manifest, validate_dotnet_runtime
 
 
 class PublicationBoundaries(unittest.TestCase):
@@ -16,7 +16,7 @@ class PublicationBoundaries(unittest.TestCase):
                 {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'},
                 {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14'}]}}
 
-    def test_runtime_metadata_requires_actual_exact_rc22_sdk_and_runtime(self):
+    def test_runtime_metadata_requires_actual_exact_rc23_sdk_and_runtime(self):
         metadata = self.runtime_metadata()
         validate_dotnet_runtime(metadata)
         reversed_frameworks = copy.deepcopy(metadata)
@@ -55,13 +55,16 @@ class PublicationBoundaries(unittest.TestCase):
             with self.subTest(frameworks=value), self.assertRaises(ValueError):
                 validate_dotnet_runtime(candidate)
 
-    def test_manifest_requires_two_distinct_exact_artifacts_and_rc22_source(self):
-        manifest={'version':'0.3.0-rc22','run_id':42,'source_revision':'a'*40,
+    def test_manifest_requires_two_distinct_exact_artifacts_and_rc23_source(self):
+        manifest={'version':'0.3.0-rc23','run_id':42,'uu_path_run_id':43,'source_revision':'a'*40,
                   'artifacts':[{'id':1,'sha256':'b'*64},{'id':2,'sha256':'c'*64}]}
         validate_manifest(manifest)
         variants=[dict(manifest,artifacts=[]),dict(manifest,artifacts=manifest['artifacts'][:1]),
                   dict(manifest,artifacts=manifest['artifacts']*2),dict(manifest,artifacts=[manifest['artifacts'][0]]*2),
-                  dict(manifest,source_revision='main'),dict(manifest,run_id=True),dict(manifest,version='0.3.0-rc9')]
+                  dict(manifest,source_revision='main'),dict(manifest,run_id=True),dict(manifest,version='0.3.0-rc9'),
+                  dict(manifest,uu_path_run_id=None),dict(manifest,uu_path_run_id=True),dict(manifest,uu_path_run_id=0),
+                  dict(manifest,uu_path_run_id=42),dict(manifest,workflow_override='untrusted')]
+        missing=copy.deepcopy(manifest);del missing['uu_path_run_id'];variants.append(missing)
         for field,value in [('id','1'),('id',0),('sha256','b'*63),('sha256','untrusted/path')]:
             candidate=copy.deepcopy(manifest);candidate['artifacts'][0][field]=value;variants.append(candidate)
         for candidate in variants:
@@ -77,6 +80,18 @@ class PublicationBoundaries(unittest.TestCase):
                             ('head_repository',{'full_name':'attacker/repo'})]:
             candidate=copy.deepcopy(run);candidate[field]=value
             with self.subTest(field=field),self.assertRaises(ValueError): validate_run(candidate,manifest)
+    def test_requires_same_source_successful_main_native_path_protection_run(self):
+        manifest={'uu_path_run_id':43,'source_revision':'a'*40}
+        run={'id':43,'head_sha':'a'*40,'head_branch':'main','event':'push','status':'completed',
+             'conclusion':'success','path':'.github/workflows/windows-uu-path-protection.yml',
+             'head_repository':{'full_name':REPO}}
+        validate_path_run(run,manifest)
+        for field,value in [('id',42),('head_sha','b'*40),('head_branch','untrusted'),('event','pull_request'),
+                            ('status','in_progress'),('conclusion','failure'),('conclusion','skipped'),
+                            ('path','.github/workflows/windows-product-candidate.yml'),
+                            ('head_repository',{'full_name':'attacker/repo'})]:
+            candidate=copy.deepcopy(run);candidate[field]=value
+            with self.subTest(field=field,value=value),self.assertRaises(ValueError): validate_path_run(candidate,manifest)
     def test_flat_allowlist_rejects_executable_traversal_and_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);out=root/'out';out.mkdir();archive=root/'outer.zip'

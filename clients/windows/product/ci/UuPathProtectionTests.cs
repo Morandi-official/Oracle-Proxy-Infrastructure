@@ -44,6 +44,7 @@ internal static class UuPathProtectionTests
             Check(UuAclRepair.AdvancedAncestors(_uu).SequenceEqual(new[]{_programs,_vendor},StringComparer.OrdinalIgnoreCase),"ADVANCED_ANCESTORS_NOT_EXACT");
             Pass("REAL_CUSTOM_DRIVE_PARENT_INHERITED_MODIFY_REPRODUCED_WITH_SIGNED_NEVER_EXECUTED_UU");
             NativePropagationContract();
+            LegacyDescriptorRoundTripProof();
             ExactFieldDescriptorProof();
             GenericModifyProof();
             var before=CaptureTree();
@@ -245,6 +246,40 @@ internal static class UuPathProtectionTests
         const string parent="D:(A;ID;FA;;;BA)(A;OICIIOID;GA;;;BA)(A;ID;FA;;;SY)(A;OICIIOID;GA;;;SY)(A;ID;0x1301bf;;;AU)(A;OICIIOID;SDGXGWGR;;;AU)(A;ID;0x1200a9;;;BU)(A;OICIIOID;GXGR;;;BU)";
         Dacl(_programs,parent);Dacl(_vendor,parent);
         Dacl(_uu,"D:PAI(A;OICI;0x1301bf;;;AU)(A;OICIIO;GA;;;SY)(A;;FA;;;SY)(A;OICIIO;GA;;;BA)(A;;FA;;;BA)(A;OICI;0x1301bf;;;BU)");
+    }
+    private static void LegacyDescriptorRoundTripProof()
+    {
+        var original=CaptureTree();SetExactFieldDescriptors();
+        // SetSecurityInfo's initializer modernizes legacy descriptor control
+        // bits on some Windows builds. Construct the old on-disk form directly
+        // on this owned disposable VHD, then compare both read APIs.
+        foreach(string path in new[]{_volume,_programs,_vendor}){
+            var state=Read(path);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);
+            raw.SetFlags(raw.ControlFlags&~(ControlFlags.DiscretionaryAclAutoInherited|ControlFlags.DiscretionaryAclAutoInheritRequired));
+            byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
+            using var handle=Open(path,0x02000000);
+            Check(SetKernelObjectSecurity(handle,4,bytes),"LEGACY_DESCRIPTOR_SETUP_FAILED");
+        }
+        var before=CaptureTree();
+        foreach(string path in new[]{_volume,_programs,_vendor,_uu}){
+            var state=before[path];var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);
+            var managed=Directory.Exists(path)?new DirectoryInfo(path).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All):new FileInfo(path).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All);
+            Console.WriteLine("LEGACY_DESCRIPTOR_BEFORE="+Path.GetFileName(path)+" NATIVE="+raw.GetSddlForm(AccessControlSections.All)+" MANAGED="+managed);
+        }
+        try{UuAclRepair.ApplyAdvanced(new[]{_uu});}
+        catch(Exception error){
+            Console.WriteLine("LEGACY_DESCRIPTOR_APPLY_FAILED="+error.Message);
+            foreach(string path in new[]{_volume,_programs,_vendor,_uu}){
+                var raw=new RawSecurityDescriptor(Convert.FromBase64String(Read(path).Binary),0);
+                Console.WriteLine("LEGACY_DESCRIPTOR_FAILURE_PATH="+path+" FLAGS="+(int)raw.ControlFlags+" SDDL="+raw.GetSddlForm(AccessControlSections.All));
+            }
+            throw;
+        }
+        Check(UuDiscovery.Trusted(_exe),"LEGACY_DESCRIPTOR_TRUST_FAILED");
+        SameSiblings(before,"LEGACY_DESCRIPTOR_APPLY_CHANGED_SIBLINGS");
+        UuAclRepair.Restore();SameTree(before,"LEGACY_DESCRIPTOR_RESTORE_NOT_NATIVE_EXACT");RemoveOwnedJournal();
+        RestoreTree(original);SameTree(original,"LEGACY_DESCRIPTOR_FIXTURE_RESET_NOT_EXACT");
+        Pass("REAL_LEGACY_NON_AUTO_INHERITED_NATIVE_DESCRIPTOR_APPLY_AND_ROLLBACK");
     }
     private static void ExactFieldDescriptorProof()
     {
@@ -493,6 +528,7 @@ internal static class UuPathProtectionTests
     [StructLayout(LayoutKind.Sequential)]private struct FileInfoNative{public uint Attributes;public System.Runtime.InteropServices.ComTypes.FILETIME Created,Accessed,Written;public uint Volume,SizeHigh,SizeLow,Links,IndexHigh,IndexLow;}
     [DllImport("kernel32.dll",EntryPoint="CreateFileW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafeFileHandle CreateFile(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
     [DllImport("kernel32.dll",SetLastError=true)]private static extern bool GetFileInformationByHandle(SafeFileHandle handle,out FileInfoNative info);
+    [DllImport("advapi32.dll",SetLastError=true)][return:MarshalAs(UnmanagedType.Bool)]private static extern bool SetKernelObjectSecurity(SafeFileHandle handle,uint information,byte[] descriptor);
     [DllImport("advapi32.dll")]private static extern uint GetSecurityInfo(SafeFileHandle handle,int type,uint information,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor);
     [DllImport("advapi32.dll")]private static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
     [DllImport("advapi32.dll")]private static extern bool GetSecurityDescriptorDacl(IntPtr descriptor,[MarshalAs(UnmanagedType.Bool)]out bool present,out IntPtr dacl,[MarshalAs(UnmanagedType.Bool)]out bool defaulted);

@@ -94,7 +94,10 @@ internal static class Platform
         try{
             VerifyProtected(Root);
             string code=error.Message.Length<=80 && error.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?error.Message:error.HResult.ToString("X8");
-            WriteAtomic(Path.Combine(Root,"diagnostics.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,stage,code,category=error.GetType().Name,at=DateTimeOffset.UtcNow.ToUnixTimeSeconds()}));
+            var detail=new Dictionary<string,string>();
+            foreach(string key in new[]{"uu.path","uu.owner","uu.expected_flags","uu.actual_flags","uu.original_error","uu.rollback_error","uu.original_path","uu.rollback_path"})
+                if(error.Data[key] is object value)detail[key]=new string((value.ToString()??"").Where(c=>!char.IsControl(c)).Take(512).ToArray());
+            WriteAtomic(Path.Combine(Root,"diagnostics.json"),JsonSerializer.SerializeToUtf8Bytes(new{schema=1,stage,code,category=error.GetType().Name,at=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),detail}));
         }catch{}
     }
     internal static int FixedCommand(string exe,params string[] arguments)

@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 using OracleProxy.Product;
@@ -44,6 +45,7 @@ internal static class UuPathProtectionTests
             Check(UuAclRepair.AdvancedAncestors(_uu).SequenceEqual(new[]{_programs,_vendor},StringComparer.OrdinalIgnoreCase),"ADVANCED_ANCESTORS_NOT_EXACT");
             Pass("REAL_CUSTOM_DRIVE_PARENT_INHERITED_MODIFY_REPRODUCED_WITH_SIGNED_NEVER_EXECUTED_UU");
             NativePropagationContract();
+            LegacyDescriptorRoundTripProof();
             ExactFieldDescriptorProof();
             GenericModifyProof();
             var before=CaptureTree();
@@ -246,6 +248,119 @@ internal static class UuPathProtectionTests
         Dacl(_programs,parent);Dacl(_vendor,parent);
         Dacl(_uu,"D:PAI(A;OICI;0x1301bf;;;AU)(A;OICIIO;GA;;;SY)(A;;FA;;;SY)(A;OICIIO;GA;;;BA)(A;;FA;;;BA)(A;OICI;0x1301bf;;;BU)");
     }
+    private static void LegacyDescriptorRoundTripProof()
+    {
+        var original=CaptureTree();SetExactFieldDescriptors();
+        // SetSecurityInfo's initializer modernizes legacy descriptor control
+        // bits on some Windows builds. Construct the old on-disk form directly
+        // on this owned disposable VHD, then compare both read APIs.
+        foreach(string path in new[]{_volume,_programs,_vendor}){
+            var state=Read(path);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);
+            raw.SetFlags(raw.ControlFlags&~(ControlFlags.DiscretionaryAclAutoInherited|ControlFlags.DiscretionaryAclAutoInheritRequired));
+            byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
+            using var handle=Open(path,0x02000000);
+            Check(SetKernelObjectSecurity(handle,4,bytes),"LEGACY_DESCRIPTOR_SETUP_FAILED");
+        }
+        var before=CaptureTree();
+        foreach(string path in new[]{_volume,_programs,_vendor,_uu}){
+            var state=before[path];var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);
+            var managed=Directory.Exists(path)?new DirectoryInfo(path).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All):new FileInfo(path).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All);
+            Console.WriteLine("LEGACY_DESCRIPTOR_BEFORE="+Path.GetFileName(path)+" NATIVE="+raw.GetSddlForm(AccessControlSections.All)+" MANAGED="+managed);
+        }
+        try{UuAclRepair.ApplyAdvanced(new[]{_uu});}
+        catch(Exception error){
+            Console.WriteLine("LEGACY_DESCRIPTOR_APPLY_FAILED="+error.Message);
+            foreach(string path in new[]{_volume,_programs,_vendor,_uu}){
+                var raw=new RawSecurityDescriptor(Convert.FromBase64String(Read(path).Binary),0);
+                Console.WriteLine("LEGACY_DESCRIPTOR_FAILURE_PATH="+path+" FLAGS="+(int)raw.ControlFlags+" SDDL="+raw.GetSddlForm(AccessControlSections.All));
+            }
+            throw;
+        }
+        Check(UuDiscovery.Trusted(_exe),"LEGACY_DESCRIPTOR_TRUST_FAILED");
+        SameSiblings(before,"LEGACY_DESCRIPTOR_APPLY_CHANGED_SIBLINGS");
+        UuAclRepair.Restore();SameLegacyTree(before,"LEGACY_DESCRIPTOR_RESTORE_CHANGED_AUTHORIZATION");RemoveOwnedJournal();
+        LegacyPendingRecoveryProof(before);
+        RestoreTree(original);SameTree(original,"LEGACY_DESCRIPTOR_FIXTURE_RESET_NOT_EXACT");
+        Pass("REAL_LEGACY_NON_AUTO_INHERITED_NATIVE_DESCRIPTOR_APPLY_AND_ROLLBACK");
+    }
+    private static void SameLegacyTree(Dictionary<string,State> before,string code)
+    {
+        foreach(var pair in before){
+            State current=Read(pair.Key);
+            if(current==pair.Value)continue;
+            // Independent on-disk proof: only the two written shared ancestors
+            // may retain Windows' AI format marker. Every DACL byte, owner,
+            // primary group, identity and all other control bits must be exact.
+            Check(pair.Key==_programs || pair.Key==_vendor,code+"_UNRELATED_OBJECT");
+            Check(current.Identity==pair.Value.Identity && current.Owner==pair.Value.Owner &&
+                current.Group==pair.Value.Group && current.Dacl==pair.Value.Dacl &&
+                current.Flags==(pair.Value.Flags|(int)ControlFlags.DiscretionaryAclAutoInherited),code+"_SECURITY_CHANGED");
+        }
+    }
+    private static void WriteLegacyFixture(string path,State state)
+    {
+        // Test setup only, never shipped or used by production maintenance.
+        // First set the documented protected/unprotected switch explicitly.
+        // The low-level fixture call alone preserves the previous switch.
+        Write(path,state,Directory.Exists(path)?0x02000000u:0x00060000u);
+        byte[] bytes=Convert.FromBase64String(state.Binary);
+        var desired=new RawSecurityDescriptor(bytes,0);
+        if(!desired.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclAutoInherited)){
+            using var handle=Open(path,Directory.Exists(path)?0x02000000u:0x00060000u);
+            Check(SetKernelObjectSecurity(handle,4,bytes),"LEGACY_FIXTURE_DIRECT_WRITE_FAILED");
+        }
+        State actual=Read(path);
+        Check(actual.Identity==state.Identity && actual.Binary==state.Binary,"LEGACY_FIXTURE_SETUP_NOT_NATIVE_EXACT");
+    }
+    private static string SortFixtureAllows(string value)
+    {
+        var raw=new RawSecurityDescriptor(Convert.FromBase64String(value),0);var acl=raw.DiscretionaryAcl!;
+        Check(acl.OfType<CommonAce>().Count()==acl.Count && acl.OfType<CommonAce>().All(ace=>ace.AceQualifier==AceQualifier.AccessAllowed && !ace.IsCallback),"LEGACY_FIXTURE_ALLOW_ONLY_REQUIRED");
+        var sorted=new RawAcl(acl.Revision,acl.Count);
+        foreach(var ace in acl.OfType<CommonAce>().OrderBy(ace=>ace.SecurityIdentifier.Value,StringComparer.Ordinal).ThenBy(ace=>(int)(ace.AceFlags&~AceFlags.Inherited)))sorted.InsertAce(sorted.Count,ace);
+        raw.DiscretionaryAcl=sorted;byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);return Convert.ToBase64String(bytes);
+    }
+    private static void LegacyPendingRecoveryProof(Dictionary<string,State> legacy)
+    {
+        // Reproduce the field rc25 journal: old non-AI Before, protected+AI
+        // first ancestor on disk, remaining objects still Before, and a journal
+        // whose allow-only ACE order differs from the on-disk source/tree.
+        foreach(string path in new[]{_volume,_programs,_vendor})WriteLegacyFixture(path,legacy[path]);
+        var before=CaptureTree();UuAclRepair.ApplyAdvanced(new[]{_uu});
+        var node=JsonNode.Parse(File.ReadAllText(Backup))!.AsObject();
+        var entries=node["Ancestors"]!.AsArray().Concat(node["Entries"]!.AsArray()).ToArray();
+        foreach(var entry in entries.Where(entry=>entry!["Path"]!.GetValue<string>()!=_programs)){
+            string path=entry!["Path"]!.GetValue<string>();WriteLegacyFixture(path,before[path]);
+        }
+        node["Phase"]="pending";
+        foreach(var entry in new[]{node["SourceParent"]}.Concat(entries)){
+            entry!["Before"]=SortFixtureAllows(entry["Before"]!.GetValue<string>());
+            entry["After"]=SortFixtureAllows(entry["After"]!.GetValue<string>());
+        }
+        string pending=node.ToJsonString();File.WriteAllText(Backup,pending);
+        LegacyDenyOrderRefusal(node);
+        UuAclRepair.Restore();SameLegacyTree(before,"LEGACY_PENDING_RESTORE_CHANGED_AUTHORIZATION");
+        foreach(var pair in before.Where(pair=>pair.Key!=_programs))Check(Read(pair.Key)==pair.Value,"LEGACY_PENDING_UNWRITTEN_OBJECT_CHANGED");
+        using(var restored=JsonDocument.Parse(File.ReadAllText(Backup)))Check(restored.RootElement.GetProperty("Phase").GetString()=="restored","LEGACY_PENDING_NOT_COMMITTED");
+        RemoveOwnedJournal();
+        Pass("REAL_EXISTING_V2_PENDING_SORTED_ALLOW_JOURNAL_RECOVERS_ONLY_WRITTEN_PARENT_PRESERVES_SOURCE_AND_DATA");
+    }
+    private static void LegacyDenyOrderRefusal(JsonObject pending)
+    {
+        string path=Path.Combine(_uu,"assets","binary.cfg");State original=Read(path);
+        var node=pending.DeepClone().AsObject();
+        var entry=node["Entries"]!.AsArray().First(item=>item!["Path"]!.GetValue<string>()==path)!;
+        var raw=new RawSecurityDescriptor(Convert.FromBase64String(entry["After"]!.GetValue<string>()),0);
+        var acl=raw.DiscretionaryAcl!;acl.InsertAce(0,new CommonAce(AceFlags.None,AceQualifier.AccessDenied,(int)FileSystemRights.WriteData,new SecurityIdentifier(Known[1]),false,null));
+        byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
+        string recorded=Convert.ToBase64String(bytes);entry["Before"]=recorded;entry["After"]=recorded;
+        var deny=acl[0];acl.RemoveAce(0);acl.InsertAce(acl.Count,deny);bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
+        WriteLegacyFixture(path,original with{Binary=Convert.ToBase64String(bytes)});
+        File.WriteAllText(Backup,node.ToJsonString());
+        RestoreRefusedWithoutWrites("LEGACY_PENDING_DENY_REORDER","UU_REPAIR_ACL_CHANGED",path);
+        WriteLegacyFixture(path,original);File.WriteAllText(Backup,pending.ToJsonString());
+        Pass("REAL_LEGACY_RECOVERY_REFUSES_DENY_ACE_REORDER_WITH_ZERO_OBJECT_OR_JOURNAL_WRITES");
+    }
     private static void ExactFieldDescriptorProof()
     {
         var original=CaptureTree();
@@ -444,10 +559,13 @@ internal static class UuPathProtectionTests
         Pass("REAL_EXTERNAL_ACL_THIRD_STATE_REFUSES_ROLLBACK_WITH_ZERO_OBJECT_OR_JOURNAL_WRITES");
         Pass("REAL_VOLUME_SOURCE_NATIVE_FILE_ID_AND_PLANNED_CAS_REFUSE_EXTERNAL_CHANGES_WITHOUT_OVERWRITE");
     }
-    private static void RestoreRefusedWithoutWrites(string code,string expectedCode)
+    private static void RestoreRefusedWithoutWrites(string code,string expectedCode,string? expectedPath=null)
     {
         var before=CaptureTree();State journal=Read(Backup);string content=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Backup)));DateTime written=File.GetLastWriteTimeUtc(Backup);bool refused=false;
-        try{UuAclRepair.Restore();}catch(IOException error){refused=true;Check(error.Message==expectedCode,code+"_WRONG_REFUSAL_REASON");}
+        try{UuAclRepair.Restore();}catch(IOException error){
+            refused=true;Check(error.Message==expectedCode,code+"_WRONG_REFUSAL_REASON");
+            if(expectedPath is not null)Check(error.Data["uu.path"] as string==expectedPath,code+"_WRONG_REFUSAL_PATH");
+        }
         Check(refused,code+"_NOT_REFUSED");SameTree(before,code+"_OVERWROTE_OBJECTS");
         Check(Read(Backup)==journal && File.GetLastWriteTimeUtc(Backup)==written && Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Backup)))==content,code+"_OVERWROTE_JOURNAL");
     }
@@ -493,6 +611,7 @@ internal static class UuPathProtectionTests
     [StructLayout(LayoutKind.Sequential)]private struct FileInfoNative{public uint Attributes;public System.Runtime.InteropServices.ComTypes.FILETIME Created,Accessed,Written;public uint Volume,SizeHigh,SizeLow,Links,IndexHigh,IndexLow;}
     [DllImport("kernel32.dll",EntryPoint="CreateFileW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern SafeFileHandle CreateFile(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
     [DllImport("kernel32.dll",SetLastError=true)]private static extern bool GetFileInformationByHandle(SafeFileHandle handle,out FileInfoNative info);
+    [DllImport("advapi32.dll",SetLastError=true)][return:MarshalAs(UnmanagedType.Bool)]private static extern bool SetKernelObjectSecurity(SafeFileHandle handle,uint information,byte[] descriptor);
     [DllImport("advapi32.dll")]private static extern uint GetSecurityInfo(SafeFileHandle handle,int type,uint information,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor);
     [DllImport("advapi32.dll")]private static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
     [DllImport("advapi32.dll")]private static extern bool GetSecurityDescriptorDacl(IntPtr descriptor,[MarshalAs(UnmanagedType.Bool)]out bool present,out IntPtr dacl,[MarshalAs(UnmanagedType.Bool)]out bool defaulted);
@@ -505,3 +624,4 @@ internal static class UuPathProtectionTests
     [DllImport("kernel32.dll",SetLastError=true)]private static extern bool DeviceIoControl(SafeFileHandle handle,uint code,byte[]? input,int inputSize,byte[] output,int outputSize,out uint returned,IntPtr overlapped);
     [DllImport("advapi32.dll",EntryPoint="LogonUserW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool LogonUser(string name,string domain,string password,int type,int provider,out SafeAccessTokenHandle token);
 }
+

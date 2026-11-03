@@ -300,8 +300,12 @@ internal static class UuPathProtectionTests
     private static void WriteLegacyFixture(string path,State state)
     {
         // Test setup only, never shipped or used by production maintenance.
+        // First set the documented protected/unprotected switch explicitly.
+        // The low-level fixture call alone preserves the previous switch.
+        Write(path,state,Directory.Exists(path)?0x02000000u:0x00060000u);
         using var handle=Open(path,Directory.Exists(path)?0x02000000u:0x00060000u);
         Check(SetKernelObjectSecurity(handle,4,Convert.FromBase64String(state.Binary)),"LEGACY_FIXTURE_DIRECT_WRITE_FAILED");
+        Check(Read(path)==state,"LEGACY_FIXTURE_SETUP_NOT_NATIVE_EXACT");
     }
     private static string SortFixtureAllows(string value)
     {
@@ -331,6 +335,7 @@ internal static class UuPathProtectionTests
         string pending=node.ToJsonString();File.WriteAllText(Backup,pending);
         LegacyDenyOrderRefusal(node);
         UuAclRepair.Restore();SameLegacyTree(before,"LEGACY_PENDING_RESTORE_CHANGED_AUTHORIZATION");
+        foreach(var pair in before.Where(pair=>pair.Key!=_programs))Check(Read(pair.Key)==pair.Value,"LEGACY_PENDING_UNWRITTEN_OBJECT_CHANGED");
         using(var restored=JsonDocument.Parse(File.ReadAllText(Backup)))Check(restored.RootElement.GetProperty("Phase").GetString()=="restored","LEGACY_PENDING_NOT_COMMITTED");
         RemoveOwnedJournal();
         Pass("REAL_EXISTING_V2_PENDING_SORTED_ALLOW_JOURNAL_RECOVERS_ONLY_WRITTEN_PARENT_PRESERVES_SOURCE_AND_DATA");

@@ -447,6 +447,9 @@ internal static partial class UuAclRepair
         var error=new IOException(code);error.Data["uu.path"]=item.Path;
         if(expected is not null)error.Data["uu.expected_flags"]=(int)DecodeDescriptor(expected).ControlFlags;
         if(actual is not null)error.Data["uu.actual_flags"]=(int)DecodeDescriptor(actual).ControlFlags;
+#if ORACLE_PRODUCT_TESTS
+        if(expected is not null && actual is not null)Console.WriteLine("UU_FIXTURE_OBJECT_DIFF_PATH="+item.Path+" EXPECTED="+DecodeDescriptor(expected).GetSddlForm(AccessControlSections.All)+" ACTUAL="+DecodeDescriptor(actual).GetSddlForm(AccessControlSections.All));
+#endif
         return error;
     }
     private static void VerifyObject(PathLocked handle,PathObject item,string expected,bool automaticMark=false,bool restoring=false)

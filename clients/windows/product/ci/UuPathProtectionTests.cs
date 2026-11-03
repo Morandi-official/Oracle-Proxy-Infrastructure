@@ -243,7 +243,11 @@ internal static class UuPathProtectionTests
         void Dacl(string path,string sddl){
             var state=Read(path);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);
             var target=new RawSecurityDescriptor(sddl);raw.DiscretionaryAcl=target.DiscretionaryAcl;raw.SetFlags(target.ControlFlags);
-            byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);Write(path,state with{Binary=Convert.ToBase64String(bytes)});
+            byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
+            // Fixture initialization only: the reported UU root policy must
+            // actually flow to its children before the baseline is captured.
+            // MAXIMUM_ALLOWED would leave synthetic stale inherited child ACEs.
+            Write(path,state with{Binary=Convert.ToBase64String(bytes)},path==_uu?0x00060000u:0x02000000u);
         }
         Dacl(_volume,"D:(A;OICIIO;SDGXGWGR;;;AU)(A;;0x1301bf;;;AU)(A;;FA;;;SY)(A;OICIIO;GA;;;SY)(A;OICIIO;GA;;;BA)(A;;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)");
         const string parent="D:(A;ID;FA;;;BA)(A;OICIIOID;GA;;;BA)(A;ID;FA;;;SY)(A;OICIIOID;GA;;;SY)(A;ID;0x1301bf;;;AU)(A;OICIIOID;SDGXGWGR;;;AU)(A;ID;0x1200a9;;;BU)(A;OICIIOID;GXGR;;;BU)";

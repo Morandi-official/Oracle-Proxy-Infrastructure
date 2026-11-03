@@ -214,32 +214,22 @@ internal static class UuPathProtectionTests
     private static void RemoveOwnedJournal(){if(File.Exists(Backup))File.Delete(Backup);}
     private static void GenericModifyProof()
     {
-        var original=CaptureTree();
-        var source=Read(_volume);var sourceRaw=new RawSecurityDescriptor(Convert.FromBase64String(source.Binary),0);
-        foreach(var ace in sourceRaw.DiscretionaryAcl!.OfType<CommonAce>())
-            if(ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly))ace.AccessMask=unchecked((int)0xA0000000u);
-        var sourceBytes=new byte[sourceRaw.BinaryLength];sourceRaw.GetBinaryForm(sourceBytes,0);Write(_volume,source with{Binary=Convert.ToBase64String(sourceBytes)});
-        foreach(string parent in new[]{_programs,_vendor}){
-            var state=Read(parent);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);bool changed=false;
-            foreach(var ace in raw.DiscretionaryAcl!.OfType<CommonAce>()){
-                if(ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly) &&
-                   (ace.AccessMask&~(int)FileSystemRights.Synchronize)==(int)FileSystemRights.Modify){ace.AccessMask=unchecked((int)0xE0010000u);changed=true;}
-            }
-            Check(changed,"RAW_SD_GX_GW_GR_FIXTURE_MISSING");
-            byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);Write(parent,state with{Binary=Convert.ToBase64String(bytes)});
-        }
+        var original=CaptureTree();SetExactFieldDescriptors();
+        var source=Read(_volume);var raw=new RawSecurityDescriptor(Convert.FromBase64String(source.Binary),0);bool changed=false;
+        foreach(var ace in raw.DiscretionaryAcl!.OfType<CommonAce>())
+            if(ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly) && unchecked((uint)ace.AccessMask)==0xE0010000u){ace.AccessMask=unchecked((int)0xA0000000u);changed=true;}
+        Check(changed,"MISMATCH_SOURCE_GENERIC_ACE_NOT_PRESENT");
+        var bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);Write(_volume,source with{Binary=Convert.ToBase64String(bytes)});
         var before=CaptureTree();
-        // This deliberately changes only the child's inherited raw ACE: its
-        // captured source still uses a concrete Modify IO mask. Restoring such
-        // inconsistent provenance can normalize it. Refuse before journal/write.
+        var parent=new RawSecurityDescriptor(Convert.FromBase64String(before[_programs].Binary),0);
+        Check(parent.DiscretionaryAcl!.OfType<CommonAce>().Any(ace=>ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.Inherited) && unchecked((uint)ace.AccessMask)==0xE0010000u),"MISMATCH_CHILD_INHERITED_GENERIC_ACE_NOT_PRESENT");
         Check(UuAclRepair.EligibleAdvancedRoots().Length==0,"MISMATCHED_RAW_GENERIC_SOURCE_ACCEPTED");
         RefusedWithoutWrites(before,"MISMATCHED_RAW_GENERIC_SOURCE","UU_REPAIR_SELECTION_CHANGED");
         RestoreTree(original);SameTree(original,"RAW_GENERIC_MODIFY_TEST_CLEANUP_NOT_EXACT");
         Pass("REAL_MISMATCHED_RAW_GENERIC_INHERITANCE_SOURCE_REFUSED_BEFORE_JOURNAL_OR_WRITE");
     }
-    private static void ExactFieldDescriptorProof()
+    private static void SetExactFieldDescriptors()
     {
-        var original=CaptureTree();
         void Dacl(string path,string sddl){
             var state=Read(path);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);
             var target=new RawSecurityDescriptor(sddl);raw.DiscretionaryAcl=target.DiscretionaryAcl;raw.SetFlags(target.ControlFlags);
@@ -253,6 +243,11 @@ internal static class UuPathProtectionTests
         const string parent="D:(A;ID;FA;;;BA)(A;OICIIOID;GA;;;BA)(A;ID;FA;;;SY)(A;OICIIOID;GA;;;SY)(A;ID;0x1301bf;;;AU)(A;OICIIOID;SDGXGWGR;;;AU)(A;ID;0x1200a9;;;BU)(A;OICIIOID;GXGR;;;BU)";
         Dacl(_programs,parent);Dacl(_vendor,parent);
         Dacl(_uu,"D:PAI(A;OICI;0x1301bf;;;AU)(A;OICIIO;GA;;;SY)(A;;FA;;;SY)(A;OICIIO;GA;;;BA)(A;;FA;;;BA)(A;OICI;0x1301bf;;;BU)");
+    }
+    private static void ExactFieldDescriptorProof()
+    {
+        var original=CaptureTree();
+        SetExactFieldDescriptors();
         var before=CaptureTree();
         foreach(string path in new[]{_programs,_vendor}){
             var raw=new RawSecurityDescriptor(Convert.FromBase64String(before[path].Binary),0);

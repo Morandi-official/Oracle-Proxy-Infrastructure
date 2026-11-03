@@ -137,6 +137,9 @@ def preflight():
     secondary_spec=importlib.util.spec_from_file_location('secondary_endpoint',Path(__file__).with_name('secondary_endpoint.py'))
     secondary=importlib.util.module_from_spec(secondary_spec);secondary_spec.loader.exec_module(secondary)
     value['secondary_endpoint']=secondary.observe()
+    ingress_spec=importlib.util.spec_from_file_location('ingress_readiness',Path(__file__).with_name('ingress_readiness.py'))
+    ingress=importlib.util.module_from_spec(ingress_spec);ingress_spec.loader.exec_module(ingress)
+    value['public_ingress_readiness']=ingress.observe()
     diagnostic_request=json.loads(Path(__file__).with_name('request.json').read_text())
     if diagnostic_request.get('operation')=='preflight' and diagnostic_request.get('request_id','').startswith('network-performance-'):
         try:

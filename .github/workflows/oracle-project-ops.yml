@@ -104,7 +104,7 @@ jobs:
             python3 ops/oracle-project/verify_downloads.py
           fi
       - name: External QUIC TLS reachability without client credentials
-        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
+        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https' || steps.request.outputs.transport_probe == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -113,7 +113,9 @@ jobs:
           "$quic_venv/bin/pip" install --disable-pip-version-check aioquic==1.3.0
           "$quic_venv/bin/python" ops/oracle-project/verify_quic.py
           "$quic_venv/bin/python" ops/oracle-project/verify_web_http3.py --require-reachable
-          if [[ '${{ steps.request.outputs.secondary_endpoint }}' == true ]]; then
+          if [[ '${{ steps.request.outputs.transport_probe }}' == true ]]; then
+            "$quic_venv/bin/python" ops/oracle-project/verify_secondary_endpoint.py --vpn
+          elif [[ '${{ steps.request.outputs.secondary_endpoint }}' == true ]]; then
             if [[ '${{ steps.request.outputs.secondary_vpn }}' == true ]]; then
               "$quic_venv/bin/python" ops/oracle-project/verify_secondary_endpoint.py --vpn
             else

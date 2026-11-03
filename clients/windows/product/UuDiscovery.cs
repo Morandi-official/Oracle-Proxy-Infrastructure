@@ -79,7 +79,7 @@ internal static class UuDiscovery
     {
         for(var dir=new FileInfo(path).Directory;dir?.Parent is not null;dir=dir.Parent)
             if(dir.Parent.Name.Equals("GameViewer",StringComparison.OrdinalIgnoreCase) &&
-               (dir.Name.Equals("config",StringComparison.OrdinalIgnoreCase)||dir.Name.Equals("log",StringComparison.OrdinalIgnoreCase)))return true;
+               (dir.Name.Equals("config",StringComparison.OrdinalIgnoreCase)||dir.Name.Equals("log",StringComparison.OrdinalIgnoreCase)||dir.Name.Equals("setup",StringComparison.OrdinalIgnoreCase)))return true;
         return false;
     }
     internal static UuIssue? Inspect(string path)

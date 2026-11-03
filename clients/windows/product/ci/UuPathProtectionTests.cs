@@ -143,7 +143,7 @@ internal static class UuPathProtectionTests
         Directory.CreateDirectory(Path.Combine(_uu,"assets"));Directory.CreateDirectory(Path.Combine(_other,"nested"));Directory.CreateDirectory(Path.Combine(_volume,"OtherRootApp"));
         string source=Path.Combine(_volume,"official.exe");File.Copy(source,_exe);File.Delete(source);
         File.WriteAllText(Path.Combine(_uu,"assets","binary.cfg"),"synthetic config; no credentials");File.WriteAllText(Path.Combine(_other,"nested","data.txt"),"sibling");File.WriteAllText(Path.Combine(_volume,"OtherRootApp","data.txt"),"other root sibling");
-        Directory.CreateDirectory(Path.Combine(_uu,"config"));Directory.CreateDirectory(Path.Combine(_uu,"log"));
+        Directory.CreateDirectory(Path.Combine(_uu,"config"));Directory.CreateDirectory(Path.Combine(_uu,"log"));Directory.CreateDirectory(Path.Combine(_uu,"setup"));
         foreach(string path in Paths())SetOwner(path,Admin);
         BuildMutableData();
         var markerAcl=new FileSecurity();markerAcl.SetOwner(Admin);markerAcl.SetAccessRuleProtection(true,false);
@@ -169,7 +169,7 @@ internal static class UuPathProtectionTests
     }
     private static void SameSiblings(Dictionary<string,State> expected,string failure)
     {
-        foreach(var entry in expected.Where(entry=>entry.Key.Equals(_volume,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(_other,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_uu,"config")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || entry.Key.Equals(Path.Combine(_uu,"config"),StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_uu,"log")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || entry.Key.Equals(Path.Combine(_uu,"log"),StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_volume,"OtherRootApp"),StringComparison.OrdinalIgnoreCase)))Check(Read(entry.Key)==entry.Value,failure);
+        foreach(var entry in expected.Where(entry=>entry.Key.Equals(_volume,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(_other,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_uu,"config")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || entry.Key.Equals(Path.Combine(_uu,"config"),StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_uu,"log")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || entry.Key.Equals(Path.Combine(_uu,"log"),StringComparison.OrdinalIgnoreCase) || entry.Key.Equals(Path.Combine(_uu,"setup"),StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_uu,"setup")+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase) || entry.Key.StartsWith(Path.Combine(_volume,"OtherRootApp"),StringComparison.OrdinalIgnoreCase)))Check(Read(entry.Key)==entry.Value,failure);
     }
     private static SafeFileHandle Open(string path,uint access,uint share=3)
     {
@@ -369,7 +369,7 @@ internal static class UuPathProtectionTests
             File.WriteAllText(Path.Combine(_uu,@"config\popup\popup.ini"),"fixture setting");
             File.WriteAllText(Path.Combine(_uu,@"config\streamer\cache.json"),"{}");
             File.WriteAllText(Path.Combine(_uu,@"log\client\Log\session.log"),"fixture log");
-            File.Copy(_exe,Path.Combine(_uu,@"config\streamer\GameViewer.exe"));
+            File.Copy(_exe,Path.Combine(_uu,@"config\streamer\GameViewer.exe"));File.Copy(_exe,Path.Combine(_uu,@"setup\GameViewer.exe"));
         });
     }
     private static void MutableDataProof()
@@ -377,6 +377,7 @@ internal static class UuPathProtectionTests
         string config=Path.Combine(_uu,@"config\popup\popup.ini"),log=Path.Combine(_uu,@"log\client\Log\session.log"),dataExe=Path.Combine(_uu,@"config\streamer\GameViewer.exe");
         Check(Read(config).Owner!=Admin.Value && !new[]{"S-1-5-18",Admin.Value}.Contains(Read(log).Owner),"ORDINARY_OWNED_DATA_NOT_REPRODUCED");
         Check(File.ReadAllText(config)=="fixture setting" && File.ReadAllText(log)=="fixture log","DATA_CONTENT_CHANGED_BY_REPAIR");
+        Check(UuDiscovery.Inspect(Path.Combine(_uu,@"setup\GameViewer.exe"))?.Code=="UU_MUTABLE_DATA_EXECUTABLE","CACHED_INSTALLER_GAINED_UU_TRUST");
         Check(UuDiscovery.Inspect(dataExe)?.Code=="UU_MUTABLE_DATA_EXECUTABLE" && !UuDiscovery.Discover().Paths.Contains(dataExe,StringComparer.OrdinalIgnoreCase),"DATA_EXECUTABLE_GAINED_UU_TRUST");
         AsOrdinaryUser(()=>{
             foreach(string dir in new[]{Path.GetDirectoryName(config)!,Path.GetDirectoryName(log)!}){

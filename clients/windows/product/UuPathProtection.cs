@@ -298,7 +298,7 @@ internal static partial class UuAclRepair
             // Native writes to code directories do not propagate. Leave these
             // fixed top-level runtime-data trees entirely outside the transaction:
             // no traversal, locks, ACL/owner writes, or journal rollback targets.
-            if(node.Depth==0 && directory && (Path.GetFileName(path).Equals("config",StringComparison.OrdinalIgnoreCase)||Path.GetFileName(path).Equals("log",StringComparison.OrdinalIgnoreCase)))continue;
+            if(node.Depth==0 && directory && (Path.GetFileName(path).Equals("config",StringComparison.OrdinalIgnoreCase)||Path.GetFileName(path).Equals("log",StringComparison.OrdinalIgnoreCase)||Path.GetFileName(path).Equals("setup",StringComparison.OrdinalIgnoreCase)))continue;
             if(paths.Count>=MaximumObjects || path.Length>2048)throw new IOException("UU_REPAIR_TREE_LIMIT");
             paths.Add(path);
             if(directory){

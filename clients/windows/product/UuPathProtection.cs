@@ -209,13 +209,19 @@ internal static partial class UuAclRepair
             uint mask=unchecked((uint)ace.AccessMask);
             if(ace.AceQualifier==AceQualifier.AccessAllowed && !TrustedSid(ace.SecurityIdentifier)){
                 bool writes=(mask&0x50000000)!=0 || (mask&(uint)AnyWrite)!=0;
-                bool known=KnownGroups.Contains(ace.SecurityIdentifier.Value) && (mask&~(uint)FileSystemRights.Synchronize)==(uint)FileSystemRights.Modify;
+                // Native NTFS may retain DELETE|GENERIC_READ|GENERIC_WRITE|
+                // GENERIC_EXECUTE on inherit-only ACEs (SDGXGWGR). FILE_GENERIC_*
+                // map that exact mask to Modify|Synchronize. Accept only this
+                // exact equivalent, never generic write/all or extra rights.
+                bool modify=(mask&~(uint)FileSystemRights.Synchronize)==(uint)FileSystemRights.Modify || mask==0xE0010000u;
+                bool known=KnownGroups.Contains(ace.SecurityIdentifier.Value) && modify;
                 if(writes && !known)throw new IOException("UU_PATH_ACL_PATTERN_REFUSED");
                 if(known && (!ancestor || !ace.AceFlags.HasFlag(AceFlags.InheritOnly))){
                     // Shared ancestors may only have the exact separate
                     // current-object M and inherit-only OI/CI M layout.
                     if(ancestor && (ace.AceFlags&~AceFlags.Inherited)!=AceFlags.None)throw new IOException("UU_PATH_ANCESTOR_PATTERN_REFUSED");
-                    ace.AccessMask=(int)FileSystemRights.ReadAndExecute|(ace.AccessMask&(int)FileSystemRights.Synchronize);
+                    ace.AccessMask=(int)FileSystemRights.ReadAndExecute|
+                        (mask==0xE0010000u?(int)FileSystemRights.Synchronize:(ace.AccessMask&(int)FileSystemRights.Synchronize));
                 }
                 if(ancestor && known && ace.AceFlags.HasFlag(AceFlags.InheritOnly) &&
                     (ace.AceFlags&~AceFlags.Inherited)!=(AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly))throw new IOException("UU_PATH_ANCESTOR_PATTERN_REFUSED");
@@ -228,6 +234,23 @@ internal static partial class UuAclRepair
         return EncodeDescriptor(descriptor);
     }
 
+    private static void CheckGenericInheritanceSource(PathObject parent,PathObject child)
+    {
+        var source=CheckedDescriptor(parent.Before).DiscretionaryAcl!;
+        var target=CheckedDescriptor(child.Before).DiscretionaryAcl!;
+        const AceFlags io=AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly;
+        foreach(var ace in target.OfType<CommonAce>()){
+            if(ace.AceQualifier!=AceQualifier.AccessAllowed || !ace.AceFlags.HasFlag(AceFlags.Inherited) ||
+               unchecked((uint)ace.AccessMask)!=0xE0010000u || !KnownGroups.Contains(ace.SecurityIdentifier.Value))continue;
+            // Re-enabling inheritance must reproduce these raw ACEs from the
+            // captured source. A synthetically mismatched source can normalize
+            // the descriptor during restore; refuse it before any writes.
+            if((ace.AceFlags&io)!=io || !source.OfType<CommonAce>().Any(origin=>
+                !origin.IsCallback && origin.AceQualifier==AceQualifier.AccessAllowed &&
+                origin.SecurityIdentifier.Equals(ace.SecurityIdentifier) && unchecked((uint)origin.AccessMask)==0xE0010000u &&
+                (origin.AceFlags&~AceFlags.Inherited)==io))throw new IOException("UU_PATH_ACL_PATTERN_REFUSED");
+        }
+    }
     private sealed class PathCapture : IDisposable
     {
         internal PathJournal Journal {get;}
@@ -244,6 +267,7 @@ internal static partial class UuAclRepair
             try{
                 var source=Add(drive,"volume-root",true,false,false);CheckVolumeSource(source.Before);
                 var parents=ancestors.Select((path,index)=>Add(path,index==0?"program-files":"vendor",true,writable,true)).ToArray();
+                CheckGenericInheritanceSource(source,parents[0]);CheckGenericInheritanceSource(parents[0],parents[1]);
                 if(parents.All(item=>!HasEffectiveWrite(item.Before)))throw new IOException("UU_PATH_ANCESTORS_ALREADY_SAFE");
                 var tree=TreePaths(root).Select(path=>Add(path,path==root?"uu-root":Directory.Exists(path)?"uu-directory":"uu-file",Directory.Exists(path),writable,true)).ToArray();
                 if(!SignedMain(root))throw new IOException("UU_PATH_SIGNED_MAIN_REQUIRED");
@@ -339,6 +363,7 @@ internal static partial class UuAclRepair
         var source=journal.SourceParent;
         if(source.Role!="volume-root" || source.Path!=drive || !source.Directory || source.Before is not {Length:>0 and <=65536} || source.Before!=source.After || journal.Ancestors[0].Role!="program-files" || journal.Ancestors[0].Path!=ancestors[0] || journal.Ancestors[1].Role!="vendor" || journal.Ancestors[1].Path!=ancestors[1])throw new IOException("UU_REPAIR_BACKUP_REFUSED");
         CheckVolumeSource(source.Before);
+        CheckGenericInheritanceSource(source,journal.Ancestors[0]);CheckGenericInheritanceSource(journal.Ancestors[0],journal.Ancestors[1]);
         var paths=new HashSet<string>(StringComparer.OrdinalIgnoreCase){source.Path};
         var entries=journal.Entries;
         if(entries[0].Path!=journal.Root || entries[0].Role!="uu-root" || !entries[0].Directory)throw new IOException("UU_REPAIR_BACKUP_REFUSED");
@@ -369,7 +394,13 @@ internal static partial class UuAclRepair
     {
         handle.Revalidate();
         if(handle.Identity!=item.Identity || handle.Volume!=item.Volume)throw new IOException("UU_REPAIR_OBJECT_CHANGED");
-        if(handle.Read()!=expected)throw new IOException("UU_REPAIR_ACL_CHANGED");
+        string actual=handle.Read();
+        if(actual!=expected){
+#if ORACLE_PRODUCT_TESTS
+            Console.WriteLine("UU_FIXTURE_ACL_DIFF_ROLE="+item.Role+" EXPECTED="+DecodeDescriptor(expected).GetSddlForm(AccessControlSections.All)+" ACTUAL="+DecodeDescriptor(actual).GetSddlForm(AccessControlSections.All));
+#endif
+            throw new IOException("UU_REPAIR_ACL_CHANGED");
+        }
     }
     private static void VerifySource(PathJournal journal,Dictionary<string,PathLocked> objects)
     {

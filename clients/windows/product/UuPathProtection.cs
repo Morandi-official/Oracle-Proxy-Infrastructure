@@ -209,7 +209,12 @@ internal static partial class UuAclRepair
             uint mask=unchecked((uint)ace.AccessMask);
             if(ace.AceQualifier==AceQualifier.AccessAllowed && !TrustedSid(ace.SecurityIdentifier)){
                 bool writes=(mask&0x50000000)!=0 || (mask&(uint)AnyWrite)!=0;
-                bool known=KnownGroups.Contains(ace.SecurityIdentifier.Value) && (mask&~(uint)FileSystemRights.Synchronize)==(uint)FileSystemRights.Modify;
+                // Native NTFS may retain DELETE|GENERIC_READ|GENERIC_WRITE|
+                // GENERIC_EXECUTE on inherit-only ACEs (SDGXGWGR). FILE_GENERIC_*
+                // map that exact mask to Modify|Synchronize. Accept only this
+                // exact equivalent, never generic write/all or extra rights.
+                bool modify=(mask&~(uint)FileSystemRights.Synchronize)==(uint)FileSystemRights.Modify || mask==0xE0010000u;
+                bool known=KnownGroups.Contains(ace.SecurityIdentifier.Value) && modify;
                 if(writes && !known)throw new IOException("UU_PATH_ACL_PATTERN_REFUSED");
                 if(known && (!ancestor || !ace.AceFlags.HasFlag(AceFlags.InheritOnly))){
                     // Shared ancestors may only have the exact separate

@@ -44,6 +44,8 @@ internal static class UuPathProtectionTests
             Check(UuAclRepair.AdvancedAncestors(_uu).SequenceEqual(new[]{_programs,_vendor},StringComparer.OrdinalIgnoreCase),"ADVANCED_ANCESTORS_NOT_EXACT");
             Pass("REAL_CUSTOM_DRIVE_PARENT_INHERITED_MODIFY_REPRODUCED_WITH_SIGNED_NEVER_EXECUTED_UU");
             NativePropagationContract();
+            GenericModifyProof();
+            ExactFieldDescriptorProof();
             var before=CaptureTree();
             OccupiedDirectoryRefusal(before);
             ZeroWriteRefusals(before);
@@ -210,6 +212,56 @@ internal static class UuPathProtectionTests
         Pass("REAL_NTFS_MAXIMUM_ALLOWED_PRESERVES_SIBLING_NATIVE_DESCRIPTOR_OWNER_FLAGS_NORMAL_HANDLE_DETECTS_PROPAGATION");
     }
     private static void RemoveOwnedJournal(){if(File.Exists(Backup))File.Delete(Backup);}
+    private static void GenericModifyProof()
+    {
+        var original=CaptureTree();
+        foreach(string parent in new[]{_programs,_vendor}){
+            var state=Read(parent);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);bool changed=false;
+            foreach(var ace in raw.DiscretionaryAcl!.OfType<CommonAce>()){
+                if(ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly) &&
+                   (ace.AccessMask&~(int)FileSystemRights.Synchronize)==(int)FileSystemRights.Modify){ace.AccessMask=unchecked((int)0xE0010000u);changed=true;}
+            }
+            Check(changed,"RAW_SD_GX_GW_GR_FIXTURE_MISSING");
+            byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);Write(parent,state with{Binary=Convert.ToBase64String(bytes)});
+        }
+        var before=CaptureTree();
+        Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"RAW_GENERIC_MODIFY_PREFLIGHT_REJECTED");
+        UuAclRepair.ApplyAdvanced(new[]{_uu});
+        Check(UuDiscovery.Trusted(_exe),"RAW_GENERIC_MODIFY_TRUST_FAILED");SameSiblings(before,"RAW_GENERIC_MODIFY_SIBLING_CHANGED");
+        foreach(string parent in new[]{_programs,_vendor}){
+            var raw=new RawSecurityDescriptor(Convert.FromBase64String(Read(parent).Binary),0);
+            Check(raw.DiscretionaryAcl!.OfType<CommonAce>().Any(ace=>ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly) && unchecked((uint)ace.AccessMask)==0xE0010000u),"RAW_GENERIC_MODIFY_INHERIT_ONLY_NOT_PRESERVED");
+        }
+        OrdinaryUserProof();
+        UuAclRepair.Restore();SameTree(before,"RAW_GENERIC_MODIFY_ROLLBACK_NOT_EXACT");RemoveOwnedJournal();
+        RestoreTree(original);SameTree(original,"RAW_GENERIC_MODIFY_TEST_CLEANUP_NOT_EXACT");
+        Pass("REAL_RAW_SDGXGWGR_PARENT_MODIFY_ACCEPTED_WITH_SIBLING_AND_EXACT_ROLLBACK_PROOF");
+    }
+    private static void ExactFieldDescriptorProof()
+    {
+        var original=CaptureTree();
+        void Dacl(string path,string sddl){
+            var state=Read(path);var raw=new RawSecurityDescriptor(Convert.FromBase64String(state.Binary),0);
+            var target=new RawSecurityDescriptor(sddl);raw.DiscretionaryAcl=target.DiscretionaryAcl;raw.SetFlags(target.ControlFlags);
+            byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);Write(path,state with{Binary=Convert.ToBase64String(bytes)});
+        }
+        Dacl(_volume,"D:(A;OICIIO;SDGXGWGR;;;AU)(A;;0x1301bf;;;AU)(A;;FA;;;SY)(A;OICIIO;GA;;;SY)(A;OICIIO;GA;;;BA)(A;;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;GXGR;;;BU)");
+        const string parent="D:(A;ID;FA;;;BA)(A;OICIIOID;GA;;;BA)(A;ID;FA;;;SY)(A;OICIIOID;GA;;;SY)(A;ID;0x1301bf;;;AU)(A;OICIIOID;SDGXGWGR;;;AU)(A;ID;0x1200a9;;;BU)(A;OICIIOID;GXGR;;;BU)";
+        Dacl(_programs,parent);Dacl(_vendor,parent);
+        Dacl(_uu,"D:PAI(A;OICI;0x1301bf;;;AU)(A;OICIIO;GA;;;SY)(A;;FA;;;SY)(A;OICIIO;GA;;;BA)(A;;FA;;;BA)(A;OICI;0x1301bf;;;BU)");
+        var before=CaptureTree();
+        foreach(string path in new[]{_programs,_vendor}){
+            var raw=new RawSecurityDescriptor(Convert.FromBase64String(before[path].Binary),0);
+            Check(!raw.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclProtected),"FIELD_PARENT_MUST_RETAIN_INHERITANCE");
+            Check(raw.DiscretionaryAcl!.OfType<CommonAce>().Any(ace=>ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.Inherited) && ace.AceFlags.HasFlag(AceFlags.InheritOnly) && unchecked((uint)ace.AccessMask)==0xE0010000u),"FIELD_NATIVE_RAW_GENERIC_MODIFY_NOT_REPRODUCED");
+        }
+        Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"FIELD_RAW_SDDL_PREVIEW_REJECTED");
+        UuAclRepair.ApplyAdvanced(new[]{_uu});Check(UuDiscovery.Trusted(_exe),"FIELD_RAW_SDDL_TRUST_FAILED");
+        SameSiblings(before,"FIELD_RAW_SDDL_CHANGED_SIBLINGS");OrdinaryUserProof();
+        UuAclRepair.Restore();SameTree(before,"FIELD_RAW_SDDL_RESTORE_NOT_NATIVE_EXACT");RemoveOwnedJournal();
+        RestoreTree(original);SameTree(original,"FIELD_RAW_SDDL_FIXTURE_RESET_NOT_EXACT");
+        Pass("REAL_FIELD_RAW_SDDL_TWO_UNPROTECTED_PARENTS_APPLY_TRUST_ORDINARY_USER_AND_EXACT_ROLLBACK");
+    }
     private static void RefusedWithoutWrites(Dictionary<string,State> expected,string code,string? expectedCode=null)
     {
         State? backup=File.Exists(Backup)?Read(Backup):null;string? content=backup is null?null:Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Backup)));DateTime written=backup is null?default:File.GetLastWriteTimeUtc(Backup);bool refused=false;
@@ -245,7 +297,7 @@ internal static class UuPathProtectionTests
         foreach(var rule in new[]{new FileSystemAccessRule(new SecurityIdentifier("S-1-1-0"),FileSystemRights.Modify,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow),new FileSystemAccessRule(new SecurityIdentifier(Known[1]),FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow)}){
             var acl=new DirectoryInfo(_uu).GetAccessControl();acl.AddAccessRule(rule);Write(_uu,WithAcl(before[_uu],acl));RefusedWithoutWrites(CaptureTree(),"UNKNOWN_PRINCIPAL_OR_FULL_CONTROL");Write(_uu,before[_uu]);
         }
-        foreach(uint genericWrite in new[]{0x40000000u,0x10000000u}){
+        foreach(uint genericWrite in new[]{0x40000000u,0x10000000u,0xE0010040u,0xE0050000u,0xE0090000u}){
             var raw=new RawSecurityDescriptor(Convert.FromBase64String(before[_programs].Binary),0);
             raw.DiscretionaryAcl!.InsertAce(raw.DiscretionaryAcl.Count,new CommonAce(AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly|AceFlags.Inherited,AceQualifier.AccessAllowed,unchecked((int)genericWrite),new SecurityIdentifier(Known[1]),false,null));
             var bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);Write(_programs,before[_programs] with{Binary=Convert.ToBase64String(bytes)});

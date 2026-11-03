@@ -303,9 +303,14 @@ internal static class UuPathProtectionTests
         // First set the documented protected/unprotected switch explicitly.
         // The low-level fixture call alone preserves the previous switch.
         Write(path,state,Directory.Exists(path)?0x02000000u:0x00060000u);
-        using var handle=Open(path,Directory.Exists(path)?0x02000000u:0x00060000u);
-        Check(SetKernelObjectSecurity(handle,4,Convert.FromBase64String(state.Binary)),"LEGACY_FIXTURE_DIRECT_WRITE_FAILED");
-        Check(Read(path)==state,"LEGACY_FIXTURE_SETUP_NOT_NATIVE_EXACT");
+        byte[] bytes=Convert.FromBase64String(state.Binary);
+        var desired=new RawSecurityDescriptor(bytes,0);
+        if(!desired.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclAutoInherited)){
+            using var handle=Open(path,Directory.Exists(path)?0x02000000u:0x00060000u);
+            Check(SetKernelObjectSecurity(handle,4,bytes),"LEGACY_FIXTURE_DIRECT_WRITE_FAILED");
+        }
+        State actual=Read(path);
+        Check(actual.Identity==state.Identity && actual.Binary==state.Binary,"LEGACY_FIXTURE_SETUP_NOT_NATIVE_EXACT");
     }
     private static string SortFixtureAllows(string value)
     {
@@ -352,7 +357,7 @@ internal static class UuPathProtectionTests
         var deny=acl[0];acl.RemoveAce(0);acl.InsertAce(acl.Count,deny);bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
         WriteLegacyFixture(path,original with{Binary=Convert.ToBase64String(bytes)});
         File.WriteAllText(Backup,node.ToJsonString());
-        RestoreRefusedWithoutWrites("LEGACY_PENDING_DENY_REORDER","UU_REPAIR_ACL_CHANGED");
+        RestoreRefusedWithoutWrites("LEGACY_PENDING_DENY_REORDER","UU_REPAIR_ACL_CHANGED",path);
         WriteLegacyFixture(path,original);File.WriteAllText(Backup,pending.ToJsonString());
         Pass("REAL_LEGACY_RECOVERY_REFUSES_DENY_ACE_REORDER_WITH_ZERO_OBJECT_OR_JOURNAL_WRITES");
     }
@@ -554,10 +559,13 @@ internal static class UuPathProtectionTests
         Pass("REAL_EXTERNAL_ACL_THIRD_STATE_REFUSES_ROLLBACK_WITH_ZERO_OBJECT_OR_JOURNAL_WRITES");
         Pass("REAL_VOLUME_SOURCE_NATIVE_FILE_ID_AND_PLANNED_CAS_REFUSE_EXTERNAL_CHANGES_WITHOUT_OVERWRITE");
     }
-    private static void RestoreRefusedWithoutWrites(string code,string expectedCode)
+    private static void RestoreRefusedWithoutWrites(string code,string expectedCode,string? expectedPath=null)
     {
         var before=CaptureTree();State journal=Read(Backup);string content=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Backup)));DateTime written=File.GetLastWriteTimeUtc(Backup);bool refused=false;
-        try{UuAclRepair.Restore();}catch(IOException error){refused=true;Check(error.Message==expectedCode,code+"_WRONG_REFUSAL_REASON");}
+        try{UuAclRepair.Restore();}catch(IOException error){
+            refused=true;Check(error.Message==expectedCode,code+"_WRONG_REFUSAL_REASON");
+            if(expectedPath is not null)Check(error.Data["uu.path"] as string==expectedPath,code+"_WRONG_REFUSAL_PATH");
+        }
         Check(refused,code+"_NOT_REFUSED");SameTree(before,code+"_OVERWROTE_OBJECTS");
         Check(Read(Backup)==journal && File.GetLastWriteTimeUtc(Backup)==written && Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Backup)))==content,code+"_OVERWROTE_JOURNAL");
     }

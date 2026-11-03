@@ -233,6 +233,23 @@ internal static partial class UuAclRepair
         return EncodeDescriptor(descriptor);
     }
 
+    private static void CheckGenericInheritanceSource(PathObject parent,PathObject child)
+    {
+        var source=CheckedDescriptor(parent.Before).DiscretionaryAcl!;
+        var target=CheckedDescriptor(child.Before).DiscretionaryAcl!;
+        const AceFlags io=AceFlags.ObjectInherit|AceFlags.ContainerInherit|AceFlags.InheritOnly;
+        foreach(var ace in target.OfType<CommonAce>()){
+            if(ace.AceQualifier!=AceQualifier.AccessAllowed || !ace.AceFlags.HasFlag(AceFlags.Inherited) ||
+               unchecked((uint)ace.AccessMask)!=0xE0010000u || !KnownGroups.Contains(ace.SecurityIdentifier.Value))continue;
+            // Re-enabling inheritance must reproduce these raw ACEs from the
+            // captured source. A synthetically mismatched source can normalize
+            // the descriptor during restore; refuse it before any writes.
+            if((ace.AceFlags&io)!=io || !source.OfType<CommonAce>().Any(origin=>
+                !origin.IsCallback && origin.AceQualifier==AceQualifier.AccessAllowed &&
+                origin.SecurityIdentifier.Equals(ace.SecurityIdentifier) && unchecked((uint)origin.AccessMask)==0xE0010000u &&
+                (origin.AceFlags&io)==io))throw new IOException("UU_PATH_ACL_PATTERN_REFUSED");
+        }
+    }
     private sealed class PathCapture : IDisposable
     {
         internal PathJournal Journal {get;}
@@ -249,6 +266,7 @@ internal static partial class UuAclRepair
             try{
                 var source=Add(drive,"volume-root",true,false,false);CheckVolumeSource(source.Before);
                 var parents=ancestors.Select((path,index)=>Add(path,index==0?"program-files":"vendor",true,writable,true)).ToArray();
+                CheckGenericInheritanceSource(source,parents[0]);CheckGenericInheritanceSource(parents[0],parents[1]);
                 if(parents.All(item=>!HasEffectiveWrite(item.Before)))throw new IOException("UU_PATH_ANCESTORS_ALREADY_SAFE");
                 var tree=TreePaths(root).Select(path=>Add(path,path==root?"uu-root":Directory.Exists(path)?"uu-directory":"uu-file",Directory.Exists(path),writable,true)).ToArray();
                 if(!SignedMain(root))throw new IOException("UU_PATH_SIGNED_MAIN_REQUIRED");
@@ -344,6 +362,7 @@ internal static partial class UuAclRepair
         var source=journal.SourceParent;
         if(source.Role!="volume-root" || source.Path!=drive || !source.Directory || source.Before is not {Length:>0 and <=65536} || source.Before!=source.After || journal.Ancestors[0].Role!="program-files" || journal.Ancestors[0].Path!=ancestors[0] || journal.Ancestors[1].Role!="vendor" || journal.Ancestors[1].Path!=ancestors[1])throw new IOException("UU_REPAIR_BACKUP_REFUSED");
         CheckVolumeSource(source.Before);
+        CheckGenericInheritanceSource(source,journal.Ancestors[0]);CheckGenericInheritanceSource(journal.Ancestors[0],journal.Ancestors[1]);
         var paths=new HashSet<string>(StringComparer.OrdinalIgnoreCase){source.Path};
         var entries=journal.Entries;
         if(entries[0].Path!=journal.Root || entries[0].Role!="uu-root" || !entries[0].Directory)throw new IOException("UU_REPAIR_BACKUP_REFUSED");

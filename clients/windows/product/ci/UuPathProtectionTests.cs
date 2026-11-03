@@ -225,17 +225,13 @@ internal static class UuPathProtectionTests
             byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);Write(parent,state with{Binary=Convert.ToBase64String(bytes)});
         }
         var before=CaptureTree();
-        Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"RAW_GENERIC_MODIFY_PREFLIGHT_REJECTED");
-        UuAclRepair.ApplyAdvanced(new[]{_uu});
-        Check(UuDiscovery.Trusted(_exe),"RAW_GENERIC_MODIFY_TRUST_FAILED");SameSiblings(before,"RAW_GENERIC_MODIFY_SIBLING_CHANGED");
-        foreach(string parent in new[]{_programs,_vendor}){
-            var raw=new RawSecurityDescriptor(Convert.FromBase64String(Read(parent).Binary),0);
-            Check(raw.DiscretionaryAcl!.OfType<CommonAce>().Any(ace=>ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly) && unchecked((uint)ace.AccessMask)==0xE0010000u),"RAW_GENERIC_MODIFY_INHERIT_ONLY_NOT_PRESERVED");
-        }
-        OrdinaryUserProof();
-        UuAclRepair.Restore();SameTree(before,"RAW_GENERIC_MODIFY_ROLLBACK_NOT_EXACT");RemoveOwnedJournal();
+        // This deliberately changes only the child's inherited raw ACE: its
+        // captured source still uses a concrete Modify IO mask. Restoring such
+        // inconsistent provenance can normalize it. Refuse before journal/write.
+        Check(UuAclRepair.EligibleAdvancedRoots().Length==0,"MISMATCHED_RAW_GENERIC_SOURCE_ACCEPTED");
+        RefusedWithoutWrites(before,"MISMATCHED_RAW_GENERIC_SOURCE","UU_REPAIR_SELECTION_CHANGED");
         RestoreTree(original);SameTree(original,"RAW_GENERIC_MODIFY_TEST_CLEANUP_NOT_EXACT");
-        Pass("REAL_RAW_SDGXGWGR_PARENT_MODIFY_ACCEPTED_WITH_SIBLING_AND_EXACT_ROLLBACK_PROOF");
+        Pass("REAL_MISMATCHED_RAW_GENERIC_INHERITANCE_SOURCE_REFUSED_BEFORE_JOURNAL_OR_WRITE");
     }
     private static void ExactFieldDescriptorProof()
     {
@@ -257,6 +253,10 @@ internal static class UuPathProtectionTests
         }
         Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"FIELD_RAW_SDDL_PREVIEW_REJECTED");
         UuAclRepair.ApplyAdvanced(new[]{_uu});Check(UuDiscovery.Trusted(_exe),"FIELD_RAW_SDDL_TRUST_FAILED");
+        foreach(string path in new[]{_programs,_vendor}){
+            var raw=new RawSecurityDescriptor(Convert.FromBase64String(Read(path).Binary),0);
+            Check(raw.DiscretionaryAcl!.OfType<CommonAce>().Any(ace=>ace.SecurityIdentifier.Value==Known[0] && ace.AceFlags.HasFlag(AceFlags.InheritOnly) && unchecked((uint)ace.AccessMask)==0xE0010000u),"FIELD_RAW_GENERIC_IO_NOT_PRESERVED");
+        }
         SameSiblings(before,"FIELD_RAW_SDDL_CHANGED_SIBLINGS");OrdinaryUserProof();
         UuAclRepair.Restore();SameTree(before,"FIELD_RAW_SDDL_RESTORE_NOT_NATIVE_EXACT");RemoveOwnedJournal();
         RestoreTree(original);SameTree(original,"FIELD_RAW_SDDL_FIXTURE_RESET_NOT_EXACT");

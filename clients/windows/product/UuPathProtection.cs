@@ -407,47 +407,90 @@ internal static partial class UuAclRepair
         AdvancedTestHook?.Invoke(stage);
 #endif
     }
-    private static void VerifyObject(PathLocked handle,PathObject item,string expected)
+    // SetSecurityInfo converts a legacy DACL to the automatic-inheritance
+    // format even with MAXIMUM_ALLOWED (which still prevents child writes).
+    // Accept only this one-way bookkeeping bit; never ignore protection,
+    // owner/group, an ACE, an access mask, or any other descriptor component.
+    private static bool DescriptorMatches(string actual,string expected,bool allowAutomaticMark,bool allowAllowAcePermutation)
+    {
+        if(actual==expected)return true;
+        var current=DecodeDescriptor(actual);var desired=DecodeDescriptor(expected);
+        if(current.ControlFlags!=desired.ControlFlags){
+            if(!allowAutomaticMark || desired.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclAutoInherited) ||
+               current.ControlFlags!=(desired.ControlFlags|ControlFlags.DiscretionaryAclAutoInherited))return false;
+            current.SetFlags(desired.ControlFlags);
+        }
+        if(EncodeDescriptor(current)==expected)return true;
+        if(!allowAllowAcePermutation || current.DiscretionaryAcl is null || desired.DiscretionaryAcl is null ||
+           current.DiscretionaryAcl.Revision!=desired.DiscretionaryAcl.Revision ||
+           current.DiscretionaryAcl.Count!=desired.DiscretionaryAcl.Count)return false;
+        static string[]? AllowedAces(RawAcl acl){
+            var values=new List<string>();
+            foreach(GenericAce entry in acl){
+                // Order is security-sensitive when ANY deny/object/callback ACE
+                // is present. This compatibility path is allow-only, preserves
+                // every raw ACE and duplicate, and never maps generic rights.
+                if(entry is not CommonAce ace || ace.IsCallback || ace.AceQualifier!=AceQualifier.AccessAllowed)return null;
+                byte[] bytes=new byte[ace.BinaryLength];ace.GetBinaryForm(bytes,0);values.Add(Convert.ToHexString(bytes));
+            }
+            values.Sort(StringComparer.Ordinal);return values.ToArray();
+        }
+        var left=AllowedAces(current.DiscretionaryAcl);var right=AllowedAces(desired.DiscretionaryAcl);
+        if(left is null || right is null || !left.SequenceEqual(right,StringComparer.Ordinal))return false;
+        current.DiscretionaryAcl=desired.DiscretionaryAcl;
+        return EncodeDescriptor(current)==expected;
+    }
+    private static bool JournalMatches(PathObject item,string actual,string expected,bool restoring)=>
+        DescriptorMatches(actual,expected,item.Before!=item.After,restoring);
+    private static IOException ObjectFailure(string code,PathObject item,string? expected=null,string? actual=null)
+    {
+        var error=new IOException(code);error.Data["uu.path"]=item.Path;
+        if(expected is not null)error.Data["uu.expected_flags"]=(int)DecodeDescriptor(expected).ControlFlags;
+        if(actual is not null)error.Data["uu.actual_flags"]=(int)DecodeDescriptor(actual).ControlFlags;
+        return error;
+    }
+    private static void VerifyObject(PathLocked handle,PathObject item,string expected,bool automaticMark=false,bool restoring=false)
     {
         handle.Revalidate();
-        if(handle.Identity!=item.Identity || handle.Volume!=item.Volume)throw new IOException("UU_REPAIR_OBJECT_CHANGED");
+        if(handle.Identity!=item.Identity || handle.Volume!=item.Volume)throw ObjectFailure("UU_REPAIR_OBJECT_CHANGED",item);
         string actual=handle.Read();
-        if(actual!=expected){
+        if(!DescriptorMatches(actual,expected,automaticMark && item.Before!=item.After,restoring)){
 #if ORACLE_PRODUCT_TESTS
             Console.WriteLine("UU_FIXTURE_ACL_DIFF_ROLE="+item.Role+" EXPECTED="+DecodeDescriptor(expected).GetSddlForm(AccessControlSections.All)+" ACTUAL="+DecodeDescriptor(actual).GetSddlForm(AccessControlSections.All));
 #endif
-            throw new IOException("UU_REPAIR_ACL_CHANGED");
+            throw ObjectFailure("UU_REPAIR_ACL_CHANGED",item,expected,actual);
         }
     }
-    private static void VerifySource(PathJournal journal,Dictionary<string,PathLocked> objects)
+    private static void VerifySource(PathJournal journal,Dictionary<string,PathLocked> objects,bool restoring=false)
     {
         if(PathVolume(journal.SourceParent.Path)!=journal.SourceParent.Volume)throw new IOException("UU_PATH_VOLUME_REFUSED");
-        VerifyObject(objects[journal.SourceParent.Path],journal.SourceParent,journal.SourceParent.Before);
+        VerifyObject(objects[journal.SourceParent.Path],journal.SourceParent,journal.SourceParent.Before,false,restoring);
     }
-    private static void RollbackAdvanced(PathJournal journal,Dictionary<string,PathLocked> objects,List<PathObject> written)
+    private static void RollbackAdvanced(PathJournal journal,Dictionary<string,PathLocked> objects,List<PathObject> written,bool restoring=false)
     {
-        VerifySource(journal,objects);
+        VerifySource(journal,objects,restoring);
         var changed=new List<PathObject>();
         foreach(var item in written){
             var handle=objects[item.Path];handle.Revalidate();
-            if(handle.Identity!=item.Identity)throw new IOException("UU_REPAIR_OBJECT_CHANGED");
+            if(handle.Identity!=item.Identity)throw ObjectFailure("UU_REPAIR_OBJECT_CHANGED",item);
             string current=handle.Read();
-            if(current==item.After)changed.Add(item);
-            else if(current!=item.Before)throw new IOException("UU_REPAIR_ACL_CHANGED");
+            if(JournalMatches(item,current,item.Before,restoring))continue;
+            if(JournalMatches(item,current,item.After,restoring))changed.Add(item);
+            else throw ObjectFailure("UU_REPAIR_ACL_CHANGED",item,item.After,current);
         }
         var changedPaths=changed.Select(item=>item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         // A source directory changed by another actor cannot be used to
         // re-enable inheritance during rollback. Do not overwrite that change.
-        foreach(var item in MutableObjects(journal).Where(item=>item.Directory))VerifyObject(objects[item.Path],item,changedPaths.Contains(item.Path)?item.After:item.Before);
+        foreach(var item in MutableObjects(journal).Where(item=>item.Directory))VerifyObject(objects[item.Path],item,changedPaths.Contains(item.Path)?item.After:item.Before,true,restoring);
         foreach(var item in changed){
-            VerifySource(journal,objects);
+            VerifySource(journal,objects,restoring);
             string parentPath=Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(item.Path))!;
             var parent=parentPath==Path.TrimEndingDirectorySeparator(journal.SourceParent.Path)?journal.SourceParent:MutableObjects(journal).FirstOrDefault(candidate=>string.Equals(candidate.Path,parentPath,StringComparison.OrdinalIgnoreCase));
             if(parent is null)throw new IOException("UU_PATH_SOURCE_PARENT_CHANGED");
-            VerifyObject(objects[parent.Path],parent,parent.Before);
-            VerifyObject(objects[item.Path],item,item.After);objects[item.Path].Write(item.Before);VerifyObject(objects[item.Path],item,item.Before);
+            VerifyObject(objects[parent.Path],parent,parent.Before,true,restoring);
+            VerifyObject(objects[item.Path],item,item.After,true,restoring);objects[item.Path].Write(item.Before);VerifyObject(objects[item.Path],item,item.Before,true,restoring);
         }
-        foreach(var item in changed)VerifyObject(objects[item.Path],item,item.Before);
+        foreach(var item in changed)VerifyObject(objects[item.Path],item,item.Before,true,restoring);
     }
     internal static void ApplyAdvanced(string[] roots)
     {
@@ -463,17 +506,25 @@ internal static partial class UuAclRepair
             int parent=0;
             foreach(var item in MutableObjects(journal)){
                 VerifySource(journal,objects);VerifyObject(objects[item.Path],item,item.Before);
-                if(item.Before!=item.After){written.Add(item);objects[item.Path].Write(item.After);VerifyObject(objects[item.Path],item,item.After);}
+                if(item.Before!=item.After){written.Add(item);objects[item.Path].Write(item.After);VerifyObject(objects[item.Path],item,item.After,true);}
                 AdvancedStage(item.Role is "program-files" or "vendor"?$"ancestor_{parent++}_written":"uu_object_written");
             }
             AdvancedStage("before_commit");VerifySource(journal,objects);
             if(!TreePaths(journal.Root).SequenceEqual(journal.Entries.Select(item=>item.Path),StringComparer.OrdinalIgnoreCase))throw new IOException("UU_PATH_TREE_CHANGED");
-            foreach(var item in MutableObjects(journal))VerifyObject(objects[item.Path],item,item.After);
+            foreach(var item in MutableObjects(journal))VerifyObject(objects[item.Path],item,item.After,true);
             if(!UuDiscovery.Discover().Paths.Any(path=>path.StartsWith(journal.Root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)))throw new IOException("UU_REPAIR_NOT_VERIFIED");
             SaveAdvanced(journal with{Phase="applied"});
-        }catch{
+        }catch(Exception original){
             try{RollbackAdvanced(journal,objects,written);SaveAdvanced(journal with{Phase="restored"});}
-            catch{throw new IOException("UU_PATH_ROLLBACK_NOT_VERIFIED");}
+            catch(Exception rollback){
+                var error=new IOException("UU_PATH_ROLLBACK_NOT_VERIFIED",new AggregateException(original,rollback));
+                error.Data["uu.original_error"]=original.Message;error.Data["uu.rollback_error"]=rollback.Message;
+                if(original.Data["uu.path"] is string originalPath)error.Data["uu.original_path"]=originalPath;
+                if(rollback.Data["uu.path"] is string rollbackPath)error.Data["uu.rollback_path"]=rollbackPath;
+                foreach(string key in new[]{"uu.path","uu.expected_flags","uu.actual_flags"})
+                    if(rollback.Data[key] is object value)error.Data[key]=value;
+                throw error;
+            }
             throw;
         }
     }
@@ -485,13 +536,16 @@ internal static partial class UuAclRepair
         try{
             foreach(var item in new[]{journal.SourceParent}.Concat(MutableObjects(journal))){
                 var handle=new PathLocked(item.Path,item.Directory,item.Role!="volume-root",item.Volume);objects.Add(item.Path,handle);handle.Revalidate();
-                if(handle.Identity!=item.Identity)throw new IOException("UU_REPAIR_OBJECT_CHANGED");
+                if(handle.Identity!=item.Identity)throw ObjectFailure("UU_REPAIR_OBJECT_CHANGED",item);
                 string current=handle.Read();
-                if(item.Role=="volume-root" ? current!=item.Before : journal.Phase=="applied" ? current!=item.After : current!=item.Before && current!=item.After)throw new IOException("UU_REPAIR_ACL_CHANGED");
-                if(item.Before!=item.After && current==item.After)written.Add(item);
+                bool before=JournalMatches(item,current,item.Before,true),after=JournalMatches(item,current,item.After,true);
+                if(item.Role=="volume-root" ? !before : journal.Phase=="applied" ? !after : !before && !after)
+                    throw ObjectFailure("UU_REPAIR_ACL_CHANGED",item,journal.Phase=="applied"?item.After:item.Before,current);
+                if(item.Before!=item.After && !before && after)written.Add(item);
             }
-            VerifySource(journal,objects);SaveAdvanced(journal with{Phase="restoring"});
-            RollbackAdvanced(journal,objects,written);SaveAdvanced(journal with{Phase="restored"});
+            VerifySource(journal,objects,true);SaveAdvanced(journal with{Phase="restoring"});
+            RollbackAdvanced(journal,objects,written,true);SaveAdvanced(journal with{Phase="restored"});
         }finally{foreach(var item in objects.Values)item.Dispose();}
     }
 }
+

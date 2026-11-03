@@ -17,5 +17,6 @@ with tempfile.TemporaryDirectory(prefix='oracle-syntax-only-') as folder:
         (payload/name).write_text('Synthetic syntax test only; never execute or distribute.',encoding='utf-8-sig')
     (payload/'licenses/OracleProxy-GPL-3.0.txt').write_text('Synthetic compiler input; not a product licence.')
     subprocess.run([str(compiler),'/Qp','/DPayloadDir='+str(payload),'/DOutputDir='+str(out),
-                    '/DProductVersion=0.3.0-rc25','/DVersionNumbers=0.3.0.25','/DArtifactStem=syntax-only',str(script)],check=True)
+                    '/DProductVersion=0.3.0-rc26','/DVersionNumbers=0.3.0.25','/DArtifactStem=syntax-only',str(script)],check=True)
 print('INNO_REAL_SCRIPT_SYNTAX_PREFLIGHT_NO_OUTPUT_EXECUTION_OR_PUBLICATION=PASS')
+

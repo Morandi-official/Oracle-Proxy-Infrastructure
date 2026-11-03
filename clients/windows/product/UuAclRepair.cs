@@ -228,7 +228,8 @@ internal static partial class UuAclRepair
             if(state["ok"]?.GetValue<bool>()!=true || state["mode"]?.GetValue<string>()!="disconnected" || state["guard"]?.GetValue<bool>()==true || state["intent"]?.GetValue<bool>()==true)throw new IOException("UU_REPAIR_DISCONNECT_REQUIRED");
             if(restore)Restore();else if(advanced)ApplyAdvanced(roots);else Apply(roots);
         }
-        MessageBox.Show(restore?"原权限已恢复，VPN 保持断开。":"权限修复已核验，VPN 保持断开。关闭此提示后返回客户端查看识别结果。","UU 权限维护");
+        MessageBox.Show(restore?"原访问权限和继承开关已恢复，VPN 保持断开。":"权限修复已核验，VPN 保持断开。关闭此提示后返回客户端查看识别结果。","UU 权限维护");
         return true;
     }
 }
+

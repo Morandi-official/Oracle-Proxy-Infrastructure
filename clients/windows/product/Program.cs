@@ -54,10 +54,14 @@ internal static class Program
                 };
                 string location=error.Data["uu.path"] is string path?"\r\n路径："+new string(path.Where(c=>!char.IsControl(c)).Take(512).ToArray()):"";
                 string owner=error.Data["uu.owner"] is string sid?"\r\n拥有者 SID："+new string(sid.Where(c=>!char.IsControl(c)).Take(128).ToArray()):"";
-                MessageBox.Show("UU 权限维护未完成。\r\n"+reason+"\r\n\r\n"+(error.Message.All(c=>c is >= 'A' and <= 'Z' or '_')?error.Message:error.HResult.ToString("X8"))+location+owner,"UU 权限维护");
+                string detail="";
+                foreach(var field in new[]{("uu.original_error","最初错误"),("uu.original_path","最初路径"),("uu.rollback_error","回滚错误"),("uu.rollback_path","回滚路径"),("uu.expected_flags","预期标记"),("uu.actual_flags","实际标记")})
+                    if(error.Data[field.Item1] is object value)detail+="\r\n"+field.Item2+"："+new string((value.ToString()??"").Where(c=>!char.IsControl(c)).Take(512).ToArray());
+                MessageBox.Show("UU 权限维护未完成。\r\n"+reason+"\r\n\r\n"+(error.Message.All(c=>c is >= 'A' and <= 'Z' or '_')?error.Message:error.HResult.ToString("X8"))+location+owner+detail,"UU 权限维护");
             }
             if(args.Length==0 && Environment.UserInteractive)MessageBox.Show("操作未完成，已有保护与密钥保留。请使用完整便携包，并检查系统服务状态。","Oracle Proxy");
             return 3;
         }
     }
 }
+

@@ -247,7 +247,7 @@ internal static partial class UuAclRepair
             if((ace.AceFlags&io)!=io || !source.OfType<CommonAce>().Any(origin=>
                 !origin.IsCallback && origin.AceQualifier==AceQualifier.AccessAllowed &&
                 origin.SecurityIdentifier.Equals(ace.SecurityIdentifier) && unchecked((uint)origin.AccessMask)==0xE0010000u &&
-                (origin.AceFlags&io)==io))throw new IOException("UU_PATH_ACL_PATTERN_REFUSED");
+                (origin.AceFlags&~AceFlags.Inherited)==io))throw new IOException("UU_PATH_ACL_PATTERN_REFUSED");
         }
     }
     private sealed class PathCapture : IDisposable

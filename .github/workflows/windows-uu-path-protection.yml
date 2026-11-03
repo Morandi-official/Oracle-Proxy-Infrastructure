@@ -1,0 +1,32 @@
+name: Windows UU shared-parent protection boundary
+on:
+  pull_request:
+    paths: ['clients/windows/product/**', '.github/workflows/windows-uu-path-protection.yml']
+  push:
+    branches: [main]
+    paths: ['clients/windows/product/**', '.github/workflows/windows-uu-path-protection.yml']
+permissions:
+  contents: read
+jobs:
+  shared-parent-acl-boundary:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: clients/windows/product
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: clients/windows/product/global.json
+      - name: Build non-shipped native ACL fixture
+        run: dotnet publish ci/OracleProxy.Product.Tests.csproj -c Release -o dist/uu-path-fixture
+      - name: Real owned NTFS VHD protection and exact rollback
+        run: ./ci/test-uu-path-protection.ps1 -FixtureExe dist/uu-path-fixture/OracleProxy.Product.Tests.exe

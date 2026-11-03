@@ -97,9 +97,13 @@ internal static class UuDiscovery
         catch(System.Security.Cryptography.CryptographicException){return new(path,"UU_SIGNATURE_UNREADABLE");}
         catch{return new(path,"UU_TRUST_INSPECTION_FAILED");}
     }
-    // Cache only successful Authenticode work. Every call above still rechecks
-    // file/ancestor ownership, ACLs and reparse points before consulting this.
-    private static readonly Dictionary<string,(string Identity,long Until)> Signatures=new(StringComparer.OrdinalIgnoreCase);
+    // Authenticode authenticates the file object, so separate hard-link paths
+    // can share a successful result only while their complete identity matches.
+    // Every Inspect still checks that particular path's owner, ACLs and reparse
+    // points first. Hits never extend this fixed sixty-second trust interval.
+    private static readonly Dictionary<string,long> Signatures=new(StringComparer.Ordinal);
+    private static long _signatureVerificationCount;
+    internal static long SignatureVerificationCount=>Interlocked.Read(ref _signatureVerificationCount);
     [StructLayout(LayoutKind.Sequential)]private struct BasicInfo{public long Created,Accessed,Written,Changed;public uint Attributes;}
     [StructLayout(LayoutKind.Sequential)]private struct IdInfo{public ulong Volume;public Guid FileId;}
     [DllImport("kernel32.dll",SetLastError=true,EntryPoint="GetFileInformationByHandleEx")]
@@ -109,7 +113,7 @@ internal static class UuDiscovery
     private static string SignatureIdentity(string path)
     {
         using var file=File.OpenHandle(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
-        if(!BasicInformation(file,0,out var basic,(uint)Marshal.SizeOf<BasicInfo>()) || !IdInformation(file,18,out var id,(uint)Marshal.SizeOf<IdInfo>()))throw new IOException("FILE_IDENTITY_UNAVAILABLE");
+        if(!BasicInformation(file,0,out var basic,(uint)Marshal.SizeOf<BasicInfo>()) || !IdInformation(file,18,out var id,(uint)Marshal.SizeOf<IdInfo>()) || id.Volume==0 || id.FileId==Guid.Empty)throw new IOException("FILE_IDENTITY_UNAVAILABLE");
         return $"{id.Volume:X}:{id.FileId}:{basic.Created}:{basic.Written}:{basic.Changed}:{RandomAccess.GetLength(file)}";
     }
     private static UuIssue? CachedSignatureIssue(string path)
@@ -117,19 +121,20 @@ internal static class UuDiscovery
         string identity;
         try{identity=SignatureIdentity(path);}catch{return SignatureIssue(path);}
         lock(Signatures){
-            if(Signatures.TryGetValue(path,out var item) && item.Identity==identity && Environment.TickCount64<item.Until)return null;
+            if(Signatures.TryGetValue(identity,out long until) && Environment.TickCount64<until)return null;
         }
         var issue=SignatureIssue(path);
         if(issue is not null)return issue;
         if(identity!=SignatureIdentity(path))return new(path,"UU_TRUST_CHANGED_REFRESH_REQUIRED");
         lock(Signatures){
             if(Signatures.Count>=256)Signatures.Clear();
-            Signatures[path]=(identity,Environment.TickCount64+60_000);
+            Signatures[identity]=Environment.TickCount64+60_000;
         }
         return null;
     }
     internal static UuIssue? SignatureIssue(string path)
     {
+        Interlocked.Increment(ref _signatureVerificationCount);
         try{
             // The input is a signed PE executable, not a PEM/DER certificate file.
             // X509CertificateLoader cannot extract its Authenticode signer. WinVerifyTrust

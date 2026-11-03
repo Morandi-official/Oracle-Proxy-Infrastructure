@@ -9,7 +9,7 @@ namespace OracleProxy.Product;
 // Explicit, elevated maintenance only. Never invoked by the control pipe or
 // connection path. Only discovered, signed UU roots with the exact known ACE
 // pattern are eligible. No executables, services, owners or firewall are changed.
-internal static class UuAclRepair
+internal static partial class UuAclRepair
 {
     internal sealed record Entry(string Path,bool Directory,string Identity,string Before,string After);
     internal sealed record Journal(int Schema,string Phase,string[] Roots,Entry[] Entries);
@@ -163,7 +163,7 @@ internal static class UuAclRepair
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
         if(roots.Length==0 || !roots.Order(StringComparer.OrdinalIgnoreCase).SequenceEqual(EligibleRoots().Order(StringComparer.OrdinalIgnoreCase),StringComparer.OrdinalIgnoreCase))throw new IOException("UU_REPAIR_SELECTION_CHANGED");
-        if(File.Exists(Backup) && Load().Phase!="restored")throw new IOException("UU_REPAIR_BACKUP_EXISTS");
+        if(File.Exists(Backup) && BackupActive())throw new IOException("UU_REPAIR_BACKUP_EXISTS");
         ApplyVerified(roots);
     }
     // Used directly only by the non-shipped ACL fixture; production uses Apply.
@@ -195,7 +195,9 @@ internal static class UuAclRepair
     }
     internal static void Restore()
     {
-        if(!Platform.IsAdmin)throw new UnauthorizedAccessException();var journal=Load();
+        if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
+        if(BackupSchema()==2){RestoreAdvanced();return;}
+        var journal=Load();
         if(journal.Phase=="restored")throw new IOException("UU_REPAIR_ALREADY_RESTORED");
         var locks=new Dictionary<string,Locked>(StringComparer.OrdinalIgnoreCase);
         try{
@@ -212,14 +214,19 @@ internal static class UuAclRepair
     internal static bool RunInteractive(bool restore)
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
-        string[] roots=restore?Load().Roots:EligibleRoots();
-        if(roots.Length==0)throw new IOException("UU_REPAIR_NO_MATCH");
-        string message=(restore?"将恢复下列 UU 目录备份的权限，并保持 VPN 断开。恢复后连接检查可能再次拦截。":"将备份下列 UU 目录及现有子项的权限，仅将 Users/Authenticated Users 的额外“修改”授权收紧为“读取和执行”，保留系统、管理员和读取权限。不会停止 UU 或改写程序文件。普通用户写入安装目录或自动更新可能受到影响；可使用“恢复 UU 权限”回滚。请仅在可本地操作的测试机进行。")+"\r\n\r\n"+string.Join("\r\n",roots);
+        bool advanced=restore && BackupSchema()==2;
+        string[] roots=restore?(advanced?[LoadAdvanced().Root]:Load().Roots):EligibleRoots();
+        string? advancedRefusal=null;
+        if(!restore && roots.Length==0){roots=EligibleAdvancedRoots(out advancedRefusal);advanced=roots.Length>0;}
+        if(roots.Length==0)throw new IOException(advancedRefusal ?? "UU_REPAIR_NO_MATCH");
+        string message=(restore?(advanced?"将按备份对象身份恢复下列两个父目录和 UU 子树的原权限及继承状态，VPN 保持断开。其他软件子目录的 ACL 不写入；若对象或源权限已改变，将拒绝覆盖。恢复后连接检查可能再次拦截。":"将恢复下列 UU 目录备份的权限，并保持 VPN 断开。恢复后连接检查可能再次拦截。"):advanced?
+            "将备份并保护下列 UU 路径：仅把 Users/Authenticated Users 已识别的“修改”授权收紧为“读取和执行”，不改所有者或程序内容。必要的共享父目录将停止继承并保留原授权副本，只收紧其自身权限；对子目录的原继承策略保留，其他软件子目录的 ACL 不写入。普通用户在这些父目录新建或重命名软件目录将受到限制，可能需要管理员。UU 子树的现有对象将停止继承并保留原授权副本，再收紧上述修改权限；UU 的普通用户更新或写入可能受影响。为保证备份和验签一致，将锁定现有文件；若 UU 正在占用，请在本地退出 UU 后再试，不会自动停止 UU。可使用“恢复 UU 权限”按对象身份精确回滚。请仅在可本地操作时确认。":
+            "将备份下列 UU 目录及现有子项的权限，仅将 Users/Authenticated Users 的额外“修改”授权收紧为“读取和执行”，保留系统、管理员和读取权限。不会停止 UU 或改写程序文件。普通用户写入安装目录或自动更新可能受到影响；可使用“恢复 UU 权限”回滚。请仅在可本地操作的测试机进行。")+"\r\n\r\n"+string.Join("\r\n",advanced?AdvancedAncestors(roots[0]).Concat(roots):roots);
         if(MessageBox.Show(message,"UU 权限维护（UAC）",MessageBoxButtons.OKCancel,MessageBoxIcon.Warning)!=DialogResult.OK)return false;
         using(AcquireMaintenance()){
             var state=Task.Run(()=>ControlPipe.Send(restore?"Disconnect":"Status")).GetAwaiter().GetResult();
             if(state["ok"]?.GetValue<bool>()!=true || state["mode"]?.GetValue<string>()!="disconnected" || state["guard"]?.GetValue<bool>()==true || state["intent"]?.GetValue<bool>()==true)throw new IOException("UU_REPAIR_DISCONNECT_REQUIRED");
-            if(restore)Restore();else Apply(roots);
+            if(restore)Restore();else if(advanced)ApplyAdvanced(roots);else Apply(roots);
         }
         MessageBox.Show(restore?"原权限已恢复，VPN 保持断开。":"权限修复已核验，VPN 保持断开。关闭此提示后返回客户端查看识别结果。","UU 权限维护");
         return true;

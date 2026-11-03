@@ -342,7 +342,8 @@ internal static class UuPathProtectionTests
         var entry=node["Entries"]!.AsArray().First(item=>item!["Path"]!.GetValue<string>()==path)!;
         var raw=new RawSecurityDescriptor(Convert.FromBase64String(entry["After"]!.GetValue<string>()),0);
         var acl=raw.DiscretionaryAcl!;acl.InsertAce(0,new CommonAce(AceFlags.None,AceQualifier.AccessDenied,(int)FileSystemRights.WriteData,new SecurityIdentifier(Known[1]),false,null));
-        byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);entry["Before"]=entry["After"]=Convert.ToBase64String(bytes);
+        byte[] bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
+        string recorded=Convert.ToBase64String(bytes);entry["Before"]=recorded;entry["After"]=recorded;
         var deny=acl[0];acl.RemoveAce(0);acl.InsertAce(acl.Count,deny);bytes=new byte[raw.BinaryLength];raw.GetBinaryForm(bytes,0);
         WriteLegacyFixture(path,original with{Binary=Convert.ToBase64String(bytes)});
         File.WriteAllText(Backup,node.ToJsonString());

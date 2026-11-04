@@ -640,7 +640,7 @@ internal static class ProductTests
         initial.SetResult(restoring);UiPumpUntil(()=>form.PollInterval==1000,"COLD_SERVICE_RESTORATION_DID_NOT_SET_BOUNDED_POLL");
         for(int attempt=0;attempt<4;attempt++){
             form.Display((JsonObject)restoring.DeepClone());Application.DoEvents();
-            UiAssert(startup.Visible && !login.Visible && !shell.Visible && loginFrames==0,"REMEMBERED_PROOF_WITH_PENDING_ACCOUNT_FLASHED_LOGIN");
+            UiAssert(startup.Visible && !login.Visible && !shell.Visible && loginFrames==0 && form.AcceptButton is null,"REMEMBERED_PROOF_WITH_PENDING_ACCOUNT_FLASHED_LOGIN");
         }
         waiting=false;var refreshed=form.Act("Status");UiPumpUntil(()=>refreshed.IsCompleted && shell.Visible,"REMEMBERED_STARTUP_DID_NOT_REVEAL_DASHBOARD");
         UiAssert(!startup.Visible && !login.Visible && loginFrames==0,"REMEMBERED_STARTUP_FLASHED_LOGIN_PAGE");

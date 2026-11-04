@@ -269,7 +269,7 @@ internal sealed class MainForm : Form
         _help.SetToolTip(_telemetry,"速率按本机 VPN 网卡字节增量统计；HTTP 延迟包含隧道及检测站点响应时间，与游戏延迟不同。");
         foreach(var value in new[]{_download,_upload})_help.SetToolTip(value,"本机 VPN 网卡实时速率。1 MiB/s 约为 8.39 Mbps。");
         _help.SetToolTip(_emergencyRecovery,"独立的本机恢复入口，需要管理员授权；恢复完成前不会把网络状态当作已断开。");
-        AcceptButton=_login;viewport.SizeChanged+=(_,_)=>FitBody();FitBody();FitLogin();
+        AcceptButton=null;viewport.SizeChanged+=(_,_)=>FitBody();FitBody();FitLogin();
         var area=Screen.FromControl(this).WorkingArea;Size=new Size(Math.Min(Width,area.Width),Math.Min(Height,area.Height));
         FormClosing+=async(_,e)=>{if(e.CloseReason==CloseReason.UserClosing && !_allowClose){e.Cancel=true;await QuitClient();}};
     }

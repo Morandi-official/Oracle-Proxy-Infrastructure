@@ -39,7 +39,8 @@ internal sealed class MainForm : Form
     private readonly Button _maintenanceToggle=new(){Name="maintenance-toggle",Text="展开系统维护",AutoSize=true};
     private readonly Button _emergencyRecovery=new(){Name="emergency-recovery",Text="恢复直连（UAC）",AutoSize=true};
     private readonly ToolTip _help=new(){ShowAlways=true,InitialDelay=350,ReshowDelay=100,AutoPopDelay=18000};
-    private bool _deviceExpanded,_hasAccount,_authenticated,_dashboardShown,_toolsExpanded;
+    private bool _deviceExpanded,_hasAccount,_authenticated,_dashboardShown,_toolsExpanded,_provisioning,_serviceReady;
+    private readonly Button _bootstrapRetry=new(){Name="bootstrap-retry",Text="重试初始化",Height=38,Visible=false};
     private readonly TableLayoutPanel _shell,_toolsContent;
     private readonly Panel _loginGate;
     private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc28",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
@@ -141,7 +142,7 @@ internal sealed class MainForm : Form
     private static BufferedFlowPanel Actions()=>new(){AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,WrapContents=true,Margin=new Padding(0,6,0,6),Padding=new Padding(0)};
     internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null,TimeSpan? requestTimeout=null,TimeSpan? quitTimeout=null)
     {
-        _send=send ?? ControlPipe.Send;_realService=send is null;DoubleBuffered=true;
+        _send=send ?? ControlPipe.Send;_realService=send is null;_serviceReady=!_realService;DoubleBuffered=true;
         _requestTimeout=requestTimeout??TimeSpan.FromSeconds(45);_quitTimeout=quitTimeout??TimeSpan.FromSeconds(45);
         if(_requestTimeout<=TimeSpan.Zero || _requestTimeout>TimeSpan.FromMinutes(1) || _quitTimeout<=TimeSpan.Zero || _quitTimeout>TimeSpan.FromMinutes(1))throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         _statusTimeout=TimeSpan.FromMilliseconds(Math.Min(_requestTimeout.TotalMilliseconds,6000));
@@ -232,7 +233,7 @@ internal sealed class MainForm : Form
         _rememberLogin.Margin=new Padding(0,0,0,12);Row(loginContent,_rememberLogin);_help.SetToolTip(_rememberLogin,"最多保留 30 天的加密登录令牌，不保存明文密码；退出账号后立即清除。");
         _login.AutoSize=false;_login.Height=44;_login.Margin=new Padding(0,0,0,12);Row(loginContent,_login);
         _loginFeedback.AutoSize=false;_loginFeedback.Height=44;_loginFeedback.AutoEllipsis=true;_loginFeedback.ForeColor=Muted;Row(loginContent,_loginFeedback);
-        var install=Tool("安装 / 升级服务",Install);Row(loginContent,install);
+        Row(loginContent,_bootstrapRetry);_bootstrapRetry.Click+=async(_,_)=>{if(await ProvisionService())await StartReadyClient();};
         var loginCard=Card("login-card","",loginContent);loginCard.AutoSize=true;loginCard.Padding=new Padding(28,24,28,24);_loginGate.Controls.Add(loginCard);
         void FitLogin(){int width=Math.Min(470,Math.Max(1,_loginGate.ClientSize.Width-40));loginCard.Width=width;loginCard.MaximumSize=new Size(width,0);loginCard.Left=Math.Max(0,(_loginGate.ClientSize.Width-width)/2);loginCard.Top=Math.Max(12,(_loginGate.ClientSize.Height-loginCard.Height)/2);}
         _loginGate.SizeChanged+=(_,_)=>FitLogin();loginCard.SizeChanged+=(_,_)=>FitLogin();
@@ -247,13 +248,7 @@ internal sealed class MainForm : Form
         _login.Click+=async(_,_)=>await Act(_rememberLogin.Checked?"LoginRemembered":"Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
         _password.KeyDown+=async(_,e)=>{if(e.KeyCode==Keys.Enter && _login.Enabled){e.SuppressKeyPress=true;await Act(_rememberLogin.Checked?"LoginRemembered":"Login");}};
         _timer.Tick+=async(_,_)=>{if(!_busy && !_closing)await Act("Status");};
-        Shown+=async(_,_)=>{
-            await Act("Status");
-            if(!IsDisposed && !_closing && _authenticated && _statusReadSucceeded && !_needsReconcile && !_startupPrepared && _deviceRegistered && !_connectionIntent && _lastMode=="disconnected"){
-                _startupPrepared=true;await Act("Prepare");
-            }
-            if(!IsDisposed && !_closing)_timer.Start();
-        };
+        Shown+=async(_,_)=>{if(_realService){if(await ProvisionService())await StartReadyClient();}else{await Act("Status");await StartReadyClient();}};
         IEnumerable<Control> Descendants(Control parent){foreach(Control child in parent.Controls){yield return child;foreach(var nested in Descendants(child))yield return nested;}}
         foreach(var button in Descendants(body).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connect || button==_login);StyleButton(_emergencyRecovery);
         foreach(var input in new[]{_username,_password,_deviceName}){input.BorderStyle=BorderStyle.FixedSingle;input.AccessibleName=input==_username?"登录账号":input==_password?"密码":"设备名称";}
@@ -264,12 +259,38 @@ internal sealed class MainForm : Form
         FormClosing+=async(_,e)=>{if(e.CloseReason==CloseReason.UserClosing && !_allowClose){e.Cancel=true;await QuitClient();}};
     }
 
+    private async Task StartReadyClient()
+    {
+        if(!IsDisposed && !_closing && _authenticated && _statusReadSucceeded && !_needsReconcile && !_startupPrepared && _deviceRegistered && !_connectionIntent && _lastMode=="disconnected"){
+            _startupPrepared=true;await Act("Prepare");
+        }
+        if(!IsDisposed && !_closing && _serviceReady)_timer.Start();
+    }
+    private async Task<bool> ProvisionService()
+    {
+        if(_provisioning || _closing || IsDisposed)return false;
+        _provisioning=true;_serviceReady=false;_timer.Stop();_bootstrapRetry.Visible=false;_loginFeedback.Text="正在准备系统服务，请完成可能出现的 Windows 授权。";RefreshActions();
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(TimeSpan.FromMinutes(3));
+        try{
+            string version=typeof(MainForm).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+            async Task<JsonObject> Read(CancellationToken cancel){using var limit=CancellationTokenSource.CreateLinkedTokenSource(cancel);limit.CancelAfter(TimeSpan.FromSeconds(8));try{return await ControlPipe.Send("Status",null,null,limit.Token);}catch(OperationCanceledException)when(!cancel.IsCancellationRequested){throw new IOException("SERVICE_STATUS_TIMEOUT");}}
+            var state=await ServiceBootstrap.Ensure(version,Read,Installer.ElevateInstallAsync,deadline.Token);
+            if(IsDisposed || _closing)return false;
+            _serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;Display(state);return true;
+        }catch(Exception error){
+            if(!IsDisposed && !_closing){
+                _loginFeedback.Text=error.Message=="SERVICE_SETUP_CANCELLED"?"已取消初始化。完成系统服务准备后才可登录。":error is OperationCanceledException?"初始化结果尚未确认，请等待安装窗口结束后重试。":"系统服务尚未准备完成，请重试初始化。";
+                _bootstrapRetry.Visible=true;
+            }
+            return false;
+        }finally{_provisioning=false;if(!IsDisposed){if(!_serviceReady)_bootstrapRetry.Visible=true;RefreshActions();}}
+    }
     protected override void Dispose(bool disposing){if(disposing){_lifetime.Cancel();_requestEpoch.Cancel();_timer.Dispose();_help.Dispose();}base.Dispose(disposing);}
     private void CancelRequests(){var previous=_requestEpoch;_requestEpoch=new CancellationTokenSource();previous.Cancel();previous.Dispose();}
     private void RefreshActions()
     {
         if(IsDisposed)return;
-        bool available=!_busy && !_closing && !_needsReconcile && !_uuMaintaining;
+        bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining;
         _connect.Enabled=available && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
         _transportChoice.Enabled=available && !_connectionIntent;_native8443Test.Enabled=available && !_connectionIntent && _native8443Available;
         UpdateRegistrationActions();
@@ -324,7 +345,7 @@ internal sealed class MainForm : Form
         if(_closing || IsDisposed)return;
         bool passive=command=="Status";
         if(passive)_statusReadSucceeded=false;
-        if(!passive && (_busy || _needsReconcile || _uuMaintaining))return;
+        if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
         bool acquired=false,sentMutation=false;
         if(!passive){_busy=true;if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号…";RefreshActions();}

@@ -212,6 +212,29 @@ internal static class Installer
     {
         var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};info.ArgumentList.Add("--recover");Process.Start(info);
     }
+    private static readonly object InstallLock=new();
+    private static Task<int>? _pendingInstall;
+    internal static Task<int> ElevateInstallAsync(CancellationToken cancel)
+    {
+        Task<int> pending;
+        lock(InstallLock){
+            // Cancelling the GUI wait must not interrupt file replacement or
+            // rollback. A retry joins this same child while it is still running.
+            if(_pendingInstall is null || _pendingInstall.IsCompleted)_pendingInstall=InstallChild();
+            pending=_pendingInstall;
+        }
+        return pending.WaitAsync(cancel);
+    }
+    private static async Task<int> InstallChild()
+    {
+        Platform.VerifyBundle(AppContext.BaseDirectory);
+        var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};
+        info.ArgumentList.Add("--install");info.ArgumentList.Add(WindowsIdentity.GetCurrent().User!.Value);
+        Process process;
+        try{process=Process.Start(info) ?? throw new IOException("SERVICE_SETUP_NOT_STARTED");}
+        catch(System.ComponentModel.Win32Exception error)when(error.NativeErrorCode==1223){return 4;}
+        using(process){await process.WaitForExitAsync().ConfigureAwait(false);return process.ExitCode;}
+    }
     internal static void Elevate(bool uninstall)
     {
         var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};

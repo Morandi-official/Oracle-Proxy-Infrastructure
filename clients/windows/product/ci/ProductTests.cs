@@ -362,6 +362,7 @@ internal static class ProductTests
     }
     private static int Ui()
     {
+        BootstrapPolicyRegression();
         LoginAndCleanupPolicyRegression();
         OracleAcceptance.VerifyDeviceBudgetFixture();
         var nativeEvents=new NativeUdpEvidence();
@@ -547,6 +548,32 @@ internal static class ProductTests
     }
     private static void UiAssert(bool condition,string failure){if(!condition)throw new IOException(failure);}
     private static Button UiButton(Control root,string name)=>UiDescendants(root).OfType<Button>().Single(button=>button.Name==name);
+    private static void BootstrapPolicyRegression()
+    {
+        const string version="0.3.0-rc28+synthetic-exact-revision";
+        JsonObject current=new(){["schema"]=1,["ok"]=true,["product_version"]=version,["login_authenticated"]=false};
+        int reads=0,installs=0;
+        Task<JsonObject> Read(CancellationToken cancel){cancel.ThrowIfCancellationRequested();reads++;return Task.FromResult((JsonObject)current.DeepClone());}
+        Task<int> Install(CancellationToken cancel){cancel.ThrowIfCancellationRequested();installs++;current["product_version"]=version;return Task.FromResult(0);}
+        ServiceBootstrap.Ensure(version,Read,Install,CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(reads==1 && installs==0,"MATCHING_SERVICE_REPEATED_ELEVATION_BEFORE_LOGIN");
+        current["product_version"]="0.3.0-rc27+old-source";reads=installs=0;
+        var ready=ServiceBootstrap.Ensure(version,Read,Install,CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(installs==1 && reads==2 && ServiceBootstrap.Current(ready,version),"SERVICE_UPGRADE_DID_NOT_VERIFY_NEW_RUNNING_VERSION");
+        current["product_version"]=version+"-other";reads=installs=0;bool cancelled=false;
+        try{ServiceBootstrap.Ensure(version,Read,_=>{installs++;return Task.FromResult(4);},CancellationToken.None).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="SERVICE_SETUP_CANCELLED"){cancelled=true;}
+        UiAssert(cancelled && installs==1 && reads==1,"CANCELLED_UAC_WAS_REPEATED_OR_ACCEPTED_AS_READY");
+        bool failed=false;installs=0;
+        try{ServiceBootstrap.Ensure(version,Read,_=>{installs++;return Task.FromResult(5);},CancellationToken.None).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="SERVICE_SETUP_FAILED"){failed=true;}
+        UiAssert(failed && installs==1,"FAILED_SETUP_ENABLED_LOGIN_OR_REPEATED_INSTALL");
+        reads=installs=0;
+        var fresh=ServiceBootstrap.Ensure(version,token=>{token.ThrowIfCancellationRequested();if(++reads==1)throw new IOException("SERVICE_ABSENT");return Task.FromResult((JsonObject)current.DeepClone());},Install,CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(installs==1 && reads==2 && ServiceBootstrap.Current(fresh,version),"MISSING_SERVICE_WAS_NOT_INITIALIZED_BEFORE_LOGIN");
+        Console.WriteLine("STARTUP_SERVICE_MATCH_SKIPS_UAC_OLD_OR_MISSING_INSTALLS_ONCE_CANCEL_OR_FAILURE_NEVER_ENABLES_LOGIN=PASS");
+    }
+
     private static void LoginAndCleanupPolicyRegression()
     {
         const long now=1793766000;

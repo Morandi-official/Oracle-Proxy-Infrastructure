@@ -89,7 +89,7 @@ class PackageBoundaryTests(unittest.TestCase):
             self.assertEqual(metadata['dotnet_runtime']['deployment'], 'self-contained')
             self.assertEqual(metadata['dotnet_runtime']['version'], '10.0.14')
             self.assertEqual(len(metadata['dotnet_runtime']['included_frameworks']), 2)
-            self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc20-win-x64-'))
+            self.assertTrue(bundle.name.startswith('Proxy-0.3.0-rc20-win-x64-'))
         with zipfile.ZipFile(next(out.glob('*-source.zip'))) as archive:
             self.assertIn('clients/windows/product/core/vendor/example.test/core.go', archive.namelist())
             self.assertFalse(any('obj/' in p or 'secret' in p for p in archive.namelist()))
@@ -99,7 +99,7 @@ class PackageBoundaryTests(unittest.TestCase):
         self.put('clients/windows/product/OracleProxy.Product.csproj', '<Project><PropertyGroup><Version>0.3.0-rc21</Version></PropertyGroup></Project>')
         self.invoke()
         bundle=next(p for p in (self.root/'dist/candidate').glob('*.zip') if not p.name.endswith('-source.zip'))
-        self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc21-win-x64-'))
+        self.assertTrue(bundle.name.startswith('Proxy-0.3.0-rc21-win-x64-'))
         with zipfile.ZipFile(bundle) as archive:
             self.assertEqual(json.loads(archive.read('BUILD.json'))['version'],'0.3.0-rc21')
 

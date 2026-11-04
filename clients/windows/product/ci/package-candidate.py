@@ -125,7 +125,7 @@ def main():
                                     'browser media-granted local interface disclosure limitation',
                                     'application publisher signing'],
                 'nuget_packages': packages}
-    tag = 'OracleProxy-' + version + '-win-x64-' + revision[:12]
+    tag = 'Proxy-' + version + '-win-x64-' + revision[:12]
     source_name = tag + '-source.zip'
     metadata['corresponding_source_archive'] = source_name
     tracked = run('git', 'ls-files', 'clients/windows/product', 'clients/windows/service-host/NativeDriverTrust.cs',

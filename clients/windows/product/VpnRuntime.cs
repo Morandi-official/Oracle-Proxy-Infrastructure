@@ -88,7 +88,9 @@ internal sealed class VpnRuntime : IDisposable
             _secret.ConnectIntent=true;_secret.RecoveryRequired=true;_secret.Save();
             _mode="recovery";_error="STATE_MISSING_RECOVERY_REQUIRED";return;
         }
-        if(NativeUdpPortPolicy.Upgrade(_secret))_secret.Save();
+        // A read-only service upgrade must preserve the existing DPAPI bytes.
+        // Persist this hint migration with the next normal state mutation.
+        NativeUdpPortPolicy.Upgrade(_secret);
         if(_secret.ConnectIntent){NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());_mode="protected";}
         else{await EnsureTunnelRemoved();NativeGuard.Clear();_mode="disconnected";}
     }

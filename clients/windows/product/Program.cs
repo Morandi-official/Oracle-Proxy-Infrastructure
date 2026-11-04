@@ -59,7 +59,7 @@ internal static class Program
                     if(error.Data[field.Item1] is object value)detail+="\r\n"+field.Item2+"："+new string((value.ToString()??"").Where(c=>!char.IsControl(c)).Take(512).ToArray());
                 MessageBox.Show("UU 权限维护未完成。\r\n"+reason+"\r\n\r\n"+(error.Message.All(c=>c is >= 'A' and <= 'Z' or '_')?error.Message:error.HResult.ToString("X8"))+location+owner+detail,"UU 权限维护");
             }
-            if(args.Length==0 && Environment.UserInteractive)MessageBox.Show("操作未完成，已有保护与密钥保留。请使用完整便携包，并检查系统服务状态。","Oracle Proxy");
+            if(args.Length==0 && Environment.UserInteractive)MessageBox.Show("操作未完成，已有保护与密钥保留。请使用完整便携包，并检查系统服务状态。","Proxy");
             return 3;
         }
     }

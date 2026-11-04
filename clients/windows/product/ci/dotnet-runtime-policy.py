@@ -80,7 +80,7 @@ def runtime_config_path(product=PRODUCT):
         path = product / path
     path = path.resolve()
     if (not path.is_relative_to((product / 'bin').resolve()) or
-            path.name != 'OracleProxy.runtimeconfig.json' or not path.is_file()):
+            path.name != 'Proxy.runtimeconfig.json' or not path.is_file()):
         raise ValueError('SELECTED_PRODUCT_BUILD_RUNTIME_CONFIG_REQUIRED')
     return path
 

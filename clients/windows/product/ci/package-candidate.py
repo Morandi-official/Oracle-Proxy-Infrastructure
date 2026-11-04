@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[4]
 PRODUCT = ROOT / 'clients/windows/product'
-PAYLOADS = ('OracleProxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll')
+PAYLOADS = ('Proxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll')
 _policy_spec = importlib.util.spec_from_file_location('runtime_policy', Path(__file__).with_name('dotnet-runtime-policy.py'))
 RUNTIME_POLICY = importlib.util.module_from_spec(_policy_spec)
 _policy_spec.loader.exec_module(RUNTIME_POLICY)
@@ -125,7 +125,7 @@ def main():
                                     'browser media-granted local interface disclosure limitation',
                                     'application publisher signing'],
                 'nuget_packages': packages}
-    tag = 'OracleProxy-' + version + '-win-x64-' + revision[:12]
+    tag = 'Proxy-' + version + '-win-x64-' + revision[:12]
     source_name = tag + '-source.zip'
     metadata['corresponding_source_archive'] = source_name
     tracked = run('git', 'ls-files', 'clients/windows/product', 'clients/windows/service-host/NativeDriverTrust.cs',

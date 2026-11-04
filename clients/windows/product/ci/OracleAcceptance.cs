@@ -293,7 +293,12 @@ internal static class OracleAcceptance
         try{
             VerifyDeviceBudgetFixture();RecoveryPolicy();
             Check(await ExitIp()!="152.67.156.100","REAL_RUNNER_DIRECT_BASELINE");
-            stage="LOGIN";var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
+            stage="LOGIN";var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));
+            Check(login["login_authenticated"]?.GetValue<bool>()==true && login["login_remembered_until"]?.GetValue<long>()==0,"REAL_NON_REMEMBERED_PASSWORD_LOGIN_HAS_NO_PERSISTED_REMEMBER_PROOF");
+            var signedOut=await Send("Quit");
+            Check(signedOut["login_authenticated"]?.GetValue<bool>()==false && signedOut["account"] is null && signedOut["core_pid"]?.GetValue<uint>()==0,"REAL_NON_REMEMBERED_EXPLICIT_QUIT_REQUIRES_LOGIN_NEXT_TIME");
+            login=RequireSuccess("LoginRemembered",await ControlPipe.Send("LoginRemembered",username,password));password=null;
+            Check(login["login_authenticated"]?.GetValue<bool>()==true && login["login_remembered_until"]?.GetValue<long>() is long until && until>DateTimeOffset.UtcNow.ToUnixTimeSeconds() && until<=DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeSeconds(),"REAL_REMEMBERED_PASSWORD_LOGIN_RETURNS_BOUNDED_THIRTY_DAY_PROOF");
             Check(login["ok"]?.GetValue<bool>()==true && login["account"]?["username"]?.GetValue<string>()==username,"REAL_ORACLE_CLIENT_AUTHENTICATION_WITHOUT_AUTOMATIC_ENROLLMENT");
             int beforeRegistration=login["account"]!["device_count"]!.GetValue<int>();
             Check(login["device_registered"]?.GetValue<bool>()==false && login["registration"]?["status"]?.GetValue<string>()=="pending" && login["registration"]?["requires_slot"]?.GetValue<bool>()==true && login["core_pid"]?.GetValue<uint>()==0 && login["intent"]?.GetValue<bool>()==false,"REAL_AUTHENTICATED_DEVICE_IS_PENDING_WITHOUT_CORE_OR_SLOT");
@@ -431,7 +436,7 @@ internal static class OracleAcceptance
             Check(await ExitIp()=="152.67.156.100","REAL_ORDINARY_WINDOWS_HTTP_THROUGH_ORACLE_WIREGUARD_EXIT");
             // The real public GUI is an ordinary process; closing/crashing it must
             // not control the SYSTEM tunnel lifetime.
-            stage="GUI_PROCESS_LOSS";using(var gui=Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"..","product","OracleProxy.exe")){UseShellExecute=false})!){await Task.Delay(1500);if(!gui.HasExited)gui.Kill(true);}
+            stage="GUI_PROCESS_LOSS";using(var gui=Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"..","product","Proxy.exe")){UseShellExecute=false})!){await Task.Delay(1500);if(!gui.HasExited)gui.Kill(true);}
             Check((await Send("Status"))["mode"]?.GetValue<string>()=="connected" && await ExitIp()=="152.67.156.100","REAL_GUI_PROCESS_LOSS_KEEPS_SYSTEM_TUNNEL");
             stage="SERVICE_CRASH_RECOVERY";var service=Process.GetProcessesByName("OracleProxy.Service").Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe);
             using(service){service.Kill(true);await service.WaitForExitAsync();}
@@ -440,7 +445,7 @@ internal static class OracleAcceptance
             try{Check(await ExitIp()=="152.67.156.100","REAL_SERVICE_CRASH_PROBE_HAS_NO_DIRECT_EXIT");}
             catch(IOException){throw;}catch{Console.WriteLine("REAL_SERVICE_CRASH_PROBE_BLOCKED=PASS");}
             var recovered=await Connected();
-            Check(recovered["account"]?["device_count"]?.GetValue<int>()==devices,"REAL_SCM_RECOVERY_REUSES_EXISTING_DEVICE_IDENTITY");
+            Check(recovered["login_authenticated"]?.GetValue<bool>()==true && recovered["account"]?["device_count"]?.GetValue<int>()==devices,"REAL_SCM_RECOVERY_REUSES_EXISTING_DEVICE_IDENTITY");
             Check(await ExitIp()=="152.67.156.100","REAL_SCM_RECOVERY_ORACLE_EXIT");
             stage="AUTOMATIC_QUIC_FALLBACK";await Send("Disconnect");
             if(prepared["quic_available"]?.GetValue<bool>()==true){
@@ -522,7 +527,7 @@ internal static class OracleAcceptance
             Console.WriteLine("REAL_DEVICE_RUN_USED_BYTES="+(checked(finalUsage["peer_rx_bytes"]!.GetValue<long>()+finalUsage["peer_tx_bytes"]!.GetValue<long>())-_deviceUsageStart!.Value));
             _deviceUsageStart=null;
             stage="LOGOUT";var loggedOut=await Send("Logout");
-            Check(loggedOut["account"] is null && loggedOut["core_pid"]?.GetValue<uint>()==0 && loggedOut["intent"]?.GetValue<bool>()==false,"REAL_LOGOUT_CLEARS_ACCOUNT_AFTER_FINAL_DEVICE_BUDGET");
+            Check(loggedOut["login_authenticated"]?.GetValue<bool>()==false && loggedOut["login_remembered_until"]?.GetValue<long>()==0 && loggedOut["account"] is null && loggedOut["core_pid"]?.GetValue<uint>()==0 && loggedOut["intent"]?.GetValue<bool>()==false,"REAL_LOGOUT_CLEARS_ACCOUNT_AFTER_FINAL_DEVICE_BUDGET");
             Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
         }catch(Exception error){try{SafeNativeState(await ControlPipe.Send("Status"));}catch{}try{await ControlPipe.Send("Disconnect");}catch{}Console.WriteLine("REAL_ORACLE_STAGE="+stage);if(_lastAssertion.Length>0)Console.WriteLine("REAL_ORACLE_ASSERTION="+_lastAssertion);Console.WriteLine("REAL_ORACLE_ERROR_TYPE="+error.GetType().Name);if(error.Message is "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" or "INVALID_SERVICE_RESPONSE" or "FRAME_TOO_LARGE" or "ORACLE_SERVICE_COMMAND_FAILED")Console.WriteLine("REAL_ORACLE_FIXED_ERROR="+error.Message);Console.WriteLine("REAL_ORACLE_HRESULT="+error.HResult.ToString("X8"));if(error is Win32Exception native)Console.WriteLine("REAL_ORACLE_NATIVE_ERROR="+native.NativeErrorCode);Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=FAIL");return 1;}
     }

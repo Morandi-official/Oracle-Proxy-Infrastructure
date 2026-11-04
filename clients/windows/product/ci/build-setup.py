@@ -15,7 +15,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[4]
-PAYLOADS = {'OracleProxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll'}
+PAYLOADS = {'Proxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll'}
 TEXT = {'BUILD.json', 'SHA256SUMS.txt', '请先阅读.txt'}
 
 
@@ -97,7 +97,7 @@ def main():
     revision = metadata.get('source_revision', '')
     if not match or not re.fullmatch('[a-f0-9]{40}', revision) or metadata.get('publisher_signed') is not False:
         raise ValueError('UNSIGNED_CANDIDATE_METADATA_REQUIRED')
-    stem = 'OracleProxy-' + version + '-win-x64-' + revision[:12]
+    stem = 'Proxy-' + version + '-win-x64-' + revision[:12]
     portable = out / (stem + '.zip')
     sums = dict(line.split('  ', 1)[::-1] for line in (out / 'SHA256SUMS.txt').read_text().splitlines())
     if sums.get(portable.name) != digest(portable):

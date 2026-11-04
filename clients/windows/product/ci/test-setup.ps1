@@ -6,7 +6,7 @@ $desktopRoot=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]
 $serviceRoot=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)) 'OracleProxy'
 $stateRoot=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'OracleProxy'
 $arp='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{26C03D94-CA79-4A48-BC2C-F45BD14C69F5}_is1'
-$shortcut=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)) 'Oracle Proxy\Oracle Proxy.lnk'
+$shortcut=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)) 'Proxy\Proxy.lnk'
 if((Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path $desktopRoot) -or (Test-Path $serviceRoot) -or (Test-Path $arp)){throw 'PREEXISTING_INSTALLATION_REFUSED'}
 $setup=(Resolve-Path $SetupPath).Path
 $metadata=Get-Content -Raw (Join-Path (Split-Path $setup) 'BUILD.json') | ConvertFrom-Json
@@ -30,19 +30,19 @@ function Check-Installed {
   }
  }
  if((Get-Content -Raw (Join-Path $desktopRoot 'desktop.marker')) -ne 'OracleProxy.Desktop.v1'){throw 'DESKTOP_PRODUCT_MARKER_REQUIRED'}
- foreach($name in @('OracleProxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll')){
+ foreach($name in @('Proxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll')){
   if((Get-FileHash (Join-Path $desktopRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.$name){throw 'DESKTOP_PAYLOAD_DIGEST_MISMATCH'}
  }
  foreach($name in @('OracleProxy.Core.exe','OracleProxy.Guard.dll')){
   if((Get-FileHash (Join-Path $serviceRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.$name){throw 'SERVICE_PAYLOAD_DIGEST_MISMATCH'}
  }
- if((Get-FileHash (Join-Path $serviceRoot 'OracleProxy.Service.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.'OracleProxy.exe'){throw 'SERVICE_HOST_DIGEST_MISMATCH'}
+ if((Get-FileHash (Join-Path $serviceRoot 'OracleProxy.Service.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.'Proxy.exe'){throw 'SERVICE_HOST_DIGEST_MISMATCH'}
  if((Get-Content -Raw (Join-Path $serviceRoot 'owner.sid')).Trim() -ne $owner){throw 'OWNER_BINDING_MISMATCH'}
  if(-not (Test-Path $shortcut) -or -not (Test-Path $arp)){throw 'STANDARD_SHORTCUT_AND_UNINSTALL_ENTRY_REQUIRED'}
  $registration=Get-ItemProperty $arp
- if($registration.DisplayName -notlike 'Oracle Proxy*' -or $registration.DisplayVersion -ne $metadata.version){throw 'STANDARD_UNINSTALL_METADATA_REQUIRED'}
+ if($registration.DisplayName -notlike 'Proxy*' -or $registration.DisplayVersion -ne $metadata.version){throw 'STANDARD_UNINSTALL_METADATA_REQUIRED'}
  $shell=New-Object -ComObject WScript.Shell
- if($shell.CreateShortcut($shortcut).TargetPath -ne (Join-Path $desktopRoot 'OracleProxy.exe')){throw 'SHORTCUT_TARGET_MISMATCH'}
+ if($shell.CreateShortcut($shortcut).TargetPath -ne (Join-Path $desktopRoot 'Proxy.exe')){throw 'SHORTCUT_TARGET_MISMATCH'}
  return [int]$service.ProcessId
 }
 
@@ -85,7 +85,7 @@ try {
  Set-Content -LiteralPath (Join-Path $desktopRoot 'foreign-sentinel.txt') -Value 'DISPOSABLE_FOREIGN_DESKTOP_FIXTURE'
  $rejected=Start-Process -FilePath $setup -ArgumentList $arguments -PassThru
  if(-not $rejected.WaitForExit(120000)){Stop-Process -Id $rejected.Id -Force;throw 'UNSAFE_DESKTOP_REJECTION_DEADLINE'}
- if($rejected.ExitCode -eq 0 -or (Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $desktopRoot 'OracleProxy.exe')) -or (Test-Path (Join-Path $desktopRoot 'desktop.marker')) -or (Test-Path $arp) -or (Get-Content -Raw (Join-Path $desktopRoot 'foreign-sentinel.txt')).Trim() -ne 'DISPOSABLE_FOREIGN_DESKTOP_FIXTURE'){throw 'WRITABLE_FOREIGN_DESKTOP_WAS_ADOPTED'}
+ if($rejected.ExitCode -eq 0 -or (Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $desktopRoot 'Proxy.exe')) -or (Test-Path (Join-Path $desktopRoot 'desktop.marker')) -or (Test-Path $arp) -or (Get-Content -Raw (Join-Path $desktopRoot 'foreign-sentinel.txt')).Trim() -ne 'DISPOSABLE_FOREIGN_DESKTOP_FIXTURE'){throw 'WRITABLE_FOREIGN_DESKTOP_WAS_ADOPTED'}
  Remove-Item -LiteralPath (Join-Path $desktopRoot 'foreign-sentinel.txt')
  [IO.Directory]::Delete($desktopRoot,$false)
  Write-Host 'REAL_EXE_SETUP_REFUSES_PREEXISTING_USERS_MODIFY_DESKTOP_WITHOUT_SERVICE_OR_FILE_CHANGES=PASS'
@@ -101,16 +101,16 @@ try {
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $savedState){throw 'UPGRADE_DID_NOT_PRESERVE_DPAPI_STATE'}
  Write-Host 'REAL_EXE_SETUP_UPGRADE_SHORTCUT_ARP_PID_HASH_OWNER_AND_DPAPI_PRESERVATION=PASS'
  Invoke-SetupProcess (Join-Path $desktopRoot 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
- if((Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path $arp) -or (Test-Path $shortcut) -or (Test-Path (Join-Path $desktopRoot 'OracleProxy.exe')) -or (Test-Path (Join-Path $stateRoot 'state.dpapi'))){throw 'STANDARD_UNINSTALL_NOT_COMPLETE'}
+ if((Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path $arp) -or (Test-Path $shortcut) -or (Test-Path (Join-Path $desktopRoot 'Proxy.exe')) -or (Test-Path (Join-Path $stateRoot 'state.dpapi'))){throw 'STANDARD_UNINSTALL_NOT_COMPLETE'}
  Write-Host 'REAL_EXE_STANDARD_UNINSTALL_REMOVES_OWN_SERVICE_SHORTCUT_ARP_AND_LOCAL_STATE=PASS'
  if([Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0){Write-Host 'WTS_ORIGINAL_DESKTOP_OWNER_BRANCH=NOT_COVERED_HEADLESS_SESSION'}else{Write-Host 'WTS_ORIGINAL_DESKTOP_OWNER_BRANCH=EXPLICIT_OWNER_CI_OVERRIDE_ONLY'}
 } finally {
  # Fixed candidate-owned cleanup only; there are no credentials, peers or
  # Connect requests in this fixture. A failed install must not affect others.
  if($started -and (Get-Service OracleProxyService -ErrorAction SilentlyContinue)){
-  $client=Join-Path $desktopRoot 'OracleProxy.exe'
-  if(-not (Test-Path $client)){$client=Join-Path $PWD 'dist/product/OracleProxy.exe'}
-  if((Test-Path $client) -and (Get-FileHash $client -Algorithm SHA256).Hash.ToLowerInvariant() -eq $metadata.payload_sha256.'OracleProxy.exe'){
+  $client=Join-Path $desktopRoot 'Proxy.exe'
+  if(-not (Test-Path $client)){$client=Join-Path $PWD 'dist/product/Proxy.exe'}
+  if((Test-Path $client) -and (Get-FileHash $client -Algorithm SHA256).Hash.ToLowerInvariant() -eq $metadata.payload_sha256.'Proxy.exe'){
    $process=Start-Process -FilePath $client -ArgumentList '--uninstall' -PassThru
    if(-not $process.WaitForExit(60000)){Stop-Process -Id $process.Id -Force;Write-Warning 'Candidate cleanup did not complete'}
   }

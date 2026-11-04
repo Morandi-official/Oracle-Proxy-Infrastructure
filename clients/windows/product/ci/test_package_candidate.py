@@ -36,7 +36,7 @@ class PackageBoundaryTests(unittest.TestCase):
         self.runtime_config = {'runtimeOptions': {'tfm': 'net10.0', 'includedFrameworks': [
             {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'},
             {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14'}]}}
-        self.config_path = self.put('clients/windows/product/bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json',
+        self.config_path = self.put('clients/windows/product/bin/Release/net10.0-windows/win-x64/Proxy.runtimeconfig.json',
                                     json.dumps(self.runtime_config))
         self.config_selection = self.patches.enter_context(patch.object(
             candidate.RUNTIME_POLICY, 'runtime_config_path', return_value=self.config_path))
@@ -89,7 +89,7 @@ class PackageBoundaryTests(unittest.TestCase):
             self.assertEqual(metadata['dotnet_runtime']['deployment'], 'self-contained')
             self.assertEqual(metadata['dotnet_runtime']['version'], '10.0.14')
             self.assertEqual(len(metadata['dotnet_runtime']['included_frameworks']), 2)
-            self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc20-win-x64-'))
+            self.assertTrue(bundle.name.startswith('Proxy-0.3.0-rc20-win-x64-'))
         with zipfile.ZipFile(next(out.glob('*-source.zip'))) as archive:
             self.assertIn('clients/windows/product/core/vendor/example.test/core.go', archive.namelist())
             self.assertFalse(any('obj/' in p or 'secret' in p for p in archive.namelist()))
@@ -99,12 +99,12 @@ class PackageBoundaryTests(unittest.TestCase):
         self.put('clients/windows/product/OracleProxy.Product.csproj', '<Project><PropertyGroup><Version>0.3.0-rc21</Version></PropertyGroup></Project>')
         self.invoke()
         bundle=next(p for p in (self.root/'dist/candidate').glob('*.zip') if not p.name.endswith('-source.zip'))
-        self.assertTrue(bundle.name.startswith('OracleProxy-0.3.0-rc21-win-x64-'))
+        self.assertTrue(bundle.name.startswith('Proxy-0.3.0-rc21-win-x64-'))
         with zipfile.ZipFile(bundle) as archive:
             self.assertEqual(json.loads(archive.read('BUILD.json'))['version'],'0.3.0-rc21')
 
     def test_shared_runtime_and_wrong_bundled_patch_are_rejected(self):
-        config_path = 'clients/windows/product/bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+        config_path = 'clients/windows/product/bin/Release/net10.0-windows/win-x64/Proxy.runtimeconfig.json'
         self.runtime_config['runtimeOptions']['framework'] = {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'}
         self.put(config_path, json.dumps(self.runtime_config))
         with self.assertRaisesRegex(RuntimeError, 'Actual self-contained'):
@@ -116,7 +116,7 @@ class PackageBoundaryTests(unittest.TestCase):
             self.invoke()
 
     def test_packaging_uses_msbuild_selected_runtime_config_not_stale_default(self):
-        selected = self.put('clients/windows/product/bin/x64/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json',
+        selected = self.put('clients/windows/product/bin/x64/Release/net10.0-windows/win-x64/Proxy.runtimeconfig.json',
                             json.dumps(self.runtime_config))
         self.config_selection.return_value = selected
         self.config_path.write_text('{"runtimeOptions":{"tfm":"net8.0"}}', encoding='utf-8')

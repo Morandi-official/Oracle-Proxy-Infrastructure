@@ -362,6 +362,8 @@ internal static class ProductTests
     }
     private static int Ui()
     {
+        BootstrapPolicyRegression();
+        LoginAndCleanupPolicyRegression();
         OracleAcceptance.VerifyDeviceBudgetFixture();
         var nativeEvents=new NativeUdpEvidence();
         if(!nativeEvents.Record("NATIVE_UDP_443_SEND_INIT") || !nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_10054") || nativeEvents.Record("NATIVE_UDP_443_READ_ERROR_9999999999") || nativeEvents.Record("NATIVE_UDP_443_RECV_REPLY SYNTHETIC_SECRET") || nativeEvents.Record("NATIVE_UDP_22_SEND_INIT") || nativeEvents.Record("NATIVE_UDP_443_SEND_INIT\n"))return 1;
@@ -376,7 +378,7 @@ internal static class ProductTests
         Console.WriteLine("NETWORK_CHANGE_RESTORES_NATIVE_UDP_PREFERENCE=PASS");
         Application.EnableVisualStyles();
         var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
-        var snapshot=new JsonObject{["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
+        var snapshot=new JsonObject{["login_authenticated"]=true,["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
         snapshot["device_registered"]=true;
         snapshot["registration"]=new JsonObject{["status"]="registered",["device_id"]="aabbccddeeff",["device_name"]="Known test PC",["confirmed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["requires_slot"]=false};
         snapshot["devices"]=new JsonArray(new JsonObject{["id"]="aabbccddeeff",["name"]="Known test PC",["current"] = true,["revoked"] = false});
@@ -388,7 +390,7 @@ internal static class ProductTests
         if(snapshot["failure"]!["socket_error"]?.GetValue<string>()!="ConnectionRefused" || snapshot["failure"]!.ToJsonString().Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         using var form=new MainForm((_,_,_)=>Task.FromResult((JsonObject)snapshot.DeepClone()));
         form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
-        if(!form.ConnectionReport.Contains("native_udp.endpoint_port: 51820") || !form.ConnectionReport.Contains("egress_probe_timeout") || form.ConnectionReport.Contains("SYNTHETIC_NATIVE_SECRET_DO_NOT_COPY") || !form.ConnectionReport.Contains("ORACLE_EGRESS_PROBE") || !form.ConnectionReport.Contains("ConnectionRefused") || form.ConnectionReport.Contains("synthetic-user") || form.ConnectionReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
+        if(!form.ConnectionReport.Contains("native_udp.endpoint_port: 51820") || !form.ConnectionReport.Contains("egress_probe_timeout") || form.ConnectionReport.Contains("SYNTHETIC_NATIVE_SECRET_DO_NOT_COPY") || !form.ConnectionReport.Contains("EGRESS_PROBE") || !form.ConnectionReport.Contains("ConnectionRefused") || form.ConnectionReport.Contains("synthetic-user") || form.ConnectionReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         Console.WriteLine("CONNECTION_FAILURE_STAGE_AND_ENUMS_EXPORTED_WITHOUT_MESSAGES_OR_CREDENTIALS=PASS");
         if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
            form.UuReport.Contains("synthetic-user") || form.UuReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.UuReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY"))return 1;
@@ -411,6 +413,7 @@ internal static class ProductTests
             Directory.CreateDirectory("dist/review");image.Save($"dist/review/windows-client-{size.Width}x{size.Height}-synthetic.png");
         }
         Console.WriteLine("THREE_ALIGNED_SECTIONS_FIT_NORMAL_AND_MINIMUM_WINDOW_WITHOUT_HORIZONTAL_SCROLL=PASS");
+        UiLoginAndLayoutRegression(snapshot);
         UiLayoutRegression(snapshot);
         var toolsViewport=(ScrollableControl)Descendants(form).Single(c=>c.Name=="viewport");
         toolsViewport.ScrollControlIntoView(Descendants(form).Single(c=>c.Name=="toolsSection"));Application.DoEvents();
@@ -545,9 +548,115 @@ internal static class ProductTests
     }
     private static void UiAssert(bool condition,string failure){if(!condition)throw new IOException(failure);}
     private static Button UiButton(Control root,string name)=>UiDescendants(root).OfType<Button>().Single(button=>button.Name==name);
+    private static void BootstrapPolicyRegression()
+    {
+        const string version="0.3.0-rc28+synthetic-exact-revision";
+        JsonObject current=new(){["schema"]=1,["ok"]=true,["product_version"]=version,["login_authenticated"]=false};
+        int reads=0,installs=0;
+        Task<JsonObject> Read(CancellationToken cancel){cancel.ThrowIfCancellationRequested();reads++;return Task.FromResult((JsonObject)current.DeepClone());}
+        Task<int> Install(CancellationToken cancel){cancel.ThrowIfCancellationRequested();installs++;current["product_version"]=version;return Task.FromResult(0);}
+        ServiceBootstrap.Ensure(version,Read,Install,CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(reads==1 && installs==0,"MATCHING_SERVICE_REPEATED_ELEVATION_BEFORE_LOGIN");
+        current["product_version"]="0.3.0-rc27+old-source";reads=installs=0;
+        var ready=ServiceBootstrap.Ensure(version,Read,Install,CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(installs==1 && reads==2 && ServiceBootstrap.Current(ready,version),"SERVICE_UPGRADE_DID_NOT_VERIFY_NEW_RUNNING_VERSION");
+        current["product_version"]=version+"-other";reads=installs=0;bool cancelled=false;
+        try{ServiceBootstrap.Ensure(version,Read,_=>{installs++;return Task.FromResult(4);},CancellationToken.None).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="SERVICE_SETUP_CANCELLED"){cancelled=true;}
+        UiAssert(cancelled && installs==1 && reads==1,"CANCELLED_UAC_WAS_REPEATED_OR_ACCEPTED_AS_READY");
+        bool failed=false;installs=0;
+        try{ServiceBootstrap.Ensure(version,Read,_=>{installs++;return Task.FromResult(5);},CancellationToken.None).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="SERVICE_SETUP_FAILED"){failed=true;}
+        UiAssert(failed && installs==1,"FAILED_SETUP_ENABLED_LOGIN_OR_REPEATED_INSTALL");
+        reads=installs=0;
+        var fresh=ServiceBootstrap.Ensure(version,token=>{token.ThrowIfCancellationRequested();if(++reads==1)throw new IOException("SERVICE_ABSENT");return Task.FromResult((JsonObject)current.DeepClone());},Install,CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(installs==1 && reads==2 && ServiceBootstrap.Current(fresh,version),"MISSING_SERVICE_WAS_NOT_INITIALIZED_BEFORE_LOGIN");
+        Console.WriteLine("STARTUP_SERVICE_MATCH_SKIPS_UAC_OLD_OR_MISSING_INSTALLS_ONCE_CANCEL_OR_FAILURE_NEVER_ENABLES_LOGIN=PASS");
+    }
+
+    private static void LoginAndCleanupPolicyRegression()
+    {
+        const long now=1793766000;
+        var secret=new DurableState{Token="synthetic-session",PrivateKey="synthetic-private",PublicKey="synthetic-public"};
+        LoginPolicy.Start(secret,now+LoginPolicy.MaximumAge+600,false,"synthetic-user",now);
+        UiAssert(LoginPolicy.Authorized(secret,true,now+1) && !LoginPolicy.Authorized(secret,false,now+1),"NON_REMEMBERED_SESSION_SURVIVED_SERVICE_RESTART");
+        UiAssert(!LoginPolicy.Authorized(secret,true,now+LoginPolicy.MaximumAge),"INTERACTIVE_SESSION_EXCEEDED_THIRTY_DAYS");
+        LoginPolicy.Start(secret,now+900,true,"synthetic-user",now);
+        UiAssert(LoginPolicy.Authorized(secret,false,now+1) && !LoginPolicy.Authorized(secret,false,now+900),"REMEMBERED_SESSION_IGNORED_SERVER_EXPIRY");
+        LoginPolicy.Enrolled(secret,now+100);
+        UiAssert(LoginPolicy.Authorized(secret,false,now+1000) && !LoginPolicy.Authorized(secret,false,now-1) && !LoginPolicy.Authorized(secret,false,now+LoginPolicy.MaximumAge),"ENROLLMENT_EXTENDED_REMEMBERING_BEYOND_ORIGINAL_THIRTY_DAY_BOUND");
+        LoginPolicy.Forget(secret);
+        UiAssert(secret.Token.Length==0 && secret.RememberedUsername.Length==0 && secret.RememberLoginUntil==0 && secret.PrivateKey=="synthetic-private" && secret.PublicKey=="synthetic-public","FORGET_LOGIN_DID_NOT_CLEAR_AUTH_OR_REPLACED_DEVICE_KEYS");
+        using(var runtime=new VpnRuntime()){
+            typeof(VpnRuntime).GetField("_secret",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.SetValue(runtime,new DurableState{Token="legacy-without-interactive-login"});
+            var denied=runtime.Command(new JsonObject{["version"]=1,["command"]="Connect"}).GetAwaiter().GetResult();
+            UiAssert(denied["ok"]?.GetValue<bool>()==false && denied["error"]?.GetValue<string>()=="LOGIN_REQUIRED" && denied["intent"]?.GetValue<bool>()==false && denied["login_authenticated"]?.GetValue<bool>()==false,"SERVICE_CONNECT_BYPASSED_LOGIN_GATE_WITH_LEGACY_TOKEN");
+        }
+        int audits=0,recoveries=0;
+        VpnRuntime.AuditStoppedTunnel(()=>{if(++audits==1)throw new IOException("OWNED_TUNNEL_REMOVAL_NOT_VERIFIED");return Task.CompletedTask;},()=>{recoveries++;return Task.CompletedTask;}).GetAwaiter().GetResult();
+        UiAssert(audits==2 && recoveries==1,"STOPPED_TUNNEL_DID_NOT_RECOVER_AND_REAUDIT");
+        bool refused=false;audits=recoveries=0;
+        try{VpnRuntime.AuditStoppedTunnel(()=>throw new IOException("OWNED_TUNNEL_REMOVAL_NOT_VERIFIED"),()=>throw new IOException("TUN_OWNER_IDENTITY_MISMATCH")).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="TUN_OWNER_IDENTITY_MISMATCH"){refused=true;}
+        UiAssert(refused,"FAILED_RECEIPT_PROOF_WAS_ACCEPTED_AS_SAFE_OFF");
+        refused=false;
+        try{VpnRuntime.AuditStoppedTunnel(()=>throw new IOException("OWNED_TUNNEL_REMOVAL_NOT_VERIFIED"),()=>Task.CompletedTask).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="OWNED_TUNNEL_REMOVAL_NOT_VERIFIED"){refused=true;}
+        UiAssert(refused,"RECOVERY_RESULT_SKIPPED_FINAL_ABSENCE_AUDIT");
+        Console.WriteLine("LOGIN_GATE_THIRTY_DAY_BOUND_SERVER_EXPIRY_LOGOUT_KEY_PRESERVATION_AND_RECEIPT_RECOVERY_REAUDIT=PASS");
+    }
+    private static void UiLoginAndLayoutRegression(JsonObject source)
+    {
+        var ready=UiReady(source);ready["product_version"]="0.3.0-rc28+synthetic";
+        var signedOut=(JsonObject)ready.DeepClone();signedOut["login_authenticated"]=false;signedOut["account"]=null;
+        JsonObject current=(JsonObject)signedOut.DeepClone();var commands=new List<string>();
+        using var form=new MainForm((command,username,password)=>{
+            commands.Add(command);
+            if(command=="LoginRemembered"){
+                UiAssert(username=="synthetic-user" && password=="synthetic-password","LOGIN_PAGE_DID_NOT_SUBMIT_ENTERED_CREDENTIALS");
+                current=(JsonObject)ready.DeepClone();
+            }else if(command=="Logout")current=(JsonObject)signedOut.DeepClone();
+            return Task.FromResult((JsonObject)current.DeepClone());
+        });
+        UiShow(form);
+        var shell=UiDescendants(form).Single(c=>c.Name=="dashboard");var gate=UiDescendants(form).Single(c=>c.Name=="login-gate");
+        UiAssert(gate.Visible && !shell.Visible && commands.SequenceEqual(new[]{"Status"}),"INITIAL_LOGIN_PAGE_WAS_BYPASSED_OR_PREPARED_A_TUNNEL");
+        UiRecoveryReachable(form,"LOGIN_PAGE");
+        var usernameBox=UiDescendants(form).OfType<TextBox>().Single(c=>c.AccessibleName=="登录账号");var passwordBox=UiDescendants(form).OfType<TextBox>().Single(c=>c.AccessibleName=="密码");
+        UiAssert(usernameBox.Visible && passwordBox.Visible && passwordBox.UseSystemPasswordChar,"LOGIN_FIELDS_HIDDEN_OR_PASSWORD_UNMASKED");
+        Directory.CreateDirectory("dist/review");
+        using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-login-rc28.png");}
+        usernameBox.Text="synthetic-user";passwordBox.Text="synthetic-password";
+        UiDescendants(form).OfType<Button>().Single(c=>c.Text=="登录").PerformClick();
+        UiPumpUntil(()=>shell.Visible && !gate.Visible,"SUCCESSFUL_LOGIN_DID_NOT_OPEN_DASHBOARD");
+        UiAssert(commands.SequenceEqual(new[]{"Status","LoginRemembered"}) && passwordBox.Text.Length==0,"LOGIN_WAS_REPEATED_OR_PASSWORD_RETAINED_IN_UI");
+        var version=UiDescendants(form).Single(c=>c.Name=="app-version");
+        UiAssert(version.ForeColor==Color.Gray && form.Text=="Proxy","PUBLIC_BRANDING_OR_VERSION_COLOR_INCORRECT");
+        var tools=UiDescendants(form).Single(c=>c.Name=="toolsContent");UiAssert(!tools.Visible,"DIAGNOSTICS_NOT_COLLAPSED_BY_DEFAULT");
+        UiButton(form,"diagnostics-toggle").PerformClick();Application.DoEvents();
+        var actions=UiDescendants(form).Single(c=>c.Name=="diagnostic-actions").Controls.Cast<Control>().ToArray();
+        Console.WriteLine("UI_DIAGNOSTIC_COLUMNS="+string.Join(";",actions.Select(c=>c.Text+":"+c.Bounds)));
+        using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-diagnostics-rc28.png");}
+        UiAssert(tools.Visible && actions.Length>=6 && actions.Max(c=>c.Width)-actions.Min(c=>c.Width)<=1,"DIAGNOSTIC_BUTTON_COLUMNS_NOT_ALIGNED");
+        var metrics=UiDescendants(form).Single(c=>c.Name=="connectionMetrics");int metricHeight=metrics.Height;
+        var card=UiDescendants(form).Single(c=>c.Name=="connectionSection");int cardHeight=card.Height;
+        foreach(string mode in Enumerable.Range(0,12).SelectMany(_=>new[]{"connected","protected","recovery","disconnected"})){
+            var state=(JsonObject)ready.DeepClone();state["mode"]=mode;state["transport"]="wireguard-udp";state["verified_exit_ip"]="152.67.156.100";state["verified_exit_ipv6"]="2603:c020:c015:8100::10";
+            state["guard"]=mode!="disconnected";state["intent"]=mode!="disconnected";state["error"]=mode=="recovery"?"RECOVERY_REQUIRED":"";
+            form.Display(state);Application.DoEvents();
+            UiAssert(metrics.Height==metricHeight && Math.Abs(card.Height-cardHeight)<=2,"CONNECTION_STATE_REFRESH_CREATED_EMPTY_LAYOUT_SPACE");
+            UiAssert(metrics.Controls.Cast<Control>().All(c=>metrics.ClientRectangle.Contains(c.Bounds)),"METRIC_CELL_CLIPPED_AFTER_STATE_TRANSITION");
+        }
+        UiAssert(!UiDescendants(form).Any(c=>c.Visible && c.Text.Contains("Oracle",StringComparison.OrdinalIgnoreCase)) && !form.ConnectionReport.Contains("oracle",StringComparison.OrdinalIgnoreCase),"PUBLIC_UI_STILL_EXPOSES_PROVIDER_BRANDING");
+        using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-dashboard-rc28.png");}
+        Task logout=form.Act("Logout");UiPumpUntil(()=>logout.IsCompleted,"LOGOUT_PAGE_TRANSITION_STALLED");
+        UiAssert(gate.Visible && !shell.Visible && usernameBox.Text.Length==0 && passwordBox.Text.Length==0,"LOGOUT_DID_NOT_RETURN_TO_EMPTY_LOGIN_PAGE");
+        Console.WriteLine("REAL_LOGIN_FIRST_FORM_REMEMBERED_LOGIN_LOGOUT_INTEGRATED_LAYOUT_EQUAL_BUTTONS_STABLE_METRICS_AND_PROVIDER_NEUTRAL_BRANDING=PASS");
+    }
+
     private static JsonObject UiReady(JsonObject original)
     {
-        var value=(JsonObject)original.DeepClone();value["ok"]=true;value["intent"]=false;value["guard"]=false;value["tun_permitted"]=false;
+        var value=(JsonObject)original.DeepClone();value["ok"]=true;value["login_authenticated"]=true;value["intent"]=false;value["guard"]=false;value["tun_permitted"]=false;
         value["mode"]="disconnected";value["error"]="";value["core_pid"]=0U;value["quick_ready"]=true;value["preparing"]=false;
         value["native_udp_8443_available"]=true;value["native_udp_port_preference"]=8443;value["transport_preference"]="udp";
         long now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();value["received_at"]=now;value["observed_at"]=now;return value;
@@ -575,6 +684,7 @@ internal static class ProductTests
         var viewport=(ScrollableControl)UiDescendants(form).Single(control=>control.Name=="viewport");
         var maintenance=UiDescendants(form).Single(control=>control.Name=="system-maintenance");
         var details=UiDescendants(form).Single(control=>control.Name=="deviceDetails");
+        UiButton(form,"diagnostics-toggle").PerformClick();Application.DoEvents();
         var maintenanceToggle=UiButton(form,"maintenance-toggle");
         var deviceToggle=UiButton(form,"device-details-toggle");
         Directory.CreateDirectory("dist/review");
@@ -685,7 +795,9 @@ internal static class ProductTests
         void Set(string name,object value)=>typeof(VpnRuntime).GetField(name,System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.SetValue(runtime,value);
         bool Preparing()=>(bool)typeof(VpnRuntime).GetProperty("Preparing",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(runtime)!;
         bool CanCreate()=>(bool)typeof(VpnRuntime).GetProperty("CanCreateCore",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(runtime)!;
-        Set("_secret",new DurableState{Token="synthetic-in-memory-only",ConnectIntent=false});
+        var preparedSecret=new DurableState{Token="synthetic-in-memory-only",ConnectIntent=false};
+        LoginPolicy.Start(preparedSecret,DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds(),true,"synthetic-user",DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        Set("_secret",preparedSecret);
         Set("_state",new JsonObject{["registration"]=new JsonObject{["status"]="registered"},["device"]=new JsonObject{["registered"]=true},["tunnel"]=new JsonObject()});
         Set("_prepareUntil",DateTimeOffset.UtcNow.AddMinutes(5));Set("_prepareMayStartCore",true);Set("_prepareRetryAfter",DateTimeOffset.UtcNow.AddMinutes(1));
         UiAssert(!Preparing() && !CanCreate(),"FAILED_PREPARE_IGNORED_RETRY_BACKOFF");

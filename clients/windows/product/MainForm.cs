@@ -33,13 +33,20 @@ internal sealed class MainForm : Form
     private readonly TableLayoutPanel _registrationGroup;
     private readonly TableLayoutPanel _deviceDetails;
     private readonly TableLayoutPanel _credentials;
-    private readonly BufferedFlowPanel _maintenance;
+    private readonly TableLayoutPanel _maintenance;
     private readonly Button _deviceToggle=new(){Name="device-details-toggle",Text="展开设备详情",AutoSize=true};
-    private readonly Button _credentialsToggle=new(){Text="切换账号",AutoSize=true};
     private readonly Button _maintenanceToggle=new(){Name="maintenance-toggle",Text="展开系统维护",AutoSize=true};
     private readonly Button _emergencyRecovery=new(){Name="emergency-recovery",Text="恢复直连（UAC）",AutoSize=true};
     private readonly ToolTip _help=new(){ShowAlways=true,InitialDelay=350,ReshowDelay=100,AutoPopDelay=18000};
-    private bool _deviceExpanded,_credentialsExpanded,_hasAccount;
+    private bool _deviceExpanded,_hasAccount,_authenticated,_dashboardShown,_toolsExpanded,_provisioning,_serviceReady;
+    private readonly Button _bootstrapRetry=new(){Name="bootstrap-retry",Text="重试初始化",Height=38,Visible=false};
+    private readonly TableLayoutPanel _shell,_toolsContent;
+    private readonly Panel _loginGate;
+    private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc28",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
+    private readonly Label _loginFeedback=new(){Name="login-feedback",Text="登录后即可管理连接与设备。"};
+    private readonly CheckBox _rememberLogin=new(){Name="remember-login",Text="记住登录（最多 30 天）",Checked=true,AutoSize=true};
+    private readonly Button _diagnosticsToggle=new(){Name="diagnostics-toggle",Text="展开诊断与测试",Height=38,AutoSize=false};
+    private static readonly Color Canvas=Color.FromArgb(244,247,251);
     private bool _deviceDetailsShown=true,_deviceToggleShown=true;
     private static readonly Color Ink=Color.FromArgb(32,47,68),Muted=Color.FromArgb(100,116,139),Accent=Color.FromArgb(10,132,108),Border=Color.FromArgb(222,229,238);
 
@@ -75,13 +82,26 @@ internal sealed class MainForm : Form
     private readonly Label _protocol=MetricValue(),_exitIp=MetricValue(),_download=MetricValue(),_upload=MetricValue(),_latency=MetricValue(),_uu=MetricValue();
     private readonly Label _accountName=new(){AutoSize=true,Text="尚未登录"};
     private readonly Label _usageUpdated=new(){AutoSize=true,ForeColor=Color.FromArgb(100,113,134)};
-    private readonly Button _logout=new(){Text="退出账号",AutoSize=true,Visible=false};
+    private readonly Button _logout=new(){Text="退出登录",AutoSize=true,Visible=false};
     private long? _sampleAt,_sampleRx,_sampleTx;
     private uint _samplePid;
     private static Label MetricValue()=>new(){Text="—",Dock=DockStyle.Fill,AutoEllipsis=true,Height=30,TextAlign=ContentAlignment.MiddleLeft,Font=new Font("Microsoft YaHei UI",13,FontStyle.Bold),Margin=new Padding(0)};
     private static TableLayoutPanel Stack(string name){var panel=new TableLayoutPanel{Name=name,Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,Margin=new Padding(0),Padding=new Padding(0)};panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));return panel;}
     private static void Row(TableLayoutPanel panel,Control item){int row=panel.RowCount++;panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));item.Dock=DockStyle.Fill;panel.Controls.Add(item,0,row);}
-    private static Control Metric(string title,Label value){var cell=Stack("metric"+title);cell.Margin=new Padding(0,0,18,12);Row(cell,new Label{Text=title,AutoSize=true,ForeColor=Color.FromArgb(100,113,134),Margin=new Padding(0,0,0,3)});Row(cell,value);return cell;}
+    private static Control Metric(string title,Label value){
+        var cell=new Panel{Name="metric"+title,Dock=DockStyle.Fill,Margin=new Padding(0,0,14,8)};
+        value.Dock=DockStyle.Fill;cell.Controls.Add(value);
+        cell.Controls.Add(new Label{Text=title,Dock=DockStyle.Top,Height=22,ForeColor=Muted,Margin=new Padding(0)});
+        return cell;
+    }
+    private static TableLayoutPanel ButtonGrid(string name){
+        var grid=new TableLayoutPanel{Name=name,ColumnCount=3,RowCount=0,AutoSize=false,Height=0,Dock=DockStyle.Top,Margin=new Padding(0,8,0,0)};
+        for(int i=0;i<3;i++)grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,1));
+        grid.SizeChanged+=(_,_)=>{float width=Math.Max(1,(grid.ClientSize.Width-grid.Padding.Horizontal)/3);foreach(ColumnStyle column in grid.ColumnStyles)if(column.Width!=width)column.Width=width;};
+        return grid;
+    }
+    private void SetToolsExpanded(bool expanded){if(_toolsExpanded==expanded)return;_toolsExpanded=expanded;_toolsContent.Visible=expanded;_diagnosticsToggle.Text=expanded?"收起诊断与测试":"展开诊断与测试";}
+
     private sealed class SectionCard:GroupBox
     {
         internal SectionCard(){DoubleBuffered=true;ResizeRedraw=true;SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);}
@@ -123,51 +143,46 @@ internal sealed class MainForm : Form
     private static BufferedFlowPanel Actions()=>new(){AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,WrapContents=true,Margin=new Padding(0,6,0,6),Padding=new Padding(0)};
     internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null,TimeSpan? requestTimeout=null,TimeSpan? quitTimeout=null)
     {
-        _send=send ?? ControlPipe.Send;_realService=send is null;DoubleBuffered=true;
-        _requestTimeout=requestTimeout??TimeSpan.FromSeconds(30);_quitTimeout=quitTimeout??TimeSpan.FromSeconds(15);
+        _send=send ?? ControlPipe.Send;_realService=send is null;_serviceReady=!_realService;DoubleBuffered=true;
+        _requestTimeout=requestTimeout??TimeSpan.FromSeconds(45);_quitTimeout=quitTimeout??TimeSpan.FromSeconds(45);
         if(_requestTimeout<=TimeSpan.Zero || _requestTimeout>TimeSpan.FromMinutes(1) || _quitTimeout<=TimeSpan.Zero || _quitTimeout>TimeSpan.FromMinutes(1))throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         _statusTimeout=TimeSpan.FromMilliseconds(Math.Min(_requestTimeout.TotalMilliseconds,6000));
-        Text="Oracle Proxy";AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(1080,820);MinimumSize=new Size(720,520);BackColor=Color.FromArgb(244,247,251);ForeColor=Ink;Font=new Font("Microsoft YaHei UI",10);StartPosition=FormStartPosition.CenterScreen;
-        var shell=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=new Padding(0)};
-        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,166));shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        shell.RowStyles.Add(new RowStyle(SizeType.Percent,100));Controls.Add(shell);
-        var sidebar=new Panel{Dock=DockStyle.Fill,BackColor=Color.FromArgb(20,31,53),Margin=new Padding(0),Padding=new Padding(18,28,16,18)};
-        var navigation=Stack("navigation");navigation.ForeColor=Color.White;
-        Row(navigation,new Label{Text="ORACLE\nPROXY",AutoSize=true,Font=new Font(Font.FontFamily,17,FontStyle.Bold),Margin=new Padding(0,0,0,30)});
-        sidebar.Controls.Add(navigation);shell.Controls.Add(sidebar,0,0);
-        var workspace=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=new Padding(0)};
-        workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));workspace.RowStyles.Add(new RowStyle(SizeType.Percent,100));workspace.RowStyles.Add(new RowStyle(SizeType.AutoSize));shell.Controls.Add(workspace,1,0);
-        var viewport=new Panel{Name="viewport",Dock=DockStyle.Fill,AutoScroll=true,Margin=new Padding(0)};workspace.Controls.Add(viewport,0,0);
-        var body=Stack("sections");body.Padding=new Padding(22,20,22,16);viewport.Controls.Add(body);
-        void FitBody(){
-            int width=Math.Max(1,viewport.ClientSize.Width-(viewport.VerticalScroll.Visible?SystemInformation.VerticalScrollBarWidth:0));
-            if(body.MaximumSize.Width!=width)body.MaximumSize=new Size(width,0);
-            if(body.Width!=width)body.Width=width;
-        }
-        viewport.SizeChanged+=(_,_)=>FitBody();body.SizeChanged+=(_,_)=>FitBody();
-        _mode.AutoSize=false;_mode.Height=44;_mode.Font=new Font(Font.FontFamily,20,FontStyle.Bold);_mode.AutoEllipsis=true;_mode.Margin=new Padding(0,0,0,6);
-        _detail.AutoSize=true;_detail.MinimumSize=new Size(0,45);_detail.ForeColor=Muted;_detail.Margin=new Padding(0,0,0,12);
-        _detail.SizeChanged+=(_,_)=>{int width=Math.Max(1,_detail.Parent?.ClientSize.Width??1);if(_detail.MaximumSize.Width!=width)_detail.MaximumSize=new Size(width,0);};
+        Text="Proxy";AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(1000,800);MinimumSize=new Size(720,520);BackColor=Canvas;ForeColor=Ink;Font=new Font("Microsoft YaHei UI",10);StartPosition=FormStartPosition.CenterScreen;
+        var root=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=new Padding(0),Padding=new Padding(0)};
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.Absolute,66));root.RowStyles.Add(new RowStyle(SizeType.Percent,100));root.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(root);
+        var heading=new TableLayoutPanel{Name="app-header",Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Padding=new Padding(26,12,26,10),Margin=new Padding(0),BackColor=Canvas};
+        heading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        heading.Controls.Add(new Label{Text="Proxy",AutoSize=true,ForeColor=Color.Black,Font=new Font(Font.FontFamily,21,FontStyle.Bold),Margin=new Padding(0,0,16,0)},0,0);
+        _version.Dock=DockStyle.Fill;_version.TextAlign=ContentAlignment.MiddleLeft;heading.Controls.Add(_version,1,0);root.Controls.Add(heading,0,0);
+        var content=new Panel{Dock=DockStyle.Fill,Margin=new Padding(0)};root.Controls.Add(content,0,1);
+        _shell=new TableLayoutPanel{Name="dashboard",Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Visible=false,Margin=new Padding(0)};
+        _shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));_shell.RowStyles.Add(new RowStyle(SizeType.Absolute,44));_shell.RowStyles.Add(new RowStyle(SizeType.Percent,100));content.Controls.Add(_shell);
+        var navigation=Actions();navigation.Name="navigation";navigation.BackColor=Canvas;navigation.Padding=new Padding(22,0,22,0);navigation.Margin=new Padding(0);_shell.Controls.Add(navigation,0,0);
+        var viewport=new Panel{Name="viewport",Dock=DockStyle.Fill,AutoScroll=true,Margin=new Padding(0)};_shell.Controls.Add(viewport,0,1);
+        var body=Stack("sections");body.Padding=new Padding(22,4,22,16);viewport.Controls.Add(body);
+        void FitBody(){int width=Math.Max(1,viewport.ClientSize.Width-SystemInformation.VerticalScrollBarWidth);if(body.MaximumSize.Width!=width)body.MaximumSize=new Size(width,0);if(body.Width!=width)body.Width=width;}
+        viewport.SizeChanged+=(_,_)=>FitBody();
+        _mode.AutoSize=false;_mode.Height=38;_mode.Font=new Font(Font.FontFamily,18,FontStyle.Bold);_mode.AutoEllipsis=true;_mode.Margin=new Padding(0,0,0,4);
+        _detail.AutoSize=false;_detail.Height=36;_detail.MinimumSize=Size.Empty;_detail.MaximumSize=Size.Empty;_detail.AutoEllipsis=true;_detail.ForeColor=Muted;_detail.Margin=new Padding(0,0,0,10);
         var connection=Stack("connectionContent");Row(connection,_mode);Row(connection,_detail);
-        var metrics=new TableLayoutPanel{Name="connectionMetrics",AutoSize=true,Dock=DockStyle.Fill,ColumnCount=3,RowCount=2,Margin=new Padding(0)};
-        for(int i=0;i<3;i++)metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));
-        _exitIp.Height=46;_exitIp.Font=new Font(Font.FontFamily,10,FontStyle.Bold);_protocol.Font=new Font(Font.FontFamily,11,FontStyle.Bold);
+        var metrics=new TableLayoutPanel{Name="connectionMetrics",AutoSize=false,Height=128,Dock=DockStyle.Fill,ColumnCount=3,RowCount=2,Margin=new Padding(0,0,0,8)};
+        for(int i=0;i<3;i++)metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));for(int i=0;i<2;i++)metrics.RowStyles.Add(new RowStyle(SizeType.Percent,50));
+        _exitIp.Font=new Font(Font.FontFamily,10,FontStyle.Bold);_protocol.Font=new Font(Font.FontFamily,11,FontStyle.Bold);
         var values=new[]{Metric("当前协议",_protocol),Metric("已验证出口 IP",_exitIp),Metric("隧道 HTTP 延迟",_latency),Metric("下载速率 · VPN",_download),Metric("上传速率 · VPN",_upload),Metric("UU 直连保护",_uu)};
         for(int i=0;i<values.Length;i++)metrics.Controls.Add(values[i],i%3,i/3);Row(connection,metrics);
         _transportChoice.Items.AddRange(["自动（UDP 优先）","WireGuard / UDP","QUIC / HTTP/3"]);_transportChoice.SelectedIndex=0;
-        var selection=Actions();selection.Controls.Add(new Label{Text="首选连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_transportChoice);Row(connection,selection);
+        var selection=Actions();selection.Controls.Add(new Label{Text="连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_transportChoice);Row(connection,selection);
         _transportChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(TransportPolicy.ClientSelection(_transportChoice.SelectedIndex,_native8443Available));};
-        var buttons=Actions();_connect.BackColor=Color.FromArgb(11,137,108);_connect.ForeColor=Color.White;_connect.FlatStyle=FlatStyle.Flat;_connect.FlatAppearance.BorderSize=0;_connect.UseVisualStyleBackColor=false;_connect.Margin=new Padding(0,0,10,0);_disconnect.Margin=new Padding(0);buttons.Controls.AddRange([_connect,_disconnect]);Row(connection,buttons);
-        _help.SetToolTip(_connect,"连接使用所选首选通道；必要时自动切换备用通道。防泄漏启用后，普通应用流量经 Oracle 出口。");
-        _help.SetToolTip(_disconnect,"停止本次 VPN 连接并恢复普通应用直连。保留系统服务和已登记设备，便于下次连接。");
-        _help.SetToolTip(_transportChoice,"UDP 为主通道，QUIC 为备用；受限网络下自动使用 HTTPS 兜底。连接期间先断开再切换。");
-        Row(connection,new Label{Text="关闭窗口会安全断开并退出。",AutoSize=true,ForeColor=Color.FromArgb(100,113,134),Margin=new Padding(0,8,0,0)});
-        _telemetry.AutoSize=false;_telemetry.Height=28;_telemetry.AutoEllipsis=true;_telemetry.ForeColor=Color.FromArgb(100,113,134);_telemetry.Margin=new Padding(0,8,0,0);Row(connection,_telemetry);
-        var connectionCard=Card("connectionSection","01   当前连接",connection);Row(body,connectionCard);
-        var account=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,12);Row(account,_accountName);
+        var buttons=Actions();_connect.Margin=new Padding(0,0,10,0);_disconnect.Margin=new Padding(0);buttons.Controls.AddRange([_connect,_disconnect]);Row(connection,buttons);
+        _help.SetToolTip(_connect,"使用所选通道连接；必要时自动尝试备用通道。连接通过验证后，普通应用流量经加密隧道发送。");
+        _help.SetToolTip(_disconnect,"安全断开 VPN 并恢复普通应用直连，保留已登记设备。");
+        _help.SetToolTip(_transportChoice,"UDP 优先，QUIC 与 HTTPS 作为备用。连接期间请先断开再切换。");
+        _telemetry.AutoSize=false;_telemetry.Height=28;_telemetry.AutoEllipsis=true;_telemetry.ForeColor=Muted;_telemetry.Margin=new Padding(0,8,0,0);Row(connection,_telemetry);
+        var connectionCard=Card("connectionSection","当前连接",connection);Row(body,connectionCard);
+        var account=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,10);Row(account,_accountName);
         _usage.AutoSize=false;_usage.Height=30;_usage.Margin=new Padding(0,0,0,4);Row(account,_usage);
-        _progress.Dock=DockStyle.Fill;_progress.Height=14;_progress.Margin=new Padding(0,0,0,10);Row(account,_progress);
-        _expiry.AutoSize=false;_expiry.Height=28;_expiry.AutoEllipsis=true;_expiry.Margin=new Padding(0,0,0,6);Row(account,_expiry);_usageUpdated.AutoSize=false;_usageUpdated.Height=28;_usageUpdated.AutoEllipsis=true;_usageUpdated.Margin=new Padding(0,0,0,14);Row(account,_usageUpdated);
+        _progress.Dock=DockStyle.Fill;_progress.Height=12;_progress.Margin=new Padding(0,0,0,10);Row(account,_progress);
+        _expiry.AutoSize=false;_expiry.Height=28;_expiry.AutoEllipsis=true;_expiry.Margin=new Padding(0,0,0,4);Row(account,_expiry);_usageUpdated.AutoSize=false;_usageUpdated.Height=28;_usageUpdated.AutoEllipsis=true;_usageUpdated.Margin=new Padding(0,0,0,10);Row(account,_usageUpdated);
         _registrationGroup=Stack("deviceRegistration");
         var deviceHeader=new TableLayoutPanel{Name="deviceSummary",Dock=DockStyle.Fill,AutoSize=true,ColumnCount=2,RowCount=1,Margin=new Padding(0,6,0,8)};
         deviceHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));deviceHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -183,85 +198,112 @@ internal sealed class MainForm : Form
         Row(account,_registrationGroup);_registrationGroup.Visible=false;
         _deviceName.TextChanged+=(_,_)=>UpdateRegistrationActions();_deviceConfirmation.CheckedChanged+=(_,_)=>UpdateRegistrationActions();
         _registerDevice.Click+=async(_,_)=>{if(_deviceConfirmation.Checked)await Act("ConfirmDevice");};
-        _credentials=new TableLayoutPanel{Name="credentials",Dock=DockStyle.Fill,AutoSize=true,ColumnCount=2,RowCount=2,Margin=new Padding(0)};
-        _credentials.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));_credentials.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));
-        _credentials.Controls.Add(new Label{Text="登录账号",AutoSize=true,Margin=new Padding(0,0,12,6)},0,0);_credentials.Controls.Add(new Label{Text="密码",AutoSize=true,Margin=new Padding(0,0,0,6)},1,0);
-        _username.Dock=_password.Dock=DockStyle.Fill;_username.Margin=new Padding(0,0,12,0);_password.Margin=new Padding(0);_credentials.Controls.Add(_username,0,1);_credentials.Controls.Add(_password,1,1);Row(account,_credentials);
-        var accountActions=Actions();_login.MinimumSize=_logout.MinimumSize=new Size(100,36);_login.Margin=new Padding(0,0,10,0);_logout.Margin=new Padding(0);accountActions.Controls.AddRange([_login,_credentialsToggle,_logout]);Row(account,accountActions);
-        _credentialsToggle.Margin=new Padding(0,0,10,0);_credentialsToggle.Visible=false;
-        _credentialsToggle.Click+=(_,_)=>{_credentialsExpanded=!_credentialsExpanded;_credentials.Visible=_credentialsExpanded;_login.Visible=_credentialsExpanded;_credentialsToggle.Text=_credentialsExpanded?"取消切换":"切换账号";if(_credentialsExpanded)_username.Focus();};
-        _password.KeyDown+=async(_,e)=>{if(e.KeyCode==Keys.Enter && _login.Enabled){e.SuppressKeyPress=true;await Act("Login");}};
-        _logout.Click+=async(_,_)=>await Act("Logout");var accountCard=Card("accountSection","02   账号、用量与设备",account);Row(body,accountCard);
-        var tools=Stack("toolsContent");
-        var diagnostics=Actions();
-        Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=true,MinimumSize=new Size(112,36),Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
-        diagnostics.Controls.Add(Tool("连接诊断",()=>ShowReport("连接诊断",_connectionReport)));
-        diagnostics.Controls.Add(Tool("GitHub 连通性",async()=>await ShowGitHubReport()));
-        diagnostics.Controls.Add(Tool("UU 检查详情",ShowUuReport));
-        diagnostics.Controls.Add(Tool("重新识别 UU",async()=>await Act("RefreshUu")));
-        _native8443Test=Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443"));diagnostics.Controls.Add(_native8443Test);
+        var accountActions=Actions();accountActions.Controls.Add(_logout);Row(account,accountActions);
+        _logout.Click+=async(_,_)=>await Act("Logout");
+        var accountCard=Card("accountSection","账号与设备",account);Row(body,accountCard);
+        var tools=Stack("toolsContainer");_diagnosticsToggle.Dock=DockStyle.Fill;Row(tools,_diagnosticsToggle);_toolsContent=Stack("toolsContent");_toolsContent.Visible=false;Row(tools,_toolsContent);
+        _diagnosticsToggle.Click+=(_,_)=>SetToolsExpanded(!_toolsExpanded);
+        var diagnostics=ButtonGrid("diagnostic-actions");
+        Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=false,Height=40,Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
+        void Add(TableLayoutPanel grid,Button button){int index=grid.Controls.Count;int row=index/3;if(row>=grid.RowCount){grid.RowCount=row+1;grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.Height=grid.RowCount*48;}button.Dock=DockStyle.Fill;grid.Controls.Add(button,index%3,row);}
+        Add(diagnostics,Tool("连接诊断",()=>ShowReport("连接诊断",_connectionReport)));
+        Add(diagnostics,Tool("GitHub 连通性",async()=>await ShowGitHubReport()));Add(diagnostics,Tool("UU 检查详情",ShowUuReport));
+        Add(diagnostics,Tool("重新识别 UU",async()=>await Act("RefreshUu")));
+        _native8443Test=Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443"));Add(diagnostics,_native8443Test);
         void Open(string url){try{System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url){UseShellExecute=true});}catch{_detail.Text="未能打开默认浏览器。";}}
-        diagnostics.Controls.Add(Tool("打开出口检查",()=>Open("https://www.cloudflare.com/cdn-cgi/trace")));
-        diagnostics.Controls.Add(Tool("打开管理后台",()=>Open("https://vpn-admin.morandi.dpdns.org/")));Row(tools,diagnostics);
-        _maintenance=Actions();_maintenance.Name="system-maintenance";_maintenance.Visible=false;
-        _maintenanceToggle.Margin=new Padding(0,0,10,6);Row(tools,_maintenanceToggle);
-        _maintenanceToggle.Click+=(_,_)=>{_maintenance.Visible=!_maintenance.Visible;_maintenanceToggle.Text=_maintenance.Visible?"收起系统维护":"展开系统维护";};
-        _maintenance.Controls.Add(Tool("安装 / 升级服务",()=>{try{Installer.Elevate(false);}catch{_detail.Text="操作未完成，请检查 UAC 提示或使用完整便携包。";}}));
-        _maintenance.Controls.Add(Tool("卸载",()=>{if(MessageBox.Show(this,"将恢复直连并卸载系统服务、删除本机密钥。服务器仍保留设备记录与用量，请联系管理员撤销旧设备以释放名额。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.Elevate(true);}catch{_detail.Text="卸载未完成，请检查 UAC 提示。";}}}));
-        foreach(bool restore in new[]{false,true})_maintenance.Controls.Add(Tool(restore?"恢复 UU 权限（UAC）":"修复 UU 并重新识别（UAC）",async()=>await MaintainUu(restore)));
-        Row(tools,_maintenance);
-        Row(tools,new Label{Text="候选版 · 安装与维护操作需要 Windows 管理员授权。",AutoSize=false,Height=30,ForeColor=Muted,Margin=new Padding(0,10,0,0)});
-        var toolsCard=Card("toolsSection","03   诊断与测试",tools);Row(body,toolsCard);
-        // Recovery must remain reachable when a service command is stalled,
-        // cards are collapsed, or the smaller viewport has scrolled elsewhere.
-        var safety=Actions();safety.Name="safety-actions";safety.BackColor=Color.White;safety.Margin=new Padding(0);safety.Padding=new Padding(22,8,22,8);
-        _emergencyRecovery.Margin=new Padding(0,0,12,0);safety.Controls.Add(_emergencyRecovery);
-        safety.Controls.Add(new Label{Text="操作无响应时可在本机恢复直连。",AutoSize=true,ForeColor=Muted,Margin=new Padding(0,8,0,0)});workspace.Controls.Add(safety,0,1);
-        _emergencyRecovery.Click+=(_,_)=>{
-            if(MessageBox.Show(this,"将停止本产品的隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","紧急恢复",MessageBoxButtons.OKCancel)!=DialogResult.OK)return;
-            CancelRequests();_needsReconcile=true;RefreshActions();
-            try{Installer.ElevateRecovery();_detail.Text="恢复请求已提交；等待系统服务确认结果。";}
-            catch{_detail.Text="恢复请求未完成，请检查 UAC 提示。现有连接结果仍待确认。";}
-        };
-        foreach(var (title,target) in new[]{("01  当前连接",connectionCard),("02  账号与设备",accountCard),("03  诊断与测试",toolsCard)}){
-            var button=new Button{Text=title,Dock=DockStyle.Fill,Height=46,TextAlign=ContentAlignment.MiddleLeft,FlatStyle=FlatStyle.Flat,BackColor=Color.FromArgb(20,31,53),UseVisualStyleBackColor=false,ForeColor=Color.White,Margin=new Padding(0,0,0,8)};button.FlatAppearance.BorderSize=0;button.Click+=(_,_)=>viewport.ScrollControlIntoView(target);Row(navigation,button);
+        Add(diagnostics,Tool("打开出口检查",()=>Open("https://www.cloudflare.com/cdn-cgi/trace")));
+        Row(_toolsContent,diagnostics);
+        _maintenance=ButtonGrid("system-maintenance");_maintenance.Visible=false;
+        Row(_toolsContent,_maintenanceToggle);_maintenanceToggle.Click+=(_,_)=>{_maintenance.Visible=!_maintenance.Visible;_maintenanceToggle.Text=_maintenance.Visible?"收起系统维护":"展开系统维护";};
+        void Install(){try{Installer.Elevate(false);}catch{_loginFeedback.Text=_detail.Text="安装未完成，请检查 UAC 提示或使用完整软件包。";}}
+        Add(_maintenance,Tool("安装 / 升级服务",Install));
+        Add(_maintenance,Tool("卸载服务",()=>{if(MessageBox.Show(this,"将恢复直连并卸载系统服务、删除本机密钥。设备登记与用量仍保留，需由管理员撤销旧设备释放名额。继续？","卸载",MessageBoxButtons.OKCancel)==DialogResult.OK){try{Installer.Elevate(true);}catch{_detail.Text="卸载未完成，请检查 UAC 提示。";}}}));
+        foreach(bool restore in new[]{false,true}){var button=Tool(restore?"恢复 UU 权限":"修复 UU 权限",async()=>await MaintainUu(restore));_help.SetToolTip(button,"需要管理员授权。修复后自动重新识别；恢复使用原权限备份。");Add(_maintenance,button);}Row(_toolsContent,_maintenance);
+        var toolsCard=Card("toolsSection","诊断与测试",tools);Row(body,toolsCard);
+        foreach(var (title,target) in new[]{("当前连接",connectionCard),("账号与设备",accountCard),("诊断与测试",toolsCard)}){
+            var button=new Button{Text=title,AutoSize=false,Width=148,Height=36,TextAlign=ContentAlignment.MiddleCenter,FlatStyle=FlatStyle.Flat,BackColor=Canvas,UseVisualStyleBackColor=false,ForeColor=Ink,Margin=new Padding(0,0,10,0)};button.FlatAppearance.BorderSize=0;button.Click+=(_,_)=>{if(target==toolsCard)SetToolsExpanded(true);viewport.ScrollControlIntoView(target);};navigation.Controls.Add(button);
         }
-        _login.Click+=async(_,_)=>await Act("Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
+        // The login screen is the initial view. Only an authenticated service
+        // response with an account can reveal the dashboard.
+        _loginGate=new Panel{Name="login-gate",Dock=DockStyle.Fill,AutoScroll=true,Margin=new Padding(0),BackColor=Canvas};content.Controls.Add(_loginGate);_loginGate.BringToFront();
+        var loginContent=Stack("loginContent");
+        Row(loginContent,new Label{Text="登录账号",AutoSize=true,Font=new Font(Font.FontFamily,18,FontStyle.Bold),Margin=new Padding(0,0,0,10)});
+        Row(loginContent,new Label{Text="使用管理员提供的账号和密码。",AutoSize=true,ForeColor=Muted,Margin=new Padding(0,0,0,18)});
+        _credentials=Stack("credentials");_username.Dock=_password.Dock=DockStyle.Fill;_username.Height=_password.Height=36;_username.Margin=_password.Margin=new Padding(0,0,0,12);
+        Row(_credentials,new Label{Text="账号",AutoSize=true,Margin=new Padding(0,0,0,4)});Row(_credentials,_username);Row(_credentials,new Label{Text="密码",AutoSize=true,Margin=new Padding(0,0,0,4)});Row(_credentials,_password);Row(loginContent,_credentials);
+        _rememberLogin.Margin=new Padding(0,0,0,12);Row(loginContent,_rememberLogin);_help.SetToolTip(_rememberLogin,"最多保留 30 天的加密登录令牌，不保存明文密码；退出账号后立即清除。");
+        _login.AutoSize=false;_login.Height=44;_login.Margin=new Padding(0,0,0,12);Row(loginContent,_login);
+        _loginFeedback.AutoSize=false;_loginFeedback.Height=44;_loginFeedback.AutoEllipsis=true;_loginFeedback.ForeColor=Muted;Row(loginContent,_loginFeedback);
+        Row(loginContent,_bootstrapRetry);_bootstrapRetry.Click+=async(_,_)=>{if(await ProvisionService())await StartReadyClient();};
+        var loginCard=Card("login-card","",loginContent);loginCard.Dock=DockStyle.None;loginCard.AutoSize=true;loginCard.Padding=new Padding(28,24,28,24);_loginGate.Controls.Add(loginCard);
+        void FitLogin(){int width=Math.Min(470,Math.Max(1,_loginGate.ClientSize.Width-40));loginCard.Width=width;loginCard.MaximumSize=new Size(width,0);loginCard.Left=Math.Max(0,(_loginGate.ClientSize.Width-width)/2);loginCard.Top=Math.Max(12,(_loginGate.ClientSize.Height-loginCard.Height)/2);}
+        _loginGate.SizeChanged+=(_,_)=>FitLogin();loginCard.SizeChanged+=(_,_)=>FitLogin();
+        var safety=Actions();safety.Name="safety-actions";safety.BackColor=Canvas;safety.Margin=new Padding(0);safety.Padding=new Padding(22,8,22,10);
+        _emergencyRecovery.Margin=new Padding(0,0,12,0);safety.Controls.Add(_emergencyRecovery);safety.Controls.Add(new Label{Text="连接异常时，可在本机恢复直连。",AutoSize=true,ForeColor=Muted,Margin=new Padding(0,8,0,0)});root.Controls.Add(safety,0,2);
+        _emergencyRecovery.Click+=(_,_)=>{
+            if(MessageBox.Show(this,"将停止隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","恢复直连",MessageBoxButtons.OKCancel)!=DialogResult.OK)return;
+            CancelRequests();_needsReconcile=true;RefreshActions();
+            try{Installer.ElevateRecovery();_loginFeedback.Text=_detail.Text="恢复请求已提交，等待系统服务确认。";}
+            catch{_loginFeedback.Text=_detail.Text="恢复请求未完成，请检查 UAC 提示。";}
+        };
+        _login.Click+=async(_,_)=>await Act(_rememberLogin.Checked?"LoginRemembered":"Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
+        _password.KeyDown+=async(_,e)=>{if(e.KeyCode==Keys.Enter && _login.Enabled){e.SuppressKeyPress=true;await Act(_rememberLogin.Checked?"LoginRemembered":"Login");}};
         _timer.Tick+=async(_,_)=>{if(!_busy && !_closing)await Act("Status");};
-        Shown+=async(_,_)=>{
-            await Act("Status");
-            if(!IsDisposed && !_closing && _statusReadSucceeded && !_needsReconcile && !_startupPrepared && _deviceRegistered && !_connectionIntent && _lastMode=="disconnected"){
-                _startupPrepared=true;await Act("Prepare");
+        Shown+=async(_,_)=>{if(_realService){if(await ProvisionService())await StartReadyClient();}else{await Act("Status");await StartReadyClient();}};
+        IEnumerable<Control> Descendants(Control parent){foreach(Control child in parent.Controls){yield return child;foreach(var nested in Descendants(child))yield return nested;}}
+        foreach(var button in Descendants(body).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connect || button==_login);StyleButton(_emergencyRecovery);
+        foreach(var input in new[]{_username,_password,_deviceName}){input.BorderStyle=BorderStyle.FixedSingle;input.AccessibleName=input==_username?"登录账号":input==_password?"密码":"设备名称";}
+        _help.SetToolTip(_telemetry,"速率按本机 VPN 网卡字节增量统计；HTTP 延迟包含隧道及检测站点响应时间，与游戏延迟不同。");
+        foreach(var value in new[]{_download,_upload})_help.SetToolTip(value,"本机 VPN 网卡实时速率。1 MiB/s 约为 8.39 Mbps。");
+        _help.SetToolTip(_emergencyRecovery,"独立的本机恢复入口，需要管理员授权；恢复完成前不会把网络状态当作已断开。");
+        AcceptButton=_login;FitBody();FitLogin();
+        FormClosing+=async(_,e)=>{if(e.CloseReason==CloseReason.UserClosing && !_allowClose){e.Cancel=true;await QuitClient();}};
+    }
+
+    private async Task StartReadyClient()
+    {
+        if(!IsDisposed && !_closing && _authenticated && _statusReadSucceeded && !_needsReconcile && !_startupPrepared && _deviceRegistered && !_connectionIntent && _lastMode=="disconnected"){
+            _startupPrepared=true;await Act("Prepare");
+        }
+        if(!IsDisposed && !_closing && _serviceReady)_timer.Start();
+    }
+    private async Task<bool> ProvisionService()
+    {
+        if(_provisioning || _closing || IsDisposed)return false;
+        _provisioning=true;_serviceReady=false;_timer.Stop();_bootstrapRetry.Visible=false;_loginFeedback.Text="正在准备系统服务，请完成可能出现的 Windows 授权。";RefreshActions();
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(TimeSpan.FromMinutes(3));
+        try{
+            string version=typeof(MainForm).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+            async Task<JsonObject> Read(CancellationToken cancel){using var limit=CancellationTokenSource.CreateLinkedTokenSource(cancel);limit.CancelAfter(TimeSpan.FromSeconds(8));try{return await ControlPipe.Send("Status",null,null,limit.Token);}catch(OperationCanceledException)when(!cancel.IsCancellationRequested){throw new IOException("SERVICE_STATUS_TIMEOUT");}}
+            var state=await ServiceBootstrap.Ensure(version,Read,Installer.ElevateInstallAsync,deadline.Token);
+            if(IsDisposed || _closing)return false;
+            _serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;Display(state);return true;
+        }catch(Exception error){
+            if(!IsDisposed && !_closing){
+                _loginFeedback.Text=error.Message=="SERVICE_SETUP_CANCELLED"?"已取消初始化。完成系统服务准备后才可登录。":error is OperationCanceledException?"初始化结果尚未确认，请等待安装窗口结束后重试。":"系统服务尚未准备完成，请重试初始化。";
+                _bootstrapRetry.Visible=true;
             }
-            if(!IsDisposed && !_closing)_timer.Start();
-        };
-        IEnumerable<Control> Descendants(Control root){foreach(Control child in root.Controls){yield return child;foreach(var nested in Descendants(child))yield return nested;}}
-        foreach(var button in Descendants(body).OfType<Button>())StyleButton(button,button==_connect);StyleButton(_emergencyRecovery);
-        foreach(var input in Descendants(body).OfType<TextBox>()){input.BorderStyle=BorderStyle.FixedSingle;input.AccessibleName=input==_username?"登录账号":input==_password?"密码":"设备名称";}
-        _help.SetToolTip(_telemetry,"速率按本机 VPN 网卡字节增量统计；HTTP 延迟包含 Oracle 隧道与检测站点响应时间，不能等同于游戏延迟。");
-        foreach(var value in new[]{_download,_upload})_help.SetToolTip(value,"本机 VPN 网卡的实时速率。1 MiB/s 约为 8.39 Mbps；测速网站通常使用 Mbps。");
-        _help.SetToolTip(_emergencyRecovery,"独立于当前请求的本机恢复入口。需要 Windows 管理员授权；恢复完成前不会把网络状态当作已断开。");
-        FitBody();
-        FormClosing+=async(_,e)=>{
-            // Only a deliberate user close changes connection intent. Windows
-            // shutdown, forced termination and GUI crashes retain fail-close.
-            if(e.CloseReason==CloseReason.UserClosing && !_allowClose){e.Cancel=true;await QuitClient();}
-        };
+            return false;
+        }finally{_provisioning=false;if(!IsDisposed){if(!_serviceReady)_bootstrapRetry.Visible=true;RefreshActions();}}
     }
     protected override void Dispose(bool disposing){if(disposing){_lifetime.Cancel();_requestEpoch.Cancel();_timer.Dispose();_help.Dispose();}base.Dispose(disposing);}
     private void CancelRequests(){var previous=_requestEpoch;_requestEpoch=new CancellationTokenSource();previous.Cancel();previous.Dispose();}
     private void RefreshActions()
     {
         if(IsDisposed)return;
-        bool available=!_busy && !_closing && !_needsReconcile && !_uuMaintaining;
-        _connect.Enabled=available && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
+        bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining;
+        _connect.Enabled=available && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
         _transportChoice.Enabled=available && !_connectionIntent;_native8443Test.Enabled=available && !_connectionIntent && _native8443Available;
         UpdateRegistrationActions();
     }
     private async Task<JsonObject> SendRequest(string command,string? username,string? password,CancellationToken cancel)
     {
         cancel.ThrowIfCancellationRequested();
-        Task<JsonObject> pending=_realService?ControlPipe.Send(command,username,password,cancel):_send(command,username,password);
+        async Task<JsonObject> Real(){
+            while(true){try{return await ControlPipe.Send(command,username,password,cancel);}
+                catch(IOException error)when(error.Message=="SERVICE_BUSY"){await Task.Delay(200,cancel);}}
+        }
+        Task<JsonObject> pending=_realService?Real():_send(command,username,password);
         try{return await pending.WaitAsync(cancel);}
         catch{
             // A cancelled wait cannot undo a command already admitted by the
@@ -292,7 +334,7 @@ internal sealed class MainForm : Form
             _allowClose=true;Close();return true;
         }catch{
             if(sentQuit)_needsReconcile=true;
-            if(!IsDisposed)_detail.Text="退出结果未确认，窗口保持打开。请稍后重试；底部“恢复直连（UAC）”始终可用。";
+            if(!IsDisposed)_loginFeedback.Text=_detail.Text="退出结果未确认，窗口保持打开。请稍后重试；底部“恢复直连（UAC）”始终可用。";
             return false;
         }finally{
             if(acquired)_requests.Release();
@@ -304,26 +346,31 @@ internal sealed class MainForm : Form
         if(_closing || IsDisposed)return;
         bool passive=command=="Status";
         if(passive)_statusReadSucceeded=false;
-        if(!passive && (_busy || _needsReconcile || _uuMaintaining))return;
+        if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
         bool acquired=false,sentMutation=false;
-        if(!passive){_busy=true;RefreshActions();}
+        if(!passive){_busy=true;if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号…";RefreshActions();}
         try{
             if(passive){if(!_requests.Wait(0))return;acquired=true;}
             else{await _requests.WaitAsync(deadline.Token);acquired=true;}
             // Ordinary Connect preserves the service's adaptive port plan.
             // A diagnostic pin is set only by its explicit diagnostic button.
-            sentMutation=!passive;var state=await SendRequest(command,command=="Login"?_username.Text:command=="ConfirmDevice"?_deviceName.Text:null,command=="Login"?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
-            if(command=="Login")_password.Clear();
+            if(command is "Login" or "LoginRemembered" && _connectionIntent){
+                sentMutation=true;var off=await SendRequest("Disconnect",null,null,deadline.Token);Display(off);
+                if(off["ok"]?.GetValue<bool>()!=true || off["intent"]?.GetValue<bool>()!=false)throw new IOException("SAFE_OFF_NOT_VERIFIED");
+            }
+            sentMutation=!passive;var state=await SendRequest(command,command is "Login" or "LoginRemembered"?_username.Text:command=="ConfirmDevice"?_deviceName.Text:null,command is "Login" or "LoginRemembered"?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
+            if(command is "Login" or "LoginRemembered")_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
             Display(state);
-            if(command=="Login" && state["ok"]?.GetValue<bool>()==true && state["account"] is JsonObject){_credentialsExpanded=false;_credentials.Visible=false;_login.Visible=false;_credentialsToggle.Text="切换账号";}
-            if(command=="Login" && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
+            if(command=="Logout" && state["ok"]?.GetValue<bool>()==true){_username.Clear();_password.Clear();_startupPrepared=false;}
+            if(command is "Login" or "LoginRemembered" && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
         }catch(OperationCanceledException){
             if(sentMutation)_needsReconcile=true;
             if(!IsDisposed && !_closing){
                 _mode.Text=_needsReconcile?"操作结果待确认":"系统服务响应超时";_mode.ForeColor=Color.DarkOrange;
                 _detail.Text=_needsReconcile?"等待已结束，服务可能仍在处理。确认状态后才能继续操作；底部可使用“恢复直连（UAC）”。":"暂未读到系统服务状态，稍后会重试。现有连接与保护不会因此更改。";
+                _loginFeedback.Text=_detail.Text;
             }
         }catch{
             if(sentMutation)_needsReconcile=true;
@@ -331,6 +378,7 @@ internal sealed class MainForm : Form
                 _maintenance.Visible=true;_maintenanceToggle.Text="收起系统维护";_mode.Text="系统服务暂不可用";_mode.ForeColor=Color.DarkOrange;_protocol.Text=_exitIp.Text=_latency.Text=_uu.Text="—";UpdateRates(new JsonObject(),false);_progress.Enabled=false;_usageUpdated.Text="用量更新暂不可用，显示上次读取值。";
                 _detail.Text=_needsReconcile?"上次操作结果尚未确认。请等待状态刷新；必要时使用底部“恢复直连（UAC）”。":"无法读取系统服务。首次使用请安装服务；已安装时可查看连接诊断或使用底部恢复入口。";
                 try{string path=Path.Combine(Platform.Root,"diagnostics.json");if(new FileInfo(path).Length<=4096){var d=JsonNode.Parse(File.ReadAllText(path));_detail.Text+=$" 诊断：{d?["stage"]} / {d?["code"]}。";}}catch{}
+                _loginFeedback.Text=_detail.Text;
             }
         }
         finally{if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
@@ -392,7 +440,10 @@ internal sealed class MainForm : Form
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            Text="Oracle Proxy · "+(state["product_version"]?.GetValue<string>() ?? "0.3.0-rc18");
+            string productVersion=state["product_version"]?.GetValue<string>() ?? "0.3.0-rc28";
+            _version.Text="v"+productVersion.Split('+')[0];
+            if(_help.GetToolTip(_version)!=productVersion)_help.SetToolTip(_version,productVersion);
+            _connectionReport=_connectionReport.Replace("ORACLE_EGRESS_","EGRESS_",StringComparison.Ordinal).Replace("ORACLE_","EGRESS_",StringComparison.Ordinal).Replace("oracle_egress_","egress_",StringComparison.Ordinal).Replace("oracle_","egress_",StringComparison.Ordinal);
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
@@ -401,7 +452,7 @@ internal sealed class MainForm : Form
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
             _lastMode=mode;
             _timer.Interval=mode is "protected" or "connecting" || (state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:mode=="connected"?1000:3000;
-            _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 Oracle · HTTPS","wireguard-quic"=>"已连接 Oracle · QUIC / HTTP/3",_=>"已连接 Oracle · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
+            _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 · HTTPS","wireguard-quic"=>"已连接 · QUIC / HTTP/3",_=>"已连接 · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;
             string policy=state["account"]?["status"]?.GetValue<string>() ?? "";
             string detail=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?(policy is "disabled" or "expired" or "quota" or "server_budget" or "unavailable"?$"账号状态：{PolicyName(policy)}。防泄漏保护保留。":"连接受保护；意外中断时将阻止普通应用绕过 VPN。"):"点击连接前，请先登录管理员分配的账号。";
@@ -412,10 +463,18 @@ internal sealed class MainForm : Form
             }
             if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)detail="快速连接已就绪（"+(state["transport"]?.GetValue<string>() switch{"wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS 兜底通道",_=>"WireGuard UDP 主通道"})+"）。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
             else if(mode=="disconnected" && state["preparing"]?.GetValue<bool>()==true)detail="正在预备加密通道，当前普通应用仍直连。首次连接或网络变化可能需要等待。";
-            var account=state["account"]?.AsObject();
+            var account=state["login_authenticated"]?.GetValue<bool>()==true?state["account"]?.AsObject():null;
             bool hasAccount=account is not null;
             if(_hasAccount!=hasAccount){
-                _hasAccount=hasAccount;_credentialsExpanded=false;_credentials.Visible=!hasAccount;_login.Visible=!hasAccount;_credentialsToggle.Visible=hasAccount;_credentialsToggle.Text="切换账号";_logout.Visible=hasAccount;
+                _hasAccount=hasAccount;_credentials.Visible=!hasAccount;_login.Visible=!hasAccount;_logout.Visible=hasAccount;
+            }
+            _authenticated=state["login_authenticated"]?.GetValue<bool>()==true && hasAccount;
+            if(_dashboardShown && !_authenticated){_username.Clear();_password.Clear();}
+            if(_dashboardShown!=_authenticated){_dashboardShown=_authenticated;_shell.Visible=_authenticated;_loginGate.Visible=!_authenticated;AcceptButton=_authenticated?_connect:_login;}
+            if(!_authenticated){
+                string code=state["error"]?.GetValue<string>() ?? "";
+                string feedback=code.Length>0?Message(code):_connectionIntent?"当前连接仍受保护，登录前会先安全断开。":"登录后即可管理连接与设备。";
+                if(_loginFeedback.Text!=feedback)_loginFeedback.Text=feedback;
             }
             if(account is not null){
                 long used=account["used_bytes"]!.GetValue<long>();long? limit=account["limit_bytes"]?.GetValue<long>();
@@ -436,11 +495,11 @@ internal sealed class MainForm : Form
                 _mode.Text="已登录 · 请确认本机设备";
                 detail="请在账号与设备区核对本机名称和识别码，确认归属并登记后再连接。";
             }
-            if(_detail.Text!=detail)_detail.Text=detail;
+            if(_detail.Text!=detail)_detail.Text=detail;if(_help.GetToolTip(_detail)!=detail)_help.SetToolTip(_detail,detail);
             string protocolText=mode=="connected"?state["transport"]?.GetValue<string>() switch{"wireguard-udp"=>"WireGuard / UDP","wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS / TLS 兜底",_=>"—"}:"—";
             string exit4=state["verified_exit_ip"]?.GetValue<string>() ?? "待验证",exit6=state["verified_exit_ipv6"]?.GetValue<string>() ?? "";
             _exitIp.Text=mode=="connected"?exit4+(exit6.Length>0?"\n"+exit6:""):"—";
-            string exitHelp=mode=="connected"?"IPv4："+exit4+(exit6.Length>0?"\nIPv6："+exit6:""):"连接验证通过后显示 Oracle 出口。";
+            string exitHelp=mode=="connected"?"IPv4："+exit4+(exit6.Length>0?"\nIPv6："+exit6:""):"连接验证通过后显示出口。";
             if(_help.GetToolTip(_exitIp)!=exitHelp)_help.SetToolTip(_exitIp,exitHelp);
             if(mode=="connected" && state["transport"]?.GetValue<string>()=="wireguard-udp" && state["native_udp_selected_port"] is JsonValue selectedPort && selectedPort.TryGetValue<int>(out int selectedUdpPort))protocolText+=" · "+selectedUdpPort;
             if(_protocol.Text!=protocolText)_protocol.Text=protocolText;
@@ -482,7 +541,7 @@ internal sealed class MainForm : Form
         bool active=account?["status"]?.GetValue<string>()=="active" && fresh;
         bool requiresSlot=registration?["requires_slot"]?.GetValue<bool>()!=false;
         int count=account?["device_count"]?.GetValue<int>() ?? 0,limit=account?["device_limit"]?.GetValue<int>() ?? 0;
-        _canConnect=_deviceRegistered && active;_connect.Enabled=!_busy && !_closing && !_needsReconcile && !_uuMaintaining && _canConnect;
+        _canConnect=_authenticated && _deviceRegistered && active;_connect.Enabled=!_busy && !_closing && !_needsReconcile && !_uuMaintaining && _canConnect;
         _canRegister=registration is not null && !_deviceRegistered && active && (!requiresSlot || count<limit);
         _deviceName.ReadOnly=_deviceRegistered;_deviceConfirmation.Enabled=!_deviceRegistered && !_connectionIntent && active && registration is not null;
         long? confirmed=registration?["confirmed_at"]?.GetValue<long>();
@@ -510,10 +569,11 @@ internal sealed class MainForm : Form
         "UU_TRUST_NOT_VERIFIED"=>"UU 信任核验未通过，请查看“UU 检查详情”；目录权限问题可使用“修复 UU 并重新识别（UAC）”。",
         "SERVICE_OPERATION_FAILED"=>"连接未完成，请点击“连接诊断”查看失败阶段和错误码。",
         "CORE_READY_TIMEOUT"=>"隧道核心启动超时，保护保持启用。请复制“连接诊断”。",
-        "ORACLE_PROBE_TIMEOUT"=>"Oracle 出口验证超时，保护保持启用。请复制“连接诊断”。",
-        "ORACLE_PROBE_HTTP_FAILED"=>"Oracle 出口请求失败，保护保持启用。请复制“连接诊断”。",
+        "ORACLE_PROBE_TIMEOUT"=>"出口验证超时，保护保持启用。请复制“连接诊断”。",
+        "ORACLE_PROBE_HTTP_FAILED"=>"出口请求失败，保护保持启用。请复制“连接诊断”。",
         "UU_MAINTENANCE_BUSY"=>"UU 权限维护进行中，请完成后再连接。",
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",
+        "LOGIN_SESSION_EXPIRED"=>"登录已过期，请重新登录。",
         "LOGIN_REQUIRED"=>"请先登录账号。", "DISCONNECT_BEFORE_LOGIN"=>"更换登录前请先断开。", _=>$"操作尚未完成：{code}。"};
 }

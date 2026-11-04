@@ -95,8 +95,9 @@ internal static class Installer
                 foreach(string name in Files)File.Copy(Path.Combine(Platform.Root,name),Path.Combine(previous,name),true);
                 backedUp=true;
             }
-            foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"OracleProxy.exe":name),Path.Combine(Platform.Root,name),true);
-            if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Oracle Proxy VPN");
+            foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"Proxy.exe":name),Path.Combine(Platform.Root,name),true);
+            if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Proxy VPN");
+            else Sc("config",Platform.Service,"DisplayName=","Proxy VPN");
             Platform.ServiceEnvironment(Platform.Service);
             Sc("failure",Platform.Service,"reset=","300","actions=","restart/3000/restart/5000/restart/10000");
             Sc("start",Platform.Service);
@@ -210,6 +211,29 @@ internal static class Installer
     internal static void ElevateRecovery()
     {
         var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};info.ArgumentList.Add("--recover");Process.Start(info);
+    }
+    private static readonly object InstallLock=new();
+    private static Task<int>? _pendingInstall;
+    internal static Task<int> ElevateInstallAsync(CancellationToken cancel)
+    {
+        Task<int> pending;
+        lock(InstallLock){
+            // Cancelling the GUI wait must not interrupt file replacement or
+            // rollback. A retry joins this same child while it is still running.
+            if(_pendingInstall is null || _pendingInstall.IsCompleted)_pendingInstall=InstallChild();
+            pending=_pendingInstall;
+        }
+        return pending.WaitAsync(cancel);
+    }
+    private static async Task<int> InstallChild()
+    {
+        Platform.VerifyBundle(AppContext.BaseDirectory);
+        var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};
+        info.ArgumentList.Add("--install");info.ArgumentList.Add(WindowsIdentity.GetCurrent().User!.Value);
+        Process process;
+        try{process=Process.Start(info) ?? throw new IOException("SERVICE_SETUP_NOT_STARTED");}
+        catch(System.ComponentModel.Win32Exception error)when(error.NativeErrorCode==1223){return 4;}
+        using(process){await process.WaitForExitAsync().ConfigureAwait(false);return process.ExitCode;}
     }
     internal static void Elevate(bool uninstall)
     {

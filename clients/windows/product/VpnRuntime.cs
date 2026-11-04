@@ -18,6 +18,9 @@ internal sealed class VpnRuntime : IDisposable
     private TunnelTransport _transport;
     private int _probeFailures;
     private bool _initialCarrierSelected;
+    private bool _interactiveAuthenticated;
+    private bool SessionAuthorized=>LoginPolicy.Authorized(_secret,_interactiveAuthenticated,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+    private void ForgetLogin(){LoginPolicy.Forget(_secret);_interactiveAuthenticated=false;_state=null;_secret.Save();}
     private readonly JsonObject _carrierFailures=new();
     private TunnelTransport Preferred(){
         if(_secret.TransportPreference!="auto")return TransportPolicy.First(_secret.TransportPreference,_state);
@@ -63,7 +66,7 @@ internal sealed class VpnRuntime : IDisposable
     private long? _readyMs;
     private void MarkConnected(){_mode="connected";if(_clickStarted!=0 && _readyMs is null)_readyMs=System.Diagnostics.Stopwatch.GetElapsedTime(_clickStarted).Ticks/TimeSpan.TicksPerMillisecond;}
     private bool WarmReady=>!_secret.ConnectIntent && _core.Running && !_core.TunActive && _verifiedGeneration==_generation && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
-    private bool Preparing=>!_secret.ConnectIntent && DeviceRegistration.Confirmed(_state) && _secret.Token.Length>0 &&
+    private bool Preparing=>!_secret.ConnectIntent && SessionAuthorized && DeviceRegistration.Confirmed(_state) && _secret.Token.Length>0 &&
         DateTimeOffset.UtcNow<_prepareUntil && (_core.Running || _prepareMayStartCore && DateTimeOffset.UtcNow>=_prepareRetryAfter);
     // Retaining an existing dormant core is not permission to replace it after
     // a fallback/profile change stops it during this same maintenance pass.
@@ -104,6 +107,10 @@ internal sealed class VpnRuntime : IDisposable
                     await StopCore();NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());
                 }
                 try{
+                    long now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    if(_secret.Token.Length>0 && _secret.LoginIssuedAt>0 && (now>=_secret.SessionExpiresAt || now-_secret.LoginIssuedAt>=LoginPolicy.MaximumAge || now<_secret.LoginIssuedAt)){
+                        ForgetLogin();_prepareUntil=default;_prepareMayStartCore=false;await StopCore();_error="LOGIN_REQUIRED";if(_secret.ConnectIntent)_mode="protected";
+                    }
                     if(DateTimeOffset.UtcNow>=_nextNetworkCheck){
                         _nextNetworkCheck=DateTimeOffset.UtcNow.AddSeconds(1);
                         if(_carriers.Observe(CarrierMemory.Scope(_state))){
@@ -163,6 +170,7 @@ internal sealed class VpnRuntime : IDisposable
                         }
                     }else if(!_secret.ConnectIntent && _core.Running){await StopCore();_transport=Preferred();_probeFailures=0;}
                 }catch(Exception error){
+                    if(error is ApiException && error.Message=="LOGIN_REQUIRED")ForgetLogin();
                     Failed(error);
                     // A rejected inventory must not be rediscovered every
                     // 200ms under the same gate needed by Status and Quit.
@@ -215,9 +223,9 @@ internal sealed class VpnRuntime : IDisposable
     {
         if(!value.TryGetPropertyValue("version",out var version)||version?.GetValue<int>()!=1)throw new IOException("INVALID_PROTOCOL");
         string command=value["command"]?.GetValue<string>() ?? "";
-        var fields=command=="Login"?new[]{"version","command","username","password"}:command=="ConfirmDevice"?new[]{"version","command","device_name","confirm"}:new[]{"version","command"};
+        var fields=command is "Login" or "LoginRemembered"?new[]{"version","command","username","password"}:command=="ConfirmDevice"?new[]{"version","command","device_name","confirm"}:new[]{"version","command"};
         if(value.Count!=fields.Length || fields.Any(field=>!value.ContainsKey(field)))throw new IOException("INVALID_FIELDS");
-        if(command is not ("Status" or "Login" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferUdpAdaptive" or "PreferAutoAdaptive" or "PreferUdp8443" or "PreferAuto8443" or "PreferQuic"))throw new IOException("UNKNOWN_COMMAND");
+        if(command is not ("Status" or "Login" or "LoginRemembered" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferUdpAdaptive" or "PreferAutoAdaptive" or "PreferUdp8443" or "PreferAuto8443" or "PreferQuic"))throw new IOException("UNKNOWN_COMMAND");
         await _gate.WaitAsync(admission);
         bool admitted=false;
         try{
@@ -226,7 +234,7 @@ internal sealed class VpnRuntime : IDisposable
             admission.ThrowIfCancellationRequested();
             admitted=true;
             switch(command){
-            case "Prepare":_prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);_prepareMayStartCore=true;_prepareRetryAfter=default;break;
+            case "Prepare":if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");_prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);_prepareMayStartCore=true;_prepareRetryAfter=default;break;
             case "PreferAuto":case "PreferUdp":case "PreferUdpAdaptive":case "PreferAutoAdaptive":case "PreferUdp8443":case "PreferAuto8443":case "PreferQuic":
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_TRANSPORT_CHANGE");
                 if((command is "PreferUdp8443" or "PreferAuto8443") && !TransportPolicy.Native8443Available(_state))throw new IOException("NATIVE_UDP8443_NOT_AVAILABLE");
@@ -237,7 +245,7 @@ internal sealed class VpnRuntime : IDisposable
                 _secret.NativeUdpPortPreference=command is "PreferUdp8443" or "PreferAuto8443"?8443:0;
                 _secret.CarrierHintUntil=0;_secret.Save();_transport=Preferred();_initialCarrierSelected=true;
                 _prepareUntil=default;_prepareMayStartCore=false;_prepareRetryAfter=default;_error="";_failure=null;_connectMs=null;_switchTimings=null;_clickStarted=0;_readyMs=null;break;
-            case "Login":
+            case "Login":case "LoginRemembered":
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_LOGIN");
                 await StopCore();_transport=TransportPolicy.First(_secret.TransportPreference,_state);_initialCarrierSelected=false;_probeFailures=0;_nativeUdpAttempt=null;
                 _stage="ACCOUNT_LOGIN";string username=value["username"]!.GetValue<string>(),password=value["password"]!.GetValue<string>();
@@ -248,10 +256,10 @@ internal sealed class VpnRuntime : IDisposable
                     finally{CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);}
                 }
                 var login=await _api.Call("authenticate","",new JsonObject{["username"]=username,["password"]=password,["public_key"]=_secret.PublicKey,["device_name"]=Environment.MachineName,["client_version"]=DeviceRegistration.Version});
-                _secret.Token=login["token"]!.GetValue<string>();login.Remove("token");_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error="";break;
+                _secret.Token=login["token"]!.GetValue<string>();login.Remove("token");LoginPolicy.Start(_secret,login["token_expires_at"]!.GetValue<long>(),command=="LoginRemembered",username,DateTimeOffset.UtcNow.ToUnixTimeSeconds());_interactiveAuthenticated=true;_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error="";break;
             case "ConfirmDevice":{
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_ENROLLMENT");
-                if(_secret.Token.Length==0)throw new IOException("LOGIN_REQUIRED");
+                if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
                 if(_secret.RecoveryRequired)throw new IOException("RECOVERY_REQUIRED");
                 if(value["confirm"] is not JsonValue confirmation || !confirmation.TryGetValue<bool>(out bool confirmed) || !confirmed)throw new IOException("DEVICE_CONFIRMATION_REQUIRED");
                 string name=value["device_name"]?.GetValue<string>()?.Trim() ?? "";
@@ -259,13 +267,13 @@ internal sealed class VpnRuntime : IDisposable
                 _stage="DEVICE_CONFIRMATION";
                 var registered=await _api.Call("enroll",_secret.Token,new JsonObject{["device_name"]=name,["confirm"]=true});
                 if(!DeviceRegistration.Confirmed(registered))throw new IOException("DEVICE_CONFIRMATION_REQUIRED");
-                _state=registered;_received=DateTimeOffset.UtcNow;_error="";_failure=null;_mode="disconnected";_prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);_prepareMayStartCore=true;_prepareRetryAfter=default;
+                LoginPolicy.Enrolled(_secret,DateTimeOffset.UtcNow.ToUnixTimeSeconds());_secret.Save();_state=registered;_received=DateTimeOffset.UtcNow;_error="";_failure=null;_mode="disconnected";_prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);_prepareMayStartCore=true;_prepareRetryAfter=default;
                 break;
             }
             case "Connect":{
                 _prepareRetryAfter=default;
                 var timer=System.Diagnostics.Stopwatch.StartNew();_connectMs=null;_switchTimings=new JsonObject();
-                if(_secret.Token.Length==0)throw new IOException("LOGIN_REQUIRED");
+                if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
                 if(!DeviceRegistration.Confirmed(_state))throw new IOException("DEVICE_CONFIRMATION_REQUIRED");
                 if(_secret.RecoveryRequired)throw new IOException("RECOVERY_REQUIRED");
                 if(_core.Running && _mode=="connected" && _secret.ConnectIntent)break;
@@ -299,12 +307,12 @@ internal sealed class VpnRuntime : IDisposable
                 }
                 _connectMs=timer.ElapsedMilliseconds;_switchTimings["complete_ms"]=_connectMs;break;}
             case "Disconnect":await Disconnect();break;
-            case "Quit":await Disconnect(keepPrepared:false);break;
+            case "Quit":await Disconnect(keepPrepared:false);if(_secret.RememberLoginUntil==0)ForgetLogin();break;
             case "Logout":
-                await Disconnect();
+                await Disconnect(keepPrepared:false);
                 _prepareUntil=default;await StopCore();
                 if(_secret.Token.Length>0){try{await _api.Call("logout",_secret.Token,new JsonObject());}catch{ /* expire remotely; locally erase bearer regardless */ }}
-                _secret.Token="";_secret.Save();_state=null;break;
+                ForgetLogin();break;
             case "RefreshUu":
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_UU_REFRESH");
                 _prepareRetryAfter=default;
@@ -315,7 +323,7 @@ internal sealed class VpnRuntime : IDisposable
             }
             return Snapshot();
         }catch(OperationCanceledException)when(!admitted && admission.IsCancellationRequested){throw;}
-        catch(Exception e){Failed(e);if(!_secret.ConnectIntent)_prepareRetryAfter=DateTimeOffset.UtcNow.AddSeconds(30);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
+        catch(Exception e){if(e is ApiException && e.Message=="LOGIN_REQUIRED")ForgetLogin();Failed(e);if(!_secret.ConnectIntent)_prepareRetryAfter=DateTimeOffset.UtcNow.AddSeconds(30);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
         finally{_gate.Release();}
     }
     private async Task Disconnect(bool keepPrepared=true)
@@ -327,8 +335,10 @@ internal sealed class VpnRuntime : IDisposable
             _stage="DISCONNECT";
             bool keep=keepPrepared && _core.Running && _core.StandbyCapable && ActivePolicy() && _runningProfile==Profile();
             _stage="DISCONNECT_DEACTIVATE";
-            if(keep){if(_core.TunActive)await _core.Deactivate();}
-            else await StopCore();
+            if(keep){
+                try{if(_core.TunActive)await _core.Deactivate();}
+                catch(Exception error)when(error is IOException or TimeoutException){keep=false;await StopCore();}
+            }else await StopCore();
             _stage="DISCONNECT_AUDIT";
             keep=await AuditDisconnectedTunnel(keep,StopCore);
             _stage="DISCONNECT_STATE";
@@ -354,7 +364,17 @@ internal sealed class VpnRuntime : IDisposable
                 await stopCore();
             }
         }
-        await EnsureTunnelRemoved();return false;
+        await AuditStoppedTunnel(EnsureTunnelRemoved,RecoverStoppedTunnel);return false;
+    }
+    // An owned orphan is recoverable by this SYSTEM service without another UAC
+    // prompt. Keep the guard until the receipt-bound helper and final audit pass.
+    private static Task RecoverStoppedTunnel()=>NativeGuard.Active?TunReceipt.RecoverOrphan():TunReceipt.RecoverDormantOrphan();
+    internal static async Task AuditStoppedTunnel(Func<Task> audit,Func<Task> recover)
+    {
+        try{await audit();return;}
+        catch(IOException error)when(error.Message=="OWNED_TUNNEL_REMOVAL_NOT_VERIFIED"){}
+        await recover();
+        await audit();
     }
     internal static async Task EnsureTunnelInactive()
     {
@@ -389,7 +409,7 @@ internal sealed class VpnRuntime : IDisposable
                 if(nic is not null){var stats=nic.GetIPv4Statistics();traffic=new(){["sample_ms"]=Environment.TickCount64,["rx_bytes"]=stats.BytesReceived,["tx_bytes"]=stats.BytesSent};}
             }catch(NetworkInformationException){}catch(System.Net.Sockets.SocketException){}
         }
-        return new(){["registration"]=_state?["registration"]?.DeepClone(),["devices"]=_state?["devices"]?.DeepClone(),["device_registered"]=DeviceRegistration.Confirmed(_state),["traffic"]=traffic,["verified_exit_ip"]=_mode=="connected" && _verifiedGeneration==_generation && NativeGuard.TunPermitted?"152.67.156.100":null,["ok"]=ok,["schema"]=1,["mode"]=_secret.RecoveryRequired || (_secret.ConnectIntent && !NativeGuard.Active)?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=_state?["account"]?.DeepClone(),["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
+        return new(){["login_authenticated"]=SessionAuthorized,["login_remembered_until"]=SessionAuthorized?_secret.RememberLoginUntil:0,["remembered_username"]=SessionAuthorized?_secret.RememberedUsername:"",["registration"]=_state?["registration"]?.DeepClone(),["devices"]=_state?["devices"]?.DeepClone(),["device_registered"]=DeviceRegistration.Confirmed(_state),["traffic"]=traffic,["verified_exit_ip"]=_mode=="connected" && _verifiedGeneration==_generation && NativeGuard.TunPermitted?"152.67.156.100":null,["ok"]=ok,["schema"]=1,["mode"]=_secret.RecoveryRequired || (_secret.ConnectIntent && !NativeGuard.Active)?"recovery":_mode=="connected" && !NativeGuard.TunPermitted?"protected":_mode,["error"]=_error,["intent"]=_secret.ConnectIntent,["guard"]=_secret.ConnectIntent?NativeGuard.Active:false,["latency_ms"]=_latency,["received_at"]=_received==default?null:_received.ToUnixTimeSeconds(),["observed_at"]=_state?["observed_at"]?.DeepClone(),["account"]=SessionAuthorized?_state?["account"]?.DeepClone():null,["period"]=_state?["period"]?.DeepClone(),["uu_verified_programs"]=_secret.UuPaths.Length,
         ["ipv6_policy"]=_state?["tunnel"]?["ipv6_policy"]?.DeepClone(),["verified_exit_ipv6"]=_mode=="connected" && _verifiedGeneration==_generation && NativeGuard.TunPermitted && _state?["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel"?"2603:c020:c015:8100::10":null,
         ["transport_preference"]=_secret.TransportPreference,["transport_address"]=_transport==TunnelTransport.WireGuardHttps?"152.67.156.100":TransportPolicy.IngressAddress(_state),["native_udp_adaptive"]=_secret.NativeUdpAdaptive,["native_udp_port_preference"]=_secret.NativeUdpPortPreference,["native_udp_8443_available"]=TransportPolicy.Native8443Available(_state),["carrier_stage"]=_core.CarrierStage,["carrier_failures"]=_carrierFailures.DeepClone(),["failure"]=_failure?.DeepClone(),["connection_stage"]=_stage,["core_stage"]=_core.SafeStage,["core_pid"]=_core.Pid,["tun_permitted"]=_secret.ConnectIntent && NativeGuard.TunPermitted,["transport"]=TransportPolicy.Name(_transport),
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),

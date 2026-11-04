@@ -27,5 +27,10 @@ try {
     }
 } finally { $idle.Dispose() }
 Write-Host 'REAL_PS5_WRAPPED_UDP_RECEIVE_TIMEOUT=PASS'
+foreach ($bad in @(@{Address='127.0.0.1';Port=443},@{Address='example.com';Port=443},@{Address='1.1.1.1';Port=8443})) {
+    try { [void](Invoke-OPVersionProbe $bad.Port $bad.Address); throw 'FOREIGN_TARGET_ACCEPTED' }
+    catch { if ($_.Exception.Message -ne 'FIXED_PUBLIC_TARGET_REQUIRED') { throw } }
+}
+Write-Host 'FIXED_PUBLIC_TARGETS_ONLY=PASS'
 & $script -RequireReply
-Write-Host 'REAL_WINDOWS_PUBLIC_UDP443_AND_8443_RETURN=PASS'
+Write-Host 'REAL_WINDOWS_BOTH_ORACLE_INGRESS_AND_CLOUDFLARE_UDP_RETURN=PASS'

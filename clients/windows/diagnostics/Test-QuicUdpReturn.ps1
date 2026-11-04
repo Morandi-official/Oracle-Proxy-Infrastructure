@@ -44,17 +44,19 @@ function Get-OPSocketError($Record) {
     return [string]$cause.SocketErrorCode
 }
 
-function Invoke-OPVersionProbe([ValidateSet(443,8443)][int]$Port) {
+function Invoke-OPVersionProbe([ValidateSet(443,8443)][int]$Port, [string]$Address='152.67.156.100') {
+    if ($Address -notin @('152.67.156.100','141.147.78.44','1.1.1.1') -or
+        ($Address -eq '1.1.1.1' -and $Port -ne 443)) { throw 'FIXED_PUBLIC_TARGET_REQUIRED' }
     $probe=New-OPVersionProbe
     $socket=New-Object Net.Sockets.UdpClient ([Net.Sockets.AddressFamily]::InterNetwork)
     $watch=[Diagnostics.Stopwatch]::StartNew()
     $matched=$false; $received=0; $socketError=''
     try {
-        $socket.Connect('152.67.156.100',$Port)
-        $socket.Client.ReceiveTimeout=5000
+        $socket.Connect($Address,$Port)
+        $socket.Client.ReceiveTimeout=3000
         [void]$socket.Send($probe.Packet,$probe.Packet.Length)
-        while ($watch.ElapsedMilliseconds -lt 5000) {
-            $socket.Client.ReceiveTimeout=[Math]::Max(1,5000-[int]$watch.ElapsedMilliseconds)
+        while ($watch.ElapsedMilliseconds -lt 3000) {
+            $socket.Client.ReceiveTimeout=[Math]::Max(1,3000-[int]$watch.ElapsedMilliseconds)
             $remote=New-Object Net.IPEndPoint ([Net.IPAddress]::Any),0
             $reply=$socket.Receive([ref]$remote); $received++
             if (Test-OPVersionReply $reply $probe) { $matched=$true; break }
@@ -64,7 +66,7 @@ function Invoke-OPVersionProbe([ValidateSet(443,8443)][int]$Port) {
         $socketError=Get-OPSocketError $_
     } finally { $watch.Stop(); $socket.Dispose() }
     return [pscustomobject]@{
-        port=$Port; matching_version_reply=$matched; received_datagrams=$received
+        address=$Address; port=$Port; matching_version_reply=$matched; received_datagrams=$received
         elapsed_ms=$watch.ElapsedMilliseconds; socket_error=$socketError
         tls_verified=$false; vpn_peer_tested=$false
     }
@@ -75,11 +77,20 @@ if ($DefinitionsOnly) { return }
 if (@(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Name -eq 'OracleProxy' -and $_.Status -eq 'Up' }).Count) {
     throw 'VPN_ADAPTER_ACTIVE_DISCONNECT_FIRST'
 }
-Write-Host 'UDP return-path control only; no TLS/VPN authentication. No settings are changed.'
+Write-Host 'UDP path controls: both Oracle entrances plus Cloudflare. No TLS/VPN authentication or settings changes.'
+Write-Host ('UDP_CONTROL_STARTED_AT='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
 $results=@()
-foreach ($port in @(443,8443)) {
+$targets=@(
+    @{Address='141.147.78.44';Port=443},
+    @{Address='141.147.78.44';Port=8443},
+    @{Address='152.67.156.100';Port=443},
+    @{Address='152.67.156.100';Port=8443},
+    @{Address='1.1.1.1';Port=443}
+)
+foreach ($target in $targets) {
     foreach ($attempt in @(1,2)) {
-        $result=Invoke-OPVersionProbe $port
+        $result=Invoke-OPVersionProbe $target.Port $target.Address
+        $result | Add-Member -NotePropertyName attempt -NotePropertyValue $attempt
         $results+=$result
         Write-Host ('UDP_CONTROL_RESULT='+($result | ConvertTo-Json -Compress))
     }

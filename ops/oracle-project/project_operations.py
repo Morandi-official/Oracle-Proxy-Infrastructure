@@ -368,6 +368,10 @@ def install_downloads():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='publish-udp-path-controls-20261104':
+        diagnostic_spec=importlib.util.spec_from_file_location('publish_udp_control',Path(__file__).with_name('publish_udp_control.py'))
+        diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic)
+        diagnostic.install();diagnostic.verify_public();return # Static asset only; no Caddy, routes, firewall or service changes.
     if request.get('request_id')=='old-hosted-ci-three-slots-20261103':
         cleanup_spec=importlib.util.spec_from_file_location('old_hosted_ci_cleanup',Path(__file__).with_name('cleanup_old_hosted_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)
@@ -579,4 +583,3 @@ if __name__ == '__main__':
     except Exception:
         print('PROJECT_OPERATION_FAILED_CHECK_PREFLIGHT_OR_SERVICE_STATUS', file=sys.stderr)
         raise SystemExit(2) from None
-

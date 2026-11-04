@@ -149,7 +149,9 @@ def collect():
     try:
         client=UsageapiClient({'region':region},signer=signer,timeout=(5,20),retry_strategy=retry)
         billing_start,billing_end=billing_range(now)
+        result['billing_from']=int(billing_start.timestamp())
         result['billing_through']=int(billing_end.timestamp())
+        result['billing_scope']='tenancy-all-regions-transfer-skus'
         result['billing_granularity']='HOURLY'
         if billing_end<=billing_start:
             result['billing_status']='NO_COMPLETED_HOURS'

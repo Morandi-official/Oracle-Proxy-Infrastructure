@@ -225,3 +225,16 @@ def privacy_check(request):
 def privacy_asset(request,name):
     if name not in ('privacy.js','style.css'):return JsonResponse({'error':'NOT_FOUND'},status=404)
     return FileResponse((settings.BASE_DIR/'static'/'console'/name).open('rb'),content_type='text/javascript' if name.endswith('.js') else 'text/css')
+
+
+@require_GET
+def host_status(request):
+    rejected=deny(request)
+    if rejected is not None:return rejected
+    from .host_health import public
+    rows=list(Snapshot.objects.order_by('-observed_at')[:91])
+    current=next((r.payload['health'] for r in rows if r.payload.get('health')),None)
+    age=max(0,int(timezone.now().timestamp()-current['observed_at'])) if current else None
+    history=[{'at':r.payload['health']['observed_at'],'cpu':r.payload['health'].get('cpu_percent'),'memory':r.payload['health'].get('memory_percent'),'rx':r.payload['health']['network'].get('rx_bytes_per_second'),'tx':r.payload['health']['network'].get('tx_bytes_per_second')} for r in reversed(rows) if r.payload.get('health')]
+    events=[{'at':int(a.occurred_at.timestamp()),'action':a.action,'code':a.resource} for a in Audit.objects.filter(action__startswith='server.health.').order_by('-occurred_at')[:10]]
+    return JsonResponse({'sample':public(current) if current else None,'age_seconds':age,'stale':age is None or age>30,'sample_interval_seconds':10,'history':history,'events':events})

@@ -1,10 +1,10 @@
 [Unit]
-Description=Refresh Oracle administrator observations once a minute
+Description=Refresh Oracle administrator observations every ten seconds
 
 [Timer]
 OnBootSec=30
-OnUnitActiveSec=60
-AccuracySec=5
+OnUnitActiveSec=10
+AccuracySec=1
 Unit=oracle-proxy-admin-collect.service
 
 [Install]

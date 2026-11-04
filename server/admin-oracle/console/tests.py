@@ -29,6 +29,16 @@ class AdminTests(TestCase):
         cache.clear()
         self.client = Client(HTTP_HOST=HOST)
 
+    def test_host_metrics_are_admin_only_bounded_and_private_counters_removed(self):
+        self.assertEqual(self.get('/api/host-status').status_code,401)
+        self.signed_in()
+        payload={'observed_at':int(time.time())-40,'cpu_percent':25,'memory_percent':30,'network':{'rx_bytes_per_second':1,'tx_bytes_per_second':2},'_raw':{'cpu':[1,2],'boot':'private'}}
+        Snapshot.objects.create(observed_at=timezone.now(),payload={'health':payload})
+        data=self.get('/api/host-status').json()
+        self.assertTrue(data['stale']);self.assertNotIn('_raw',data['sample'])
+        self.assertEqual(len(data['history']),1)
+        self.assertEqual(data['sample_interval_seconds'],10)
+
     def get(self, path, data=None, **kwargs):
         return self.client.get(path, data=data, secure=True, **kwargs)
 

@@ -64,4 +64,5 @@ class FlClashProfile(models.Model):
     token_hash = models.CharField(max_length=64)
     encrypted_material = models.TextField()
     phase = models.CharField(max_length=16, default='pending')
+    last_used_at = models.DateTimeField(null=True)
     created_at = models.DateTimeField(default=timezone.now)

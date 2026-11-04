@@ -255,6 +255,8 @@ def annotate_devices(snapshot):
         peer['client_status']={'last_seen_at':int(row.last_seen_at.timestamp()) if row and row.last_seen_at else None,'online':age is not None and 0<=age<=30,'reported_mode':row.reported_mode if row else 'unknown','transport':row.reported_transport if row else ''}
     users={u['id'] for u in snapshot.get('users',[])}
     snapshot['pending_devices']=[{'id':fingerprint(row.public_key),'public_key':row.public_key,'name':row.proposed_name,'user_id':str(row.account.user_id),'created_at':int(row.created_at.timestamp()),'last_seen_at':int(row.last_seen_at.timestamp()) if row.last_seen_at else None} for row in sessions.values() if row.enrollment_flow and row.public_key not in peers and row.public_key not in snapshot.get('deleted_public_keys',[]) and str(row.account.user_id) in users]
+    from .flclash import observe_usage
+    observe_usage(snapshot)
     return snapshot
 
 

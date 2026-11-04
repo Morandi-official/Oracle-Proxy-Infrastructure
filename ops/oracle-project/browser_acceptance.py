@@ -57,7 +57,12 @@ def main():
                         assert profiles.status==200 and isinstance(profiles.json().get('profiles'),list)
                         assert page.locator('#flclash').count()==1
                         expect(page.locator('#flclash-status')).to_contain_text('WireGuard UDP 443')
-                        assert page.locator('#flclash-form [name=confirm]').count()==1
+                        assert page.locator('#flclash-form [name=confirm]').count()==0
+                        telemetry=context.request.get(BASE+'/api/host-status')
+                        assert telemetry.status==200
+                        health=telemetry.json();assert health['sample'] and not health['stale'] and '_raw' not in health['sample']
+                        assert page.locator('#host-health').count()==1
+                        print('LIVE_HOST_HEALTH_FRESH=PASS',flush=True)
                         print(f'BROWSER_{name.upper()}_REAL_FLCLASH_UDP_EXPORT_MODULE_READ_ONLY=PASS',flush=True)
                         assert page.locator('#unconfirmed').count()==1
                         assert not page.locator('#user-form').is_visible()

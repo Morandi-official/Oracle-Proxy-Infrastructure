@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/client/quic-certificate', transports.public_certificate),
     path('api/client/logout', client_api.logout),
     path('api/status', views.status),
+    path('api/host-status', views.host_status),
     path('api/audit', views.audit),
     path('api/control', views.management),
     path('api/flclash', flclash.profiles),

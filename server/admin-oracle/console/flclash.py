@@ -28,7 +28,34 @@ def cipher():
 def summary(row):
     return {'id':str(row.pk),'user_id':str(row.account_id),'name':row.name,
             'device_id':client_api.fingerprint(row.public_key),'status':row.phase,
-            'created_at':int(row.created_at.timestamp())}
+            'created_at':int(row.created_at.timestamp()),'last_used_at':int(row.last_used_at.timestamp()) if row.last_used_at else None}
+
+
+def observe_usage(state):
+    """A handshake proves key use, never physical-device identity."""
+    from datetime import datetime, timezone as utc
+    now=timezone.now().timestamp()
+    peers={p['public_key']:p for p in state.get('peers',[])}
+    rows=FlClashProfile.objects.exclude(phase='revoked')
+    for row in rows:
+        peer=peers.get(row.public_key)
+        if not peer or peer.get('user_id')!=str(row.account_id):continue
+        handshake=peer.get('handshake')
+        if type(handshake) is int and 0<handshake<=now+5 and (not row.last_used_at or handshake>row.last_used_at.timestamp()):
+            row.last_used_at=datetime.fromtimestamp(handshake,utc.utc);row.save(update_fields=['last_used_at'])
+        peer['client_kind']='flclash'
+        peer['flclash_used']=bool(row.last_used_at)
+        peer['flclash_last_used_at']=int(row.last_used_at.timestamp()) if row.last_used_at else None
+
+
+def available_user(state,user_id):
+    at=state.get('observed_at',0);now=timezone.now().timestamp()
+    if state.get('error') or not at or not 0<=now-at<=20:raise ValueError('CONTROL_SERVICE_UNAVAILABLE')
+    user=next((u for u in state['users'] if u['id']==str(user_id)),None)
+    if not user or user['status']!='active':raise ValueError('ACCOUNT_UNAVAILABLE')
+    if state['budget']['guard_blocked']:raise ValueError('SERVER_BUDGET_BLOCKED')
+    if user['device_count']>=user['device_limit']:raise ValueError('DEVICE_LIMIT_REACHED')
+    return user
 
 
 def active_state(row, actor):
@@ -74,7 +101,18 @@ def profiles(request):
     from .views import deny
     rejected=deny(request)
     if rejected is not None:return rejected
-    return JsonResponse({'profiles':[summary(p) for p in FlClashProfile.objects.select_related('account').order_by('-created_at')[:2048]]})
+    try:
+        state=control.call('state','system:health',{});observe_usage(state)
+        rows=[]
+        for row in FlClashProfile.objects.select_related('account').order_by('-created_at')[:2048]:
+            item=summary(row)
+            peer=next((p for p in state['peers'] if p['public_key']==row.public_key and p['user_id']==str(row.account_id)),None)
+            user=next((u for u in state['users'] if u['id']==str(row.account_id)),None)
+            if item['status']=='active' and (not peer or peer.get('revoked')):item['status']='revoked'
+            elif item['status']=='active' and (not user or user['status']!='active' or state.get('error') or state['budget']['guard_blocked'] or not 0<=timezone.now().timestamp()-state.get('observed_at',0)<=20):item['status']='blocked'
+            rows.append(item)
+        return JsonResponse({'profiles':rows})
+    except (OSError,TimeoutError,ValueError,DatabaseError):return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
 
 
 @require_POST
@@ -83,12 +121,18 @@ def create(request):
     rejected=deny(request)
     if rejected is not None:return rejected
     try:
-        value=client_api.payload(request,{'user_id','name','confirm'})
-        if value['confirm'] is not True:raise ValueError('DEVICE_CONFIRMATION_REQUIRED')
-        name=client_api.valid_name(value['name'])
+        # Accept the previous admin form during rolling deployment. New form
+        # has no device-name / confirmation / separate enrollment step.
+        value=json.loads(request.body) if request.content_type=='application/json' and len(request.body)<=4096 else None
+        if not isinstance(value,dict) or set(value) not in ({'user_id'},{'user_id','name','confirm'}):raise ValueError('INVALID_REQUEST')
+        if 'confirm' in value and value['confirm'] is not True:raise ValueError('DEVICE_CONFIRMATION_REQUIRED')
         with client_api.management_lock():
             account=ClientAccount.objects.get(user_id=uuid.UUID(value['user_id']))
+            state=control.call('state',audit_actor(request),{})
+            available_user(state,account.user_id)
             if FlClashProfile.objects.filter(account=account).exclude(phase='revoked').count()>=32:raise ValueError('DEVICE_LIMIT_REACHED')
+            ordinal=FlClashProfile.objects.filter(account=account).count()+1
+            name=f'{account.username[:48]}的第{ordinal}个FlClash设备'
             key=X25519PrivateKey.generate()
             private=base64.b64encode(key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption())).decode()
             public=base64.b64encode(key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode()
@@ -98,14 +142,20 @@ def create(request):
                 encrypted_material=cipher().encrypt(json.dumps({'private_key':private,'token':token}).encode()).decode())
             # Persist pending first: if RPC/response is interrupted, the exact
             # public key remains visible and revocable. Never allocate on GET.
-            control.call('peer.enroll',audit_actor(request),{'public_key':public,'user_id':str(account.user_id),'name':name,'machine_name':name,'client_version':'FlClash-UDP-v1','confirm':True})
+            try:
+                control.call('peer.enroll',audit_actor(request),{'public_key':public,'user_id':str(account.user_id),'name':name,'machine_name':name,'client_version':'FlClash-UDP-v1','confirm':True})
+            except ValueError as error:
+                # Explicit quota/account rejection occurs before binding in
+                # the root engine. Unknown I/O outcomes remain revocable.
+                if str(error) in ('DEVICE_LIMIT_REACHED','ACCOUNT_UNAVAILABLE','SERVER_BUDGET_BLOCKED'):row.delete()
+                raise
             row.phase='active';row.save(update_fields=['phase'])
             Audit.objects.create(actor=audit_actor(request),action='flclash.created',resource=client_api.fingerprint(public))
             return JsonResponse({'profile':summary(row)},status=201)
     except ClientAccount.DoesNotExist:return JsonResponse({'error':'ACCOUNT_UNAVAILABLE'},status=400)
     except (ValueError,TypeError,KeyError,AttributeError) as error:
         code=str(error)
-        return JsonResponse({'error':code if code in ('DEVICE_LIMIT_REACHED','ACCOUNT_UNAVAILABLE','SERVER_BUDGET_BLOCKED','DEVICE_CONFIRMATION_REQUIRED') else 'PROFILE_CREATE_REJECTED'},status=400)
+        return JsonResponse({'error':code if code in ('DEVICE_LIMIT_REACHED','ACCOUNT_UNAVAILABLE','SERVER_BUDGET_BLOCKED','DEVICE_CONFIRMATION_REQUIRED','CONTROL_SERVICE_UNAVAILABLE') else 'PROFILE_CREATE_REJECTED'},status=400)
     except (OSError,TimeoutError,DatabaseError):return JsonResponse({'error':'CONTROL_SERVICE_UNAVAILABLE'},status=503)
 
 

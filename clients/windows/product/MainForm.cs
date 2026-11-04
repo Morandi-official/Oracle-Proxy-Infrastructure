@@ -97,9 +97,12 @@ internal sealed class MainForm : Form
         return cell;
     }
     private static TableLayoutPanel ButtonGrid(string name){
-        var grid=new TableLayoutPanel{Name=name,ColumnCount=3,RowCount=0,AutoSize=false,Height=0,Dock=DockStyle.Top,Margin=new Padding(0,8,0,0)};
+        var grid=new TableLayoutPanel{Name=name,ColumnCount=4,RowCount=0,AutoSize=false,Height=0,Dock=DockStyle.Top,Margin=new Padding(0,8,0,0)};
         for(int i=0;i<3;i++)grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,1));
-        grid.SizeChanged+=(_,_)=>{float width=Math.Max(1,(grid.ClientSize.Width-grid.Padding.Horizontal)/3);foreach(ColumnStyle column in grid.ColumnStyles)if(column.Width!=width)column.Width=width;};
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,0));
+        // TableLayoutPanel expands its last column with unused pixels, even for
+        // Absolute sizes. Give the 0-2 remainder pixels their own empty column.
+        grid.SizeChanged+=(_,_)=>{int available=Math.Max(3,grid.ClientSize.Width-grid.Padding.Horizontal),width=available/3;for(int i=0;i<4;i++){int target=i==3?available-width*3:width;if(grid.ColumnStyles[i].Width!=target)grid.ColumnStyles[i].Width=target;}};
         return grid;
     }
     private void SetToolsExpanded(bool expanded){if(_toolsExpanded==expanded)return;_toolsExpanded=expanded;_toolsContent.Visible=expanded;_diagnosticsToggle.Text=expanded?"收起诊断与测试":"展开诊断与测试";}

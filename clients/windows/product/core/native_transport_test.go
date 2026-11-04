@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"syscall"
@@ -76,6 +77,14 @@ func TestNativeUDPRebindKeepsExistingWireGuardSessionData(t *testing.T) {
 }
 
 func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
+	for _, ports := range [][]uint16{{51820, 443}, {443, 8443}, {8443, 443}} {
+		t.Run(fmt.Sprintf("ports_%d_%d", ports[0], ports[1]), func(t *testing.T) {
+			testNativePortFailover(t, ports)
+		})
+	}
+}
+
+func testNativePortFailover(t *testing.T, ports []uint16) {
 	for _, loss := range []int{0, 1, 2, 3, 4} {
 		t.Run([]string{"primary", "primary_request_lost", "primary_reply_lost_shared_replay_guard", "late_obsolete_primary_reply", "synchronous_primary_send_denied"}[loss], func(t *testing.T) {
 			var replay sync.Mutex
@@ -135,7 +144,7 @@ func TestNativeUDPPrimaryAndBlockedPrimarySecondary(t *testing.T) {
 					s.Close()
 				}
 			}()
-			c := newNativeConn(sockets, []uint16{51820, 443})
+			c := newNativeConn(sockets, ports)
 			defer c.Close()
 			c.SetReadDeadline(time.Now().Add(time.Second))
 			packet := append([]byte{1, 0, 0, 0}, make([]byte, 144)...)

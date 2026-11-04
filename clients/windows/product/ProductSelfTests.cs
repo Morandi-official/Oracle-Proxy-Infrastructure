@@ -29,6 +29,22 @@ internal static class ProductSelfTests
         if(CoreConfig.Build(state,secret,"synthetic-only")["outbounds"]?[1]?["ports"]?[0]?.GetValue<int>()!=51820)return false;
         secret.CarrierNetworkHash=CarrierMemory.NetworkHash();secret.CarrierHintUntil=0;
         if(CoreConfig.Build(state,secret,"synthetic-only")["outbounds"]?[1]?["ports"]?[0]?.GetValue<int>()!=51820)return false;
+        state["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443,8443);
+        bool Ports(params int[] expected)=>CoreConfig.Build(state,secret,"synthetic-only")["outbounds"]![1]!["ports"]!.AsArray().Select(n=>n!.GetValue<int>()).SequenceEqual(expected);
+        if(!Ports(443,8443))return false;
+        secret.CarrierHintUntil=DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeSeconds();secret.NativeUdpPortHint=8443;secret.CarrierNetworkHash=CarrierMemory.NetworkHash(state);
+        if(!Ports(8443,443))return false;
+        secret.CarrierNetworkHash="another-network";
+        if(!Ports(443,8443))return false;
+        secret.CarrierNetworkHash=CarrierMemory.NetworkHash(state);secret.NativeUdpPortPreference=8443;
+        if(!Ports(8443))return false;
+        secret.NativeUdpAdaptive=false;
+        if(!NativeUdpPortPolicy.Upgrade(secret) || !secret.NativeUdpAdaptive || secret.NativeUdpPortPreference!=0 || secret.CarrierHintUntil!=0 || !Ports(443,8443))return false;
+        secret.NativeUdpPortPreference=8443;secret.NativeUdpAdaptive=false;
+        if(NativeUdpPortPolicy.Upgrade(secret) || secret.NativeUdpAdaptive || !Ports(8443))return false;
+        secret.NativeUdpPortPreference=0;secret.CarrierHintUntil=0;
+        var fresh=new DurableState();if(!NativeUdpPortPolicy.Upgrade(fresh) || fresh.NativeUdpPortPreference!=0 || fresh.NativeUdpPortPolicyVersion!=1)return false;
+        state["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443);
         try{CoreConfig.Build(state,secret,"synthetic-only",true);return false;}catch(IOException){}
         state["tunnel"]!["https_relay"]=true;secret.Token=new string('A',43);
         var relay=CoreConfig.Build(state,secret,"synthetic-only",true);

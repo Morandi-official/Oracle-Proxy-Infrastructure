@@ -457,10 +457,10 @@ internal static class ProductTests
         reselect.Display(preferenceState);
         var sameChoice=Descendants(reselect).OfType<ComboBox>().Single();
         typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
-        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp8443"}))return 1;
-        Console.WriteLine("RESELECTING_NORMAL_UDP_RETAINS_ADVERTISED_NATIVE_8443=PASS");
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdpAdaptive"}))return 1;
+        Console.WriteLine("RESELECTING_NORMAL_UDP_RESTORES_ADAPTIVE_PORT_SELECTION=PASS");
         typeof(Button).GetMethod("OnClick",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(Descendants(reselect).OfType<Button>().Single(b=>b.Text=="原生 UDP 8443 测试"),[EventArgs.Empty]);
-        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp8443","PreferUdp8443"}))return 1;
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdpAdaptive","PreferUdp8443"}))return 1;
         Console.WriteLine("NATIVE_UDP8443_DIAGNOSTIC_BUTTON_USES_FIXED_AUTHENTICATED_COMMAND=PASS");
         preferenceState["intent"]=true;reselect.Display(preferenceState);
         if(Descendants(reselect).OfType<Button>().Single(b=>b.Text=="原生 UDP 8443 测试").Enabled)return 1;
@@ -469,15 +469,15 @@ internal static class ProductTests
             var selectionCalls=new List<string>();
             using var normal=new MainForm((command,_,_)=>{selectionCalls.Add(command);if(command.EndsWith("8443",StringComparison.Ordinal))defaults["native_udp_port_preference"]=8443;return Task.FromResult((JsonObject)defaults.DeepClone());});
             normal.Display(defaults);normal.Act("Connect").GetAwaiter().GetResult();
-            if(!selectionCalls.SequenceEqual(new[]{preference=="auto"?"PreferAuto8443":"PreferUdp8443","Connect"}))return 1;
+            if(!selectionCalls.SequenceEqual(new[]{"Connect"}))return 1;
         }
         var denied=(JsonObject)preferenceState.DeepClone();denied["intent"]=false;denied["native_udp_port_preference"]=0;denied["ok"]=false;
         var deniedCalls=new List<string>();using(var rejected=new MainForm((command,_,_)=>{deniedCalls.Add(command);return Task.FromResult((JsonObject)denied.DeepClone());})){
-            rejected.Display(denied);rejected.Act("Connect").GetAwaiter().GetResult();
-            if(!deniedCalls.SequenceEqual(new[]{"PreferUdp8443"}))return 1;
+            rejected.Display(denied);rejected.Act("PreferUdp").GetAwaiter().GetResult();
+            if(!deniedCalls.SequenceEqual(new[]{"PreferUdp"}))return 1;
         }
-        if(TransportPolicy.ClientSelection(1,false)!="PreferUdp" || TransportPolicy.ClientSelection(0,false)!="PreferAuto" || TransportPolicy.ClientSelection(2,true)!="PreferQuic")return 1;
-        Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_SELECT_NATIVE_8443_BEFORE_CONNECT_AND_REFUSE_FAILED_SELECTION=PASS");
+        if(TransportPolicy.ClientSelection(1,false)!="PreferUdp" || TransportPolicy.ClientSelection(0,false)!="PreferAuto" || TransportPolicy.ClientSelection(2,true)!="PreferQuic" || TransportPolicy.ClientSelection(1,true)!="PreferUdpAdaptive" || TransportPolicy.ClientSelection(0,true)!="PreferAutoAdaptive")return 1;
+        Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_PRESERVE_ADAPTIVE_PORT_SELECTION=PASS");
         var pending=(JsonObject)snapshot.DeepClone();pending["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
         pending["registration"]=new JsonObject{["status"]="pending",["device_id"]="112233aabbcc",["device_name"]="DESKTOP-NEW",["requires_slot"]=true};pending["devices"]=new JsonArray();
         var registrationCalls=new List<(string Command,string? Name,string? Consent)>();

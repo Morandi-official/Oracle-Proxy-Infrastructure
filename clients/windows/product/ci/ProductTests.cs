@@ -635,6 +635,8 @@ internal static class ProductTests
         var tools=UiDescendants(form).Single(c=>c.Name=="toolsContent");UiAssert(!tools.Visible,"DIAGNOSTICS_NOT_COLLAPSED_BY_DEFAULT");
         UiButton(form,"diagnostics-toggle").PerformClick();Application.DoEvents();
         var actions=UiDescendants(form).Single(c=>c.Name=="diagnostic-actions").Controls.Cast<Control>().ToArray();
+        Console.WriteLine("UI_DIAGNOSTIC_COLUMNS="+string.Join(";",actions.Select(c=>c.Text+":"+c.Bounds)));
+        using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-diagnostics-rc28.png");}
         UiAssert(tools.Visible && actions.Length>=6 && actions.Max(c=>c.Width)-actions.Min(c=>c.Width)<=1,"DIAGNOSTIC_BUTTON_COLUMNS_NOT_ALIGNED");
         var metrics=UiDescendants(form).Single(c=>c.Name=="connectionMetrics");int metricHeight=metrics.Height;
         var card=UiDescendants(form).Single(c=>c.Name=="connectionSection");int cardHeight=card.Height;

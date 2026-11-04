@@ -90,13 +90,13 @@ internal sealed class MainForm : Form
     private static TableLayoutPanel Stack(string name){var panel=new TableLayoutPanel{Name=name,Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,Margin=new Padding(0),Padding=new Padding(0)};panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));return panel;}
     private static void Row(TableLayoutPanel panel,Control item){int row=panel.RowCount++;panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));item.Dock=DockStyle.Fill;panel.Controls.Add(item,0,row);}
     private static Control Metric(string title,Label value){
-        var cell=new Panel{Name="metric"+title,Dock=DockStyle.Fill,Margin=new Padding(0,0,14,10)};
+        var cell=new Panel{Name="metric"+title,Dock=DockStyle.Fill,Margin=new Padding(0,0,14,8)};
         value.Dock=DockStyle.Fill;cell.Controls.Add(value);
-        cell.Controls.Add(new Label{Text=title,Dock=DockStyle.Top,Height=26,ForeColor=Muted,Margin=new Padding(0)});
+        cell.Controls.Add(new Label{Text=title,Dock=DockStyle.Top,Height=22,ForeColor=Muted,Margin=new Padding(0)});
         return cell;
     }
     private static TableLayoutPanel ButtonGrid(string name){
-        var grid=new TableLayoutPanel{Name=name,ColumnCount=3,RowCount=0,AutoSize=true,Dock=DockStyle.Top,Margin=new Padding(0,8,0,0)};
+        var grid=new TableLayoutPanel{Name=name,ColumnCount=3,RowCount=0,AutoSize=false,Height=0,Dock=DockStyle.Top,Margin=new Padding(0,8,0,0)};
         for(int i=0;i<3;i++)grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));return grid;
     }
     private void SetToolsExpanded(bool expanded){if(_toolsExpanded==expanded)return;_toolsExpanded=expanded;_toolsContent.Visible=expanded;_diagnosticsToggle.Text=expanded?"收起诊断与测试":"展开诊断与测试";}
@@ -161,10 +161,10 @@ internal sealed class MainForm : Form
         var body=Stack("sections");body.Padding=new Padding(22,4,22,16);viewport.Controls.Add(body);
         void FitBody(){int width=Math.Max(1,viewport.ClientSize.Width-SystemInformation.VerticalScrollBarWidth);if(body.MaximumSize.Width!=width)body.MaximumSize=new Size(width,0);if(body.Width!=width)body.Width=width;}
         viewport.SizeChanged+=(_,_)=>FitBody();
-        _mode.AutoSize=false;_mode.Height=44;_mode.Font=new Font(Font.FontFamily,20,FontStyle.Bold);_mode.AutoEllipsis=true;_mode.Margin=new Padding(0,0,0,4);
-        _detail.AutoSize=false;_detail.Height=48;_detail.MinimumSize=Size.Empty;_detail.MaximumSize=Size.Empty;_detail.AutoEllipsis=true;_detail.ForeColor=Muted;_detail.Margin=new Padding(0,0,0,10);
+        _mode.AutoSize=false;_mode.Height=38;_mode.Font=new Font(Font.FontFamily,18,FontStyle.Bold);_mode.AutoEllipsis=true;_mode.Margin=new Padding(0,0,0,4);
+        _detail.AutoSize=false;_detail.Height=36;_detail.MinimumSize=Size.Empty;_detail.MaximumSize=Size.Empty;_detail.AutoEllipsis=true;_detail.ForeColor=Muted;_detail.Margin=new Padding(0,0,0,10);
         var connection=Stack("connectionContent");Row(connection,_mode);Row(connection,_detail);
-        var metrics=new TableLayoutPanel{Name="connectionMetrics",AutoSize=false,Height=176,Dock=DockStyle.Fill,ColumnCount=3,RowCount=2,Margin=new Padding(0,0,0,8)};
+        var metrics=new TableLayoutPanel{Name="connectionMetrics",AutoSize=false,Height=128,Dock=DockStyle.Fill,ColumnCount=3,RowCount=2,Margin=new Padding(0,0,0,8)};
         for(int i=0;i<3;i++)metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));for(int i=0;i<2;i++)metrics.RowStyles.Add(new RowStyle(SizeType.Percent,50));
         _exitIp.Font=new Font(Font.FontFamily,10,FontStyle.Bold);_protocol.Font=new Font(Font.FontFamily,11,FontStyle.Bold);
         var values=new[]{Metric("当前协议",_protocol),Metric("已验证出口 IP",_exitIp),Metric("隧道 HTTP 延迟",_latency),Metric("下载速率 · VPN",_download),Metric("上传速率 · VPN",_upload),Metric("UU 直连保护",_uu)};
@@ -204,7 +204,7 @@ internal sealed class MainForm : Form
         _diagnosticsToggle.Click+=(_,_)=>SetToolsExpanded(!_toolsExpanded);
         var diagnostics=ButtonGrid("diagnostic-actions");
         Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=false,Height=40,Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
-        void Add(TableLayoutPanel grid,Button button){int index=grid.Controls.Count;int row=index/3;if(row>=grid.RowCount){grid.RowCount=row+1;grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));}button.Dock=DockStyle.Fill;grid.Controls.Add(button,index%3,row);}
+        void Add(TableLayoutPanel grid,Button button){int index=grid.Controls.Count;int row=index/3;if(row>=grid.RowCount){grid.RowCount=row+1;grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.Height=grid.RowCount*48;}button.Dock=DockStyle.Fill;grid.Controls.Add(button,index%3,row);}
         Add(diagnostics,Tool("连接诊断",()=>ShowReport("连接诊断",_connectionReport)));
         Add(diagnostics,Tool("GitHub 连通性",async()=>await ShowGitHubReport()));Add(diagnostics,Tool("UU 检查详情",ShowUuReport));
         Add(diagnostics,Tool("重新识别 UU",async()=>await Act("RefreshUu")));
@@ -234,7 +234,7 @@ internal sealed class MainForm : Form
         _login.AutoSize=false;_login.Height=44;_login.Margin=new Padding(0,0,0,12);Row(loginContent,_login);
         _loginFeedback.AutoSize=false;_loginFeedback.Height=44;_loginFeedback.AutoEllipsis=true;_loginFeedback.ForeColor=Muted;Row(loginContent,_loginFeedback);
         Row(loginContent,_bootstrapRetry);_bootstrapRetry.Click+=async(_,_)=>{if(await ProvisionService())await StartReadyClient();};
-        var loginCard=Card("login-card","",loginContent);loginCard.AutoSize=true;loginCard.Padding=new Padding(28,24,28,24);_loginGate.Controls.Add(loginCard);
+        var loginCard=Card("login-card","",loginContent);loginCard.Dock=DockStyle.None;loginCard.AutoSize=true;loginCard.Padding=new Padding(28,24,28,24);_loginGate.Controls.Add(loginCard);
         void FitLogin(){int width=Math.Min(470,Math.Max(1,_loginGate.ClientSize.Width-40));loginCard.Width=width;loginCard.MaximumSize=new Size(width,0);loginCard.Left=Math.Max(0,(_loginGate.ClientSize.Width-width)/2);loginCard.Top=Math.Max(12,(_loginGate.ClientSize.Height-loginCard.Height)/2);}
         _loginGate.SizeChanged+=(_,_)=>FitLogin();loginCard.SizeChanged+=(_,_)=>FitLogin();
         var safety=Actions();safety.Name="safety-actions";safety.BackColor=Canvas;safety.Margin=new Padding(0);safety.Padding=new Padding(22,8,22,10);

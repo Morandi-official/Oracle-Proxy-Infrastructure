@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[4]
 PRODUCT = ROOT / 'clients/windows/product'
-PAYLOADS = ('OracleProxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll')
+PAYLOADS = ('Proxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll')
 _policy_spec = importlib.util.spec_from_file_location('runtime_policy', Path(__file__).with_name('dotnet-runtime-policy.py'))
 RUNTIME_POLICY = importlib.util.module_from_spec(_policy_spec)
 _policy_spec.loader.exec_module(RUNTIME_POLICY)

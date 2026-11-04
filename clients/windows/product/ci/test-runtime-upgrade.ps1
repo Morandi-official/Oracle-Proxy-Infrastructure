@@ -5,7 +5,7 @@ $serviceRoot=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]
 $stateRoot=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'OracleProxy'
 $fixture=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'OracleProxyRuntimeUpgradeFixture'
 if((Get-Service OracleProxyService,OracleProxyRecovery -ErrorAction SilentlyContinue) -or (Test-Path $serviceRoot) -or (Test-Path $stateRoot) -or (Test-Path $fixture) -or (Get-NetAdapter -Name OracleProxy -ErrorAction SilentlyContinue)){throw 'PREEXISTING_PRODUCT_OR_FIXTURE_REFUSED'}
-$new=(Resolve-Path './dist/product/OracleProxy.exe').Path
+$new=(Resolve-Path './dist/product/Proxy.exe').Path
 $newHash=(Get-FileHash $new -Algorithm SHA256).Hash
 $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $oldRevision='fc988d72983906b74aeb629163a8110bc36ee8ab'
@@ -140,15 +140,15 @@ try {
  Invoke-RuntimeProduct $new @('--install',$owner)
  $newPid=Get-VerifiedProductService $newHash
  if($newPid -eq $oldPid){throw 'CROSS_RUNTIME_UPGRADE_DID_NOT_REPLACE_PROCESS'}
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc27+' 'udp'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc28+' 'udp'
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $cipherBefore){throw 'CROSS_RUNTIME_UPGRADE_REWROTE_EXISTING_DPAPI_STATE'}
  Invoke-RuntimeWitness 'VerifyUdp'
- Assert-RuntimeStatus $newPid 'PreferAuto' '0.3.0-rc27+' 'auto'
+ Assert-RuntimeStatus $newPid 'PreferAuto' '0.3.0-rc28+' 'auto'
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -eq $cipherBefore){throw 'NET10_SERVICE_DID_NOT_SAVE_SYNTHETIC_PREFERENCE'}
  Invoke-RuntimeWitness 'VerifyAuto'
  Restart-Service OracleProxyService
  $newPid=Get-VerifiedProductService $newHash
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc27+' 'auto'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc28+' 'auto'
  Invoke-RuntimeWitness 'VerifyAuto'
  Write-Host 'REAL_NET8_TO_NET10_SYSTEM_DPAPI_OWNER_PUBLIC_PRIVATE_KEY_AND_SCM_PIPE_UPGRADE=PASS'
  Invoke-RuntimeProduct $new @('--uninstall')

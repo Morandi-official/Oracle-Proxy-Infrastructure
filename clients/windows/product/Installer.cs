@@ -95,8 +95,9 @@ internal static class Installer
                 foreach(string name in Files)File.Copy(Path.Combine(Platform.Root,name),Path.Combine(previous,name),true);
                 backedUp=true;
             }
-            foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"OracleProxy.exe":name),Path.Combine(Platform.Root,name),true);
-            if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Oracle Proxy VPN");
+            foreach(string name in Files)File.Copy(Path.Combine(source,name=="OracleProxy.Service.exe"?"Proxy.exe":name),Path.Combine(Platform.Root,name),true);
+            if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Proxy VPN");
+            else Sc("config",Platform.Service,"DisplayName=","Proxy VPN");
             Platform.ServiceEnvironment(Platform.Service);
             Sc("failure",Platform.Service,"reset=","300","actions=","restart/3000/restart/5000/restart/10000");
             Sc("start",Platform.Service);

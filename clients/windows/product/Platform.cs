@@ -114,6 +114,10 @@ internal sealed class DurableState
     public string PrivateKey {get;set;}="";
     public string PublicKey {get;set;}="";
     public string Token {get;set;}="";
+    public long LoginIssuedAt {get;set;}
+    public long SessionExpiresAt {get;set;}
+    public long RememberLoginUntil {get;set;}
+    public string RememberedUsername {get;set;}="";
     public string TransportPreference {get;set;}="auto";
     public string CarrierHint {get;set;}="";
     public string CarrierNetworkHash {get;set;}="";

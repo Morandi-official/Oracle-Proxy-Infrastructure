@@ -4,7 +4,7 @@ if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted
 if(!$env:ORACLE_CLIENT_ACCEPTANCE_USERNAME -or !$env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD){throw 'Dedicated client Environment credentials are missing'}
 if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){throw 'Preexisting product service refused'}
 if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting product directory refused'}
-$exe=(Resolve-Path './dist/product/OracleProxy.exe').Path
+$exe=(Resolve-Path './dist/product/Proxy.exe').Path
 $test=(Resolve-Path './dist/product-tests/OracleProxy.Product.Tests.exe').Path
 $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'

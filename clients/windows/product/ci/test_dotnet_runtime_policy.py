@@ -29,7 +29,7 @@ class RuntimePolicyTests(unittest.TestCase):
                                        'sdk': {'version': '10.0.404', 'runtime-version': '10.0.15'}}]}
 
     def config(self, options):
-        path = self.product / 'bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+        path = self.product / 'bin/Release/net10.0-windows/win-x64/Proxy.runtimeconfig.json'
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({'runtimeOptions': options}))
         return path
@@ -59,10 +59,10 @@ class RuntimePolicyTests(unittest.TestCase):
                         policy.check_published(self.product)
 
     def test_msbuild_selects_platform_path_and_never_scans_stale_default_build(self):
-        selected = self.product / 'bin/x64/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+        selected = self.product / 'bin/x64/Release/net10.0-windows/win-x64/Proxy.runtimeconfig.json'
         selected.parent.mkdir(parents=True)
         selected.write_text('{}')
-        default = self.product / 'bin/Release/net10.0-windows/win-x64/OracleProxy.runtimeconfig.json'
+        default = self.product / 'bin/Release/net10.0-windows/win-x64/Proxy.runtimeconfig.json'
         default.parent.mkdir(parents=True)
         default.write_text('stale .NET8 config must never be chosen')
         with mock.patch.object(policy.subprocess, 'check_output', return_value=str(selected)+'\n') as query:

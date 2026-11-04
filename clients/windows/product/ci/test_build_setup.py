@@ -52,7 +52,7 @@ class SetupBoundary(unittest.TestCase):
     def test_exact_pinned_product_payload_and_notices_only(self):
         stage = self.root / 'payload'
         build.stage_bundle(self.archive(), self.metadata, stage)
-        self.assertEqual((stage / 'OracleProxy.exe').read_bytes(), b'OracleProxy.exe')
+        self.assertEqual((stage / 'Proxy.exe').read_bytes(), b'Proxy.exe')
         self.assertEqual((stage / 'licenses/OracleProxy-GPL-3.0.txt').read_text(), 'test license')
         self.assertEqual((stage / '请先阅读.txt').read_text(encoding='utf-8-sig'), '用户说明')
 

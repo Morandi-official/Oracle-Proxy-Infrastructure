@@ -129,7 +129,7 @@ jobs:
           $env:DOTNET_ROOT_X64=$isolatedRuntime
           $env:DOTNET_MULTILEVEL_LOOKUP='0'
           foreach($case in @(@('--self-test',0),@('--service',3),@('--arbitrary-command',2))){
-            $result=Start-Process -FilePath (Resolve-Path '../../../dist/product/OracleProxy.exe') -ArgumentList $case[0] -Wait -PassThru
+            $result=Start-Process -FilePath (Resolve-Path '../../../dist/product/Proxy.exe') -ArgumentList $case[0] -Wait -PassThru
             if($result.ExitCode -ne $case[1]){throw "Product boundary $($case[0]) exited $($result.ExitCode), expected $($case[1])"}
           }
           Write-Host 'PRODUCT_EXACT_NET10_SELF_CONTAINED_NO_SHARED_DOTNET=PASS'
@@ -204,7 +204,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc27-win-x64-unsigned-acceptance-candidate
+          name: OracleProxy-0.3.0-rc28-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             dist/candidate/*-setup.exe
@@ -216,7 +216,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: OracleProxy-0.3.0-rc27-corresponding-source
+          name: OracleProxy-0.3.0-rc28-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt
@@ -231,7 +231,7 @@ jobs:
           $out='./dist/review'
           New-Item -ItemType Directory -Force $out | Out-Null
           Copy-Item ./clients/windows/product/core/go.mod,./clients/windows/product/core/go.sum $out
-          Get-ChildItem ./dist/product -File | Where-Object Name -in @('OracleProxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll') | ForEach-Object {"$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content "$out/SHA256SUMS.txt"
+          Get-ChildItem ./dist/product -File | Where-Object Name -in @('Proxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll') | ForEach-Object {"$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content "$out/SHA256SUMS.txt"
       - uses: actions/upload-artifact@v4
         if: always() && hashFiles('dist/review/*') != ''
         with:

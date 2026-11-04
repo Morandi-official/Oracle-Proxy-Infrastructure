@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'Disposable hosted Windows required'}
 if(Get-Service OracleProxyService,OracleProxyCandidateFixture -ErrorAction SilentlyContinue){throw 'Preexisting service refused'}
 if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting install refused'}
-$exe=(Resolve-Path './dist/product/OracleProxy.exe').Path
+$exe=(Resolve-Path './dist/product/Proxy.exe').Path
 $test=(Resolve-Path './dist/product-tests/OracleProxy.Product.Tests.exe').Path
 & $test --udp-loss-self-test
 if($LASTEXITCODE -ne 0){throw 'Disposable packet-layer UDP fault session failed'}
@@ -121,7 +121,7 @@ Write-Host 'REAL_FIXED_UAC_RECOVERY_REMOVES_RECEIPT_OWNED_KERNEL_ORPHAN_BEFORE_S
 Copy-Item "$env:ProgramData/OracleProxy/state.dpapi" "$env:ProgramData/OracleProxy/state.recovery-$([Guid]::NewGuid().ToString('N')).dpapi"
 Remove-Item "$env:ProgramData/OracleProxy/state.dpapi"
 $oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash
-$bad=(Resolve-Path './dist/bad-upgrade/OracleProxy.exe').Path
+$bad=(Resolve-Path './dist/bad-upgrade/Proxy.exe').Path
 $upgrade=Start-Process $bad -ArgumentList @('--install',$owner) -Wait -PassThru
 if($upgrade.ExitCode -eq 0){throw 'Deliberate bad startup unexpectedly installed'}
 if((Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash -ne $oldHash){throw 'Automatic rollback did not restore the previous executable'}

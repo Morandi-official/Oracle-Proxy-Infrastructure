@@ -54,3 +54,14 @@ class ClientLoginThrottle(models.Model):
     bucket = models.CharField(max_length=100, primary_key=True)
     attempts = models.PositiveIntegerField(default=0)
     expires_at = models.DateTimeField(db_index=True)
+
+
+class FlClashProfile(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(ClientAccount, on_delete=models.CASCADE)
+    name = models.CharField(max_length=80)
+    public_key = models.CharField(max_length=44, unique=True)
+    token_hash = models.CharField(max_length=64)
+    encrypted_material = models.TextField()
+    phase = models.CharField(max_length=16, default='pending')
+    created_at = models.DateTimeField(default=timezone.now)

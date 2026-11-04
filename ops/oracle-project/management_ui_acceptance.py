@@ -21,6 +21,7 @@ def main():
    with tempfile.TemporaryDirectory() as temporary:
     driver=fixture.FakeDriver();engine=fixture.agent.Engine(Path(temporary)/'fixture.sqlite3',driver);engine.tick()
     browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='Europe/London');page=context.new_page()
+    profiles_fixture=[]
     accounts={};official_fixture=[None];pending_fixture=[[]];presence_fixture=[False];presence_at=[int(time.time())]
     engine.official_usage=lambda:official_fixture[0] or {'status':'NOT_QUERIED'}
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
@@ -61,6 +62,23 @@ def main():
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path.startswith('/api/users/') and path.endswith('/usage'):
        data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
+      elif path=='/api/flclash':data={'profiles':profiles_fixture}
+      elif path=='/api/flclash/create':
+       assert route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
+       value=route.request.post_data_json;assert value['confirm'] is True
+       key=base64.b64encode(bytes([9])*32).decode()
+       engine.dispatch({'operation':'peer.enroll','actor':'github:204281968','data':{'public_key':key,'user_id':value['user_id'],'name':value['name'],'machine_name':value['name'],'client_version':'FlClash-UDP-v1','confirm':True}})
+       profiles_fixture.append({'id':'synthetic-profile','user_id':value['user_id'],'name':value['name'],'status':'active','created_at':int(time.time()),'device_id':'fixture-only'})
+       data={'profile':profiles_fixture[-1]}
+      elif path=='/api/flclash/synthetic-profile':
+       assert route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
+       action=route.request.post_data_json['action']
+       if action=='link':data={'url':'https://management-fixture.invalid/fixture-import/profile.yaml'}
+       else:
+        assert action=='revoke';engine.dispatch({'operation':'peer.revoke','actor':'github:204281968','data':{'public_key':base64.b64encode(bytes([9])*32).decode()}})
+        profiles_fixture[-1]['status']='revoked';data={'profile':profiles_fixture[-1]}
+      elif path=='/fixture-import/profile.yaml':
+       route.fulfill(status=200,headers={'Content-Type':'application/yaml','Content-Disposition':'attachment; filename=Proxy-UDP.yaml'},body=json.dumps({'proxies':[{'type':'wireguard','port':443}],'rules':['MATCH,Proxy UDP']}));return
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':{'wg_service':'ACTIVE','wg_interface':'PRESENT','udp_listener':'LISTENING','observed_at':int(time.time())}}
       elif path=='/api/audit':data={'entries':[{'occurred_at':int(time.time())-i,'actor':'fixture','action':'test','resource':'fixture'} for i in range(20)],'activity':[{'username':'ci-user01','count':7}]}
       else:route.fulfill(status=404);return
@@ -133,6 +151,15 @@ def main():
      expect(page.locator('#pending-device-rows')).to_contain_text('CI pending <b>literal</b>')
      assert page.locator('#pending-device-rows b').count()==0
      assert engine.device_count(user['id'])==2
+     page.locator('#flclash-user').select_option(user['id']);page.locator('#flclash-form [name=name]').fill('CI FlClash phone')
+     page.locator('#flclash-form [name=confirm]').check();page.get_by_role('button',name='创建设备配置',exact=True).click()
+     profile_row=page.locator('#flclash-rows tr').filter(has_text='CI FlClash phone');expect(profile_row).to_contain_text('可导入')
+     assert engine.device_count(user['id'])==3
+     with page.expect_download() as delivery:profile_row.get_by_role('button',name='下载配置',exact=True).click()
+     config=json.loads(Path(delivery.value.path()).read_text());assert config['proxies'][0]['type']=='wireguard' and config['rules']==['MATCH,Proxy UDP']
+     profile_row.get_by_role('button',name='撤销',exact=True).click();expect(profile_row).to_contain_text('已撤销')
+     assert engine.device_count(user['id'])==2
+     print(f'SYNTHETIC_{name.upper()}_FLCLASH_CONFIRMED_DEVICE_CREATE_DOWNLOAD_REVOKE=PASS',flush=True)
      confirmed.get_by_role('button',name='管理',exact=True).click()
      expect(page.locator('#device-profile')).to_be_visible()
      expect(page.locator('#device-profile')).to_contain_text('设备识别码')

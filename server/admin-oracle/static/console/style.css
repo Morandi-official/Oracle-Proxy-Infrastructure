@@ -39,3 +39,5 @@ input,select{font:inherit;color:var(--text);min-height:42px}input:focus-visible,
 
 /* Fixed tooltip bounds avoid off-screen overflow before hover or keyboard focus. */
 .help-text{position:fixed;left:16px;right:auto;top:90px;width:min(380px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto}
+
+#flclash-form .form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#flclash-form>.check{display:flex;align-items:center;gap:8px;color:var(--muted);margin:0 0 16px}#flclash-form>.check input{width:16px;flex:none}#flclash .row-actions{min-width:220px}@media(max-width:700px){#flclash-form .form-grid{grid-template-columns:1fr}}

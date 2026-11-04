@@ -135,5 +135,6 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Do not send secrets, callback codes, MFA QR contents or tokens to email/log output.
 EMAIL_BACKEND = 'django.core.mail.backends.dummy.EmailBackend'
 LOGGING = {'version': 1, 'disable_existing_loggers': False,
-           'handlers': {'console': {'class': 'logging.StreamHandler'}},
+           'filters': {'secret_import_url': {'()': 'console.middleware.SecretImportUrlFilter'}},
+           'handlers': {'console': {'class': 'logging.StreamHandler', 'filters':['secret_import_url']}},
            'loggers': {'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False}}}

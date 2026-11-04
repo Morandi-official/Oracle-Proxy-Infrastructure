@@ -342,11 +342,29 @@ internal static class ProductTests
         }
     }
     [DllImport("kernel32.dll",EntryPoint="CreateHardLinkW",CharSet=CharSet.Unicode,SetLastError=true)]private static extern bool CreateHardLink(string path,string existing,IntPtr security);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)]private static extern bool EnumDisplaySettings(string? device,int mode,byte[] value);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)]private static extern int ChangeDisplaySettings(byte[] value,uint flags);
+    private static byte[]? ReviewDesktop()
+    {
+        // A 1024x768 hosted desktop silently caps Win32 max tracking size while
+        // WinForms can retain a larger cached ClientSize. Test a real supported
+        // desktop mode so screenshots and clipping assertions describe pixels.
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return null;
+        var original=new byte[220];BitConverter.GetBytes((ushort)220).CopyTo(original,68);
+        UiAssert(EnumDisplaySettings(null,-1,original),"REVIEW_DESKTOP_QUERY_FAILED");
+        if(BitConverter.ToInt32(original,172)>=1280 && BitConverter.ToInt32(original,176)>=900)return null;
+        foreach(var size in new[]{new Size(1600,1000),new Size(1920,1080),new Size(1600,900),new Size(1280,1024)}){
+            var mode=(byte[])original.Clone();BitConverter.GetBytes(0x180000).CopyTo(mode,72);BitConverter.GetBytes(size.Width).CopyTo(mode,172);BitConverter.GetBytes(size.Height).CopyTo(mode,176);
+            if(ChangeDisplaySettings(mode,2)==0 && ChangeDisplaySettings(mode,0)==0){Console.WriteLine($"REAL_UI_REVIEW_DESKTOP={size.Width}x{size.Height}");return original;}
+        }
+        throw new IOException("REVIEW_DESKTOP_SIZE_UNAVAILABLE");
+    }
     private static int UiOnMessageLoop()
     {
         // Closing forms outside Application.Run can tear down the thread's
         // WinForms marshaling context between cases. Keep a real application
         // lifetime while exercising async deadlines and deliberate closes.
+        var previousDesktop=ReviewDesktop();
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
         using var host=new Form{Text="Oracle Proxy UI fixture host",ShowInTaskbar=false,Opacity=0,Size=new Size(1,1)};
@@ -358,7 +376,7 @@ internal static class ProductTests
                 Console.WriteLine("UI_FIXTURE_FAILURE="+code);Console.WriteLine(error.StackTrace);
             }finally{host.Close();}
         }));
-        Application.Run(host);return result;
+        try{Application.Run(host);return result;}finally{if(previousDesktop is not null)ChangeDisplaySettings(previousDesktop,0);}
     }
     private static int Ui()
     {
@@ -624,6 +642,7 @@ internal static class ProductTests
         var viewport=UiDescendants(form).Single(c=>c.Name=="viewport");var area=viewport.RectangleToScreen(viewport.ClientRectangle);
         foreach(var card in UiDescendants(form).Where(c=>c.Name is "connectionSection" or "accountSection" or "toolsSection"))
             UiAssert(area.Contains(card.RectangleToScreen(card.ClientRectangle)),"DEFAULT_WINDOW_REQUIRES_SCROLL_FOR_"+card.Name);
+        UiAssert(Screen.FromControl(form).WorkingArea.Contains(form.RectangleToScreen(form.ClientRectangle)),"COMPACT_REVIEW_WINDOW_EXCEEDS_REAL_DESKTOP");
         var metrics=UiDescendants(form).Single(c=>c.Name=="connectionMetrics");
         foreach(var value in UiDescendants(metrics).OfType<Label>().Where(c=>c.Text.Contains("2603:"))){
             var measured=TextRenderer.MeasureText(value.Text,value.Font,new Size(value.Width,0),TextFormatFlags.WordBreak);

@@ -44,7 +44,7 @@ internal sealed class MainForm : Form
     private readonly Panel _loginGate;
     private readonly Panel _startupGate;
     private bool _initialViewResolved;
-    private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc29",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
+    private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc30",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
     private readonly Label _loginFeedback=new(){Name="login-feedback",Text="登录后即可管理连接与设备。"};
     private readonly CheckBox _rememberLogin=new(){Name="remember-login",Text="记住登录（最多 30 天）",Checked=true,AutoSize=true};
     private readonly Button _diagnosticsToggle=new(){Name="diagnostics-toggle",Text="展开诊断与测试",Height=38,AutoSize=false};
@@ -269,24 +269,25 @@ internal sealed class MainForm : Form
         _help.SetToolTip(_telemetry,"速率按本机 VPN 网卡字节增量统计；HTTP 延迟包含隧道及检测站点响应时间，与游戏延迟不同。");
         foreach(var value in new[]{_download,_upload})_help.SetToolTip(value,"本机 VPN 网卡实时速率。1 MiB/s 约为 8.39 Mbps。");
         _help.SetToolTip(_emergencyRecovery,"独立的本机恢复入口，需要管理员授权；恢复完成前不会把网络状态当作已断开。");
-        AcceptButton=_login;viewport.SizeChanged+=(_,_)=>FitBody();FitBody();FitLogin();
+        AcceptButton=null;viewport.SizeChanged+=(_,_)=>FitBody();FitBody();FitLogin();
         var area=Screen.FromControl(this).WorkingArea;Size=new Size(Math.Min(Width,area.Width),Math.Min(Height,area.Height));
         FormClosing+=async(_,e)=>{if(e.CloseReason==CloseReason.UserClosing && !_allowClose){e.Cancel=true;await QuitClient();}};
     }
 
-    private void RevealView(bool dashboard)
+    private void RevealView(bool? dashboard)
     {
-        if(_initialViewResolved && _dashboardShown==dashboard)return;
+        if(dashboard.HasValue && _initialViewResolved && _dashboardShown==dashboard.Value)return;
+        if(!dashboard.HasValue && !_initialViewResolved && _startupGate.Visible)return;
         // Hold painting across the whole transition, including native child
         // HWNDs. This changes no network state and never awaits while frozen.
         bool redraw=IsHandleCreated && Visible;
         if(redraw)SendMessage(Handle,0x000B,IntPtr.Zero,IntPtr.Zero);
         SuspendLayout();_shell.SuspendLayout();_loginGate.SuspendLayout();
         try{
-            _dashboardShown=dashboard;_initialViewResolved=true;
-            _shell.Visible=dashboard;_loginGate.Visible=!dashboard;
-            (dashboard?(Control)_shell:_loginGate).BringToFront();_startupGate.Visible=false;
-            AcceptButton=dashboard?_connect:_login;
+            _dashboardShown=dashboard==true;_initialViewResolved=dashboard.HasValue;
+            _shell.Visible=dashboard==true;_loginGate.Visible=dashboard==false;_startupGate.Visible=!dashboard.HasValue;
+            (dashboard==true?(Control)_shell:dashboard==false?_loginGate:_startupGate).BringToFront();
+            AcceptButton=dashboard==true?_connect:dashboard==false?_login:null;
         }finally{
             _loginGate.ResumeLayout(true);_shell.ResumeLayout(true);ResumeLayout(true);
             if(redraw){SendMessage(Handle,0x000B,new IntPtr(1),IntPtr.Zero);Invalidate(true);Update();}
@@ -474,7 +475,7 @@ internal sealed class MainForm : Form
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            string productVersion=state["product_version"]?.GetValue<string>() ?? "0.3.0-rc29";
+            string productVersion=state["product_version"]?.GetValue<string>() ?? "0.3.0-rc30";
             _version.Text="v"+productVersion.Split('+')[0];
             if(_help.GetToolTip(_version)!=productVersion)_help.SetToolTip(_version,productVersion);
             _connectionReport=_connectionReport.Replace("ORACLE_EGRESS_","EGRESS_",StringComparison.Ordinal).Replace("ORACLE_","EGRESS_",StringComparison.Ordinal).Replace("oracle_egress_","egress_",StringComparison.Ordinal).Replace("oracle_","egress_",StringComparison.Ordinal);
@@ -542,7 +543,12 @@ internal sealed class MainForm : Form
             UpdateRates(state,mode=="connected" && guard);
             _telemetry.Text=mode=="connected"?(state["verified_exit_ipv6"] is not null?"双栈出口已验证 · ":"")+"防泄漏保护已启用":"连接通过验证后显示协议、出口与实时速率。";
             _usageUpdated.Text=$"用量更新：{(at is null?"—":DateTimeOffset.FromUnixTimeSeconds(at.Value).ToLocalTime().ToString("HH:mm:ss"))}  ·  {(fresh?"服务器账单统计":"上次读取值，等待刷新")}";
-            RevealView(_authenticated);
+            // A valid remembered token can precede the background account
+            // refresh after service restart. This is not a signed-out state.
+            bool restoring=state["login_authenticated"]?.GetValue<bool>()==true && account is null;
+            _startupGate.Controls[0].Text=restoring?"正在恢复已保存的登录…":"正在准备安全连接…";
+            if(restoring)_timer.Interval=1000;
+            RevealView(restoring?null:_authenticated);
 
     }
     internal string DownloadRate=>_download.Text;

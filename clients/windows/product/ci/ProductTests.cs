@@ -570,7 +570,7 @@ internal static class ProductTests
     private static Button UiButton(Control root,string name)=>UiDescendants(root).OfType<Button>().Single(button=>button.Name==name);
     private static void BootstrapPolicyRegression()
     {
-        const string version="0.3.0-rc29+synthetic-exact-revision";
+        const string version="0.3.0-rc30+synthetic-exact-revision";
         JsonObject current=new(){["schema"]=1,["ok"]=true,["product_version"]=version,["login_authenticated"]=false};
         int reads=0,installs=0;
         Task<JsonObject> Read(CancellationToken cancel){cancel.ThrowIfCancellationRequested();reads++;return Task.FromResult((JsonObject)current.DeepClone());}
@@ -636,7 +636,13 @@ internal static class ProductTests
         var startup=UiDescendants(form).Single(c=>c.Name=="startup-gate");var login=UiDescendants(form).Single(c=>c.Name=="login-gate");var shell=UiDescendants(form).Single(c=>c.Name=="dashboard");
         UiAssert(startup.Visible && !login.Visible && !shell.Visible,"REMEMBERED_STARTUP_EXPOSED_LOGIN_OR_PARTIAL_DASHBOARD");
         int loginFrames=0;login.VisibleChanged+=(_,_)=>{if(login.Visible)loginFrames++;};
-        waiting=false;initial.SetResult((JsonObject)ready.DeepClone());UiPumpUntil(()=>shell.Visible,"REMEMBERED_STARTUP_DID_NOT_REVEAL_DASHBOARD");
+        var restoring=(JsonObject)ready.DeepClone();restoring["account"]=null;restoring["login_authenticated"]=true;
+        initial.SetResult(restoring);UiPumpUntil(()=>form.PollInterval==1000,"COLD_SERVICE_RESTORATION_DID_NOT_SET_BOUNDED_POLL");
+        for(int attempt=0;attempt<4;attempt++){
+            form.Display((JsonObject)restoring.DeepClone());Application.DoEvents();
+            UiAssert(startup.Visible && !login.Visible && !shell.Visible && loginFrames==0 && form.AcceptButton is null,"REMEMBERED_PROOF_WITH_PENDING_ACCOUNT_FLASHED_LOGIN");
+        }
+        waiting=false;var refreshed=form.Act("Status");UiPumpUntil(()=>refreshed.IsCompleted && shell.Visible,"REMEMBERED_STARTUP_DID_NOT_REVEAL_DASHBOARD");
         UiAssert(!startup.Visible && !login.Visible && loginFrames==0,"REMEMBERED_STARTUP_FLASHED_LOGIN_PAGE");
         form.ClientSize=new Size(1220,820);form.PerformLayout();Application.DoEvents();
         var viewport=UiDescendants(form).Single(c=>c.Name=="viewport");var area=viewport.RectangleToScreen(viewport.ClientRectangle);
@@ -648,13 +654,13 @@ internal static class ProductTests
             var measured=TextRenderer.MeasureText(value.Text,value.Font,new Size(value.Width,0),TextFormatFlags.WordBreak);
             UiAssert(measured.Height<=value.Height,"DUALSTACK_EXIT_TEXT_CLIPPED");
         }
-        Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc29.png");}
-        Console.WriteLine("REMEMBERED_STARTUP_NEUTRAL_TO_COMPLETE_DASHBOARD_WITHOUT_LOGIN_FLASH_AND_THREE_CARDS_VISIBLE=PASS");
+        Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc30.png");}
+        Console.WriteLine("COLD_AND_WARM_REMEMBERED_STARTUP_PENDING_ACCOUNT_NEVER_SHOWS_LOGIN_AND_THREE_CARDS_VISIBLE=PASS");
     }
 
     private static void UiLoginAndLayoutRegression(JsonObject source)
     {
-        var ready=UiReady(source);ready["product_version"]="0.3.0-rc29+synthetic";
+        var ready=UiReady(source);ready["product_version"]="0.3.0-rc30+synthetic";
         var signedOut=(JsonObject)ready.DeepClone();signedOut["login_authenticated"]=false;signedOut["account"]=null;
         JsonObject current=(JsonObject)signedOut.DeepClone();var commands=new List<string>();
         using var form=new MainForm((command,username,password)=>{

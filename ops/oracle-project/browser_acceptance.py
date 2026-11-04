@@ -3,7 +3,7 @@ from urllib.parse import urlsplit
 import time
 import os
 
-from playwright.sync_api import sync_playwright, TimeoutError as BrowserTimeout
+from playwright.sync_api import sync_playwright, expect, TimeoutError as BrowserTimeout
 
 BASE = 'https://vpn-admin.morandi.dpdns.org'
 
@@ -49,9 +49,16 @@ def main():
                             restored.add_cookies(cookies)
                             assert restored.request.get(BASE+'/api/status').status==200
                             assert fresh.request.get(BASE+'/api/status').status==401
+                            assert fresh.request.get(BASE+'/api/flclash').status==401
                         finally:
                             fresh.close()
                         assert control.json().get('administrator',{}).get('username')==username
+                        profiles=context.request.get(BASE+'/api/flclash')
+                        assert profiles.status==200 and isinstance(profiles.json().get('profiles'),list)
+                        assert page.locator('#flclash').count()==1
+                        expect(page.locator('#flclash-status')).to_contain_text('WireGuard UDP 443')
+                        assert page.locator('#flclash-form [name=confirm]').count()==1
+                        print(f'BROWSER_{name.upper()}_REAL_FLCLASH_UDP_EXPORT_MODULE_READ_ONLY=PASS',flush=True)
                         assert page.locator('#unconfirmed').count()==1
                         assert not page.locator('#user-form').is_visible()
                         help_icon=page.locator('#users .help-icon').first
@@ -60,7 +67,6 @@ def main():
                         page.keyboard.press('Escape')
                         assert not page.locator('#help-users').is_visible()
                         if control.json()['users']:
-                            from playwright.sync_api import expect
                             page.locator('#user-rows .user-toggle').first.click()
                             chart=page.locator('#user-rows .user-history:not([hidden])').first
                             for choice,count in [('day',24),('week',7)]:

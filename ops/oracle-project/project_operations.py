@@ -269,6 +269,16 @@ def deploy(revision):
         spec=importlib.util.spec_from_file_location('previous_owned_browser_ci',Path(__file__).with_name('cleanup_rc20_webrtc_ci.py'))
         cleanup=importlib.util.module_from_spec(spec);spec.loader.exec_module(cleanup)
         cleanup.apply()
+    if request.get('request_id')=='rc29-compact-flclash-deploy-20261104':
+        # Web/UI/profile database only: the policy engine and transport units
+        # are unchanged. Do not restart kernel lease renewal for an export page.
+        current=host.ROOT/'current'
+        if current.is_symlink() and current.resolve().name==revision:
+            if not host.healthy():raise ValueError('APPLICATION_UNHEALTHY')
+        else:run([runtime_python(),'-I',str(SERVER/'deploy/host.py'),'install','--revision',revision])
+        verify_control()
+        print('PROJECT_RC29_WEB_PROFILE_DEPLOYMENT=VERIFIED; policy and transport unchanged')
+        return
     current = host.ROOT / 'current'
     if current.is_symlink() and current.resolve().name == revision:
         run(['systemctl', 'restart', host.UNIT_NAMES[0]])

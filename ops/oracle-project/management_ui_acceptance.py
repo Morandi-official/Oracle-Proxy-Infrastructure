@@ -61,6 +61,7 @@ def main():
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path.startswith('/api/users/') and path.endswith('/usage'):
        data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
+      elif path=='/api/flclash':data={'profiles':[]}
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':{'wg_service':'ACTIVE','wg_interface':'PRESENT','udp_listener':'LISTENING','observed_at':int(time.time())}}
       elif path=='/api/audit':data={'entries':[{'occurred_at':int(time.time())-i,'actor':'fixture','action':'test','resource':'fixture'} for i in range(20)],'activity':[{'username':'ci-user01','count':7}]}
       else:route.fulfill(status=404);return

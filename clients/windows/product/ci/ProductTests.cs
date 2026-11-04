@@ -408,11 +408,13 @@ internal static class ProductTests
             using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));
             var viewport=Descendants(form).Single(c=>c.Name=="viewport");
             var sections=Descendants(form).OfType<GroupBox>().Where(c=>c.Name.EndsWith("Section",StringComparison.Ordinal)).OrderBy(c=>c.Top).ToArray();
-            if(sections.Length!=3 || !viewport.Visible || sections.Any(c=>!c.Visible || c.Width>viewport.ClientSize.Width || c.Left!=sections[0].Left) || sections.Zip(sections.Skip(1)).Any(pair=>pair.First.Bottom>pair.Second.Top))return 1;
+            var bounds=sections.Select(c=>c.RectangleToScreen(c.ClientRectangle)).ToArray();
+            if(sections.Length!=3 || !viewport.Visible || sections.Any(c=>!c.Visible || c.Width>viewport.ClientSize.Width) || bounds.SelectMany((a,i)=>bounds.Skip(i+1).Select(b=>a.IntersectsWith(b))).Any(overlap=>overlap))return 1;
             if(viewport is ScrollableControl scroller && scroller.HorizontalScroll.Visible)return 1;
             Directory.CreateDirectory("dist/review");image.Save($"dist/review/windows-client-{size.Width}x{size.Height}-synthetic.png");
         }
         Console.WriteLine("THREE_ALIGNED_SECTIONS_FIT_NORMAL_AND_MINIMUM_WINDOW_WITHOUT_HORIZONTAL_SCROLL=PASS");
+        UiStartupAndCompactRegression(snapshot);
         UiLoginAndLayoutRegression(snapshot);
         UiLayoutRegression(snapshot);
         var toolsViewport=(ScrollableControl)Descendants(form).Single(c=>c.Name=="viewport");
@@ -550,7 +552,7 @@ internal static class ProductTests
     private static Button UiButton(Control root,string name)=>UiDescendants(root).OfType<Button>().Single(button=>button.Name==name);
     private static void BootstrapPolicyRegression()
     {
-        const string version="0.3.0-rc28+synthetic-exact-revision";
+        const string version="0.3.0-rc29+synthetic-exact-revision";
         JsonObject current=new(){["schema"]=1,["ok"]=true,["product_version"]=version,["login_authenticated"]=false};
         int reads=0,installs=0;
         Task<JsonObject> Read(CancellationToken cancel){cancel.ThrowIfCancellationRequested();reads++;return Task.FromResult((JsonObject)current.DeepClone());}
@@ -605,9 +607,35 @@ internal static class ProductTests
         UiAssert(refused,"RECOVERY_RESULT_SKIPPED_FINAL_ABSENCE_AUDIT");
         Console.WriteLine("LOGIN_GATE_THIRTY_DAY_BOUND_SERVER_EXPIRY_LOGOUT_KEY_PRESERVATION_AND_RECEIPT_RECOVERY_REAUDIT=PASS");
     }
+    private static void UiStartupAndCompactRegression(JsonObject source)
+    {
+        var initial=new TaskCompletionSource<JsonObject>();var ready=UiReady(source);
+        ready["mode"]="connected";ready["guard"]=true;ready["intent"]=true;ready["transport"]="wireguard-udp";
+        ready["verified_exit_ip"]="152.67.156.100";ready["verified_exit_ipv6"]="2603:c020:c015:8100::10";
+        bool waiting=true;
+        using var form=new MainForm((_,_,_)=>waiting?initial.Task:Task.FromResult((JsonObject)ready.DeepClone()));
+        UiShow(form);
+        var startup=UiDescendants(form).Single(c=>c.Name=="startup-gate");var login=UiDescendants(form).Single(c=>c.Name=="login-gate");var shell=UiDescendants(form).Single(c=>c.Name=="dashboard");
+        UiAssert(startup.Visible && !login.Visible && !shell.Visible,"REMEMBERED_STARTUP_EXPOSED_LOGIN_OR_PARTIAL_DASHBOARD");
+        int loginFrames=0;login.VisibleChanged+=(_,_)=>{if(login.Visible)loginFrames++;};
+        waiting=false;initial.SetResult((JsonObject)ready.DeepClone());UiPumpUntil(()=>shell.Visible,"REMEMBERED_STARTUP_DID_NOT_REVEAL_DASHBOARD");
+        UiAssert(!startup.Visible && !login.Visible && loginFrames==0,"REMEMBERED_STARTUP_FLASHED_LOGIN_PAGE");
+        form.ClientSize=new Size(1220,820);form.PerformLayout();Application.DoEvents();
+        var viewport=UiDescendants(form).Single(c=>c.Name=="viewport");var area=viewport.RectangleToScreen(viewport.ClientRectangle);
+        foreach(var card in UiDescendants(form).Where(c=>c.Name is "connectionSection" or "accountSection" or "toolsSection"))
+            UiAssert(area.Contains(card.RectangleToScreen(card.ClientRectangle)),"DEFAULT_WINDOW_REQUIRES_SCROLL_FOR_"+card.Name);
+        var metrics=UiDescendants(form).Single(c=>c.Name=="connectionMetrics");
+        foreach(var value in UiDescendants(metrics).OfType<Label>().Where(c=>c.Text.Contains("2603:"))){
+            var measured=TextRenderer.MeasureText(value.Text,value.Font,new Size(value.Width,0),TextFormatFlags.WordBreak);
+            UiAssert(measured.Height<=value.Height,"DUALSTACK_EXIT_TEXT_CLIPPED");
+        }
+        Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc29.png");}
+        Console.WriteLine("REMEMBERED_STARTUP_NEUTRAL_TO_COMPLETE_DASHBOARD_WITHOUT_LOGIN_FLASH_AND_THREE_CARDS_VISIBLE=PASS");
+    }
+
     private static void UiLoginAndLayoutRegression(JsonObject source)
     {
-        var ready=UiReady(source);ready["product_version"]="0.3.0-rc28+synthetic";
+        var ready=UiReady(source);ready["product_version"]="0.3.0-rc29+synthetic";
         var signedOut=(JsonObject)ready.DeepClone();signedOut["login_authenticated"]=false;signedOut["account"]=null;
         JsonObject current=(JsonObject)signedOut.DeepClone();var commands=new List<string>();
         using var form=new MainForm((command,username,password)=>{

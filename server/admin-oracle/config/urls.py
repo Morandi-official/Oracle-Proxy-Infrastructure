@@ -1,6 +1,6 @@
 from django.urls import include, path
 from django.conf import settings
-from console import views, client_api, transports
+from console import views, client_api, transports, flclash
 
 urlpatterns = [
     path('privacy-check/',views.privacy_check),
@@ -19,6 +19,10 @@ urlpatterns = [
     path('api/status', views.status),
     path('api/audit', views.audit),
     path('api/control', views.management),
+    path('api/flclash', flclash.profiles),
+    path('api/flclash/create', flclash.create),
+    path('api/flclash/<uuid:profile_id>', flclash.action),
+    path('api/flclash/import/<uuid:profile_id>/<str:token>/profile.yaml', flclash.download),
     path('api/users/<uuid:user_id>/usage', views.user_usage),
     path('api/health', views.health),
     path('usage.js', views.asset, {'name': 'usage.js'}),

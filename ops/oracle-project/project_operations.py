@@ -366,8 +366,18 @@ def install_downloads():
     previews.install()
 
 
+def _retire_rc27_ci_device():
+    spec=importlib.util.spec_from_file_location('owned_rc27_completed_ci',Path(__file__).with_name('cleanup_rc27_completed_ci.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    module.apply()
+
+
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='deliver-windows-rc27-and-retire-ci-20261104':
+        install_downloads()
+        _retire_rc27_ci_device()
+        return # Static release delivery plus one exact completed CI device; no Caddy, routing or firewall changes.
     if request.get('request_id')=='rc26-completed-owned-ci-slot-release-20261104':
         cleanup_spec=importlib.util.spec_from_file_location('owned_rc26_completed_ci',Path(__file__).with_name('cleanup_rc26_completed_ci.py'))
         cleanup=importlib.util.module_from_spec(cleanup_spec);cleanup_spec.loader.exec_module(cleanup)

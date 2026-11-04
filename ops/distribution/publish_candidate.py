@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc27 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc28 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc27.json')
+MANIFEST = Path(__file__).with_name('windows-rc28.json')
 
 
 def gh(*args, output=None):
@@ -28,13 +28,13 @@ def api(path): return json.loads(gh('api',f'repos/{REPO}/{path}'))
 def validate_manifest(manifest):
     artifacts=manifest.get('artifacts')
     if (set(manifest)!={'version','run_id','uu_path_run_id','source_revision','artifacts'} or
-        manifest.get('version')!='0.3.0-rc27' or
+        manifest.get('version')!='0.3.0-rc28' or
         type(manifest.get('run_id')) is not int or manifest['run_id']<=0 or
         type(manifest.get('uu_path_run_id')) is not int or manifest['uu_path_run_id']<=0 or
         manifest['uu_path_run_id']==manifest['run_id'] or
         not re.fullmatch(r'[a-f0-9]{40}',str(manifest.get('source_revision',''))) or
         not isinstance(artifacts,list) or len(artifacts)!=2):
-        raise ValueError('COMPLETE_PINNED_RC27_MANIFEST_REQUIRED')
+        raise ValueError('COMPLETE_PINNED_RC28_MANIFEST_REQUIRED')
     ids=[]
     for item in artifacts:
         if (not isinstance(item,dict) or type(item.get('id')) is not int or item['id']<=0 or
@@ -63,7 +63,7 @@ def validate_path_run(run, manifest):
 
 
 def validate_dotnet_runtime(metadata):
-    """Require rc27's actual published self-contained runtime attestation.
+    """Require rc28's actual published self-contained runtime attestation.
 
     package-candidate.py creates this section from the MSBuild-selected runtime
     config after exact SDK verification. The outer accepted-artifact digest binds
@@ -128,7 +128,7 @@ def main():
     if sys.argv[1]=='--check': print('PINNED_ACCEPTED_MAIN_ARTIFACTS=PASS');return
     if (os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('GITHUB_REF')!='refs/heads/main' or
         os.environ.get('GITHUB_REPOSITORY')!=REPO): raise ValueError('MAIN_PUBLICATION_REQUIRED')
-    prefix='OracleProxy-'+manifest['version']+'-win-x64-'+manifest['source_revision'][:12]
+    prefix='Proxy-'+manifest['version']+'-win-x64-'+manifest['source_revision'][:12]
     with tempfile.TemporaryDirectory(prefix='oracle-candidate-release-') as temporary:
         root=Path(temporary);assets=root/'assets';assets.mkdir()
         for index,artifact in enumerate(manifest['artifacts']):
@@ -155,13 +155,13 @@ def main():
                 not re.fullmatch(r'[a-f0-9]{64}',str(installer.get('compiler_sha256','')))):
             raise ValueError('ACCEPTED_INSTALLER_METADATA_REQUIRED')
         notes=root/'notes.md'
-        notes.write_text(Path(__file__).with_name('windows-rc27-notes.md').read_text(encoding='utf-8')+
+        notes.write_text(Path(__file__).with_name('windows-rc28-notes.md').read_text(encoding='utf-8')+
                          f"\n构建提交：`{manifest['source_revision']}`；[完整云端验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']
         if api('git/matching-refs/tags/'+tag): raise ValueError('EXISTING_RC_TAG_REQUIRES_REVIEW')
         request=root/'draft.json'
         request.write_text(json.dumps({'tag_name':tag,'target_commitish':manifest['source_revision'],
-            'name':'Oracle Proxy '+manifest['version']+' · Windows x64','draft':True,
+            'name':'Proxy '+manifest['version']+' · Windows x64','draft':True,
             'prerelease':True,'body':notes.read_text()}))
         release=json.loads(gh('api','--method','POST',f'repos/{REPO}/releases','--input',request))
         release_id=release['id']

@@ -35,7 +35,6 @@ internal sealed class MainForm : Form
     private readonly TableLayoutPanel _credentials;
     private readonly TableLayoutPanel _maintenance;
     private readonly Button _deviceToggle=new(){Name="device-details-toggle",Text="展开设备详情",AutoSize=true};
-    private readonly Button _credentialsToggle=new(){Text="切换账号",AutoSize=true};
     private readonly Button _maintenanceToggle=new(){Name="maintenance-toggle",Text="展开系统维护",AutoSize=true};
     private readonly Button _emergencyRecovery=new(){Name="emergency-recovery",Text="恢复直连（UAC）",AutoSize=true};
     private readonly ToolTip _help=new(){ShowAlways=true,InitialDelay=350,ReshowDelay=100,AutoPopDelay=18000};
@@ -83,7 +82,7 @@ internal sealed class MainForm : Form
     private readonly Label _protocol=MetricValue(),_exitIp=MetricValue(),_download=MetricValue(),_upload=MetricValue(),_latency=MetricValue(),_uu=MetricValue();
     private readonly Label _accountName=new(){AutoSize=true,Text="尚未登录"};
     private readonly Label _usageUpdated=new(){AutoSize=true,ForeColor=Color.FromArgb(100,113,134)};
-    private readonly Button _logout=new(){Text="退出账号",AutoSize=true,Visible=false};
+    private readonly Button _logout=new(){Text="退出登录",AutoSize=true,Visible=false};
     private long? _sampleAt,_sampleRx,_sampleTx;
     private uint _samplePid;
     private static Label MetricValue()=>new(){Text="—",Dock=DockStyle.Fill,AutoEllipsis=true,Height=30,TextAlign=ContentAlignment.MiddleLeft,Font=new Font("Microsoft YaHei UI",13,FontStyle.Bold),Margin=new Padding(0)};
@@ -97,7 +96,9 @@ internal sealed class MainForm : Form
     }
     private static TableLayoutPanel ButtonGrid(string name){
         var grid=new TableLayoutPanel{Name=name,ColumnCount=3,RowCount=0,AutoSize=false,Height=0,Dock=DockStyle.Top,Margin=new Padding(0,8,0,0)};
-        for(int i=0;i<3;i++)grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));return grid;
+        for(int i=0;i<3;i++)grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,1));
+        grid.SizeChanged+=(_,_)=>{float width=Math.Max(1,(grid.ClientSize.Width-grid.Padding.Horizontal)/3);foreach(ColumnStyle column in grid.ColumnStyles)if(column.Width!=width)column.Width=width;};
+        return grid;
     }
     private void SetToolsExpanded(bool expanded){if(_toolsExpanded==expanded)return;_toolsExpanded=expanded;_toolsContent.Visible=expanded;_diagnosticsToggle.Text=expanded?"收起诊断与测试":"展开诊断与测试";}
 
@@ -197,8 +198,8 @@ internal sealed class MainForm : Form
         Row(account,_registrationGroup);_registrationGroup.Visible=false;
         _deviceName.TextChanged+=(_,_)=>UpdateRegistrationActions();_deviceConfirmation.CheckedChanged+=(_,_)=>UpdateRegistrationActions();
         _registerDevice.Click+=async(_,_)=>{if(_deviceConfirmation.Checked)await Act("ConfirmDevice");};
-        var accountActions=Actions();accountActions.Controls.AddRange([_credentialsToggle,_logout]);Row(account,accountActions);
-        _credentialsToggle.Text="切换账号";_credentialsToggle.Click+=async(_,_)=>await Act("Logout");_logout.Click+=async(_,_)=>await Act("Logout");
+        var accountActions=Actions();accountActions.Controls.Add(_logout);Row(account,accountActions);
+        _logout.Click+=async(_,_)=>await Act("Logout");
         var accountCard=Card("accountSection","账号与设备",account);Row(body,accountCard);
         var tools=Stack("toolsContainer");_diagnosticsToggle.Dock=DockStyle.Fill;Row(tools,_diagnosticsToggle);_toolsContent=Stack("toolsContent");_toolsContent.Visible=false;Row(tools,_toolsContent);
         _diagnosticsToggle.Click+=(_,_)=>SetToolsExpanded(!_toolsExpanded);
@@ -465,9 +466,10 @@ internal sealed class MainForm : Form
             var account=state["login_authenticated"]?.GetValue<bool>()==true?state["account"]?.AsObject():null;
             bool hasAccount=account is not null;
             if(_hasAccount!=hasAccount){
-                _hasAccount=hasAccount;_credentials.Visible=!hasAccount;_login.Visible=!hasAccount;_credentialsToggle.Visible=hasAccount;_logout.Visible=hasAccount;
+                _hasAccount=hasAccount;_credentials.Visible=!hasAccount;_login.Visible=!hasAccount;_logout.Visible=hasAccount;
             }
             _authenticated=state["login_authenticated"]?.GetValue<bool>()==true && hasAccount;
+            if(_dashboardShown && !_authenticated){_username.Clear();_password.Clear();}
             if(_dashboardShown!=_authenticated){_dashboardShown=_authenticated;_shell.Visible=_authenticated;_loginGate.Visible=!_authenticated;AcceptButton=_authenticated?_connect:_login;}
             if(!_authenticated){
                 string code=state["error"]?.GetValue<string>() ?? "";

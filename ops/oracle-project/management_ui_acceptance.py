@@ -62,10 +62,12 @@ def main():
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path.startswith('/api/users/') and path.endswith('/usage'):
        data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
+      elif path=='/api/host-status':data={'sample':{'observed_at':int(time.time()),'cpu_count':4,'cpu_percent':25,'cpu_steal_percent':0,'io_wait_percent':0,'memory_percent':30,'memory_used_bytes':3000000000,'memory_total_bytes':10000000000,'load':[1,1,1],'disks':[{'used_percent':20,'used_bytes':20000000000,'total_bytes':100000000000,'available_bytes':80000000000,'inode_percent':3}],'network':{'interfaces':['ens3'],'rx_bytes_per_second':1250000,'tx_bytes_per_second':2500000,'packets_per_second':1000,'drops_delta':0,'errors_delta':0},'conntrack_count':40,'conntrack_max':10000,'tcp_established':12,'tcp_retransmit_percent':0,'alerts':[],'errors':[]},'age_seconds':1,'stale':False,'history':[],'events':[]}
       elif path=='/api/flclash':data={'profiles':profiles_fixture}
       elif path=='/api/flclash/create':
        assert route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
-       value=route.request.post_data_json;assert value['confirm'] is True
+       value=route.request.post_data_json;assert set(value)=={'user_id'}
+       value['name']='ci-user01的第1个FlClash设备'
        key=base64.b64encode(bytes([9])*32).decode()
        engine.dispatch({'operation':'peer.enroll','actor':'github:204281968','data':{'public_key':key,'user_id':value['user_id'],'name':value['name'],'machine_name':value['name'],'client_version':'FlClash-UDP-v1','confirm':True}})
        profiles_fixture.append({'id':'synthetic-profile','user_id':value['user_id'],'name':value['name'],'status':'active','created_at':int(time.time()),'device_id':'fixture-only'})
@@ -150,11 +152,13 @@ def main():
      expect(confirmed.get_by_role('button',name='管理',exact=True)).to_be_focused()
      expect(page.locator('#pending-device-rows')).to_contain_text('CI pending <b>literal</b>')
      assert page.locator('#pending-device-rows b').count()==0
+     expect(page.locator('#host-cpu')).to_have_text('25.0%')
+     expect(page.locator('#host-speed')).to_have_text('10.00 / 20.00 Mbps')
      assert engine.device_count(user['id'])==2
-     page.locator('#flclash-user').select_option(user['id']);page.locator('#flclash-form [name=name]').fill('CI FlClash phone')
-     page.locator('#flclash-form [name=confirm]').check();page.get_by_role('button',name='创建设备配置',exact=True).click()
-     profile_row=page.locator('#flclash-rows tr').filter(has_text='CI FlClash phone');expect(profile_row).to_contain_text('可导入')
+     page.locator('#flclash-user').select_option(user['id']);page.get_by_role('button',name='生成配置',exact=True).click()
+     profile_row=page.locator('#flclash-rows tr').filter(has_text='ci-user01的第1个FlClash设备');expect(profile_row).to_contain_text('可导入')
      assert engine.device_count(user['id'])==3
+     expect(page.get_by_role('button',name='生成配置',exact=True)).to_be_disabled()
      with page.expect_download() as delivery:profile_row.get_by_role('button',name='下载配置',exact=True).click()
      config=json.loads(Path(delivery.value.path()).read_text());assert config['proxies'][0]['type']=='wireguard' and config['rules']==['MATCH,Proxy UDP']
      profile_row.get_by_role('button',name='撤销',exact=True).click();expect(profile_row).to_contain_text('已撤销')

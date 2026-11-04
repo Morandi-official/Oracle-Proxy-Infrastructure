@@ -125,3 +125,9 @@ class ReadOnlyUsageTests(unittest.TestCase):
   error=type('ReadTimeout',(Exception,),{})('SECRET_REQUEST_URL')
   result=probe.error_details(error)
   self.assertEqual(result['category'],'TIMEOUT');self.assertEqual(result['exception_type'],'ReadTimeout');self.assertNotIn('SECRET',str(result))
+
+class CalendarMonthRangeTests(unittest.TestCase):
+ def test_november_resets_at_utc_month_start_not_registration_day(self):
+  start,end=probe.billing_range(dt.datetime(2026,11,4,10,45,tzinfo=dt.timezone.utc))
+  self.assertEqual(start,dt.datetime(2026,11,1,tzinfo=dt.timezone.utc))
+  self.assertEqual(end,dt.datetime(2026,11,4,10,tzinfo=dt.timezone.utc))

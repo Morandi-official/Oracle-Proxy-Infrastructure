@@ -81,7 +81,7 @@ def official_usage_status():
             raise ValueError('INVALID_USAGE_CACHE')
         fields = ('checked_at', 'period', 'status', 'monitoring_status', 'billing_status',
                   'vnic_count', 'vnic_outbound_bytes', 'metric_points', 'metric_from', 'metric_through',
-                  'metric_query_from', 'metric_query_to', 'instance_created_at', 'billing_through',
+                  'metric_query_from', 'metric_query_to', 'instance_created_at', 'billing_from', 'billing_through', 'billing_scope',
                   'billing_error_http_status', 'billing_error_category', 'billing_error_service_code', 'billing_error_exception_type','billing_hourly_error_category','billing_hourly_exception_type',
                   'billing_granularity','billing_hourly_status','billing_changed_at','next_check_at','free_tier_status','free_tier_limit_gb','free_tier_used_gb','free_tier_remaining_gb','free_tier_policy_checked')
         result = {name: value.get(name) for name in fields}
@@ -269,7 +269,7 @@ def deploy(revision):
         spec=importlib.util.spec_from_file_location('previous_owned_browser_ci',Path(__file__).with_name('cleanup_rc20_webrtc_ci.py'))
         cleanup=importlib.util.module_from_spec(spec);spec.loader.exec_module(cleanup)
         cleanup.apply()
-    if request.get('request_id')=='rc29-compact-flclash-deploy-20261104':
+    if request.get('request_id') in ('rc29-compact-flclash-deploy-20261104','admin-capacity-health-20261104'):
         # Web/UI/profile database only: the policy engine and transport units
         # are unchanged. Do not restart kernel lease renewal for an export page.
         current=host.ROOT/'current'
@@ -277,7 +277,12 @@ def deploy(revision):
             if not host.healthy():raise ValueError('APPLICATION_UNHEALTHY')
         else:run([runtime_python(),'-I',str(SERVER/'deploy/host.py'),'install','--revision',revision])
         verify_control()
-        print('PROJECT_RC29_WEB_PROFILE_DEPLOYMENT=VERIFIED; policy and transport unchanged')
+        if request.get('request_id')=='admin-capacity-health-20261104':
+            install_usage_probe()
+            run(['systemctl','restart','oracle-proxy-admin-collect.timer'])
+            run(['systemctl','start','oracle-proxy-admin-collect.service'])
+            print('OFFICIAL_CURRENT_MONTH_RECONCILIATION='+json.dumps(official_usage_status(),sort_keys=True))
+        print('PROJECT_WEB_PROFILE_DEPLOYMENT=VERIFIED; policy engine unchanged')
         return
     current = host.ROOT / 'current'
     if current.is_symlink() and current.resolve().name == revision:

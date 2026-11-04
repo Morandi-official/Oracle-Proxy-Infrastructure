@@ -1,10 +1,12 @@
 import socket
+from datetime import timedelta
 import subprocess
 from pathlib import Path
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from .models import Audit, Snapshot
+from . import host_health
 
 
 def collect():
@@ -29,7 +31,20 @@ def collect():
              'wg_service': 'ACTIVE' if result.returncode == 0 else 'INACTIVE',
              'wg_interface': 'PRESENT' if 'wg0' in interfaces else 'ABSENT',
              'udp_listener': 'LISTENING' if listening else 'NOT_LISTENING'}
+    last=Snapshot.objects.order_by('-observed_at').first()
+    health=host_health.sample((last.payload.get('health') or {}) if last else {})
+    value['health']=health
+    # Handshake metadata only, through the existing read-only socket role.
+    try:
+        from . import control,flclash
+        flclash.observe_usage(control.call('state','system:health',{}))
+    except (OSError,TimeoutError,ValueError):pass
     with transaction.atomic():
+        before={a['code'] for a in (last.payload.get('health') or {}).get('alerts',[])} if last else set()
+        after={a['code'] for a in health['alerts']}
+        for code in sorted(after-before):Audit.objects.create(actor='collector:local-readonly',action='server.health.warning',resource=code)
+        for code in sorted(before-after):Audit.objects.create(actor='collector:local-readonly',action='server.health.resolved',resource=code)
+        Snapshot.objects.filter(observed_at__lt=now-timedelta(hours=6)).delete()
         Snapshot.objects.create(observed_at=now, payload=value)
-        Audit.objects.create(actor='collector:local-readonly', action='snapshot.received')
+        if last is None:Audit.objects.create(actor='collector:local-readonly', action='snapshot.received')
     return value

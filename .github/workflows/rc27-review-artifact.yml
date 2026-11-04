@@ -1,0 +1,48 @@
+name: Preserve the exact failed rc27 review before retry upload
+on:
+  pull_request:
+    paths: ['ops/ci-artifacts/**', '.github/workflows/rc27-review-artifact.yml']
+  push:
+    branches: [main]
+    paths: ['ops/ci-artifacts/**', '.github/workflows/rc27-review-artifact.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s ops/ci-artifacts -p 'test_*.py' -v
+      - run: python3 ops/ci-artifacts/preserve_rc27_failed_review.py --check
+        env:
+          GH_TOKEN: ${{ github.token }}
+  preserve-and-free:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: review
+        run: python3 ops/ci-artifacts/preserve_rc27_failed_review.py --download
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        if: steps.review.outputs.present == 'true'
+        with:
+          name: rc27-preserved-first-attempt-review-41763938124
+          path: ${{ runner.temp }}/rc27-preserved-failed-review/*
+          if-no-files-found: error
+          retention-days: 14
+      - run: python3 ops/ci-artifacts/preserve_rc27_failed_review.py --delete
+        if: steps.review.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}

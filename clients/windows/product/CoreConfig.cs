@@ -39,17 +39,9 @@ internal static class CoreConfig
             // the connected path selects the actual IPv4 peer before binding,
             // as the working backup carriers already do. No encapsulation.
             config["endpoints"]![0]!["detour"]="oracle-native-udp";
-            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["ipv6_payload"]=dual,["address"]=ingress,["tag"]="oracle-native-udp",["ports"]=new JsonArray(port)});
-        }
-        if(transport==TunnelTransport.WireGuardUdp && port==51820 && tunnel["native_udp_ports"] is JsonArray ports && ports.Any(n=>n?.GetValue<int>()==443)){
-            bool cached443=secret.CarrierHint=="wireguard-udp" && secret.NativeUdpPortHint==443 && secret.CarrierHintUntil>DateTimeOffset.UtcNow.ToUnixTimeSeconds() && secret.CarrierNetworkHash==CarrierMemory.NetworkHash(state);
-            config["outbounds"]![1]!["ports"]=cached443?new JsonArray(443,51820):new JsonArray(51820,443);
+            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["ipv6_payload"]=dual,["address"]=ingress,["tag"]="oracle-native-udp",["ports"]=new JsonArray(NativeUdpPortPolicy.Select(state,secret,port).Select(p=>(JsonNode?)JsonValue.Create(p)).ToArray())});
         }
         if(secret.NativeUdpPortPreference is not (0 or 8443))throw new IOException("INVALID_NATIVE_PORT_PREFERENCE");
-        if(transport==TunnelTransport.WireGuardUdp && secret.NativeUdpPortPreference==8443){
-            if(port!=51820 || tunnel["native_udp_ports"] is not JsonArray available || !available.Any(n=>n?.GetValue<int>()==8443))throw new IOException("NATIVE_UDP8443_NOT_AVAILABLE");
-            config["outbounds"]![1]!["ports"]=new JsonArray(8443);
-        }
         if(transport==TunnelTransport.WireGuardQuic){
             config["endpoints"]![0]!["detour"]="oracle-quic-relay";
             config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-quic",["address"]=ingress,["tag"]="oracle-quic-relay",["token"]=secret.Token,["certificate"]=tunnel["quic"]!["certificate"]!.DeepClone()});

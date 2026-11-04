@@ -21,9 +21,11 @@ internal static class OracleAcceptance
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_primary_loss_begin(out IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_primary_reply_loss_begin(out IntPtr engine);
         [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_old_ingress_loss_begin(out IntPtr engine);
-        internal InitialUdpLoss(bool blockQuic=false,bool primaryOnly=false,bool primaryRepliesOnly=false,bool oldIngressOnly=false)
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_443_only_loss_begin(out IntPtr engine);
+        [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_8443_only_loss_begin(out IntPtr engine);
+        internal InitialUdpLoss(bool blockQuic=false,bool primaryOnly=false,bool primaryRepliesOnly=false,bool oldIngressOnly=false,bool native443Only=false,bool native8443Only=false)
         {
-            uint code=oldIngressOnly?fixture_udp_old_ingress_loss_begin(out _engine):primaryRepliesOnly?fixture_udp_primary_reply_loss_begin(out _engine):primaryOnly?fixture_udp_primary_loss_begin(out _engine):blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
+            uint code=native443Only?fixture_udp_443_only_loss_begin(out _engine):native8443Only?fixture_udp_8443_only_loss_begin(out _engine):oldIngressOnly?fixture_udp_old_ingress_loss_begin(out _engine):primaryRepliesOnly?fixture_udp_primary_reply_loss_begin(out _engine):primaryOnly?fixture_udp_primary_loss_begin(out _engine):blockQuic?fixture_udp_all_loss_begin(out _engine):fixture_udp_loss_begin(out _engine);
             if(code!=0){Console.WriteLine("INITIAL_UDP_NATIVE_ERROR="+code);throw new Win32Exception((int)code);}
         }
         public void Dispose()
@@ -317,7 +319,24 @@ internal static class OracleAcceptance
                 var blocked=await ControlPipe.Send("Connect");
                 Check(blocked["ok"]?.GetValue<bool>()==false && blocked["error"]?.GetValue<string>()=="UU_MAINTENANCE_BUSY" && blocked["mode"]?.GetValue<string>()=="disconnected" && blocked["intent"]?.GetValue<bool>()==false,"REAL_CONNECT_REFUSED_DURING_ELEVATED_UU_MAINTENANCE");
             }
-            stage="NORMAL_AUTO_NATIVE8443_POLICY";
+            stage="ADAPTIVE_UDP443_WITH_8443_BLOCKED";
+            await Send("Disconnect");var adaptive=await Send("PreferAutoAdaptive");
+            Check(adaptive["transport_preference"]?.GetValue<string>()=="auto" && adaptive["native_udp_adaptive"]?.GetValue<bool>()==true && adaptive["native_udp_port_preference"]?.GetValue<int>()==0,"REAL_AUTO_POLICY_HAS_NO_FIXED_NATIVE_PORT_PIN");
+            using(var alternateLoss=new InitialUdpLoss(native8443Only:true)){
+                var timer=Stopwatch.StartNew();await Send("Connect");var connected=await Connected();
+                SafeNativeState(connected,"ADAPTIVE_443");
+                Check(connected["transport"]?.GetValue<string>()=="wireguard-udp" && connected["native_udp_selected_port"]?.GetValue<int>()==443 && connected["transport_address"]?.GetValue<string>()=="141.147.78.44" && timer.ElapsedMilliseconds<6000 && await ExitIp()=="152.67.156.100" && await FreshDns() && await DualStackExit() && await Ipv6Stun(),"REAL_ADAPTIVE_NATIVE_UDP443_WHEN_UDP8443_IS_BLOCKED_WITH_DUALSTACK_EXIT_AND_DNS");
+                Check(connected["native_udp_attempt"]?["transport_address"]?.GetValue<string>()=="141.147.78.44" && connected["native_udp_attempt"]?["port_order"]?.GetValue<string>()=="443,8443","REAL_ADAPTIVE_NATIVE_DIAGNOSTICS_REPORT_ACTUAL_ADDRESS_AND_PORT_ORDER");
+            }
+            stage="ADAPTIVE_UDP8443_AFTER_FRESH_443_RETRY";
+            await Send("Disconnect");await Send("PreferUdpAdaptive");
+            using(var primaryLoss=new InitialUdpLoss(native443Only:true)){
+                var timer=Stopwatch.StartNew();await Send("Connect");var connected=await Connected();
+                Check(connected["transport"]?.GetValue<string>()=="wireguard-udp" && connected["native_udp_selected_port"]?.GetValue<int>()==8443 && timer.ElapsedMilliseconds<12000 && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_ADAPTIVE_FRESH_WIREGUARD_HANDSHAKE_SELECTS_8443_WHEN_443_IS_BLOCKED");
+                timer.Restart();uint prior=await ColdCore();var cached=await Connected();
+                Check(cached["core_pid"]?.GetValue<uint>()!=prior && cached["native_udp_selected_port"]?.GetValue<int>()==8443 && cached["native_udp_attempt"]?["port_order"]?.GetValue<string>()=="8443,443" && timer.ElapsedMilliseconds<4500 && await ExitIp()=="152.67.156.100","REAL_ADAPTIVE_NATIVE_PORT_MEMORY_SURVIVES_CORE_REPLACEMENT");
+            }
+            stage="EXPLICIT_AUTO_NATIVE8443_POLICY";
             await Send("Disconnect");var automatic8443=await Send("PreferAuto8443");
             Check(automatic8443["transport_preference"]?.GetValue<string>()=="auto" && automatic8443["native_udp_port_preference"]?.GetValue<int>()==8443 && automatic8443["native_udp_8443_available"]?.GetValue<bool>()==true,"REAL_NORMAL_AUTO_NATIVE_8443_SELECTION_IS_SERVER_ADVERTISED_AND_PRESERVES_AUTO_POLICY");
             using(var oldIngressLoss=new InitialUdpLoss(oldIngressOnly:true)){

@@ -21,7 +21,7 @@ internal sealed class MainForm : Form
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _githubChecking;
-    private bool _native8443Available,_native8443Selected;
+    private bool _native8443Available;
     private bool _deviceRegistered,_canConnect,_canRegister,_registrationShown;
     private string _deviceIdentity="",_deviceListSignature="";
     private readonly TextBox _deviceName=new(){Name="device-name",MaxLength=80,Dock=DockStyle.Fill};
@@ -311,14 +311,8 @@ internal sealed class MainForm : Form
         try{
             if(passive){if(!_requests.Wait(0))return;acquired=true;}
             else{await _requests.WaitAsync(deadline.Token);acquired=true;}
-            // A fresh/default UI must not silently restart the legacy 51820/443
-            // plan. Resolve the advertised native port before the user's Connect.
-            // Keep an already prepared8443 core warm, and never change an active
-            // connection's policy from a status poll.
-            if(command=="Connect" && _deviceRegistered && !_connectionIntent && _native8443Available && !_native8443Selected && (_transportChoice.SelectedIndex is 0 or 1)){
-                sentMutation=true;var selected=await SendRequest(TransportPolicy.ClientSelection(_transportChoice.SelectedIndex,true),null,null,deadline.Token);
-                Display(selected);if(selected["ok"]?.GetValue<bool>()!=true)return;
-            }
+            // Ordinary Connect preserves the service's adaptive port plan.
+            // A diagnostic pin is set only by its explicit diagnostic button.
             sentMutation=!passive;var state=await SendRequest(command,command=="Login"?_username.Text:command=="ConfirmDevice"?_deviceName.Text:null,command=="Login"?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
             if(command=="Login")_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
@@ -386,16 +380,15 @@ internal sealed class MainForm : Form
     internal void Display(JsonObject state)
     {
             _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
-            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;
             _native8443Available=state["native_udp_8443_available"]?.GetValue<bool>()==true;
-            _native8443Selected=state["native_udp_port_preference"]?.GetValue<int>()==8443;
             _native8443Test.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && _native8443Available;
             _renderingTransport=true;
             try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>() switch{"udp"=>1,"quic"=>2,_=>0};}finally{_renderingTransport=false;}
             _transportChoice.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining;
-            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
+            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";

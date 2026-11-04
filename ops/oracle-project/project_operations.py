@@ -372,8 +372,18 @@ def _retire_rc27_ci_device():
     module.apply()
 
 
+def _retire_rc28_ci_device():
+    spec=importlib.util.spec_from_file_location('owned_rc28_completed_ci',Path(__file__).with_name('cleanup_rc28_completed_ci.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    module.apply()
+
+
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id')=='deliver-windows-rc28-and-retire-ci-20261104':
+        install_downloads()
+        _retire_rc28_ci_device()
+        return # Static files plus one completed CI peer; no Caddy, routing or firewall changes.
     if request.get('request_id')=='deliver-windows-rc27-and-retire-ci-20261104':
         install_downloads()
         _retire_rc27_ci_device()

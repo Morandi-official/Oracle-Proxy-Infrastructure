@@ -21,10 +21,15 @@ def manifest():
     if (not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+',str(value.get('version',''))) or
             not re.fullmatch(r'[a-f0-9]{40}',str(value.get('source_revision','')))):
         raise ValueError('PINNED_DOWNLOAD_MANIFEST_REQUIRED')
-    prefix='OracleProxy-'+value['version'][1:]+'-win-x64-'+value['source_revision'][:12]
     names={a['name'] for a in value['assets']}
-    base={prefix+'.zip',prefix+'-source.zip','BUILD.json','SHA256SUMS.txt'}
-    if (len(value['assets'])!=len(names) or names not in (base,base|{prefix+'-setup.exe'})):
+    allowed=[]
+    for brand in ('Proxy-', 'OracleProxy-'):
+        prefix=brand+value['version'][1:]+'-win-x64-'+value['source_revision'][:12]
+        base={prefix+'.zip',prefix+'-source.zip','BUILD.json','SHA256SUMS.txt'}
+        allowed.extend((base,base|{prefix+'-setup.exe'}))
+    # Retain verified historical releases, but never mix brand/version/source
+    # families or add an executable outside the complete fixed release set.
+    if len(value['assets'])!=len(names) or names not in allowed:
         raise ValueError('PINNED_DOWNLOAD_MANIFEST_REQUIRED')
     for item in value['assets']:
         if (type(item['size']) is not int or not 0 < item['size'] <= 512*1024*1024 or

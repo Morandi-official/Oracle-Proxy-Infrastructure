@@ -49,8 +49,9 @@ class FlClashTests(TestCase):
  def test_revoke_stops_cached_config_and_link_and_keeps_accounting(self):
   self.create();row=FlClashProfile.objects.get();url=self.link(row.pk)
   self.assertEqual(self.post('/api/flclash/'+str(row.pk),{'action':'revoke'}).status_code,200)
-  self.assertEqual(self.download(url).status_code,404);row.refresh_from_db();self.assertEqual(row.encrypted_material,'');self.assertTrue(self.engine.revoked(row.public_key));self.assertEqual(self.engine.device_count(self.user['id']),0)
-  self.assertTrue(any(p['public_key']==row.public_key for p in self.engine.snapshot()['peers']))
+  self.assertEqual(self.download(url).status_code,404);self.assertFalse(FlClashProfile.objects.filter(pk=row.pk).exists());self.assertTrue(self.engine.revoked(row.public_key));self.assertEqual(self.engine.device_count(self.user['id']),0)
+  self.assertFalse(any(p['public_key']==row.public_key for p in self.engine.snapshot()['peers']))
+  self.assertEqual(self.client.get('/api/flclash',secure=True).json()['profiles'],[])
   self.assertFalse(self.driver.allowed)
  def test_two_native_devices_leave_only_one_configuration_without_pending_refusal(self):
   for key in (base64.b64encode(bytes([14])*32).decode(),base64.b64encode(bytes([15])*32).decode()):

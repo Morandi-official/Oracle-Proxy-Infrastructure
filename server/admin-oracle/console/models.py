@@ -66,3 +66,9 @@ class FlClashProfile(models.Model):
     phase = models.CharField(max_length=16, default='pending')
     last_used_at = models.DateTimeField(null=True)
     created_at = models.DateTimeField(default=timezone.now)
+
+
+class HostMetricMinute(models.Model):
+    # Compact minute sums/counts; raw host samples retain their shorter lifetime.
+    at = models.DateTimeField(primary_key=True)
+    aggregates = models.JSONField(default=dict)

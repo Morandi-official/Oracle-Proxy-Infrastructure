@@ -62,7 +62,7 @@ def main():
        if official_fixture[0] is not None:data['official_usage']=official_fixture[0]
       elif path.startswith('/api/users/') and path.endswith('/usage'):
        data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
-      elif path=='/api/host-status':data={'sample':{'observed_at':int(time.time()),'cpu_count':4,'cpu_percent':25,'cpu_steal_percent':0,'io_wait_percent':0,'memory_percent':30,'memory_used_bytes':3000000000,'memory_total_bytes':10000000000,'load':[1,1,1],'disks':[{'used_percent':20,'used_bytes':20000000000,'total_bytes':100000000000,'available_bytes':80000000000,'inode_percent':3}],'network':{'interfaces':['ens3'],'rx_bytes_per_second':1250000,'tx_bytes_per_second':2500000,'packets_per_second':1000,'drops_delta':0,'errors_delta':0},'conntrack_count':40,'conntrack_max':10000,'tcp_established':12,'tcp_retransmit_percent':0,'alerts':[],'errors':[]},'age_seconds':1,'stale':False,'history':[],'events':[]}
+      elif path=='/api/host-status':data={'sample':{'observed_at':int(time.time()),'cpu_count':4,'cpu_percent':25,'cpu_steal_percent':0,'io_wait_percent':0,'memory_percent':30,'memory_used_bytes':3000000000,'memory_total_bytes':10000000000,'load':[1,1,1],'disks':[{'used_percent':20,'used_bytes':20000000000,'total_bytes':100000000000,'available_bytes':80000000000,'inode_percent':3}],'network':{'interfaces':['ens3'],'rx_bytes_per_second':1250000,'tx_bytes_per_second':2500000,'packets_per_second':1000,'drops_delta':0,'errors_delta':0},'conntrack_count':40,'conntrack_max':10000,'tcp_established':12,'tcp_retransmit_percent':0,'alerts':[],'errors':[]},'age_seconds':1,'stale':False,'window':parse_qs(urlsplit(route.request.url).query).get('window',['hour'])[0],'bucket_seconds':60,'recorded_from':int(time.time())-3600,'history':[{'at':int(time.time())-60,'cpu':5,'memory':30,'disk':20,'load':1,'rx':1250000,'tx':2500000},{'at':int(time.time()),'cpu':25,'memory':30,'disk':20,'load':2,'rx':2000000,'tx':3000000}],'events':[]}
       elif path=='/api/flclash':data={'profiles':profiles_fixture}
       elif path=='/api/flclash/create':
        assert route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
@@ -77,8 +77,8 @@ def main():
        action=route.request.post_data_json['action']
        if action=='link':data={'url':'https://management-fixture.invalid/fixture-import/profile.yaml'}
        else:
-        assert action=='revoke';engine.dispatch({'operation':'peer.revoke','actor':'github:204281968','data':{'public_key':base64.b64encode(bytes([9])*32).decode()}})
-        profiles_fixture[-1]['status']='revoked';data={'profile':profiles_fixture[-1]}
+        assert action=='revoke';engine.dispatch({'operation':'peer.delete','actor':'github:204281968','data':{'public_key':base64.b64encode(bytes([9])*32).decode()}})
+        profiles_fixture.clear();data={'deleted':True}
       elif path=='/fixture-import/profile.yaml':
        route.fulfill(status=200,headers={'Content-Type':'application/yaml','Content-Disposition':'attachment; filename=Proxy-UDP.yaml'},body=json.dumps({'proxies':[{'type':'wireguard','port':443}],'rules':['MATCH,Proxy UDP']}));return
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':{'wg_service':'ACTIVE','wg_interface':'PRESENT','udp_listener':'LISTENING','observed_at':int(time.time())}}
@@ -153,6 +153,11 @@ def main():
      expect(page.locator('#pending-device-rows')).to_contain_text('CI pending <b>literal</b>')
      assert page.locator('#pending-device-rows b').count()==0
      expect(page.locator('#host-cpu')).to_have_text('25.0%')
+     expect(page.locator('#host-trends figure')).to_have_count(6)
+     expect(page.locator('#host-trends figure').first.locator('svg text')).to_have_count(7)
+     for window in ('day','week','month','hour'):
+      page.locator('#host-window').select_option(window)
+      expect(page.locator('#host-trends figure')).to_have_count(6)
      expect(page.locator('#host-speed')).to_have_text('10.00 / 20.00 Mbps')
      assert engine.device_count(user['id'])==2
      page.locator('#flclash-user').select_option(user['id']);page.get_by_role('button',name='生成配置',exact=True).click()
@@ -161,7 +166,7 @@ def main():
      expect(page.get_by_role('button',name='生成配置',exact=True)).to_be_disabled()
      with page.expect_download() as delivery:profile_row.get_by_role('button',name='下载配置',exact=True).click()
      config=json.loads(Path(delivery.value.path()).read_text());assert config['proxies'][0]['type']=='wireguard' and config['rules']==['MATCH,Proxy UDP']
-     profile_row.get_by_role('button',name='撤销',exact=True).click();expect(profile_row).to_contain_text('已撤销')
+     profile_row.get_by_role('button',name='撤销',exact=True).click();expect(profile_row).to_have_count(0)
      assert engine.device_count(user['id'])==2
      print(f'SYNTHETIC_{name.upper()}_FLCLASH_CONFIRMED_DEVICE_CREATE_DOWNLOAD_REVOKE=PASS',flush=True)
      confirmed.get_by_role('button',name='管理',exact=True).click()
@@ -203,7 +208,7 @@ def main():
      page.locator('#budget-form [name=confirm]').check()
      page.get_by_role('button',name='保存出站保护策略',exact=True).click()
      assert engine.budget_state()['estimated_used_bytes']>=int(1.25*2**30)
-     expect(page.locator('#available')).not_to_have_text('未知')
+     expect(page.locator('#available')).to_have_count(0)
      official_fixture[0]['free_tier_status']='PAGINATED_INCOMPLETE'
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
      expect(page.locator('#official-remaining')).to_have_text('未知')

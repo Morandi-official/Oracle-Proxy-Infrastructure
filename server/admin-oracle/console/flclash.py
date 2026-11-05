@@ -31,9 +31,17 @@ def summary(row):
             'created_at':int(row.created_at.timestamp()),'last_used_at':int(row.last_used_at.timestamp()) if row.last_used_at else None}
 
 
+def purge_revoked(state):
+    """Erase profile material only after an authoritative revocation/deletion."""
+    revoked=set(state.get('deleted_public_keys',[]))|{p['public_key'] for p in state.get('peers',[]) if p.get('revoked')}
+    FlClashProfile.objects.filter(phase='revoked').delete()
+    if revoked:FlClashProfile.objects.filter(public_key__in=revoked).delete()
+
+
 def observe_usage(state):
     """A handshake proves key use, never physical-device identity."""
     from datetime import datetime, timezone as utc
+    purge_revoked(state)
     now=timezone.now().timestamp()
     peers={p['public_key']:p for p in state.get('peers',[])}
     rows=FlClashProfile.objects.exclude(phase='revoked')
@@ -171,10 +179,10 @@ def action(request,profile_id):
             if value['action']=='revoke':
                 state=control.call('state',audit_actor(request),{})
                 if any(p['public_key']==row.public_key for p in state['peers']):
-                    control.call('peer.revoke',audit_actor(request),{'public_key':row.public_key})
-                row.phase='revoked';row.token_hash='';row.encrypted_material='';row.save()
+                    control.call('peer.delete',audit_actor(request),{'public_key':row.public_key})
+                row.delete()
                 Audit.objects.create(actor=audit_actor(request),action='flclash.revoked',resource=client_api.fingerprint(row.public_key))
-                return JsonResponse({'profile':summary(row)})
+                return JsonResponse({'deleted':True})
             if value['action']!='link':raise ValueError('INVALID_ACTION')
             active_state(row,audit_actor(request));secret=material(row)
             link=request.build_absolute_uri(f'/api/flclash/import/{row.pk}/{secret["token"]}/profile.yaml')

@@ -232,9 +232,13 @@ def host_status(request):
     rejected=deny(request)
     if rejected is not None:return rejected
     from .host_health import public
-    rows=list(Snapshot.objects.order_by('-observed_at')[:91])
+    from . import host_history
+    window=request.GET.get('window','hour')
+    if window not in host_history.WINDOWS:return JsonResponse({'error':'INVALID_WINDOW'},status=400)
+    rows=list(Snapshot.objects.order_by('-observed_at')[:3])
     current=next((r.payload['health'] for r in rows if r.payload.get('health')),None)
-    age=max(0,int(timezone.now().timestamp()-current['observed_at'])) if current else None
-    history=[{'at':r.payload['health']['observed_at'],'cpu':r.payload['health'].get('cpu_percent'),'memory':r.payload['health'].get('memory_percent'),'rx':r.payload['health']['network'].get('rx_bytes_per_second'),'tx':r.payload['health']['network'].get('tx_bytes_per_second')} for r in reversed(rows) if r.payload.get('health')]
+    delta=timezone.now().timestamp()-current['observed_at'] if current else None
+    age=int(delta) if delta is not None else None
+    history=host_history.series(window)
     events=[{'at':int(a.occurred_at.timestamp()),'action':a.action,'code':a.resource} for a in Audit.objects.filter(action__startswith='server.health.').order_by('-occurred_at')[:10]]
-    return JsonResponse({'sample':public(current) if current else None,'age_seconds':age,'stale':age is None or age>30,'sample_interval_seconds':10,'history':history,'events':events})
+    return JsonResponse({'sample':public(current) if current else None,'age_seconds':age,'stale':age is None or age<0 or age>30,'sample_interval_seconds':10,**history,'events':events})

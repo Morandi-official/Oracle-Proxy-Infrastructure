@@ -62,6 +62,11 @@ def main():
                         assert telemetry.status==200
                         health=telemetry.json();assert health['sample'] and not health['stale'] and '_raw' not in health['sample']
                         assert page.locator('#host-health').count()==1
+                        assert page.locator('#available').count()==0
+                        for window in ('hour','day','week','month'):
+                            historical=context.request.get(BASE+'/api/host-status?window='+window)
+                            assert historical.status==200 and historical.json()['window']==window and len(historical.json()['history'])>=60
+                        expect(page.locator('#host-trends figure')).to_have_count(6)
                         print('LIVE_HOST_HEALTH_FRESH=PASS',flush=True)
                         print(f'BROWSER_{name.upper()}_REAL_FLCLASH_UDP_EXPORT_MODULE_READ_ONLY=PASS',flush=True)
                         assert page.locator('#unconfirmed').count()==1

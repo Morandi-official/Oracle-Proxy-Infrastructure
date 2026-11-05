@@ -6,7 +6,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from .models import Audit, Snapshot
-from . import host_health
+from . import host_health, host_history
 
 
 def collect():
@@ -46,5 +46,6 @@ def collect():
         for code in sorted(before-after):Audit.objects.create(actor='collector:local-readonly',action='server.health.resolved',resource=code)
         Snapshot.objects.filter(observed_at__lt=now-timedelta(hours=6)).delete()
         Snapshot.objects.create(observed_at=now, payload=value)
+        host_history.record(health,now)
         if last is None:Audit.objects.create(actor='collector:local-readonly', action='snapshot.received')
     return value

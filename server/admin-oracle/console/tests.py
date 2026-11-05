@@ -36,7 +36,9 @@ class AdminTests(TestCase):
         Snapshot.objects.create(observed_at=timezone.now(),payload={'health':payload})
         data=self.get('/api/host-status').json()
         self.assertTrue(data['stale']);self.assertNotIn('_raw',data['sample'])
-        self.assertEqual(len(data['history']),1)
+        self.assertGreaterEqual(len(data['history']),60)
+        self.assertTrue(all(p['cpu'] is None for p in data['history']))
+        self.assertEqual(self.get('/api/host-status?window=bad').status_code,400)
         self.assertEqual(data['sample_interval_seconds'],10)
 
     def get(self, path, data=None, **kwargs):

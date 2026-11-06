@@ -82,6 +82,7 @@ def main():
       elif path=='/fixture-import/profile.yaml':
        route.fulfill(status=200,headers={'Content-Type':'application/yaml','Content-Disposition':'attachment; filename=Proxy-UDP.yaml'},body=json.dumps({'proxies':[{'type':'wireguard','port':443}],'rules':['MATCH,Proxy UDP']}));return
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':{'wg_service':'ACTIVE','wg_interface':'PRESENT','udp_listener':'LISTENING','observed_at':int(time.time())}}
+      elif path=='/api/udp-diagnostics':data={'diagnostics':[{'id':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','username':'<b>diagnostic-user</b>','device_id':'aabbccddeeff','started_at':int(time.time()),'phase':'complete','report':{'schema':1,'physical_nic_observation':'not_collected','trials':[{'address':'152.67.156.100','port':443,'client':{'egress_verified':True}}]}}]}
       elif path=='/api/audit':data={'entries':[{'occurred_at':int(time.time())-i,'actor':'fixture','action':'test','resource':'fixture'} for i in range(20)],'activity':[{'username':'ci-user01','count':7}]}
       else:route.fulfill(status=404);return
       route.fulfill(status=200,content_type='application/json',body=json.dumps(data))
@@ -89,6 +90,16 @@ def main():
     try:
      page.goto('https://management-fixture.invalid/',wait_until='networkidle')
      expect(page.locator('#remaining')).to_have_text('未知')
+     expect(page.locator('#udp-diag-details')).not_to_have_attribute('open','')
+     page.locator('#udp-diag-details > summary').click()
+     expect(page.locator('#udp-diag-rows')).to_contain_text('1 / 6 通过')
+     assert page.locator('#udp-diag-rows b').count()==0
+     page.locator('#udp-diag-rows').get_by_role('button',name='查看报告',exact=True).click()
+     expect(page.locator('#udp-diag-dialog')).to_be_visible()
+     diagnostic=json.loads(page.locator('#udp-diag-report').input_value())
+     assert diagnostic['diagnostic_id']=='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' and 'username' not in diagnostic
+     page.locator('#udp-diag-close').click();page.locator('#udp-diag-details > summary').click()
+     print(f'SYNTHETIC_{name.upper()}_UDP_REPORT_EXPAND_DIALOG_AND_TEXT_ESCAPE=PASS',flush=True)
      page.on('dialog',lambda dialog:dialog.accept())
      expect(page.locator('#user-form')).not_to_be_visible()
      help_icon=page.locator('#users .help-icon').first

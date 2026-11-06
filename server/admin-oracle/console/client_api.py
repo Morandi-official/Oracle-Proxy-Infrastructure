@@ -95,7 +95,7 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
     active=[p for p in owned if not p.get('revoked')]
     retired=sorted((p for p in owned if p.get('revoked')),key=lambda p:(p.get('enrollment') or {}).get('confirmed_at',0),reverse=True)
     devices=[{'id':fingerprint(p['public_key']),'name':p['name'],'current':p['public_key']==key,'revoked':p['revoked'],'confirmed_at':(p.get('enrollment') or {}).get('confirmed_at')} for p in active+retired[:8]]
-    data={'schema':1,'observed_at':snapshot['observed_at'],'period':snapshot['period'],
+    data={'schema':1,'udp_diagnostics_available':True,'observed_at':snapshot['observed_at'],'period':snapshot['period'],
         'account':{'username':account.username,'status':status,'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
         'registration':{'status':'registered' if is_confirmed else 'legacy' if peer else 'pending','device_id':fingerprint(key),'device_name':peer['name'] if peer else proposed_name,'confirmed_at':receipt['confirmed_at'] if is_confirmed else None,'requires_confirmation':not is_confirmed,'requires_slot':not bool(peer)},
         'devices':devices,'devices_history_truncated':len(retired)>8,

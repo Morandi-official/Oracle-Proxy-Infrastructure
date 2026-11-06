@@ -347,7 +347,11 @@ def install_control():
     if lock.is_symlink(): raise ValueError('UNTRUSTED_FIREWALL_LOCK')
     lock.touch(exist_ok=True)
     previous = target.read_bytes() if target.exists() else None
+    previous_unit = unit.read_bytes() if unit.exists() else None
+    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in ('udp_capture.py','udp_diagnostics.py')}
     atomic(target.with_name('ipv6_addresses.py'), (SERVER/'control/ipv6_addresses.py').read_bytes(), 0o644)
+    for name in ('udp_capture.py','udp_diagnostics.py'):
+        atomic(target.with_name(name),(SERVER/'control'/name).read_bytes(),0o644)
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
     atomic(unit,(SERVER/'deploy/oracle-proxy-control.service').read_bytes(),0o644)
     dropin = Path('/etc/systemd/system/wg-quick@wg0.service.d')
@@ -368,6 +372,11 @@ def install_control():
     except Exception:
         if previous is not None:
             atomic(target,previous,0o644)
+            for name,body in diagnostic_previous.items():
+                if body is None:target.with_name(name).unlink(missing_ok=True)
+                else:atomic(target.with_name(name),body,0o644)
+            if previous_unit is not None:atomic(unit,previous_unit,0o644)
+            subprocess.run(['systemctl','daemon-reload'],check=False)
             subprocess.run(['systemctl','restart','oracle-proxy-control.service'],check=False)
         raise
 

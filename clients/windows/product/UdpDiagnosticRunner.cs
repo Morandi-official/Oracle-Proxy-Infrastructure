@@ -70,12 +70,10 @@ internal sealed class UdpDiagnosticRunner : IDisposable
         _stop.CancelAfter(TimeSpan.FromSeconds(155));
         Phase("starting");
         lock(_sync)_report["ipv6_requested"]=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
-        lock(_sync){_report["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();foreach(var target in UdpDiagnosticTarget.All)_report["trials"]!.AsArray().Add(new JsonObject{["address"]=target.Address,["port"]=target.Port,["phase"]="pending"});}
+        lock(_sync){_report["diagnostic_id"]=id;_report["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();foreach(var target in UdpDiagnosticTarget.All)_report["trials"]!.AsArray().Add(new JsonObject{["address"]=target.Address,["port"]=target.Port,["phase"]="pending"});}
         try{
             var begin=await _api.Call("udp-diagnostics",secret.Token,new JsonObject{["action"]="start",["diagnostic_id"]=id});
-            id=begin["diagnostic_id"]!.GetValue<string>();
-            if(!Guid.TryParseExact(id,"D",out _))throw new IOException("INVALID_DIAGNOSTIC_ID");
-            lock(_sync)_report["diagnostic_id"]=id;
+            if(begin["diagnostic_id"]?.GetValue<string>()!=id)throw new IOException("INVALID_DIAGNOSTIC_ID");
             Phase("running");
             int index=0;
             foreach(var target in UdpDiagnosticTarget.All){

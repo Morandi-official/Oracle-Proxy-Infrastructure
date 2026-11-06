@@ -1,4 +1,4 @@
 {
-  "operation": "deploy",
-  "request_id": "rc31-six-udp-diagnostics-rollout-20261106"
+  "operation": "enable-https",
+  "request_id": "deliver-windows-rc31-and-retire-ci-20261106"
 }

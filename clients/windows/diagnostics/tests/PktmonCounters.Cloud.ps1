@@ -5,6 +5,14 @@ $parseErrors=$null;$parseTokens=$null
 $null=[Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1'),[ref]$parseTokens,[ref]$parseErrors)
 if($parseErrors.Count){throw 'PUBLIC_COLLECTOR_POWERSHELL_PARSE_FAILED'}
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1') -DefinitionsOnly
+foreach($duration in @(20,40,120,180)){
+    $points=@(Get-OPSampleTargets -Duration $duration -SixEntrance $true)
+    if($points[-1] -ne $duration -or @($points | Where-Object {$_ -gt $duration -or $_ -lt 0}).Count -gt 0 -or @($points | Select-Object -Unique).Count -ne $points.Count){throw 'SIX_ENTRANCE_TIMELINE_EXCEEDS_DEADLINE'}
+}
+$refused=$false
+try{& (Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1') -RemoteAddress '127.0.0.1' -DefinitionsOnly}catch{$refused=$true}
+if(-not $refused){throw 'ARBITRARY_COUNTER_TARGET_ACCEPTED'}
+Write-Host 'SIX_ENTRANCE_TIMELINE_BOUNDED_AND_TARGET_ALLOWLIST=PASS'
 # Exercise real UTF-8 native pipes under CP936, not Unicode string literals alone.
 $fixtureDirectory=Join-Path $env:RUNNER_TEMP ('op-utf8-'+[Guid]::NewGuid().ToString('N'))
 $null=New-Item -ItemType Directory -Path $fixtureDirectory
@@ -134,3 +142,21 @@ try{
 }finally{Remove-Job $probe -Force}
 if(Get-ChildItem -Path . -Filter '*.etl' -ErrorAction SilentlyContinue){throw 'COUNTERS_ONLY_UNEXPECTED_ETL_FILE'}
 Write-Host 'REAL_WINDOWS_COUNTERS_ONLY_NO_PACKET_LOG_AND_OWNED_CLEANUP=PASS'
+$probe=Start-Job -ScriptBlock {
+  Start-Sleep -Seconds 5
+  $udp=New-Object Net.Sockets.UdpClient
+  try{
+    $udp.Connect('141.147.78.44',443)
+    $packet=New-Object byte[] 148;$packet[0]=1
+    [void]$udp.Send($packet,$packet.Length)
+  }finally{$udp.Dispose()}
+}
+try{
+  & (Join-Path (Split-Path $PSScriptRoot -Parent) 'Measure-NativeUdp.ps1') -Seconds 20 -Port 443 -RemoteAddress '141.147.78.44' -SixEntranceDiagnostic
+  $null=Wait-Job $probe -Timeout 10
+  if($probe.State -ne 'Completed'){throw 'SECONDARY_COUNTER_PROBE_FAILED'}
+  Receive-Job $probe -ErrorAction Stop | Out-Null
+}finally{Remove-Job $probe -Force}
+if(-not (Test-OPIdle (Invoke-OPPktmon -Arguments @('status'))) -or -not (Test-OPNoFilters (Invoke-OPPktmon -Arguments @('filter','list')))){throw 'SECONDARY_DIAGNOSTIC_CLEANUP_NOT_VERIFIED'}
+if(Get-ChildItem -Path . -Filter '*.etl' -ErrorAction SilentlyContinue){throw 'SECONDARY_DIAGNOSTIC_UNEXPECTED_PACKET_LOG'}
+Write-Host 'REAL_SECONDARY_TARGET_SIX_ENTRANCE_COUNTER_MODE_AND_CLEANUP=PASS'

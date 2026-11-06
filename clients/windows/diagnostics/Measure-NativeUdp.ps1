@@ -1,7 +1,9 @@
 ﻿#requires -RunAsAdministrator
 # Bounded counters only. No packet logging, firewall, route or adapter changes.
 [CmdletBinding()]
-param([ValidateRange(20,45)][int]$Seconds=40,[ValidateSet(51820,443,8443)][int]$Port=51820,[switch]$DefinitionsOnly)
+param([ValidateRange(20,180)][int]$Seconds=40,[ValidateSet(51820,443,8443)][int]$Port=51820,
+    [ValidateSet('152.67.156.100','141.147.78.44')][string]$RemoteAddress='152.67.156.100',
+    [switch]$SixEntranceDiagnostic,[switch]$DefinitionsOnly)
 $ErrorActionPreference='Stop'
 function Invoke-OPUtf8Process([string]$Executable,[string[]]$Arguments){
     # pktmon emits UTF-8 on redirected pipes even when the console is CP936.
@@ -63,6 +65,10 @@ function Read-OPCounterText {
     if($text.Length -gt 1048576){throw 'COUNTER_OUTPUT_LIMIT'}
     return $text
 }
+function Get-OPSampleTargets([int]$Duration,[bool]$SixEntrance){
+    $points=if($SixEntrance){@(5,15,30,60,90,120,$Duration)}else{@(5,10,15,$Duration)}
+    return @($points | Where-Object {$_ -le $Duration} | Sort-Object -Unique)
+}
 if($DefinitionsOnly){return}
 $status=(Invoke-OPPktmon -Arguments @('status')).Trim()
 $filters=(Invoke-OPPktmon -Arguments @('filter','list')).Trim()
@@ -72,25 +78,29 @@ if(-not $idle -or -not $empty){throw 'Existing or unknown Packet Monitor state; 
 $owned=@();$started=$false
 try{
     foreach($selectedPort in @($Port)){
-        $name='OPNative'+$selectedPort
-        Invoke-OPPktmon -Arguments @('filter','add',$name,'-i','152.67.156.100','-t','UDP','-p',[string]$selectedPort) | Out-Null
+        $name='OPN'+[Guid]::NewGuid().ToString('N').Substring(0,6)+$selectedPort
+        Invoke-OPPktmon -Arguments @('filter','add',$name,'-i',$RemoteAddress,'-t','UDP','-p',[string]$selectedPort) | Out-Null
         $owned+=,$name
     }
     Write-Host (Invoke-OPPktmon -Arguments @('start','--capture','--counters-only','--comp','all'));$started=$true
-    $guide=if($Port -eq 8443){"点击原生 UDP 8443 测试，再直接连接；不要重选首选协议。"}else{"选择 WireGuard / UDP 并连接。"}
-    Write-Host "计数已开始（UDP/$Port）：$guide 请保持此窗口打开，$Seconds 秒内自动结束。"
+    # Clear only this newly owned monitor's counters, never a preexisting run.
+    Invoke-OPPktmon -Arguments @('reset') | Out-Null
+    $guide=if($SixEntranceDiagnostic){'保持 Proxy 已断开，点击“一键诊断六个 UDP 入口”；不要点击普通连接。'}elseif($Port -eq 8443){"点击原生 UDP 8443 测试，再直接连接；不要重选首选协议。"}else{"选择 WireGuard / UDP 并连接。"}
+    $prefix=if($SixEntranceDiagnostic){'PROXY_UDP_ENTRANCE'}else{'ORACLE_NATIVE_UDP'}
+    Write-Host "计数已开始（$RemoteAddress UDP/$Port）：$guide 请保持此窗口打开，$Seconds 秒内自动结束；期间不要启动其他抓包任务。"
+    Write-Host '本工具没有启用数据包日志；无发送、网卡不可见或观察不完整时，不能据此认定网络丢包。'
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    Write-Host '=== ORACLE_NATIVE_UDP_TIMELINE_BEGIN ==='
-    foreach($target in @(5,10,15,$Seconds)){
+    Write-Host "=== ${prefix}_TIMELINE_BEGIN ==="
+    foreach($target in (Get-OPSampleTargets -Duration $Seconds -SixEntrance ([bool]$SixEntranceDiagnostic))){
         $remaining=[Math]::Max(0,[int]($target*1000-$watch.ElapsedMilliseconds))
         if($remaining){Start-Sleep -Milliseconds $remaining}
-        Write-Host ('SAMPLE UTC='+[DateTime]::UtcNow.ToString('o')+' ELAPSED_MS='+$watch.ElapsedMilliseconds+' PORT='+$Port)
+        Write-Host ('SAMPLE UTC8='+[DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString('o')+' ELAPSED_MS='+$watch.ElapsedMilliseconds+' ADDRESS='+$RemoteAddress+' PORT='+$Port)
         Write-Host (Read-OPCounterText)
     }
-    Write-Host '=== ORACLE_NATIVE_UDP_TIMELINE_END ==='
-    Write-Host '=== ORACLE_NATIVE_UDP_COUNTERS_BEGIN ==='
+    Write-Host "=== ${prefix}_TIMELINE_END ==="
+    Write-Host "=== ${prefix}_COUNTERS_BEGIN ==="
     Write-Host (Read-OPCounterText)
-    Write-Host '=== ORACLE_NATIVE_UDP_COUNTERS_END ==='
+    Write-Host "=== ${prefix}_COUNTERS_END ==="
 }finally{
     try{if($started){Invoke-OPPktmon -Arguments @('stop') | Out-Null}}
     finally{

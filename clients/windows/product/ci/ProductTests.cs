@@ -92,6 +92,7 @@ internal static class ProductTests
     }
     private static async Task<int> ProbeDeadlines()
     {
+        await UdpDiagnosticApiTests.Run();
         if(!ColdHandshakeRetryPolicy())return 1;
         if(!await OrphanLogDrain(false) || !await OrphanLogDrain(true))return 1;
         Console.WriteLine("ORPHAN_STDERR_DRAINS_LARGE_UNKNOWN_OR_INVALID_LOGS_WITHOUT_PREFIX_MATCH_OR_EARLY_EXIT=PASS");
@@ -442,6 +443,13 @@ internal static class ProductTests
         var udpTable=Descendants(form).OfType<DataGridView>().Single(c=>c.Name=="udp-six-results");
         UiAssert(udpTable.Rows.Count==6 && udpReport.Contains("152.67.156.100:51820") && !udpReport.Contains("SYNTHETIC_UDP_SECRET"),"UDP_SIX_RESULTS_COPY_ALLOWLIST");
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-start").Enabled,"UDP_DIAGNOSTIC_BLOCKED_WHILE_PROTECTED");
+        snapshot["udp_diagnostic"]!["phase"]="failed";
+        snapshot["udp_diagnostic"]!["error"]="DIAGNOSTIC_API_TIMEOUT";
+        snapshot["udp_diagnostic"]!["failure_stage"]="server_sample";
+        snapshot["udp_diagnostic"]!["elapsed_ms"]=74000L;
+        form.Display(snapshot);
+        udpReport=(string)typeof(MainForm).GetField("_udpReport",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.GetValue(form)!;
+        UiAssert(udpReport.Contains("接口请求超时") && udpReport.Contains("服务端汇总入口记录") && udpReport.Contains("74.0") && !udpReport.Contains("UDP 诊断已取消") && !udpReport.Contains("SYNTHETIC_UDP_SECRET"),"UDP_API_TIMEOUT_REPORT_HAS_STAGE_DURATION_AND_NO_SECRET");
         snapshot.Remove("udp_diagnostic");form.Display(snapshot);
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-copy").Enabled,"UDP_REPORT_CLEARED_ON_SESSION_RESET");
         snapshot["mode"]="connected";snapshot["transport"]="wireguard-quic";snapshot["verified_exit_ip"]="152.67.156.100";snapshot["latency_ms"]=186L;snapshot["core_pid"]=123U;

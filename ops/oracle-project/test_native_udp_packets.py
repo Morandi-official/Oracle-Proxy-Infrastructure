@@ -49,3 +49,25 @@ class PacketCounts(unittest.TestCase):
         self.assertEqual(counts['51820']['in_initiation'],1)
         for invalid in (0,module.MAX_SECONDS+1,True,-1,'60'):
             with self.assertRaises(ValueError):module.observe(invalid)
+
+
+class EntranceCounts(unittest.TestCase):
+    def test_server_side_local_address_and_direction(self):
+        for address, role in (('10.0.0.6', 'primary'), ('10.0.0.10', 'secondary')):
+            incoming=packet(destination=443)
+            incoming[16:20]=ipaddress.ip_address(address).packed
+            self.assertEqual(module.entrance(incoming,False),role)
+            outgoing=packet(source=443,destination=35000,kind=2,length=100)
+            outgoing[12:16]=ipaddress.ip_address(address).packed
+            self.assertEqual(module.entrance(outgoing,True),role)
+        self.assertEqual(module.entrance(packet(),False),'other')
+        self.assertEqual(module.entrance(b'',True),'other')
+
+    def test_independent_counts_never_export_client_addresses(self):
+        import json
+        counts=module.empty_entrances()
+        module.increment(counts['primary'],('443','in_initiation'))
+        self.assertEqual(counts['primary']['443']['in_initiation'],1)
+        self.assertEqual(counts['secondary']['443'],{})
+        self.assertNotIn('192.0.2.7',json.dumps(counts))
+        self.assertNotIn('10.0.0.',json.dumps(counts))

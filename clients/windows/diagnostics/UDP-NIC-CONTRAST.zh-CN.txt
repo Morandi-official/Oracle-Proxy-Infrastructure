@@ -1,0 +1,36 @@
+UDP 六入口诊断的网卡层对照（rc31 及以后）
+
+用途
+在相同电脑、相同网络下，区分预期端点的回复未到 Windows 观察点，还是进入本机后被过滤。先保持 Proxy 已断开，再用管理员 PowerShell 运行采集。无需重装客户端、改 UU 权限、关防火墙或修改路由。
+
+自动方式（推荐）
+powershell.exe -NoProfile -File .\Measure-NativeUdp.ps1 -AutomaticContrast -ClearPreviousContrastFilter
+只需保持 rc31 已登录并断开。该命令自动开始两轮六入口诊断、等待结果、分别记录主/次 IP 443 的网卡计数并清理。无需点击软件按钮。只允许 Status、StartUdpDiagnostics 和 CancelUdpDiagnostics 三种命令，并通过 SCM 验证管道服务端身份；不发送账号密码。若软件正在连接/保护、已有诊断或其他抓包任务，则拒绝执行。清理旧筛选器的开关仅识别本次手动流程的 ProxyPrimary443/ProxySecondary443 精确模式，不清除未知筛选器。
+
+手动方式：失败入口示例
+powershell.exe -NoProfile -File .\Measure-NativeUdp.ps1 -RemoteAddress 152.67.156.100 -Port 443 -Seconds 120 -SixEntranceDiagnostic
+
+成功对照示例
+powershell.exe -NoProfile -File .\Measure-NativeUdp.ps1 -RemoteAddress 141.147.78.44 -Port 443 -Seconds 120 -SixEntranceDiagnostic
+
+每轮看到计数开始后，点击 Proxy 的“一键诊断六个 UDP 入口”。不要点击普通“连接”，不要切换网络或启动其他抓包任务。采集会自动结束；保留网卡/协议栈计数、丢包原因，以及对应客户端诊断编号。
+
+安全边界
+仅允许两个已知服务器 IP 和 UDP 443/8443/51820。仅计数，不保存 ETL 或报文内容，不改防火墙、网卡、路由或 UU。检测到已有监控或筛选器时拒绝启动；结束时核对筛选器归属，发现外来筛选器时拒绝清除。pktmon 的 remove 会删除全部筛选器，不能把名称参数当作可靠的选择性删除。脚本被强制终止或发现状态异常时，请保留提示，不要盲目清除其他监控任务。
+
+解读
+1. 网卡看到与预期 IP/端口匹配的回复，应用没有收到：进一步核对本机协议栈丢包原因与 WFP/防火墙过滤。
+2. 失败端点网卡 Rx 为零，成功对照同一网卡有 Rx：预期端点的回复未到该网卡观察点，重点检查回程、云公网转换及来源地址/端口是否改变；这不能唯一归责某个运营商，也不能说明所有可能来源的回复都不存在。
+3. 没有 Tx、对照也没有可见 Rx、计数不可用或未覆盖诊断窗口：证据不足，不能判定网络丢包。
+
+相关一手资料（核对日期：2026-11-06）
+Microsoft Pktmon：跨组件计数和丢包原因
+https://learn.microsoft.com/en-us/windows-server/networking/technologies/pktmon/pktmon
+Microsoft Winsock connect：已连接 UDP 套接字丢弃非预期来源的数据报
+https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-connect
+Oracle VCN FAQ：私网地址与公网地址的一对一转换；同 VNIC 多 IP 与多 VNIC 场景的区别
+https://www.oracle.com/cloud/networking/virtual-cloud-network/faq/
+NetBird #5978：报告 Windows 防火墙阻断 WireGuard P2P 握手的案例；这是固定监听端口/P2P 场景，不能照搬其入站规则到主动出站客户端
+https://github.com/netbirdio/netbird/issues/5978
+WireGuard 邮件列表 2026-06-08：wireguard-go 多 IP 源地址问题的补丁报告；其复现是 Linux userspace/IPv6，不能直接归因于 Linux 内核 WireGuard/IPv4 服务器
+https://lore-kernel.gnuweeb.org/wireguard/20260608003307.2598372-3-akawolf0@gmail.com/T/

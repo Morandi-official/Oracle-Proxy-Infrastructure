@@ -10,6 +10,8 @@ internal sealed class UdpDiagnosticRunner : IDisposable
     private volatile CoreProcess? _core;
     private Task? _task;
     private int _disposed;
+    private int _cancelRequested;
+    private string _stage="starting";
     private readonly JsonObject _report=new(){["schema"]=1,["phase"]="idle",["trials"]=new JsonArray(),["client_receive_layer"]="connected_udp_socket",["physical_nic_observation"]="not_collected"};
     internal bool Running=>_task is not null && !_task.IsCompleted;
     internal JsonObject Snapshot(){lock(_sync){
@@ -28,12 +30,18 @@ internal sealed class UdpDiagnosticRunner : IDisposable
             UuPaths=secret.UuPaths.ToArray(),NativeUdpAdaptive=false,TransportPreference="udp"};
         _task=Task.Run(()=>Run((JsonObject)state.DeepClone(),copy));
     }
-    internal void Cancel(){if(Volatile.Read(ref _disposed)!=0)return;if(Running)Phase("stopping");_stop.Cancel();_api.Cancel();_core?.Cancel();}
+    internal void Cancel(){if(Volatile.Read(ref _disposed)!=0)return;Interlocked.Exchange(ref _cancelRequested,1);if(Running)Phase("stopping");_stop.Cancel();_api.Cancel();_core?.Cancel();}
     internal async Task Stop(){Cancel();if(_task is not null)await _task.WaitAsync(TimeSpan.FromSeconds(35));}
     private void Phase(string phase){lock(_sync)_report["phase"]=phase;}
+    private void Stage(string stage){_stage=stage;lock(_sync)_report["stage"]=stage;}
+    private async Task<JsonObject> Request(string action,string token,JsonObject body)
+    {
+        Stage("server_"+action);
+        return await UdpDiagnosticApi.Call(()=>_api.Call("udp-diagnostics",token,body),_stop.Token);
+    }
     private static string Error(Exception error)=>error is OperationCanceledException?"CANCELLED":error.Message switch{
         "DIAGNOSTIC_BUSY" or "DIAGNOSTIC_RATE_LIMITED" or "DIAGNOSTIC_ACCOUNT_NOT_ACTIVE" or "DIAGNOSTIC_EXPIRED_OR_RESTARTED" or "CONTROL_SERVICE_UNAVAILABLE" or "LOGIN_REQUIRED"=>error.Message,
-        "CORE_START_FAILED" or "CORE_READY_TIMEOUT" or "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED" or "ORACLE_EGRESS_NOT_VERIFIED"=>error.Message,
+        "DIAGNOSTIC_API_TIMEOUT" or "DIAGNOSTIC_DEADLINE" or "CORE_START_FAILED" or "CORE_READY_TIMEOUT" or "ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED" or "ORACLE_EGRESS_NOT_VERIFIED"=>error.Message,
         _=>"LOCAL_DIAGNOSTIC_FAILED"};
     private static JsonObject Counters(JsonObject ports,int port)
     {
@@ -72,39 +80,45 @@ internal sealed class UdpDiagnosticRunner : IDisposable
         lock(_sync)_report["ipv6_requested"]=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
         lock(_sync){_report["diagnostic_id"]=id;_report["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();foreach(var target in UdpDiagnosticTarget.All)_report["trials"]!.AsArray().Add(new JsonObject{["address"]=target.Address,["port"]=target.Port,["phase"]="pending"});}
         try{
-            var begin=await _api.Call("udp-diagnostics",secret.Token,new JsonObject{["action"]="start",["diagnostic_id"]=id});
+            var begin=await Request("start",secret.Token,new JsonObject{["action"]="start",["diagnostic_id"]=id});
             if(begin["diagnostic_id"]?.GetValue<string>()!=id)throw new IOException("INVALID_DIAGNOSTIC_ID");
             Phase("running");
             int index=0;
             foreach(var target in UdpDiagnosticTarget.All){
                 _stop.Token.ThrowIfCancellationRequested();
-                if(started.Elapsed>TimeSpan.FromSeconds(145))throw new OperationCanceledException();
+                if(started.Elapsed>TimeSpan.FromSeconds(145))throw new IOException("DIAGNOSTIC_DEADLINE");
                 JsonObject row;lock(_sync){row=_report["trials"]![index]!.AsObject();row["phase"]="running";_report["current_trial"]=index;}
                 for(int retry=0;;retry++){
-                    try{await _api.Call("udp-diagnostics",secret.Token,new JsonObject{["action"]="begin",["diagnostic_id"]=id,["address"]=target.Address,["port"]=target.Port});break;}
+                    try{await Request("begin",secret.Token,new JsonObject{["action"]="begin",["diagnostic_id"]=id,["address"]=target.Address,["port"]=target.Port});break;}
                     catch(ApiException pending)when(pending.Message=="DIAGNOSTIC_CAPTURE_STARTING" && retry<8){await Task.Delay(300,_stop.Token);}
                 }
                 bool verified=false;string error="";var timer=Stopwatch.StartNew();
                 _core=new CoreProcess();if(_stop.IsCancellationRequested)_core.Cancel();
                 try{
+                    Stage("local_core_start");
                     await VpnRuntime.EnsureTunnelRemoved();
                     await _core.Start(state,secret,TunnelTransport.WireGuardUdp,standby:true,diagnosticTarget:target);
-                    await _core.Probe(12);verified=true;
+                    Stage("egress_probe");await _core.Probe(12);verified=true;
                 }catch(Exception failure){error=Error(failure);}
                 var evidence=_core.NativeEvidence;
                 var indices=evidence[target.Port.ToString()]?["sender_indices"]?.DeepClone() as JsonArray ?? new JsonArray();
                 var client=new JsonObject{["counters"]=Counters(evidence,target.Port),["egress_verified"]=verified,["error"]=error,["elapsed_ms"]=(int)Math.Min(180000,timer.ElapsedMilliseconds)};
+                Stage("local_core_stop");
                 try{await _core.Stop();}finally{_core.Dispose();_core=null;}
                 await VpnRuntime.EnsureTunnelRemoved();
                 lock(_sync){row["client"]=client.DeepClone();row["phase"]=verified?"passed":"failed";}
                 _stop.Token.ThrowIfCancellationRequested();
-                var sample=await _api.Call("udp-diagnostics",secret.Token,new JsonObject{["action"]="sample",["diagnostic_id"]=id,["sender_indices"]=indices,["client"]=client,["complete"]=true});
+                var sample=await Request("sample",secret.Token,new JsonObject{["action"]="sample",["diagnostic_id"]=id,["sender_indices"]=indices,["client"]=client,["complete"]=true});
                 lock(_sync){row["server"]=Server(sample);row["verdict"]=Verdict(sample["verdict"]);}
                 index++;
             }
-            Phase("complete");
-        }catch(OperationCanceledException){Phase("cancelled");}
-        catch(Exception failure){Phase("failed");lock(_sync)_report["error"]=Error(failure);}
+            Stage("complete");Phase("complete");
+        }catch(OperationCanceledException){
+            bool requested=Volatile.Read(ref _cancelRequested)!=0;
+            Phase(requested?"cancelled":"failed");
+            lock(_sync){_report["error"]=requested?"CANCELLED":_stop.IsCancellationRequested?"DIAGNOSTIC_DEADLINE":"LOCAL_DIAGNOSTIC_FAILED";_report["failure_stage"]=_stage;}
+        }
+        catch(Exception failure){Phase("failed");lock(_sync){_report["error"]=Error(failure);_report["failure_stage"]=_stage;}}
         finally{
             if(_core is not null){try{await _core.Stop();}catch{}finally{_core.Dispose();_core=null;}}
             if(id.Length>0){
@@ -120,9 +134,9 @@ internal sealed class UdpDiagnosticRunner : IDisposable
                     lock(_sync)_report["server_capture_closed"]=finished["server_capture_closed"]?.GetValue<bool>()==true;
                 }catch{lock(_sync)_report["server_capture_closed"]=false;}
             }
-            lock(_sync)_report["finished_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            lock(_sync){_report["finished_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();_report["elapsed_ms"]=(long)Math.Min(300000,started.ElapsedMilliseconds);}
             secret.PrivateKey=secret.Token="";
         }
     }
-    public void Dispose(){if(Interlocked.Exchange(ref _disposed,1)!=0)return;_stop.Cancel();_core?.Cancel();_api.Dispose();_stop.Dispose();}
+    public void Dispose(){if(Interlocked.Exchange(ref _disposed,1)!=0)return;Interlocked.Exchange(ref _cancelRequested,1);_stop.Cancel();_core?.Cancel();_api.Dispose();_stop.Dispose();}
 }

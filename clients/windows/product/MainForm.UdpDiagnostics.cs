@@ -53,8 +53,13 @@ internal sealed partial class MainForm
         _udpHeading.Text=title;_udpHeading.Visible=_udpGrid.Visible=true;
         var text=new StringBuilder("UDP 六入口诊断（不含账号密码、令牌或密钥）\r\n");
         text.AppendLine(title);
-        string reason=UdpText(report["error"]) switch{"DIAGNOSTIC_BUSY"=>"服务器已有诊断任务，请稍后重试。","DIAGNOSTIC_RATE_LIMITED"=>"诊断请求过于频繁，请稍后重试。","DIAGNOSTIC_EXPIRED_OR_RESTARTED"=>"服务器采集已到期或服务已重启，本轮观察不完整。","DIAGNOSTIC_ACCOUNT_NOT_ACTIVE"=>"账号状态当前不允许诊断。","LOGIN_REQUIRED"=>"登录已过期，请重新登录。","CONTROL_SERVICE_UNAVAILABLE"=>"服务器配对服务暂不可用。",_=>""};
+        string reason=UdpText(report["error"]) switch{"DIAGNOSTIC_BUSY"=>"服务器已有诊断任务，请稍后重试。","DIAGNOSTIC_RATE_LIMITED"=>"诊断请求过于频繁，请稍后重试。","DIAGNOSTIC_EXPIRED_OR_RESTARTED"=>"服务器采集已到期或服务已重启，本轮观察不完整。","DIAGNOSTIC_ACCOUNT_NOT_ACTIVE"=>"账号状态当前不允许诊断。","LOGIN_REQUIRED"=>"登录已过期，请重新登录。","CONTROL_SERVICE_UNAVAILABLE"=>"服务器配对服务暂不可用。","DIAGNOSTIC_API_TIMEOUT"=>"服务端诊断接口请求超时，本轮未完成；这不是主动取消，也不表示所有 UDP 入口不可用。","DIAGNOSTIC_DEADLINE"=>"诊断达到总时限，本轮观察不完整。",_=>""};
         if(reason.Length>0)text.AppendLine(reason);
+        string failureStage=UdpText(report["failure_stage"]) switch{
+            "server_start"=>"服务端开始采集","server_begin"=>"服务端开始入口测试","server_sample"=>"服务端汇总入口记录",
+            "local_core_start"=>"本机启动诊断核心","egress_probe"=>"出口验证","local_core_stop"=>"本机停止诊断核心",_=>""};
+        if(failureStage.Length>0)text.AppendLine("停止位置："+failureStage);
+        if(UdpNumber(report["elapsed_ms"]) is long elapsed && elapsed<=300000)text.AppendLine($"本轮耗时：{elapsed / 1000.0:F1} 秒");
         if(Guid.TryParseExact(UdpText(report["diagnostic_id"]),"D",out var identity))text.AppendLine("诊断编号："+identity);
         if(UdpNumber(report["started_at"]) is long at && at<=4102444800)text.AppendLine("开始时间："+DateTimeOffset.FromUnixTimeSeconds(at).ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd HH:mm:ss zzz"));
         text.AppendLine(UdpFlag(report["ipv6_requested"])?"出口验证包含 IPv4 与 IPv6。":"本轮仅验证已提供的 IPv4 出口。");
@@ -72,6 +77,7 @@ internal sealed partial class MainForm
             _udpGrid.Rows[i].SetValues(target.Address,target.Port,local,remote,result);
             text.AppendLine($"{target.Address}:{target.Port} · {result}");
             text.AppendLine($"  本机握手 发/收：{local}；服务端握手 收/发：{remote}");
+            if(UdpNumber(trial?["client"]?["elapsed_ms"]) is long trialElapsed && trialElapsed<=180000)text.AppendLine($"  本机探测耗时：{trialElapsed} ms");
             foreach(string key in new[]{"read_errors","write_errors","last_read_error","last_write_error"})if(UdpNumber(counters?[key]) is long n)text.AppendLine($"  client.{key}: {n}");
             text.AppendLine($"  服务器观察完整：{UdpFlag(captured?["complete_observation"])}；内核握手更新：{UdpFlag(trial?["server"]?["kernel_handshake_advanced"])}");
             text.AppendLine();

@@ -3,7 +3,11 @@ UDP 六入口诊断的网卡层对照（rc31 及以后）
 用途
 在相同电脑、相同网络下，区分预期端点的回复未到 Windows 观察点，还是进入本机后被过滤。先保持 Proxy 已断开，再用管理员 PowerShell 运行采集。无需重装客户端、改 UU 权限、关防火墙或修改路由。
 
-失败入口示例
+自动方式（推荐）
+powershell.exe -NoProfile -File .\Measure-NativeUdp.ps1 -AutomaticContrast -ClearPreviousContrastFilter
+只需保持 rc31 已登录并断开。该命令自动开始两轮六入口诊断、等待结果、分别记录主/次 IP 443 的网卡计数并清理。无需点击软件按钮。只允许 Status、StartUdpDiagnostics 和 CancelUdpDiagnostics 三种命令，并通过 SCM 验证管道服务端身份；不发送账号密码。若软件正在连接/保护、已有诊断或其他抓包任务，则拒绝执行。清理旧筛选器的开关仅识别本次手动流程的 ProxyPrimary443/ProxySecondary443 精确模式，不清除未知筛选器。
+
+手动方式：失败入口示例
 powershell.exe -NoProfile -File .\Measure-NativeUdp.ps1 -RemoteAddress 152.67.156.100 -Port 443 -Seconds 120 -SixEntranceDiagnostic
 
 成功对照示例

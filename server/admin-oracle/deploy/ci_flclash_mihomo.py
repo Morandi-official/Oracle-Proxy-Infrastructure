@@ -1,5 +1,6 @@
 """Pinned Mihomo + kernel WireGuard in an empty network namespace; synthetic keys only."""
 import ast
+import base64
 import http.client
 import http.server
 import ipaddress
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -40,11 +42,20 @@ def main(binary):
    request_count[0]+=1;body=b'SYNTHETIC_WG_ONLY_RESPONSE';self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
   def log_message(self,*args):pass
  class DoHHandler(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+   encoded=parse_qs(urlsplit(self.path).query).get('dns',[''])[0]
+   if not encoded or len(encoded)>5500:self.send_error(400);return
+   try:body=base64.urlsafe_b64decode(encoded+'='*((-len(encoded))%4))
+   except ValueError:self.send_error(400);return
+   self.answer(body)
   def do_POST(self):
-   dns_sources.append(self.client_address[0])
    length=int(self.headers.get('Content-Length','0'))
    if not 12<=length<=4096:self.send_error(400);return
-   body=self.rfile.read(length);end=12
+   self.answer(self.rfile.read(length))
+  def answer(self,body):
+   dns_sources.append(self.client_address[0])
+   if not 12<=len(body)<=4096:self.send_error(400);return
+   end=12
    while end<len(body) and body[end]:end+=1+body[end]
    end+=1
    if end+4>len(body):self.send_error(400);return

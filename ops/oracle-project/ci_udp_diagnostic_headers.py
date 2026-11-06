@@ -14,8 +14,8 @@ subprocess.run(['ip','address','add','10.0.0.6/32','dev','lo'],check=True)
 source=Path(__file__).resolve().parents[2]/'server/admin-oracle/control/udp_capture.py'
 spec=importlib.util.spec_from_file_location('capture',source)
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-with socket.socket(socket.AF_PACKET,socket.SOCK_DGRAM,socket.htons(0x0003)) as observer:
-    module.attach(observer);observer.bind(('lo',0));observer.settimeout(.1)
+with socket.socket(socket.AF_PACKET,socket.SOCK_DGRAM,0) as observer:
+    module.attach(observer);observer.bind(('lo',0x0003));observer.settimeout(.1)
     with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sender,socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as server:
         sender.bind(('127.0.0.1',35000));server.bind(('10.0.0.6',443));server.settimeout(1)
         business=struct.pack('<II',4,123)+b'SYNTHETIC_BUSINESS_CONTENT_NEVER_CAPTURE'

@@ -90,9 +90,12 @@ class Capture:
             observed=subprocess.run(['ip','-j','-4','route','get','1.1.1.1'],text=True,capture_output=True,check=True,timeout=5)
             rows=json.loads(observed.stdout)
             if len(rows)!=1 or rows[0].get('dev')!='enp0s6':raise ValueError('PHYSICAL_INTERFACE_NOT_VERIFIED')
-            with socket.socket(socket.AF_PACKET,socket.SOCK_DGRAM,socket.htons(0x0003)) as sock:
+            # Protocol zero keeps reception disabled until the header-only
+            # filter is attached. Otherwise packets could queue unfiltered
+            # between socket creation and SO_ATTACH_FILTER.
+            with socket.socket(socket.AF_PACKET,socket.SOCK_DGRAM,0) as sock:
                 sock.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,262144)
-                attach(sock);sock.bind(('enp0s6',0));sock.settimeout(.1)
+                attach(sock);sock.bind(('enp0s6',0x0003));sock.settimeout(.1)
                 self.started=time.monotonic();self.status='observing';self.ready.set();end=time.monotonic()+self.seconds
                 while not self.stop.is_set() and time.monotonic()<end:
                     try:

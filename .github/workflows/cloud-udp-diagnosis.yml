@@ -1,0 +1,59 @@
+name: Independent cloud UDP data-path diagnosis
+on:
+  pull_request:
+    paths: ['ops/cloud-udp/**', 'ops/oracle-project/cloud_udp_identity.py', '.github/workflows/cloud-udp-diagnosis.yml']
+  push:
+    branches: [main]
+    paths: ['ops/cloud-udp/**', 'ops/oracle-project/cloud_udp_identity.py', '.github/workflows/cloud-udp-diagnosis.yml']
+permissions:
+  contents: read
+concurrency:
+  group: oracle-project-root-operations
+  cancel-in-progress: false
+jobs:
+  source-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cryptography==50.0.2
+      - run: python -m unittest discover -s ops/cloud-udp -p 'test_*.py' -v
+  real-cloud:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: source-tests
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    environment: oracle-ops
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install cryptography==50.0.2
+      - name: Native kernel tooling on disposable Linux runner
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y wireguard-tools iproute2 curl
+      - name: Real six-endpoint authenticated UDP and forwarding checks
+        env:
+          CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_CI_KNOWN_HOSTS }}
+        run: python ops/cloud-udp/probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloud-udp-redacted-${{ runner.os }}
+          path: dist/cloud-udp/result-*.json
+          if-no-files-found: ignore
+          retention-days: 7

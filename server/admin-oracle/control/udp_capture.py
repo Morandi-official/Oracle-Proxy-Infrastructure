@@ -120,4 +120,8 @@ class Capture:
                     'socket_drops':self.socket_drops,'complete_observation':self.status in ('observing','complete') and self.evicted==0 and self.socket_drops==0 and self.started is not None and self.started<=since}
 
     def close(self):
-        self.stop.set();self.thread.join(timeout=1)
+        # Route discovery can still be inside its five-second subprocess
+        # deadline when cancellation arrives. A successful finish must mean
+        # the observer thread actually ended, rather than merely signalled.
+        self.stop.set();self.thread.join(timeout=6)
+        if self.thread.is_alive():raise TimeoutError('DIAGNOSTIC_CAPTURE_STOP_NOT_VERIFIED')

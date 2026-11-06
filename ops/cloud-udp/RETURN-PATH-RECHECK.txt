@@ -1,0 +1,24 @@
+UDP return-path comparison, 2026-11-06
+
+The local automatic contrast completed two diagnostic sessions:
+d6805929-b62c-4d74-af01-cf39f76fdbd3 (primary UDP 443 NIC observation)
+8b38deac-3f30-4301-bb7b-6436d69e5e94 (secondary UDP 443 NIC control).
+Primary: server received 3 initiations and observed 3 outgoing responses;
+client physical NIC observed 3 transmissions and zero matching receptions.
+Secondary control: physical NIC and TCPIP/WFP observed 10 received packets,
+and IPv4/IPv6 exit verification succeeded. Both captures and owned filters closed.
+
+Repeat the existing isolated six-endpoint cloud probes against CURRENT main.
+The root gate intentionally rejects reruns pinned to obsolete main revisions.
+The request selects preflight, not application deployment, and enables the
+existing separately owned 15-minute, 32-MiB diagnostic lease. The workflow
+verifies actual UDP handshakes, numeric IPv4/IPv6 HTTPS and DoH forwarding.
+Linux kernel checks also require the authenticated remote endpoint after
+handshake to equal the requested public address and port. Cleanup must verify
+that the owned peer and user were removed; no existing user device slot is used.
+
+A successful independent cloud path does not identify the dropping intermediate
+network on the user's path, and cannot rule out destination-specific cloud edge
+mapping or filtering. AF_PACKET send counts alone do not prove delivery to the
+public Internet. Do not attribute the fault to a provider from missing logs.
+No firewall, routes, UU permissions, or production peer preferences are changed.

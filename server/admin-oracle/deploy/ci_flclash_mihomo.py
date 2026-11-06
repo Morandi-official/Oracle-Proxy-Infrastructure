@@ -47,8 +47,8 @@ def main(binary):
    body=self.rfile.read(length);end=12
    while end<len(body) and body[end]:end+=1+body[end]
    end+=1
-   if end+4!=len(body):self.send_error(400);return
-   kind,cls=struct.unpack('!HH',body[end:end+4]);question=body[12:]
+   if end+4>len(body):self.send_error(400);return
+   kind,cls=struct.unpack('!HH',body[end:end+4]);question=body[12:end+4]
    address=ipaddress.ip_address('10.77.0.1' if kind==1 else 'fd42:6f70:78:77::1').packed if kind in (1,28) else None
    reply=body[:2]+struct.pack('!HHHHH',0x8180,1,1 if address else 0,0,0)+question
    if address:reply+=b'\xc0\x0c'+struct.pack('!HHIH',kind,cls,60,len(address))+address

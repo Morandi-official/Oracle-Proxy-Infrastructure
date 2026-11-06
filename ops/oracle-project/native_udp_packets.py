@@ -12,6 +12,9 @@ import subprocess
 import time
 
 PORTS = (51820, 443, 8443)
+# OCI maps the two public entrances onto these fixed local addresses.
+ENTRANCES = {socket.inet_aton("10.0.0.6"): "primary",
+             socket.inet_aton("10.0.0.10"): "secondary"}
 DEFAULT_SECONDS = 300
 MAX_SECONDS = 900
 FILTER = (
@@ -60,6 +63,16 @@ def classify(header, outgoing):
     return str(port), ('out_' if outgoing else 'in_') + kind
 
 
+def entrance(header, outgoing):
+    """Only export an allowlisted local role, never the remote client address."""
+    offset = 12 if outgoing else 16
+    return ENTRANCES.get(bytes(header[offset:offset + 4]), 'other')
+
+
+def empty_entrances():
+    return {role: empty() for role in ('primary', 'secondary', 'other')}
+
+
 def empty():
     return {str(port): {} for port in PORTS}
 
@@ -87,9 +100,9 @@ def observe(seconds=DEFAULT_SECONDS):
     if type(seconds) is not int or not 1 <= seconds <= MAX_SECONDS:
         raise ValueError('BOUNDED_CAPTURE_REQUIRED')
     started = int(time.time())
-    result = {'schema': 1, 'status': 'OBSERVATION_UNAVAILABLE', 'started_at': started,
+    result = {'schema': 2, 'status': 'OBSERVATION_UNAVAILABLE', 'started_at': started,
               'duration_seconds': seconds, 'authentication_proof': False,
-              'counts': empty(), 'windows': []}
+              'counts': empty(), 'entrances': empty_entrances(), 'windows': []}
     try:
         interface = physical_interface()
         with socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0003)) as sock:
@@ -100,20 +113,26 @@ def observe(seconds=DEFAULT_SECONDS):
             stop = time.monotonic() + seconds
             window_start = time.monotonic()
             window = empty()
+            entrance_window = empty_entrances()
             print('NATIVE_UDP_PASSIVE_CAPTURE=READY; bounded headers only; no IP or payload log', flush=True)
             while time.monotonic() < stop:
                 try:
                     header, address = sock.recvfrom(72)
-                    item = classify(header, address[2] == 4)  # PACKET_OUTGOING
+                    outgoing = address[2] == 4  # PACKET_OUTGOING
+                    item = classify(header, outgoing)
                     increment(result['counts'], item)
                     increment(window, item)
+                    role = entrance(header, outgoing)
+                    increment(result['entrances'][role], item)
+                    increment(entrance_window[role], item)
                 except socket.timeout:
                     pass
                 if time.monotonic() - window_start >= 10:
-                    result['windows'].append({'at': int(time.time()), 'counts': window})
+                    result['windows'].append({'at': int(time.time()), 'counts': window, 'entrances': entrance_window})
                     window, window_start = empty(), time.monotonic()
+                    entrance_window = empty_entrances()
             if any(window.values()):
-                result['windows'].append({'at': int(time.time()), 'counts': window})
+                result['windows'].append({'at': int(time.time()), 'counts': window, 'entrances': entrance_window})
             stats = sock.getsockopt(263, 6, 8)  # SOL_PACKET / PACKET_STATISTICS
             result['socket_packets'], result['socket_drops'] = struct.unpack('II', stats)
             result['status'] = 'OBSERVED'

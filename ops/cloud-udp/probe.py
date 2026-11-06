@@ -107,8 +107,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='cloud-udp-private-') as directory:
         folder=Path(directory);folder.chmod(0o700)
         # Never log a command containing credentials or upload this directory.
-        keyfile=folder/'ssh-key';keyfile.write_text(os.environ.pop('CI_KEY').replace('\r\n','\n').rstrip()+'\n');keyfile.chmod(0o600)
-        known=folder/'known_hosts';known.write_text(os.environ.pop('KNOWN_HOSTS').replace('\r\n','\n').rstrip()+'\n');known.chmod(0o600)
+        keyfile=folder/'ssh-key';keyfile.write_text(os.environ.pop('CI_KEY').replace('\r\n','\n').rstrip()+'\n',newline='\n');keyfile.chmod(0o600)
+        known=folder/'known_hosts';known.write_text(os.environ.pop('KNOWN_HOSTS').replace('\r\n','\n').rstrip()+'\n',newline='\n');known.chmod(0o600)
         if platform.system()=='Windows':
             run(['icacls',str(keyfile),'/inheritance:r','/grant:r',os.environ['USERNAME']+':(R)'])
         command=['ssh','-T','-i',str(keyfile),'-o','BatchMode=yes','-o','IdentitiesOnly=yes',
@@ -161,6 +161,7 @@ def main():
                     row['server_usage_delta']={k:after['usage'][k]-before['usage'][k] for k in ('rx','tx')}
                     row['udp_only']=True;row['direct_fallback']=False
                     row['passed']=row['numeric_http'].get('http_status') in (200,301,302,308) and row['numeric_tls'].get('expected_exit') is True and row['domain_doh_tls'].get('expected_exit') is True and row['server_handshake_fresh']
+                    if 'ipv6_tls' in row:row['passed']=row['passed'] and row['ipv6_tls'].get('expected_exit') is True
                 except Exception as error:row['error_category']=type(error).__name__;row['passed']=False
                 finally:
                     process.terminate()

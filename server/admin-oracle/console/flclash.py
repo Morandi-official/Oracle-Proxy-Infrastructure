@@ -89,7 +89,7 @@ def configuration(row,state,peer,private_key):
     node={'name':'Proxy UDP','type':'wireguard','server':transport_address(),'port':443,
           'ip':v4,'private-key':private_key,'public-key':state['server_public_key'],
           'udp':True,'mtu':1280,'persistent-keepalive':25,'remote-dns-resolve':True,
-          'dns':['1.1.1.1'],'allowed-ips':['0.0.0.0/0']+(['::/0'] if v6 else [])}
+          'dns':['https://1.1.1.1/dns-query'],'allowed-ips':['0.0.0.0/0']+(['::/0'] if v6 else [])}
     if v6:node['ipv6']=v6
     # JSON is a strict YAML subset accepted by Mihomo and FlClash. A single
     # outbound and MATCH policy: no DIRECT, selectors, providers or fallback.

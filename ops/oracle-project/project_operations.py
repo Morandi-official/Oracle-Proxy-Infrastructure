@@ -269,7 +269,7 @@ def deploy(revision):
         spec=importlib.util.spec_from_file_location('previous_owned_browser_ci',Path(__file__).with_name('cleanup_rc20_webrtc_ci.py'))
         cleanup=importlib.util.module_from_spec(spec);spec.loader.exec_module(cleanup)
         cleanup.apply()
-    if request.get('request_id') in ('rc29-compact-flclash-deploy-20261104','admin-capacity-health-20261104','admin-history-cleanup-20261105'):
+    if request.get('request_id') in ('rc29-compact-flclash-deploy-20261104','admin-capacity-health-20261104','admin-history-cleanup-20261105','flclash-doh-default-20261106'):
         # Web/UI/profile database only: the policy engine and transport units
         # are unchanged. Do not restart kernel lease renewal for an export page.
         current=host.ROOT/'current'

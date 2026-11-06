@@ -53,9 +53,12 @@ def main(path):
                     row[family]=item
                 handshakes=run(['wg','show',INTERFACE,'latest-handshakes']).splitlines()
                 row['handshake_fresh']=any(int(line.split()[1])>=row['started_at']-2 for line in handshakes)
+                endpoints=run(['wg','show',INTERFACE,'endpoints']).splitlines()
+                row['endpoint_after_handshake']=endpoints[0].split()[1] if len(endpoints)==1 else None
+                row['endpoint_matches_requested']=row['endpoint_after_handshake']==address+':'+str(port)
                 transfers=run(['wg','show',INTERFACE,'transfer']).splitlines()
                 row['transfer']=[{'rx':int(line.split()[1]),'tx':int(line.split()[2])} for line in transfers]
-                row['passed']=row['handshake_fresh'] and row.get('ipv4',{}).get('expected_exit') is True
+                row['passed']=row['handshake_fresh'] and row['endpoint_matches_requested'] and row.get('ipv4',{}).get('expected_exit') is True
                 if 'ipv6' in row:row['passed']=row['passed'] and row['ipv6'].get('expected_exit') is True
             except Exception as error:row['error_category']=type(error).__name__;row['passed']=False
             finally:

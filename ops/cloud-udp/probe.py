@@ -104,6 +104,7 @@ def main():
     private=base64.b64encode(key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption())).decode()
     public=base64.b64encode(key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode()
     tag=uuid.uuid4().hex
+    results['probe_id']=tag
     with tempfile.TemporaryDirectory(prefix='cloud-udp-private-') as directory:
         folder=Path(directory);folder.chmod(0o700)
         # Never log a command containing credentials or upload this directory.
@@ -115,7 +116,23 @@ def main():
                  '-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+str(known),'-o','ConnectTimeout=15',
                  'oracle-project-ci@152.67.156.100','preflight '+revision]
         def rpc(action):
-            output=run(command,input=json.dumps({'action':action,'probe_id':tag,'public_key':public})+'\n',timeout=120)
+            body=json.dumps({'action':action,'probe_id':tag,'public_key':public})+'\n'
+            if platform.system()=='Windows':
+                import paramiko
+                client=paramiko.SSHClient()
+                client.load_host_keys(str(known))
+                client.set_missing_host_key_policy(paramiko.RejectPolicy())
+                try:
+                    client.connect('152.67.156.100',username='oracle-project-ci',key_filename=str(keyfile),
+                                   look_for_keys=False,allow_agent=False,timeout=15,banner_timeout=15,auth_timeout=15)
+                    incoming,outgoing,errors=client.exec_command('preflight '+revision,timeout=120)
+                    incoming.write(body);incoming.flush();incoming.channel.shutdown_write()
+                    received=outgoing.read(2*1024*1024+1)
+                    if len(received)>2*1024*1024 or outgoing.channel.recv_exit_status()!=0:
+                        raise ValueError('DIAGNOSTIC_REMOTE_COMMAND_FAILED')
+                    output=received.decode('utf-8')
+                finally:client.close()
+            else:output=run(command,input=body,timeout=120)
             lines=[line.split('=',1)[1] for line in output.splitlines() if line.startswith('CLOUD_UDP_IDENTITY=')]
             if len(lines)!=1:raise ValueError('DIAGNOSTIC_RPC_PROTOCOL_FAILED')
             return json.loads(lines[0])
@@ -173,7 +190,9 @@ def main():
             if attempted:
                 for attempt in range(3):
                     try:
-                        results['cleaned']=rpc('cleanup').get('cleaned') is True
+                        cleanup=rpc('cleanup')
+                        results['cleaned']=cleanup.get('cleaned') is True
+                        results['pending_diagnostics']=cleanup.get('pending_diagnostics',[])
                         break
                     except Exception:
                         if attempt==2:results['cleanup_error']='CLEANUP_NOT_VERIFIED'
@@ -181,6 +200,7 @@ def main():
             results['finished_at']=int(time.time())
             result_path.write_text(json.dumps(results,indent=2)+'\n')
             print('CLOUD_UDP_IDENTITY_CLEANED='+str(results['cleaned']),flush=True)
+            print('CLOUD_UDP_PENDING_DIAGNOSTICS='+str(len(results.get('pending_diagnostics',[]))),flush=True)
     if not results['cleaned'] or len(results['endpoints'])!=6 or not all(r.get('passed') for r in results['endpoints']) or results.get('kernel_error') or any(not row.get('passed') for row in results.get('kernel',[])):
         raise SystemExit(1)
 

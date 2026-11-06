@@ -60,6 +60,21 @@ def kernel_has_peer(key):
     return key in result.stdout.splitlines()
 
 
+def pending_diagnostics():
+    paths=list(STATE.glob('*.json'))
+    if len(paths)>64:raise ValueError('DIAGNOSTIC_MARKER_LIMIT')
+    pending=[]
+    for path in paths:
+        if path.is_symlink() or path.stat().st_uid!=0 or path.stat().st_mode & 0o077 or path.stat().st_size>2048:
+            raise ValueError('UNTRUSTED_DIAGNOSTIC_MARKER')
+        marker=json.loads(path.read_text())
+        if marker.get('name')!='Cloud UDP diagnostic '+path.stem:
+            raise ValueError('DIAGNOSTIC_OWNER_MISMATCH')
+        if not marker.get('cleaned'):
+            pending.append({'probe_id':path.stem,'expires_at':marker['expires_at']})
+    return pending
+
+
 def execute(value):
     validate(value)
     key, tag = value['public_key'], value['probe_id']
@@ -114,7 +129,7 @@ def execute(value):
         if any(p['public_key'] == key and p.get('present') for p in final['peers']) or any(u['id'] == marker['user_id'] for u in final['users']) or kernel_has_peer(key):
             raise ValueError('DIAGNOSTIC_CLEANUP_NOT_VERIFIED')
         marker['cleaned'] = True; save(path, marker)
-        return {'cleaned':True}
+        return {'cleaned':True,'pending_diagnostics':pending_diagnostics()}
     if peer is None: raise ValueError('DIAGNOSTIC_PEER_MISSING')
     return {'server_public_key':snapshot['server_public_key'], 'allowed_ips':peer['allowed_ips'],
             'handshake':peer['handshake'], 'usage':peer['usage'], 'present':peer['present'],

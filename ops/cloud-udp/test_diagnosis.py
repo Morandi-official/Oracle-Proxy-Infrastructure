@@ -59,7 +59,7 @@ class IdentityTest(unittest.TestCase):
         self.assertEqual(saved['expires_at'],1800000900)
         self.assertEqual(saved['quota_bytes'],32*1024*1024)
         self.assertEqual(saved['device_limit'],1)
-        self.assertEqual(identity.execute(self.request('cleanup')),{'cleaned':True})
+        self.assertEqual(identity.execute(self.request('cleanup')),{'cleaned':True,'pending_diagnostics':[]})
         self.assertEqual(self.snapshot['users'],[{'id':'existing','name':'Real user','expires':None}])
         self.assertEqual(self.snapshot['peers'][0]['public_key'],OTHER)
         self.assertEqual(len(self.snapshot['peers']),1)

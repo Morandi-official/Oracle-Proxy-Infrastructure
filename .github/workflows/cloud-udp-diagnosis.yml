@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install cryptography==50.0.2
+      - run: pip install cryptography==50.0.2 paramiko==4.0.0
       - run: python -m unittest discover -s ops/cloud-udp -p 'test_*.py' -v
   real-cloud:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install cryptography==50.0.2
+      - run: pip install cryptography==50.0.2 paramiko==4.0.0
       - name: Native kernel tooling on disposable Linux runner
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y wireguard-tools iproute2 curl

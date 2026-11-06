@@ -1,31 +1,31 @@
 {
-  "version": "v0.3.0-rc30",
-  "source_revision": "c39044b966105363445aa969f8bb8a1af593feed",
+  "version": "v0.3.0-rc31",
+  "source_revision": "2e1e584fd2d71badd9d6a3a6e76cd5b7527c68e1",
   "assets": [
     {
       "name": "BUILD.json",
       "size": 3995,
-      "sha256": "946d3a53077c94c060ae0e53015706cbb9ade69ccfc14925c5efadad8856f47a"
+      "sha256": "e3f05b24b4ac964ebf13ef5c72bfe6972ab47d67753058af862f77bd00e0200d"
     },
     {
-      "name": "Proxy-0.3.0-rc30-win-x64-c39044b96610-setup.exe",
-      "size": 47882845,
-      "sha256": "40d24eb626f69a7bb26dd62db17b838d708a5e36e3492133da424a61a800fc85"
+      "name": "Proxy-0.3.0-rc31-win-x64-2e1e584fd2d7-setup.exe",
+      "size": 47891104,
+      "sha256": "ae34fc60737c483334bd2a9990fbcee817671f1e682ede3895105d7ed9f023d0"
     },
     {
-      "name": "Proxy-0.3.0-rc30-win-x64-c39044b96610-source.zip",
-      "size": 457899443,
-      "sha256": "fbb56ea3357b9a72691e10878b809930029c12443bbece06db19c55fdecec15c"
+      "name": "Proxy-0.3.0-rc31-win-x64-2e1e584fd2d7-source.zip",
+      "size": 457911734,
+      "sha256": "d525f702e4192885a9ee79a9ea5deb89558dc590fc0f43e0b045d362e7d55943"
     },
     {
-      "name": "Proxy-0.3.0-rc30-win-x64-c39044b96610.zip",
-      "size": 63598507,
-      "sha256": "f361596e2eb2246bd3c61948c1c5fd1d13a17bc211688afdbe7b3d8d219c8140"
+      "name": "Proxy-0.3.0-rc31-win-x64-2e1e584fd2d7.zip",
+      "size": 63619881,
+      "sha256": "d3b3b896deef0dd86e8f5f7a3a985d6554601e580e2e0ffd248e6c6b1ccef110"
     },
     {
       "name": "SHA256SUMS.txt",
       "size": 340,
-      "sha256": "22a438ea28577e5f7ceb555c379e3765c91e9982ef89e94c02283a39c38c0f13"
+      "sha256": "4bc470c23745af12b0ec4e7b800bafa978402078e9c5e28f87c35609f59823c9"
     }
   ]
 }

@@ -39,7 +39,7 @@ class FlClashTests(TestCase):
   row=FlClashProfile.objects.get();url=self.link(row.pk);body=self.download(url)
   self.assertEqual(body.status_code,200);data=json.loads(body.content);node=data['proxies'][0]
   self.assertEqual(node['type'],'wireguard');self.assertEqual(node['port'],443);self.assertEqual(data['rules'],['MATCH,Proxy UDP']);self.assertEqual(data['proxy-groups'],[])
-  self.assertEqual(node['mtu'],1280);self.assertEqual(len(base64.b64decode(node['private-key'])),32)
+  self.assertEqual(node['dns'],['https://1.1.1.1/dns-query']);self.assertTrue(node['remote-dns-resolve']);self.assertEqual(node['mtu'],1280);self.assertEqual(len(base64.b64decode(node['private-key'])),32)
   self.assertTrue(node['ipv6'].startswith('fd42:6f70:78:77:'));self.assertTrue(data['dns']['respect-rules']);self.assertTrue(data['tun']['strict-route'])
   self.assertNotIn(node['private-key'],row.encrypted_material);self.assertNotIn(url.split('/')[-2],row.encrypted_material)
   listed=self.client.get('/api/flclash',secure=True).content.decode();self.assertNotIn(node['private-key'],listed);self.assertNotIn(url,listed)

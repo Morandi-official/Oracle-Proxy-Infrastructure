@@ -9,10 +9,22 @@ internal sealed class NativeUdpEvidence
     private readonly JsonObject _ports=new();
     private static readonly Regex Event=new(@"\ANATIVE_UDP_(51820|443|8443)_(SEND_INIT|RECV_REPLY|RECV_COOKIE|RECV_INVALID|RECV_OBSOLETE|READ_ERROR_[0-9]{1,10}|WRITE_ERROR_[0-9]{1,10})\z",RegexOptions.CultureInvariant);
     private static readonly Regex SocketEvent=new(@"\ANATIVE_UDP_(51820|443|8443)_(RCVBUF_BEFORE|SNDBUF_BEFORE|RCVBUF_AFTER|SNDBUF_AFTER|SOCKET_BUFFER_ERROR)_([0-9]{1,10})\z",RegexOptions.CultureInvariant);
+    private static readonly Regex IndexEvent=new(@"\ANATIVE_UDP_(51820|443|8443)_INIT_INDEX_([0-9]{1,10})\z",RegexOptions.CultureInvariant);
     internal void Clear(){lock(_gate)_ports.Clear();}
     internal bool Record(string? line)
     {
         if(line is null || line.Length>80)return false;
+        var index=IndexEvent.Match(line);
+        if(index.Success){
+            if(!uint.TryParse(index.Groups[2].Value,out uint sender))return false;
+            lock(_gate){
+                string indexPort=index.Groups[1].Value;
+                if(_ports[indexPort] is not JsonObject counters){counters=new JsonObject();_ports[indexPort]=counters;}
+                if(counters["sender_indices"] is not JsonArray indices){indices=new JsonArray();counters["sender_indices"]=indices;}
+                if(indices.Count<16 && !indices.Any(n=>n?.GetValue<uint>()==sender))indices.Add(sender);
+            }
+            return true;
+        }
         var socket=SocketEvent.Match(line);
         if(socket.Success){
             if(!uint.TryParse(socket.Groups[3].Value,out uint bytes) || (socket.Groups[2].Value!="SOCKET_BUFFER_ERROR" && bytes>64*1024*1024))return false;

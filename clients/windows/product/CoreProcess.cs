@@ -25,7 +25,7 @@ internal sealed class CoreProcess : IDisposable
     internal string SafeStage=>Volatile.Read(ref _safeStage);
     internal uint Pid=>Running?(uint)_process!.Id:0;
     internal bool Running=>_process is not null && !_process.HasExited;
-    internal async Task Start(JsonObject state,DurableState secret,TunnelTransport transport=TunnelTransport.WireGuardUdp,bool standby=false)
+    internal async Task Start(JsonObject state,DurableState secret,TunnelTransport transport=TunnelTransport.WireGuardUdp,bool standby=false,UdpDiagnosticTarget? diagnosticTarget=null)
     {
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
@@ -53,7 +53,7 @@ internal sealed class CoreProcess : IDisposable
                 if(line.Data!="CORE_CLOSE_FAILED" || !SafeStage.StartsWith("TUN_CLEANUP_",StringComparison.Ordinal))Volatile.Write(ref _safeStage,line.Data);
             }
         };_process.BeginErrorReadLine();
-        await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,transport).ToJsonString());await _process.StandardInput.FlushAsync();
+        await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,transport,diagnosticTarget).ToJsonString());await _process.StandardInput.FlushAsync();
         string? ready;
         try{ready=await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20),_stop.Token);}
         catch(TimeoutException error){throw new IOException("CORE_READY_TIMEOUT",error);}

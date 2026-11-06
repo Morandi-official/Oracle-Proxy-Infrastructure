@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 namespace OracleProxy.Product;
-internal sealed class MainForm : Form
+internal sealed partial class MainForm : Form
 {
     private async Task ShowGitHubReport()
     {
@@ -44,7 +44,7 @@ internal sealed class MainForm : Form
     private readonly Panel _loginGate;
     private readonly Panel _startupGate;
     private bool _initialViewResolved;
-    private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc30",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
+    private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc31",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
     private readonly Label _loginFeedback=new(){Name="login-feedback",Text="登录后即可管理连接与设备。"};
     private readonly CheckBox _rememberLogin=new(){Name="remember-login",Text="记住登录（最多 30 天）",Checked=true,AutoSize=true};
     private readonly Button _diagnosticsToggle=new(){Name="diagnostics-toggle",Text="展开诊断与测试",Height=38,AutoSize=false};
@@ -224,6 +224,7 @@ internal sealed class MainForm : Form
         void Open(string url){try{System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url){UseShellExecute=true});}catch{_detail.Text="未能打开默认浏览器。";}}
         Add(diagnostics,Tool("打开出口检查",()=>Open("https://www.cloudflare.com/cdn-cgi/trace")));
         Row(_toolsContent,diagnostics);
+        BuildUdpDiagnostics(_toolsContent,diagnostics,Add);
         _maintenance=ButtonGrid("system-maintenance");_maintenance.Visible=false;
         Row(_toolsContent,_maintenanceToggle);_maintenanceToggle.Click+=(_,_)=>{_maintenance.Visible=!_maintenance.Visible;_maintenanceToggle.Text=_maintenance.Visible?"收起系统维护":"展开系统维护";};
         void Install(){try{Installer.Elevate(false);}catch{_loginFeedback.Text=_detail.Text="安装未完成，请检查 UAC 提示或使用完整软件包。";}}
@@ -297,7 +298,7 @@ internal sealed class MainForm : Form
     private static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wParam,IntPtr lParam);
     private async Task StartReadyClient()
     {
-        if(!IsDisposed && !_closing && _authenticated && _statusReadSucceeded && !_needsReconcile && !_startupPrepared && _deviceRegistered && !_connectionIntent && _lastMode=="disconnected"){
+        if(!IsDisposed && !_closing && _authenticated && _statusReadSucceeded && !_needsReconcile && !_startupPrepared && _deviceRegistered && !_connectionIntent && !_udpDiagnosing && _lastMode=="disconnected"){
             _startupPrepared=true;await Act("Prepare");
         }
         if(!IsDisposed && !_closing && _serviceReady)_timer.Start();
@@ -327,8 +328,9 @@ internal sealed class MainForm : Form
     {
         if(IsDisposed)return;
         bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining;
-        _connect.Enabled=available && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
-        _transportChoice.Enabled=available && !_connectionIntent;_native8443Test.Enabled=available && !_connectionIntent && _native8443Available;
+        _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
+        _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_native8443Test.Enabled=available && !_connectionIntent && !_udpDiagnosing && _native8443Available;
+        _udpStart.Enabled=available && _udpAvailable && _lastMode=="disconnected" && !_udpDiagnosing && !_connectionIntent && _authenticated && _deviceRegistered;_udpCancel.Enabled=available && _udpDiagnosing;_maintenance.Enabled=available && !_udpDiagnosing;
         UpdateRegistrationActions();
     }
     private async Task<JsonObject> SendRequest(string command,string? username,string? password,CancellationToken cancel)
@@ -475,7 +477,7 @@ internal sealed class MainForm : Form
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            string productVersion=state["product_version"]?.GetValue<string>() ?? "0.3.0-rc30";
+            string productVersion=state["product_version"]?.GetValue<string>() ?? "0.3.0-rc31";
             _version.Text="v"+productVersion.Split('+')[0];
             if(_help.GetToolTip(_version)!=productVersion)_help.SetToolTip(_version,productVersion);
             _connectionReport=_connectionReport.Replace("ORACLE_EGRESS_","EGRESS_",StringComparison.Ordinal).Replace("ORACLE_","EGRESS_",StringComparison.Ordinal).Replace("oracle_egress_","egress_",StringComparison.Ordinal).Replace("oracle_","egress_",StringComparison.Ordinal);
@@ -486,7 +488,8 @@ internal sealed class MainForm : Form
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
             _lastMode=mode;
-            _timer.Interval=mode is "protected" or "connecting" || (state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:mode=="connected"?1000:3000;
+            DisplayUdpDiagnostics(state);
+            _timer.Interval=_udpDiagnosing?1000:mode is "protected" or "connecting" || (state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:mode=="connected"?1000:3000;
             _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 · HTTPS","wireguard-quic"=>"已连接 · QUIC / HTTP/3",_=>"已连接 · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;
             string policy=state["account"]?["status"]?.GetValue<string>() ?? "";
@@ -601,6 +604,10 @@ internal sealed class MainForm : Form
     private static string PolicyName(string status)=>status switch{"disabled"=>"已停用","expired"=>"已到期","quota"=>"配额已耗尽","server_budget"=>"服务器出站额度保护中",_=>"待核对"};
     private static string FormatBytes(long bytes)=>bytes>=(1L<<40)?$"{bytes/(double)(1L<<40):0.00} TiB":bytes>=(1L<<30)?$"{bytes/(double)(1L<<30):0.00} GiB":bytes>=(1L<<20)?$"{bytes/(double)(1L<<20):0.00} MiB":bytes>=1024?$"{bytes/1024d:0.0} KiB":$"{bytes:N0} B";
     private static string Message(string code)=>code switch{
+        "DISCONNECT_BEFORE_UDP_DIAGNOSTIC"=>"请先断开并恢复直连，再运行 UDP 诊断。",
+        "DIAGNOSTIC_BUSY"=>"UDP 诊断正在运行，可先取消诊断。",
+        "DIAGNOSTIC_RATE_LIMITED"=>"诊断请求过于频繁，请稍后重试。",
+        "UDP_DIAGNOSTIC_NOT_AVAILABLE"=>"服务器尚未提供 UDP 配对诊断，请稍后刷新状态。",
         "DEVICE_CONFIRMATION_REQUIRED"=>"请先核对本机名称和识别码，勾选归属并登记此设备。",
         "DISCONNECT_BEFORE_ENROLLMENT"=>"请先断开 VPN，再确认本机设备。",
         "CLIENT_UPDATE_REQUIRED"=>"请升级客户端并在账号与设备区完成设备确认。",

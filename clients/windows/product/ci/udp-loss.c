@@ -45,6 +45,8 @@ __declspec(dllexport) DWORD __cdecl fixture_udp_loss_end(HANDLE engine){return F
 
 __declspec(dllexport) DWORD __cdecl fixture_udp_primary_loss_begin(HANDLE *output){return begin_loss(output,FALSE,TRUE,FALSE,FALSE,51820);}
 __declspec(dllexport) DWORD __cdecl fixture_udp_primary_reply_loss_begin(HANDLE *output){return begin_loss(output,FALSE,TRUE,TRUE,FALSE,51820);}
+/* Diagnosis-only acceptance: all three ports, primary public address, replies only. */
+__declspec(dllexport) DWORD __cdecl fixture_udp_diagnostic_primary_replies_begin(HANDLE *output){return begin_loss(output,TRUE,FALSE,TRUE,TRUE,51820);}
 
 __declspec(dllexport) DWORD __cdecl fixture_udp_old_ingress_loss_begin(HANDLE *output){return begin_loss(output,TRUE,FALSE,FALSE,TRUE,51820);}
 __declspec(dllexport) DWORD __cdecl fixture_udp_443_only_loss_begin(HANDLE *output){return begin_loss(output,FALSE,TRUE,FALSE,FALSE,443);}

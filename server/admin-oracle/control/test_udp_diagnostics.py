@@ -53,6 +53,14 @@ class CaptureTest(unittest.TestCase):
         for indices in ([True],[-1],[2**32],[1]*17,'123'):
             with self.assertRaises(ValueError):module.summarize([],'152.67.156.100',443,indices,0)
 
+    def test_close_requires_actual_thread_termination(self):
+        class StuckThread:
+            def join(self,timeout):self.timeout=timeout
+            def is_alive(self):return True
+        capture=object.__new__(module.Capture);capture.stop=threading.Event();capture.thread=StuckThread()
+        with self.assertRaisesRegex(TimeoutError,'STOP_NOT_VERIFIED'):capture.close()
+        self.assertTrue(capture.stop.is_set());self.assertEqual(capture.thread.timeout,6)
+
 
 class ManagerTest(unittest.TestCase):
     def setUp(self):

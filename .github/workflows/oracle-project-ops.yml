@@ -14,6 +14,8 @@ on:
     paths:
       - 'server/admin-oracle/**'
       - 'ops/oracle-project/**'
+      # Cloud diagnostics use the pinned gate directly; do not redeploy the application.
+      - '!ops/oracle-project/cloud_udp_identity.py'
       - '.github/workflows/oracle-project-ops.yml'
 
 permissions:

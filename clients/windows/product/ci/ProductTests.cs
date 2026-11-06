@@ -68,7 +68,7 @@ internal static class ProductTests
             bool valid=!value.ConnectIntent && !value.RecoveryRequired && value.Token=="" && value.PrivateKey.Length==44 && digest==File.ReadAllText(Path.Combine(Root,"public-sha256")) && !NativeGuard.Active && !NativeGuard.TunPresent;
             File.WriteAllText(Path.Combine(Root,"recovery-verified"),valid?"KEY_AND_SAFE_OFF_PRESERVED":"FAIL");return valid?0:1;
         }
-        if(args.SequenceEqual(new[]{"--oracle-watchdog"})){Thread.Sleep(TimeSpan.FromMinutes(9));Rescue();return 0;}
+        if(args.SequenceEqual(new[]{"--oracle-watchdog"})){Thread.Sleep(TimeSpan.FromMinutes(13));Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--watchdog"})){
             Thread.Sleep(TimeSpan.FromMinutes(4));Rescue();return 0;
         }
@@ -601,7 +601,7 @@ internal static class ProductTests
     private static Button UiButton(Control root,string name)=>UiDescendants(root).OfType<Button>().Single(button=>button.Name==name);
     private static void BootstrapPolicyRegression()
     {
-        const string version="0.3.0-rc30+synthetic-exact-revision";
+        const string version="0.3.0-rc31+synthetic-exact-revision";
         JsonObject current=new(){["schema"]=1,["ok"]=true,["product_version"]=version,["login_authenticated"]=false};
         int reads=0,installs=0;
         Task<JsonObject> Read(CancellationToken cancel){cancel.ThrowIfCancellationRequested();reads++;return Task.FromResult((JsonObject)current.DeepClone());}
@@ -685,13 +685,13 @@ internal static class ProductTests
             var measured=TextRenderer.MeasureText(value.Text,value.Font,new Size(value.Width,0),TextFormatFlags.WordBreak);
             UiAssert(measured.Height<=value.Height,"DUALSTACK_EXIT_TEXT_CLIPPED");
         }
-        Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc30.png");}
+        Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc31.png");}
         Console.WriteLine("COLD_AND_WARM_REMEMBERED_STARTUP_PENDING_ACCOUNT_NEVER_SHOWS_LOGIN_AND_THREE_CARDS_VISIBLE=PASS");
     }
 
     private static void UiLoginAndLayoutRegression(JsonObject source)
     {
-        var ready=UiReady(source);ready["product_version"]="0.3.0-rc30+synthetic";
+        var ready=UiReady(source);ready["product_version"]="0.3.0-rc31+synthetic";
         var signedOut=(JsonObject)ready.DeepClone();signedOut["login_authenticated"]=false;signedOut["account"]=null;
         JsonObject current=(JsonObject)signedOut.DeepClone();var commands=new List<string>();
         using var form=new MainForm((command,username,password)=>{

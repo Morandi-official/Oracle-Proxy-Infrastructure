@@ -44,7 +44,7 @@ internal sealed partial class MainForm : Form
     private readonly Panel _loginGate;
     private readonly Panel _startupGate;
     private bool _initialViewResolved;
-    private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc30",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
+    private readonly Label _version=new(){Name="app-version",Text="v0.3.0-rc31",ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
     private readonly Label _loginFeedback=new(){Name="login-feedback",Text="登录后即可管理连接与设备。"};
     private readonly CheckBox _rememberLogin=new(){Name="remember-login",Text="记住登录（最多 30 天）",Checked=true,AutoSize=true};
     private readonly Button _diagnosticsToggle=new(){Name="diagnostics-toggle",Text="展开诊断与测试",Height=38,AutoSize=false};
@@ -477,7 +477,7 @@ internal sealed partial class MainForm : Form
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
-            string productVersion=state["product_version"]?.GetValue<string>() ?? "0.3.0-rc30";
+            string productVersion=state["product_version"]?.GetValue<string>() ?? "0.3.0-rc31";
             _version.Text="v"+productVersion.Split('+')[0];
             if(_help.GetToolTip(_version)!=productVersion)_help.SetToolTip(_version,productVersion);
             _connectionReport=_connectionReport.Replace("ORACLE_EGRESS_","EGRESS_",StringComparison.Ordinal).Replace("ORACLE_","EGRESS_",StringComparison.Ordinal).Replace("oracle_egress_","egress_",StringComparison.Ordinal).Replace("oracle_","egress_",StringComparison.Ordinal);

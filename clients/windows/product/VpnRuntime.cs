@@ -103,6 +103,10 @@ internal sealed partial class VpnRuntime : IDisposable
             if(Diagnosing){await Task.Delay(200,cancel);continue;}
             await _gate.WaitAsync(cancel);
             try{
+                // A diagnostic can start while this loop waits for the gate.
+                // Recheck under it so the normal core never competes for the
+                // same peer/socket with a diagnostic trial.
+                if(Diagnosing)continue;
                 if(_secret.ConnectIntent && !NativeGuard.Active){
                     _secret.RecoveryRequired=true;_secret.Save();_mode="recovery";_error="WFP_POLICY_LOST";
                     await StopCore();NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());
@@ -423,6 +427,6 @@ internal sealed partial class VpnRuntime : IDisposable
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};
     }
     private static string Code(Exception e)=>e.Message.Length<=80 && e.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?e.Message:"SERVICE_OPERATION_FAILED";
-    internal void BeginStop(){_api.Cancel();_core.Cancel();}
+    internal void BeginStop(){_udpDiagnostics?.Cancel();_api.Cancel();_core.Cancel();}
     public void Dispose(){if(_udpDiagnostics is not null){try{_udpDiagnostics.Stop().GetAwaiter().GetResult();}catch{} _udpDiagnostics.Dispose();}_core.Dispose();_api.Dispose();_gate.Dispose();}
 }

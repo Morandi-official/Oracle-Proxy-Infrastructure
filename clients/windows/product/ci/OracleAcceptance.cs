@@ -48,6 +48,45 @@ internal static class OracleAcceptance
         return 0;
     }
     private const long RunBudgetBytes=16L*1024*1024;
+    [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_diagnostic_primary_replies_begin(out IntPtr engine);
+    [DllImport("OracleProxy.Fault.dll",CallingConvention=CallingConvention.Cdecl)]private static extern uint fixture_udp_loss_end(IntPtr engine);
+    private static async Task<JsonObject> AwaitDiagnostic()
+    {
+        var timer=Stopwatch.StartNew();
+        while(timer.Elapsed<TimeSpan.FromSeconds(175)){
+            var state=await Send("Status");
+            Check(state["mode"]?.GetValue<string>()=="disconnected" && state["guard"]?.GetValue<bool>()==false && state["intent"]?.GetValue<bool>()==false,"DIAGNOSTIC_REMAINS_DISCONNECTED_WITHOUT_BASELINE_GUARD");
+            if(state["udp_diagnostic"] is JsonObject report && report["running"]?.GetValue<bool>()==false)return state;
+            await Task.Delay(800);
+        }
+        throw new IOException("DIAGNOSTIC_ACCEPTANCE_DEADLINE");
+    }
+    private static async Task VerifyDiagnostics(int devices)
+    {
+        await Send("Quit");
+        var before=await Send("Status");
+        var start=Stopwatch.StartNew();await Send("StartUdpDiagnostics");
+        Check(start.Elapsed<TimeSpan.FromSeconds(8),"DIAGNOSTIC_START_DOES_NOT_HOLD_RUNTIME_GATE_FOR_PROBES");
+        var result=await AwaitDiagnostic();var report=result["udp_diagnostic"]!.AsObject();
+        Check(report["phase"]?.GetValue<string>()=="complete" && report["server_capture_closed"]?.GetValue<bool>()==true,"REAL_DIAGNOSTIC_COMPLETES_AND_CLOSES_SERVER_CAPTURE");
+        var rows=report["trials"]!.AsArray();
+        Check(rows.Count==6 && rows.All(r=>r?["verdict"]?.GetValue<string>()=="PASSED" && r?["server"]?["capture"]?["rx_initiations"]?.GetValue<long>()>0 && r?["server"]?["capture"]?["tx_responses"]?.GetValue<long>()>0),"REAL_SIX_UDP_EGRESS_AND_PAIRED_SERVER_HEADERS");
+        foreach(string field in new[]{"transport_preference","native_udp_adaptive","native_udp_port_preference"})Check(JsonNode.DeepEquals(before[field],result[field]),"DIAGNOSTIC_PRESERVES_"+field.ToUpperInvariant());
+        Check(result["account"]?["device_count"]?.GetValue<int>()==devices,"DIAGNOSTIC_USES_EXISTING_DEVICE_SLOT");
+        Directory.CreateDirectory("dist/review");File.WriteAllText("dist/review/udp-six-acceptance.json",report.ToJsonString());
+        IntPtr fault=IntPtr.Zero;
+        try{
+            Check(fixture_udp_diagnostic_primary_replies_begin(out fault)==0,"DIAGNOSTIC_DISPOSABLE_PRIMARY_RETURN_FAULT_CREATED");
+            await Send("StartUdpDiagnostics");result=await AwaitDiagnostic();report=result["udp_diagnostic"]!.AsObject();
+            rows=report["trials"]!.AsArray();
+            Check(report["phase"]?.GetValue<string>()=="complete" && rows.Count==6 && rows.Take(3).All(r=>r?["verdict"]?.GetValue<string>()=="RETURN_OR_LOCAL_RECEIVE_PATH") && rows.Skip(3).All(r=>r?["verdict"]?.GetValue<string>()=="PASSED"),"REAL_DIAGNOSTIC_IDENTIFIES_REPLY_LOSS_WITHOUT_BLAMING_SERVER_OR_OTHER_ENTRANCES");
+            File.WriteAllText("dist/review/udp-six-return-fault.json",report.ToJsonString());
+        }finally{if(fault!=IntPtr.Zero)Check(fixture_udp_loss_end(fault)==0,"DIAGNOSTIC_DISPOSABLE_RETURN_FAULT_REMOVED");}
+        await Send("StartUdpDiagnostics");await Task.Delay(1000);await Send("CancelUdpDiagnostics");
+        result=await AwaitDiagnostic();report=result["udp_diagnostic"]!.AsObject();
+        Check(report["phase"]?.GetValue<string>()=="cancelled" && report["server_capture_closed"]?.GetValue<bool>()==true,"REAL_DIAGNOSTIC_CANCEL_CLOSES_CORE_AND_SERVER_CAPTURE");
+        await Send("Quit");
+    }
     private static long? _deviceUsageStart;
     private static string _lastAssertion="";
     private static void Check(bool condition,string code){if(!condition){_lastAssertion=code;throw new IOException("ORACLE_ASSERTION_FAILED");}Console.WriteLine(code+"=PASS");}
@@ -522,6 +561,7 @@ internal static class OracleAcceptance
             Check(idle["core_pid"]?.GetValue<uint>()==0 && idle["preparing"]?.GetValue<bool>()==false && idle["account"]?["device_count"]?.GetValue<int>()==devices && await ExitIp()!="152.67.156.100","REAL_QUIT_LEAVES_AUTHENTICATED_SERVICE_IDLE_WITHOUT_CORE_RESTART");
             await Send("Connect");await Connected();
             Check((await Send("Quit"))["core_pid"]?.GetValue<uint>()==0 && await ExitIp()!="152.67.156.100","REAL_QUIT_WHILE_CONNECTED_STOPS_CORE_AND_RESTORES_DIRECT");
+            stage="SIX_UDP_PAIRED_DIAGNOSTICS";await VerifyDiagnostics(devices);
             stage="FINAL_DEVICE_BUDGET";var finalUsage=await Send("Status");
             Check(_deviceUsageStart is long start && CanCloseDeviceBudget(finalUsage,start),"REAL_DEVICE_BUDGET_CLOSED_ONLY_AFTER_CORE_STOPPED");
             Console.WriteLine("REAL_DEVICE_RUN_USED_BYTES="+(checked(finalUsage["peer_rx_bytes"]!.GetValue<long>()+finalUsage["peer_tx_bytes"]!.GetValue<long>())-_deviceUsageStart!.Value));

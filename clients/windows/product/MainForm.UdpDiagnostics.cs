@@ -56,9 +56,10 @@ internal sealed partial class MainForm
         string reason=UdpText(report["error"]) switch{"DIAGNOSTIC_BUSY"=>"服务器已有诊断任务，请稍后重试。","DIAGNOSTIC_RATE_LIMITED"=>"诊断请求过于频繁，请稍后重试。","DIAGNOSTIC_EXPIRED_OR_RESTARTED"=>"服务器采集已到期或服务已重启，本轮观察不完整。","DIAGNOSTIC_ACCOUNT_NOT_ACTIVE"=>"账号状态当前不允许诊断。","LOGIN_REQUIRED"=>"登录已过期，请重新登录。","CONTROL_SERVICE_UNAVAILABLE"=>"服务器配对服务暂不可用。",_=>""};
         if(reason.Length>0)text.AppendLine(reason);
         if(Guid.TryParseExact(UdpText(report["diagnostic_id"]),"D",out var identity))text.AppendLine("诊断编号："+identity);
-        if(UdpNumber(report["started_at"]) is long at && at<=4102444800)text.AppendLine("开始时间："+DateTimeOffset.FromUnixTimeSeconds(at).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz"));
+        if(UdpNumber(report["started_at"]) is long at && at<=4102444800)text.AppendLine("开始时间："+DateTimeOffset.FromUnixTimeSeconds(at).ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd HH:mm:ss zzz"));
         text.AppendLine(UdpFlag(report["ipv6_requested"])?"出口验证包含 IPv4 与 IPv6。":"本轮仅验证已提供的 IPv4 出口。");
         text.AppendLine("客户端收包层：UDP 套接字；物理网卡层未采集。计数不能确定具体中间网络节点。\r\n");
+        text.AppendLine("服务端报文头计数用于配对，不等同于认证成功；内核握手与出口验证分别记录。\r\n");
         if(report["trials"] is JsonArray trials)for(int i=0;i<6 && i<trials.Count;i++){
             var target=UdpDiagnosticTarget.All[i];var trial=trials[i];
             if(UdpText(trial?["address"])!=target.Address || UdpNumber(trial?["port"])!=target.Port)continue;

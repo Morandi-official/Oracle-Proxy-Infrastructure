@@ -185,3 +185,32 @@ async function refreshHost(force=false){try{
  }
  el('host-events').replaceChildren(...data.events.map(e=>{const li=document.createElement('li');li.textContent=time(e.at)+' · '+(e.action.endsWith('resolved')?'已恢复':'预警')+' · '+e.code;return li;}));if(!data.events.length){const li=document.createElement('li');li.textContent='暂无阈值变更记录';el('host-events').append(li);}
  }catch(e){el('host-freshness').textContent='读取失败';el('host-alerts').textContent='系统监控暂不可用，已显示的数据可能过期。';el('host-alerts').classList.add('error');}}
+// Read-only diagnostic reports load only while this section is expanded.
+let udpDiagnosticsBusy=false;
+async function refreshUdpDiagnostics(){
+ if(udpDiagnosticsBusy || !el('udp-diag-details').open)return;
+ udpDiagnosticsBusy=true;
+ try{
+  const data=await api('/api/udp-diagnostics');
+  const rows=data.diagnostics.map(record=>{
+   const row=document.createElement('tr');
+   cell(row,time(record.started_at));cell(row,record.username+' / '+record.device_id);
+   cell(row,({running:'诊断中',complete:'已完成',cancelled:'已取消',interrupted:'已中断',unavailable:'服务器观察不可用'})[record.phase] || '待核对');
+   const trials=Array.isArray(record.report.trials)?record.report.trials:[];
+   cell(row,trials.filter(t=>t.client?.egress_verified===true).length+' / 6 通过');
+   const actions=cell(row,'');actions.className='row-actions';
+   button(actions,'查看报告',()=>{
+    el('udp-diag-report').value=JSON.stringify({diagnostic_id:record.id,started_at:record.started_at,device_id:record.device_id,phase:record.phase,report:record.report},null,2);
+    el('udp-diag-dialog').showModal();
+   });return row;
+  });
+  if(!rows.length){const row=document.createElement('tr');cell(row,'暂无记录，请在客户端的“诊断与测试”中发起。').colSpan=5;rows.push(row);}
+  replaceRows('udp-diag-rows',rows);el('udp-diag-status').textContent='最近 '+data.diagnostics.length+' 条 · 只读记录';
+ }catch(error){el('udp-diag-status').textContent='读取失败，请稍后刷新。';}
+ finally{udpDiagnosticsBusy=false;}
+}
+el('udp-diag-details').addEventListener('toggle',refreshUdpDiagnostics);
+el('udp-diag-refresh').addEventListener('click',refreshUdpDiagnostics);
+el('udp-diag-close').addEventListener('click',()=>el('udp-diag-dialog').close());
+el('udp-diag-copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(el('udp-diag-report').value);feedback('诊断报告已复制。');}catch{feedback('未能复制，请选择报告文字后复制。',true);}});
+setInterval(()=>{if(!document.hidden && el('udp-diag-details').open)refreshUdpDiagnostics();},10000);

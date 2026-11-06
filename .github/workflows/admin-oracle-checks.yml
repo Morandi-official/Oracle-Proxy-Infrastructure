@@ -108,6 +108,8 @@ jobs:
           sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 server/admin-oracle/deploy/ci_flclash_mihomo.py "$RUNNER_TEMP/mihomo-1.19.33"
       - name: Real kernel header-only passive UDP observation in isolated namespace
         run: sudo unshare -n python3 ops/oracle-project/ci_native_packet_filter.py
+      - name: Real diagnostic header filter excludes all business packets and keys
+        run: sudo unshare -n python3 ops/oracle-project/ci_udp_diagnostic_headers.py
       - name: Real isolated IPv6 NAT policy ordering and rollback
         run: sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 ops/oracle-project/ci_ipv6_tunnel.py
       - name: Real isolated physical queue apply and rollback

@@ -6,7 +6,7 @@ internal static class CoreConfig
 {
     private static string ProcessPattern(string path)=>"(?i)^"+string.Concat(path.Select(c=>"\\.+*?()|[]{}^$".Contains(c)?"\\"+c:c.ToString()))+"$";
     internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,bool httpsRelay)=>Build(state,secret,socksPassword,httpsRelay?TunnelTransport.WireGuardHttps:TunnelTransport.WireGuardUdp);
-    internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,TunnelTransport transport=TunnelTransport.WireGuardUdp)
+    internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,TunnelTransport transport=TunnelTransport.WireGuardUdp,UdpDiagnosticTarget? diagnosticTarget=null)
     {
         string ingress=TransportPolicy.IngressAddress(state);
         var tunnel=state["tunnel"]!.AsObject();string endpoint=tunnel["endpoint"]!.GetValue<string>();
@@ -50,6 +50,7 @@ internal static class CoreConfig
             config["endpoints"]![0]!["detour"]="oracle-https-relay";
             config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-https",["tag"]="oracle-https-relay",["token"]=secret.Token});
         }
+        diagnosticTarget?.Apply(config,transport);
         return config;
     }
 }

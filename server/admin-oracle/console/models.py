@@ -72,3 +72,13 @@ class HostMetricMinute(models.Model):
     # Compact minute sums/counts; raw host samples retain their shorter lifetime.
     at = models.DateTimeField(primary_key=True)
     aggregates = models.JSONField(default=dict)
+
+
+class UdpDiagnostic(models.Model):
+    id=models.UUIDField(primary_key=True,default=uuid.uuid4,editable=False)
+    account=models.ForeignKey(ClientAccount,on_delete=models.CASCADE)
+    device_id=models.CharField(max_length=12)
+    started_at=models.DateTimeField(default=timezone.now,db_index=True)
+    updated_at=models.DateTimeField(auto_now=True)
+    phase=models.CharField(max_length=16,default='running')
+    report=models.JSONField(default=dict)

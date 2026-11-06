@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -302,6 +303,13 @@ func (c *nativeConn) Write(b []byte) (int, error) {
 		}
 		if n == len(b) && b[0] == 1 {
 			c.event(index, "SEND_INIT")
+			// Public WG sender index only, bounded for diagnostic correlation.
+			c.eventMu.Lock()
+			if c.events["INIT_INDEX"] < 16 {
+				c.events["INIT_INDEX"]++
+				fmt.Fprintf(os.Stderr, "NATIVE_UDP_%d_INIT_INDEX_%d\n", c.ports[index], binary.LittleEndian.Uint32(b[4:8]))
+			}
+			c.eventMu.Unlock()
 		}
 		return n, err
 	}

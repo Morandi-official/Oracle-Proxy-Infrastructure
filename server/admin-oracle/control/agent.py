@@ -25,7 +25,7 @@ LEASE = 20
 MAX_BYTES = 10**16
 SYSTEM_OPERATIONS = {
     'system:health': frozenset(('state',)),
-    'system:client-api': frozenset(('state', 'peer.enroll')),
+    'system:client-api': frozenset(('state', 'peer.enroll', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
 }
 _ipv6_spec = importlib.util.spec_from_file_location('oracle_ipv6_addresses', Path(__file__).with_name('ipv6_addresses.py'))
 ipv6_addresses = importlib.util.module_from_spec(_ipv6_spec)
@@ -499,6 +499,21 @@ class Engine:
         # an internal routing mistake promote them to administrator mutations.
         if actor in SYSTEM_OPERATIONS and operation not in SYSTEM_OPERATIONS[actor]:
             raise ValueError('ADMINISTRATOR_REQUIRED')
+        if operation.startswith('udp-diagnostic.'):
+            key=public_key(data.get('public_key'))
+            self.tick()
+            state=self.snapshot()
+            peer=next((p for p in state['peers'] if p['public_key']==key),None)
+            user=next((u for u in state['users'] if peer and u['id']==peer['user_id']),None)
+            if not peer or not peer['managed'] or peer['revoked'] or not user:
+                raise ValueError('DIAGNOSTIC_DEVICE_NOT_AUTHORIZED')
+            if operation!='udp-diagnostic.finish' and (state['error'] or user['status']!='active' or state['budget']['guard_blocked']):
+                raise ValueError('DIAGNOSTIC_ACCOUNT_NOT_ACTIVE')
+            if not hasattr(self,'udp_diagnostics'):
+                spec=importlib.util.spec_from_file_location('udp_diagnostics',Path(__file__).with_name('udp_diagnostics.py'))
+                module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+                self.udp_diagnostics=module.Manager()
+            return self.udp_diagnostics.call(operation,data,peer)
         if operation == 'state' and not data: return self.snapshot()
         if operation == 'usage.history':
             if actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')

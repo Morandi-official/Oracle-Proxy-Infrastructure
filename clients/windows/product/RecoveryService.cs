@@ -17,7 +17,7 @@ internal sealed class RecoveryService : ServiceBase
             _cancel.Token.ThrowIfCancellationRequested();
             Platform.VerifyServiceEnvironment();
             Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);Platform.VerifyBundle(Platform.Root);
-            foreach(var process in Process.GetProcessesByName("OracleProxy.Core"))using(process){
+            foreach(var process in Process.GetProcessesByName("Proxy.Core"))using(process){
                 _cancel.Token.ThrowIfCancellationRequested();
                 if(TunReceipt.IsOwnedCore(process)){
                     process.Kill(true);await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5),_cancel.Token);

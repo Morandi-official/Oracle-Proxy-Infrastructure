@@ -38,7 +38,7 @@ internal static class Program
                 if(!Platform.IsAdmin)return 3;
                 Installer.Remove().GetAwaiter().GetResult();return 0;
             }
-            if(args.Length!=0 || Path.GetFileName(Environment.ProcessPath)=="OracleProxy.Service.exe")return 2;
+            if(args.Length!=0 || Path.GetFileName(Environment.ProcessPath) is "OracleProxy.Service.exe" or "Proxy.Service.exe")return 2;
             ApplicationConfiguration.Initialize();Application.Run(new MainForm());return 0;
         }catch(Exception error){
             if(Platform.IsAdmin)Platform.RecordFailure("setup",error);

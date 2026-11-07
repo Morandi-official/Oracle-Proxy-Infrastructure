@@ -3,7 +3,7 @@ if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted
 . (Join-Path $PSScriptRoot 'uu-network-fixture.ps1')
 $test=Join-Path $PWD 'dist/product-tests/OracleProxy.Product.Tests.exe'
 $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
-if((Test-Path $test) -and (Test-Path "$root/authorized") -and (Test-Path "$env:ProgramFiles/OracleProxy/OracleProxy.Guard.dll")){
+if((Test-Path $test) -and (Test-Path "$root/authorized") -and (Test-Path "$env:ProgramFiles/OracleProxy/Proxy.Guard.dll")){
   $action=New-ScheduledTaskAction -Execute $test -Argument '--rescue'
   Register-ScheduledTask -TaskName 'OracleProxyCandidateRescue' -Action $action -User SYSTEM -RunLevel Highest -Force | Out-Null
   Remove-Item "$root/rescued" -ErrorAction SilentlyContinue

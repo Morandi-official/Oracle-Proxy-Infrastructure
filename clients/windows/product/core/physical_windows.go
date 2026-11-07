@@ -28,7 +28,7 @@ func physicalDialer(ctx context.Context, allowFragment ...bool) (N.Dialer, error
 	if e != nil {
 		return nil, e
 	}
-	dll, e := windows.LoadDLL(filepath.Join(filepath.Dir(executable), "OracleProxy.Guard.dll"))
+	dll, e := windows.LoadDLL(filepath.Join(filepath.Dir(executable), "Proxy.Guard.dll"))
 	if e != nil {
 		return nil, e
 	}

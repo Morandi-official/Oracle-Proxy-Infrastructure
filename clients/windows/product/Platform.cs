@@ -12,9 +12,9 @@ internal static class Platform
     internal const string Pipe = "OracleProxy.Control.v1";
     internal static string Root => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"OracleProxy");
     internal static string StateRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"OracleProxy");
-    internal static string Exe => Path.Combine(Root,"OracleProxy.Service.exe");
-    internal static string Core => Path.Combine(Root,"OracleProxy.Core.exe");
-    internal static string Guard => Path.Combine(Root,"OracleProxy.Guard.dll");
+    internal static string Exe => Path.Combine(Root,"Proxy.Service.exe");
+    internal static string Core => Path.Combine(Root,"Proxy.Core.exe");
+    internal static string Guard => Path.Combine(Root,"Proxy.Guard.dll");
     internal static bool IsSystem => WindowsIdentity.GetCurrent().User?.IsWellKnown(WellKnownSidType.LocalSystemSid)==true && Process.GetCurrentProcess().SessionId==0;
     internal static bool IsAdmin => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
@@ -77,9 +77,10 @@ internal static class Platform
         if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))return false;
         using var input=File.OpenRead(path);return CryptographicOperations.FixedTimeEquals(SHA256.HashData(input),Convert.FromHexString(expected));
     }
+    internal static string BundleFile(string root,string name)=>File.Exists(Path.Combine(root,"runtime",name))?Path.Combine(root,"runtime",name):Path.Combine(root,name);
     internal static void VerifyBundle(string root)
     {
-        if(!Pinned(Path.Combine(root,"OracleProxy.Core.exe"),BuildPins.Core) || !Pinned(Path.Combine(root,"OracleProxy.Guard.dll"),BuildPins.Guard))
+        if(!Pinned(BundleFile(root,"Proxy.Core.exe"),BuildPins.Core) || !Pinned(BundleFile(root,"Proxy.Guard.dll"),BuildPins.Guard))
             throw new IOException("BUNDLE_INTEGRITY_FAILED");
     }
     internal static void WriteAtomic(string path,byte[] content)

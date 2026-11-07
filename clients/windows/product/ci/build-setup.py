@@ -15,7 +15,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[4]
-PAYLOADS = {'Proxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll'}
+PAYLOADS = {'Proxy.exe', 'runtime/Proxy.Core.exe', 'runtime/Proxy.Guard.dll'}
 TEXT = {'BUILD.json', 'SHA256SUMS.txt', '请先阅读.txt'}
 
 

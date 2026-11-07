@@ -20,7 +20,7 @@ function Invoke-SetupProcess([string]$File,[string[]]$Arguments) {
 }
 function Check-Installed {
  $service=Get-CimInstance Win32_Service -Filter "Name='OracleProxyService'"
- $expected='"'+(Join-Path $serviceRoot 'OracleProxy.Service.exe')+'" --service'
+ $expected='"'+(Join-Path $serviceRoot 'Proxy.Service.exe')+'" --service'
  if(-not $service -or $service.State -ne 'Running' -or $service.ProcessId -le 0 -or $service.PathName -ne $expected -or $service.StartMode -ne 'Auto'){throw 'FIXED_SERVICE_IMAGE_PID_AUTOSTART_FAILED'}
  foreach($root in @($serviceRoot,$desktopRoot)){
   $acl=Get-Acl $root
@@ -30,13 +30,13 @@ function Check-Installed {
   }
  }
  if((Get-Content -Raw (Join-Path $desktopRoot 'desktop.marker')) -ne 'OracleProxy.Desktop.v1'){throw 'DESKTOP_PRODUCT_MARKER_REQUIRED'}
- foreach($name in @('Proxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll')){
+ foreach($name in @('Proxy.exe','runtime/Proxy.Core.exe','runtime/Proxy.Guard.dll')){
   if((Get-FileHash (Join-Path $desktopRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.$name){throw 'DESKTOP_PAYLOAD_DIGEST_MISMATCH'}
  }
- foreach($name in @('OracleProxy.Core.exe','OracleProxy.Guard.dll')){
-  if((Get-FileHash (Join-Path $serviceRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.$name){throw 'SERVICE_PAYLOAD_DIGEST_MISMATCH'}
+ foreach($name in @('Proxy.Core.exe','Proxy.Guard.dll')){
+  if((Get-FileHash (Join-Path $serviceRoot $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.('runtime/'+$name)){throw 'SERVICE_PAYLOAD_DIGEST_MISMATCH'}
  }
- if((Get-FileHash (Join-Path $serviceRoot 'OracleProxy.Service.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.'Proxy.exe'){throw 'SERVICE_HOST_DIGEST_MISMATCH'}
+ if((Get-FileHash (Join-Path $serviceRoot 'Proxy.Service.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $metadata.payload_sha256.'Proxy.exe'){throw 'SERVICE_HOST_DIGEST_MISMATCH'}
  if((Get-Content -Raw (Join-Path $serviceRoot 'owner.sid')).Trim() -ne $owner){throw 'OWNER_BINDING_MISMATCH'}
  if(-not (Test-Path $shortcut) -or -not (Test-Path $arp)){throw 'STANDARD_SHORTCUT_AND_UNINSTALL_ENTRY_REQUIRED'}
  $registration=Get-ItemProperty $arp

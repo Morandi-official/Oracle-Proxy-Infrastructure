@@ -38,7 +38,7 @@ internal static class TunReceipt
         Owner owner=Read();
         if(CurrentLuid()!=owner.Luid)throw new IOException("TUN_OWNER_IDENTITY_MISMATCH");
         VerifyCreatorExited(owner);
-        foreach(var process in Process.GetProcessesByName("OracleProxy.Core"))using(process){
+        foreach(var process in Process.GetProcessesByName("Proxy.Core"))using(process){
             if(OwnedCore(process,out _))throw new IOException("TUN_OWNER_LIVE_CORE_PRESENT");
         }
         // A fixed pinned child receives only its already-verified adapter identity.

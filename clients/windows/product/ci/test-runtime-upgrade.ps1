@@ -22,9 +22,10 @@ function Invoke-RuntimeProduct([string]$File,[string[]]$Arguments){
 }
 function Get-VerifiedProductService([string]$Hash){
  $service=Get-CimInstance Win32_Service -Filter "Name='OracleProxyService'"
- $image='"'+(Join-Path $serviceRoot 'OracleProxy.Service.exe')+'" --service'
+ $imageName=if($Hash -eq $newHash){'Proxy.Service.exe'}else{'OracleProxy.Service.exe'}
+ $image='"'+(Join-Path $serviceRoot $imageName)+'" --service'
  if(-not $service -or $service.State -ne 'Running' -or $service.ProcessId -le 0 -or $service.PathName -cne $image -or $service.StartName -ne 'LocalSystem' -or $service.StartMode -ne 'Auto'){throw 'RUNTIME_UPGRADE_FIXED_SYSTEM_SERVICE_REQUIRED'}
- if((Get-FileHash (Join-Path $serviceRoot 'OracleProxy.Service.exe') -Algorithm SHA256).Hash -ne $Hash -or (Get-Content -Raw (Join-Path $serviceRoot 'owner.sid')).Trim() -cne $owner){throw 'RUNTIME_UPGRADE_SERVICE_PAYLOAD_OR_OWNER_CHANGED'}
+ if((Get-FileHash (Join-Path $serviceRoot $imageName) -Algorithm SHA256).Hash -ne $Hash -or (Get-Content -Raw (Join-Path $serviceRoot 'owner.sid')).Trim() -cne $owner){throw 'RUNTIME_UPGRADE_SERVICE_PAYLOAD_OR_OWNER_CHANGED'}
  return [uint32]$service.ProcessId
 }
 function Invoke-RuntimeWitness([string]$Phase){
@@ -140,15 +141,15 @@ try {
  Invoke-RuntimeProduct $new @('--install',$owner)
  $newPid=Get-VerifiedProductService $newHash
  if($newPid -eq $oldPid){throw 'CROSS_RUNTIME_UPGRADE_DID_NOT_REPLACE_PROCESS'}
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc31+' 'udp'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc32+' 'udp'
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $cipherBefore){throw 'CROSS_RUNTIME_UPGRADE_REWROTE_EXISTING_DPAPI_STATE'}
  Invoke-RuntimeWitness 'VerifyUdp'
- Assert-RuntimeStatus $newPid 'PreferAuto' '0.3.0-rc31+' 'auto'
+ Assert-RuntimeStatus $newPid 'PreferAuto' '0.3.0-rc32+' 'auto'
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -eq $cipherBefore){throw 'NET10_SERVICE_DID_NOT_SAVE_SYNTHETIC_PREFERENCE'}
  Invoke-RuntimeWitness 'VerifyAuto'
  Restart-Service OracleProxyService
  $newPid=Get-VerifiedProductService $newHash
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc31+' 'auto'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc32+' 'auto'
  Invoke-RuntimeWitness 'VerifyAuto'
  Write-Host 'REAL_NET8_TO_NET10_SYSTEM_DPAPI_OWNER_PUBLIC_PRIVATE_KEY_AND_SCM_PIPE_UPGRADE=PASS'
  Invoke-RuntimeProduct $new @('--uninstall')
@@ -161,8 +162,9 @@ try {
   # No Login or Connect was sent. Only uninstall a service whose installed
   # image, owner and exact payload are from this fixture's checked inputs.
   $service=Get-CimInstance Win32_Service -Filter "Name='OracleProxyService'"
-  $image='"'+(Join-Path $serviceRoot 'OracleProxy.Service.exe')+'" --service'
-  $path=Join-Path $serviceRoot 'OracleProxy.Service.exe'
+  $imageName=if(Test-Path (Join-Path $serviceRoot 'Proxy.Service.exe')){'Proxy.Service.exe'}else{'OracleProxy.Service.exe'}
+  $image='"'+(Join-Path $serviceRoot $imageName)+'" --service'
+  $path=Join-Path $serviceRoot $imageName
   if($service -and $service.PathName -ceq $image -and (Test-Path $path) -and (Test-Path (Join-Path $serviceRoot 'owner.sid')) -and (Get-Content -Raw (Join-Path $serviceRoot 'owner.sid')).Trim() -ceq $owner){
    $currentHash=(Get-FileHash $path -Algorithm SHA256).Hash
    if($currentHash -eq $newHash){Invoke-RuntimeProduct $new @('--uninstall')}

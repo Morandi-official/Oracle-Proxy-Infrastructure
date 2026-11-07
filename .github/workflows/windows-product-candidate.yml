@@ -94,7 +94,7 @@ jobs:
           go test -mod=vendor -tags 'with_gvisor,with_wireguard' -v ./...
           if($LASTEXITCODE -ne 0){throw 'Core HTTPS transport tests failed'}
           New-Item -ItemType Directory -Force ../../../../dist/product | Out-Null
-          go build -mod=vendor -trimpath -tags 'with_gvisor,with_wireguard' -ldflags '-s -w -buildid=' -o ../../../../dist/product/OracleProxy.Core.exe .
+          go build -mod=vendor -trimpath -tags 'with_gvisor,with_wireguard' -ldflags '-s -w -buildid=' -o ../../../../dist/product/Proxy.Core.exe .
           if($LASTEXITCODE -ne 0){throw 'Core build failed'}
       - uses: actions/cache/save@v4
         if: steps.go-cache.outputs.cache-hit != 'true'
@@ -108,7 +108,7 @@ jobs:
         run: ./clients/windows/product/ci/verify-wintun.ps1
       - name: Compile owned native WFP boundary with Windows SDK
         shell: cmd
-        run: cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\product\OracleProxy.Guard.dll /DYNAMICBASE /NXCOMPAT /Brepro
+        run: cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\product\Proxy.Guard.dll /DYNAMICBASE /NXCOMPAT /Brepro
       - name: Embed immutable native payload hashes and compile self-contained Windows client
         shell: pwsh
         working-directory: clients/windows/product
@@ -116,8 +116,8 @@ jobs:
           $ErrorActionPreference='Stop'
           $pins='./BuildPins.cs'
           $body=Get-Content -Raw $pins
-          $body=$body.Replace('BUILD_MUST_PIN_CORE',(Get-FileHash '../../../dist/product/OracleProxy.Core.exe' -Algorithm SHA256).Hash.ToLowerInvariant())
-          $body=$body.Replace('BUILD_MUST_PIN_GUARD',(Get-FileHash '../../../dist/product/OracleProxy.Guard.dll' -Algorithm SHA256).Hash.ToLowerInvariant())
+          $body=$body.Replace('BUILD_MUST_PIN_CORE',(Get-FileHash '../../../dist/product/Proxy.Core.exe' -Algorithm SHA256).Hash.ToLowerInvariant())
+          $body=$body.Replace('BUILD_MUST_PIN_GUARD',(Get-FileHash '../../../dist/product/Proxy.Guard.dll' -Algorithm SHA256).Hash.ToLowerInvariant())
           [IO.File]::WriteAllText((Resolve-Path $pins),$body)
           dotnet publish ./OracleProxy.Product.csproj -c Release -p:DebugType=None -o ../../../dist/product
           if($LASTEXITCODE -ne 0){throw 'Product build failed'}
@@ -145,7 +145,7 @@ jobs:
           if($LASTEXITCODE -ne 0){throw 'Disposable UDP fault build failed'}
           dotnet publish ./ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ../../../dist/bad-upgrade
           if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
-          Copy-Item ../../../dist/product/OracleProxy.Core.exe,../../../dist/product/OracleProxy.Guard.dll ../../../dist/bad-upgrade
+          Copy-Item ../../../dist/product/Proxy.Core.exe,../../../dist/product/Proxy.Guard.dll ../../../dist/bad-upgrade
       - name: Real NET8 to NET10 service and DPAPI identity upgrade acceptance
         if: github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
         shell: pwsh
@@ -204,7 +204,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: Proxy-0.3.0-rc31-win-x64-unsigned-acceptance-candidate
+          name: Proxy-0.3.0-rc32-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             dist/candidate/*-setup.exe
@@ -216,7 +216,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: Proxy-0.3.0-rc31-corresponding-source
+          name: Proxy-0.3.0-rc32-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt
@@ -231,7 +231,7 @@ jobs:
           $out='./dist/review'
           New-Item -ItemType Directory -Force $out | Out-Null
           Copy-Item ./clients/windows/product/core/go.mod,./clients/windows/product/core/go.sum $out
-          Get-ChildItem ./dist/product -File | Where-Object Name -in @('Proxy.exe','OracleProxy.Core.exe','OracleProxy.Guard.dll') | ForEach-Object {"$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content "$out/SHA256SUMS.txt"
+          Get-ChildItem ./dist/product -File | Where-Object Name -in @('Proxy.exe','Proxy.Core.exe','Proxy.Guard.dll') | ForEach-Object {"$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"} | Set-Content "$out/SHA256SUMS.txt"
       - uses: actions/upload-artifact@v4
         if: always() && hashFiles('dist/review/*') != ''
         with:

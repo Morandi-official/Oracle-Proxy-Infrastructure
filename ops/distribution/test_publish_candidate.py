@@ -16,7 +16,7 @@ class PublicationBoundaries(unittest.TestCase):
                 {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'},
                 {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14'}]}}
 
-    def test_runtime_metadata_requires_actual_exact_rc31_sdk_and_runtime(self):
+    def test_runtime_metadata_requires_actual_exact_rc32_sdk_and_runtime(self):
         metadata = self.runtime_metadata()
         validate_dotnet_runtime(metadata)
         reversed_frameworks = copy.deepcopy(metadata)
@@ -55,8 +55,8 @@ class PublicationBoundaries(unittest.TestCase):
             with self.subTest(frameworks=value), self.assertRaises(ValueError):
                 validate_dotnet_runtime(candidate)
 
-    def test_manifest_requires_two_distinct_exact_artifacts_and_rc31_source(self):
-        manifest={'version':'0.3.0-rc31','run_id':42,'uu_path_run_id':43,'source_revision':'a'*40,
+    def test_manifest_requires_two_distinct_exact_artifacts_and_rc32_source(self):
+        manifest={'version':'0.3.0-rc32','run_id':42,'uu_path_run_id':43,'source_revision':'a'*40,
                   'artifacts':[{'id':1,'sha256':'b'*64},{'id':2,'sha256':'c'*64}]}
         validate_manifest(manifest)
         variants=[dict(manifest,artifacts=[]),dict(manifest,artifacts=manifest['artifacts'][:1]),

@@ -62,13 +62,16 @@ def main():
         known.write_text(os.environ.pop('KNOWN_HOSTS').replace('\r\n','\n').rstrip()+'\n');known.chmod(0o600)
         for address in TARGETS:result['entrances'].append(inspect(address,revision,key,known))
     checks=('host_key_verified','application_configured','primary_baseline_ready','secondary_alias_present','expected_secondary_advertised')
-    result['management_ready']=all(row.get('status')=='AUTHENTICATED_PREFLIGHT_COMPLETE' and all(row.get(k) for k in checks) for row in result['entrances'])
+    result['premaintenance_management_ready']=all(row.get('status')=='AUTHENTICATED_PREFLIGHT_COMPLETE' and all(row.get(k) for k in checks) for row in result['entrances'])
+    result['primary_detached_management_verified']=False
+    result['mapping_recovery_channel']='OCI_CONSOLE_OR_CONSOLE_AI_CONTROL_PLANE'
+    result['limitation']='Root gate fetches current main from GitHub; host outbound access may fail while the primary public IP is unassigned. Alternate SSH authentication is not proof the full root gate remains usable during that interval.'
     result['public_mapping_change_performed']=False
     result['credential_files_removed']=not folder.exists()
     destination=root/'dist/primary-ip-rebind/precheck.json';destination.parent.mkdir(parents=True,exist_ok=True)
     destination.write_text(json.dumps(result,indent=2)+'\n')
     print('PRIMARY_IP_REBIND_PRECHECK='+json.dumps(result,sort_keys=True),flush=True)
-    if not result['management_ready'] or not result['credential_files_removed']:raise SystemExit(1)
+    if not result['premaintenance_management_ready'] or not result['credential_files_removed']:raise SystemExit(1)
 
 
 if __name__=='__main__':main()

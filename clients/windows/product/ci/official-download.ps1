@@ -6,12 +6,23 @@ function Get-OfficialFile {
   if($SHA256 -and $SHA256 -notmatch '^[a-fA-F0-9]{64}$'){throw 'Invalid source digest'}
   $partial=$OutFile+'.partial'
   for($attempt=1;$attempt -le 3;$attempt++){
+    $phase='download'
     try{
       Invoke-WebRequest -Uri $Uri -OutFile $partial -MaximumRedirection 2 -TimeoutSec 30
+      $phase='checksum'
       if($SHA256 -and (Get-FileHash $partial -Algorithm SHA256).Hash -ne $SHA256){throw 'Source checksum mismatch'}
+      $phase='commit'
       [IO.File]::Move($partial,$OutFile,$true)
       return
     }catch{
+      $exceptionType=$_.Exception.GetType().Name
+      $status=0
+      try{
+        $response=$_.Exception.PSObject.Properties['Response']
+        if($null -ne $response -and $null -ne $response.Value){$status=[int]$response.Value.StatusCode}
+      }catch{}
+      if($status -lt 100 -or $status -gt 599){$status=0}
+      Write-Host "OFFICIAL_SOURCE_FAILURE_HOST=$($source.Host);PHASE=$phase;HTTP=$status;TYPE=$exceptionType;ATTEMPT=$attempt"
       Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
       if($attempt -eq 3){throw 'Official source download failed after three bounded attempts'}
       Write-Host 'OFFICIAL_SOURCE_DOWNLOAD_RETRY'

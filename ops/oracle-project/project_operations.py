@@ -145,6 +145,11 @@ def preflight():
         audit_spec=importlib.util.spec_from_file_location('udp_return_host_audit',Path(__file__).with_name('udp_return_host_audit.py'))
         audit=importlib.util.module_from_spec(audit_spec);audit_spec.loader.exec_module(audit)
         value['udp_return_host_audit']=audit.observe()
+        try:
+            measured=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_return_oci_audit.py'))],capture_output=True,text=True,check=True,timeout=60)
+            if len(measured.stdout)>1048576:raise ValueError('OCI_AUDIT_OUTPUT_LIMIT')
+            value['udp_return_oci_audit']=json.loads(measured.stdout)
+        except (OSError,ValueError,subprocess.SubprocessError):value['udp_return_oci_audit']={'status':'UNAVAILABLE_OR_DEADLINE','support_case_submitted':False}
     if diagnostic_request.get('operation')=='preflight' and diagnostic_request.get('request_id','').startswith('network-performance-'):
         try:
             measured=subprocess.run([sys.executable,'-I',str(Path(__file__).with_name('performance_probe.py'))],capture_output=True,text=True,check=True,timeout=120)

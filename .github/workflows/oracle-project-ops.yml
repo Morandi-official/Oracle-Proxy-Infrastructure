@@ -33,6 +33,7 @@ jobs:
     environment: oracle-ops
     outputs:
       operation: ${{ steps.request.outputs.operation }}
+      ci_retirement: ${{ steps.request.outputs.ci_retirement }}
       secondary_endpoint: ${{ steps.request.outputs.secondary_endpoint }}
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +56,7 @@ jobs:
           LOCAL_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
           LOCAL_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
           OPERATION: ${{ steps.request.outputs.operation }}
+          CI_RETIREMENT: ${{ steps.request.outputs.ci_retirement }}
           REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -99,14 +101,14 @@ jobs:
           else
             "${SSH[@]}" "$OPERATION $REVISION"
           fi
-          if [[ "$OPERATION" == deploy || "$OPERATION" == enable-https ]]; then
+          if [[ "$OPERATION" == deploy || "$OPERATION" == enable-https ]] && [[ "$CI_RETIREMENT" != true ]]; then
             curl --fail --silent --show-error --connect-timeout 8 --max-time 10 --retry 12 --retry-delay 5 --retry-all-errors \
               --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
             python3 ops/oracle-project/verify_public.py
             python3 ops/oracle-project/verify_downloads.py
           fi
       - name: External QUIC TLS reachability without client credentials
-        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https' || steps.request.outputs.transport_probe == 'true'
+        if: (steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https' || steps.request.outputs.transport_probe == 'true') && steps.request.outputs.ci_retirement != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -125,7 +127,7 @@ jobs:
             fi
           fi
       - name: Real Chromium and Firefox administrator login acceptance
-        if: steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https'
+        if: (steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https') && steps.request.outputs.ci_retirement != 'true'
         shell: bash
         env:
           ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
@@ -184,7 +186,7 @@ jobs:
 
   release-download-links:
     needs: operations
-    if: needs.operations.result == 'success' && (needs.operations.outputs.operation == 'deploy' || needs.operations.outputs.operation == 'enable-https')
+    if: needs.operations.result == 'success' && (needs.operations.outputs.operation == 'deploy' || needs.operations.outputs.operation == 'enable-https') && needs.operations.outputs.ci_retirement != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

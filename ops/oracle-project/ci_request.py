@@ -20,6 +20,10 @@ def parse_request(body):
     return value['operation']
 
 
+def is_ci_retirement(operation, request):
+    return operation == 'enable-https' and request.get('request_id') == 'retire-only-rc32-completed-ci-20261107'
+
+
 def choose():
     if os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch':
         operation = os.environ.get('REQUESTED_OPERATION', '')
@@ -38,6 +42,7 @@ if __name__ == '__main__':
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         stream.write('operation=' + operation + '\n')
         request=json.loads(Path(REQUEST).read_text())
+        stream.write('ci_retirement='+str(is_ci_retirement(operation,request)).lower()+'\n')
         stream.write('transport_probe='+str(operation=='preflight' and request.get('request_id','').startswith('udp-path-check-')).lower()+'\n')
         secondary=operation=='enable-https' and request.get('request_id') in ('secondary-endpoint-apply-20261026','secondary-vpn-promote-20261026')
         stream.write('secondary_endpoint='+str(secondary).lower()+'\n')

@@ -98,8 +98,8 @@ Move-Item $stateBackup "$env:ProgramData/OracleProxy/state.dpapi" -Force
 function Show-RecoveryFixture([string]$Stage){
  try{
   $adapters=@(Get-NetAdapter -Name OracleProxy -IncludeHidden -ErrorAction SilentlyContinue | Select-Object Name,Status,ifIndex)
-  $cores=@(Get-CimInstance Win32_Process -Filter "Name='OracleProxy.Core.exe'" -Property ProcessId,ExecutablePath)
-  $corePath=Join-Path $env:ProgramFiles 'OracleProxy\OracleProxy.Core.exe'
+  $cores=@(Get-CimInstance Win32_Process -Filter "Name='Proxy.Core.exe'" -Property ProcessId,ExecutablePath)
+  $corePath=Join-Path $env:ProgramFiles 'OracleProxy\Proxy.Core.exe'
   $owned=@($cores | Where-Object ExecutablePath -eq $corePath).Count
   $unknown=@($cores | Where-Object {-not $_.ExecutablePath}).Count
   $services=@(Get-CimInstance Win32_Service -Filter "Name='OracleProxyService' OR Name='OracleProxyRecovery'" -Property Name,State | Select-Object Name,State)
@@ -120,11 +120,11 @@ Write-Host 'REAL_PRODUCT_UAC_SYSTEM_RECOVERY_PRESERVES_KEY_AND_COMMITS_SAFE_OFF=
 Write-Host 'REAL_FIXED_UAC_RECOVERY_REMOVES_RECEIPT_OWNED_KERNEL_ORPHAN_BEFORE_SAFE_OFF=PASS'
 Copy-Item "$env:ProgramData/OracleProxy/state.dpapi" "$env:ProgramData/OracleProxy/state.recovery-$([Guid]::NewGuid().ToString('N')).dpapi"
 Remove-Item "$env:ProgramData/OracleProxy/state.dpapi"
-$oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash
+$oldHash=(Get-FileHash "$env:ProgramFiles/OracleProxy/Proxy.Service.exe").Hash
 $bad=(Resolve-Path './dist/bad-upgrade/Proxy.exe').Path
 $upgrade=Start-Process $bad -ArgumentList @('--install',$owner) -Wait -PassThru
 if($upgrade.ExitCode -eq 0){throw 'Deliberate bad startup unexpectedly installed'}
-if((Get-FileHash "$env:ProgramFiles/OracleProxy/OracleProxy.Service.exe").Hash -ne $oldHash){throw 'Automatic rollback did not restore the previous executable'}
+if((Get-FileHash "$env:ProgramFiles/OracleProxy/Proxy.Service.exe").Hash -ne $oldHash){throw 'Automatic rollback did not restore the previous executable'}
 & $test --owner-status
 if($LASTEXITCODE -ne 0){throw 'Previous service did not recover after rollback'}
 Write-Host 'REAL_BAD_UPGRADE_AUTOMATIC_BINARY_AND_SERVICE_ROLLBACK=PASS' 

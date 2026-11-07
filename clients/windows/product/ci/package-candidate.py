@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[4]
 PRODUCT = ROOT / 'clients/windows/product'
-PAYLOADS = ('Proxy.exe', 'OracleProxy.Core.exe', 'OracleProxy.Guard.dll')
+PAYLOADS = ('Proxy.exe', 'runtime/Proxy.Core.exe', 'runtime/Proxy.Guard.dll')
 _policy_spec = importlib.util.spec_from_file_location('runtime_policy', Path(__file__).with_name('dotnet-runtime-policy.py'))
 RUNTIME_POLICY = importlib.util.module_from_spec(_policy_spec)
 _policy_spec.loader.exec_module(RUNTIME_POLICY)
@@ -98,9 +98,9 @@ def main():
     out = ROOT / 'dist/candidate'
     out.mkdir(parents=True, exist_ok=True)
     build = ROOT / 'dist/product'
-    hashes = {name: digest(build / name) for name in PAYLOADS}
+    hashes = {name: digest(build / Path(name).name) for name in PAYLOADS}
     pins = (PRODUCT / 'BuildPins.cs').read_text()
-    if hashes['OracleProxy.Core.exe'] not in pins or hashes['OracleProxy.Guard.dll'] not in pins:
+    if hashes['runtime/Proxy.Core.exe'] not in pins or hashes['runtime/Proxy.Guard.dll'] not in pins:
         raise RuntimeError('Payload hashes differ from compiled build pins')
     wintun = Path(os.environ['RUNNER_TEMP']) / 'oracle-official-wintun'
     wintun_licenses = licenses(wintun)
@@ -145,11 +145,11 @@ def main():
     readme += '\n构建提交：' + revision + '\n配套源码包：' + source_name + '\n'
     with zipfile.ZipFile(out / (tag + '.zip'), 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for name in PAYLOADS:
-            archive.write(build / name, name)
+            archive.write(build / Path(name).name, name)
         archive.writestr('请先阅读.txt', readme)
         archive.writestr('BUILD.json', json.dumps(metadata, indent=2))
-        archive.write(PRODUCT / 'COPYING', 'licenses/OracleProxy-GPL-3.0.txt')
-        archive.write(PRODUCT / 'LICENSE', 'licenses/OracleProxy-LICENSE.txt')
+        archive.write(PRODUCT / 'COPYING', 'licenses/Proxy-GPL-3.0.txt')
+        archive.write(PRODUCT / 'LICENSE', 'licenses/Proxy-LICENSE.txt')
         for path in wintun_licenses:
             archive.write(path, 'licenses/wintun/' + path.relative_to(wintun).as_posix())
         for path in licenses(vendor):

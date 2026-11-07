@@ -31,7 +31,7 @@ class SetupBoundary(unittest.TestCase):
             z.writestr('BUILD.json', json.dumps(self.metadata))
             z.writestr('SHA256SUMS.txt', 'test manifest')
             z.writestr('请先阅读.txt', '用户说明'.encode('utf-8'))
-            z.writestr('licenses/OracleProxy-GPL-3.0.txt', 'test license')
+            z.writestr('licenses/Proxy-GPL-3.0.txt', 'test license')
             if extra:
                 z.writestr(extra, 'untrusted')
         return path
@@ -53,7 +53,7 @@ class SetupBoundary(unittest.TestCase):
         stage = self.root / 'payload'
         build.stage_bundle(self.archive(), self.metadata, stage)
         self.assertEqual((stage / 'Proxy.exe').read_bytes(), b'Proxy.exe')
-        self.assertEqual((stage / 'licenses/OracleProxy-GPL-3.0.txt').read_text(), 'test license')
+        self.assertEqual((stage / 'licenses/Proxy-GPL-3.0.txt').read_text(), 'test license')
         self.assertEqual((stage / '请先阅读.txt').read_text(encoding='utf-8-sig'), '用户说明')
 
     def test_path_traversal_extra_program_and_state_are_rejected(self):

@@ -50,10 +50,10 @@ class PackageBoundaryTests(unittest.TestCase):
         self.put('clients/windows/product/core/vendor/example.test/core.go', 'package core')
         self.put('temp/oracle-official-wintun/LICENSE', 'test upstream distribution license')
         for name in candidate.PAYLOADS:
-            self.put('dist/product/' + name, name)
+            self.put('dist/product/' + Path(name).name, name)
         self.put('dist/product/OracleProxy.Product.Tests.exe', 'forbidden harness')
         self.put('dist/product/secret.dpapi', 'forbidden state')
-        self.put('clients/windows/product/BuildPins.cs', '\n'.join(candidate.digest(self.root / 'dist/product' / name) for name in candidate.PAYLOADS))
+        self.put('clients/windows/product/BuildPins.cs', '\n'.join(candidate.digest(self.root / 'dist/product' / Path(name).name) for name in candidate.PAYLOADS))
         self.put('nuget/example/1.0/LICENSE', 'test NuGet license')
         self.put('nuget/example/1.0/example.nuspec', '<package><metadata><repository url="https://example.test/source" commit="123"/></metadata></package>')
         assets = {'packageFolders': {str(self.root / 'nuget'): {}},
@@ -136,7 +136,7 @@ class PackageBoundaryTests(unittest.TestCase):
             self.invoke()
 
     def test_mismatched_payload_is_rejected(self):
-        self.put('dist/product/OracleProxy.Core.exe', 'tampered core')
+        self.put('dist/product/Proxy.Core.exe', 'tampered core')
         with self.assertRaisesRegex(RuntimeError, 'compiled build pins'):
             self.invoke()
 

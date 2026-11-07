@@ -175,7 +175,7 @@ internal sealed partial class VpnRuntime : IDisposable
                         }
                     }else if(!_secret.ConnectIntent && _core.Running){await StopCore();_transport=Preferred();_probeFailures=0;}
                 }catch(Exception error){
-                    if(error is ApiException && error.Message=="LOGIN_REQUIRED")ForgetLogin();
+                    if(error is ApiException && error.Message is "LOGIN_REQUIRED" or "DEVICE_REVOKED"){ForgetLogin();await StopCore();}
                     Failed(error);
                     // A rejected inventory must not be rediscovered every
                     // 200ms under the same gate needed by Status and Quit.
@@ -258,13 +258,17 @@ internal sealed partial class VpnRuntime : IDisposable
                 await StopCore();_transport=TransportPolicy.First(_secret.TransportPreference,_state);_initialCarrierSelected=false;_probeFailures=0;_nativeUdpAttempt=null;
                 _stage="ACCOUNT_LOGIN";string username=value["username"]!.GetValue<string>(),password=value["password"]!.GetValue<string>();
                 if(username.Length is <3 or >64 || password.Length is <1 or >128)throw new IOException("INVALID_CREDENTIALS");
-                if(_secret.PrivateKey.Length==0){
+                // Never reveal an earlier account while a new login/enrollment is pending.
+                ForgetLogin();_secret.Save();
+                void NewIdentity(){
                     byte[] key=RandomNumberGenerator.GetBytes(32),pub=new byte[32];key[0]&=248;key[31]&=127;key[31]|=64;
                     try{X25519.GeneratePublicKey(key,0,pub,0);_secret.PrivateKey=Convert.ToBase64String(key);_secret.PublicKey=Convert.ToBase64String(pub);_secret.Save();}
                     finally{CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);}
                 }
-                var login=await _api.Call("authenticate","",new JsonObject{["username"]=username,["password"]=password,["public_key"]=_secret.PublicKey,["device_name"]=Environment.MachineName,["client_version"]=DeviceRegistration.Version});
-                _secret.Token=login["token"]!.GetValue<string>();login.Remove("token");LoginPolicy.Start(_secret,login["token_expires_at"]!.GetValue<long>(),command=="LoginRemembered",username,DateTimeOffset.UtcNow.ToUnixTimeSeconds());_interactiveAuthenticated=true;_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error="";break;
+                if(_secret.PrivateKey.Length==0)NewIdentity();
+                _stage="DEVICE_ADMISSION";
+                var login=await LoginAdmission.Run(_api.Call,()=>_secret.PublicKey,NewIdentity,username,password,Environment.MachineName);
+                _secret.Token=login["token"]!.GetValue<string>();login.Remove("token");LoginPolicy.Start(_secret,login["token_expires_at"]!.GetValue<long>(),command=="LoginRemembered",username,DateTimeOffset.UtcNow.ToUnixTimeSeconds());_interactiveAuthenticated=true;_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error="";_failure=null;_mode="disconnected";_prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);_prepareMayStartCore=true;_prepareRetryAfter=default;break;
             case "ConfirmDevice":{
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_ENROLLMENT");
                 if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
@@ -331,7 +335,7 @@ internal sealed partial class VpnRuntime : IDisposable
             }
             return Snapshot();
         }catch(OperationCanceledException)when(!admitted && admission.IsCancellationRequested){throw;}
-        catch(Exception e){if(e is ApiException && e.Message=="LOGIN_REQUIRED")ForgetLogin();Failed(e);if(!_secret.ConnectIntent)_prepareRetryAfter=DateTimeOffset.UtcNow.AddSeconds(30);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
+        catch(Exception e){if(e is ApiException && e.Message is "LOGIN_REQUIRED" or "DEVICE_REVOKED"){ForgetLogin();await StopCore();}Failed(e);if(!_secret.ConnectIntent)_prepareRetryAfter=DateTimeOffset.UtcNow.AddSeconds(30);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
         finally{_gate.Release();}
     }
     private async Task Disconnect(bool keepPrepared=true)

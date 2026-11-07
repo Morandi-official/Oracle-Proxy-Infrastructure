@@ -37,7 +37,7 @@ Compression=lzma2
 SolidCompression=yes
 OutputDir={#OutputDir}
 OutputBaseFilename={#ArtifactStem}-setup
-LicenseFile={#PayloadDir}\licenses\OracleProxy-GPL-3.0.txt
+LicenseFile={#PayloadDir}\licenses\Proxy-GPL-3.0.txt
 InfoBeforeFile={#PayloadDir}\请先阅读.txt
 UninstallDisplayIcon={app}\Proxy.exe
 CloseApplications=yes
@@ -51,12 +51,16 @@ Name: desktopicon; Description: "Create a desktop shortcut"; GroupDescription: "
 
 [Files]
 Source: "{#PayloadDir}\Proxy.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadDir}\OracleProxy.Core.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadDir}\OracleProxy.Guard.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\runtime\Proxy.Core.exe"; DestDir: "{app}\runtime"; Flags: ignoreversion
+Source: "{#PayloadDir}\runtime\Proxy.Guard.dll"; DestDir: "{app}\runtime"; Flags: ignoreversion
 Source: "{#PayloadDir}\BUILD.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\SHA256SUMS.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\请先阅读.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+Type: files; Name: "{app}\OracleProxy.Core.exe"
+Type: files; Name: "{app}\OracleProxy.Guard.dll"
 
 [UninstallDelete]
 Type: files; Name: "{app}\desktop.marker"
@@ -102,8 +106,8 @@ begin
   end;
   if ServiceReady then Exit;
   ExtractTemporaryFile('Proxy.exe');
-  ExtractTemporaryFile('OracleProxy.Core.exe');
-  ExtractTemporaryFile('OracleProxy.Guard.dll');
+  ExtractTemporaryFile('Proxy.Core.exe');
+  ExtractTemporaryFile('Proxy.Guard.dll');
   Arguments := '--install-interactive';
   { Administrators may explicitly select an owner for unattended installation.
     This invokes the same existing fixed --install-desktop SID boundary, not a shell. }

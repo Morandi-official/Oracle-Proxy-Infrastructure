@@ -92,6 +92,7 @@ internal static class ProductTests
     }
     private static async Task<int> ProbeDeadlines()
     {
+        await LoginAdmissionTests.Run();
         if(!ColdHandshakeRetryPolicy())return 1;
         if(!await OrphanLogDrain(false) || !await OrphanLogDrain(true))return 1;
         Console.WriteLine("ORPHAN_STDERR_DRAINS_LARGE_UNKNOWN_OR_INVALID_LOGS_WITHOUT_PREFIX_MATCH_OR_EARLY_EXIT=PASS");
@@ -534,28 +535,14 @@ internal static class ProductTests
         Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_PRESERVE_ADAPTIVE_PORT_SELECTION=PASS");
         var pending=(JsonObject)snapshot.DeepClone();pending["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
         pending["registration"]=new JsonObject{["status"]="pending",["device_id"]="112233aabbcc",["device_name"]="DESKTOP-NEW",["requires_slot"]=true};pending["devices"]=new JsonArray();
-        var registrationCalls=new List<(string Command,string? Name,string? Consent)>();
-        using(var registrationForm=new MainForm((command,name,consent)=>{
-            registrationCalls.Add((command,name,consent));
-            if(command=="ConfirmDevice" && consent=="confirmed"){
-                pending["device_registered"]=true;pending["registration"]!["status"]="registered";pending["registration"]!["device_name"]=name;pending["registration"]!["confirmed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["account"]!["device_count"]=2;
-            }
-            return Task.FromResult((JsonObject)pending.DeepClone());
-        })){
-            if(Descendants(registrationForm).OfType<Button>().Single(b=>b.Text=="连接").Enabled || Descendants(registrationForm).OfType<Button>().Single(b=>b.Name=="register-device").Enabled)return 1;
-            registrationForm.Display(pending);
-            var connectButton=Descendants(registrationForm).OfType<Button>().Single(b=>b.Text=="连接");
-            var register=Descendants(registrationForm).OfType<Button>().Single(b=>b.Name=="register-device");
-            var name=Descendants(registrationForm).OfType<TextBox>().Single(b=>b.Name=="device-name");
-            var consent=Descendants(registrationForm).OfType<CheckBox>().Single(b=>b.Name=="device-confirm");
-            if(connectButton.Enabled || register.Enabled)return 1;
-            name.Text="My own study PC";consent.Checked=true;registrationForm.Display(pending);
-            if(name.Text!="My own study PC" || !consent.Checked || !register.Enabled)return 1;
-            pending["account"]!["device_count"]=3;registrationForm.Display(pending);if(register.Enabled)return 1;
-            pending["registration"]!["requires_slot"]=false;registrationForm.Display(pending);if(!register.Enabled)return 1;
-            pending["account"]!["device_count"]=1;
-            registrationForm.Act("ConfirmDevice").GetAwaiter().GetResult();
-            if(registrationCalls.Count!=1 || registrationCalls[0]!=("ConfirmDevice","My own study PC","confirmed") || !connectButton.Enabled || register.Enabled)return 1;
+        using(var registrationForm=new MainForm((command,name,consent)=>Task.FromResult((JsonObject)pending.DeepClone()))){
+            UiShow(registrationForm);registrationForm.Display(pending);Application.DoEvents();
+            var shell=Descendants(registrationForm).Single(c=>c.Name=="dashboard");
+            var gate=Descendants(registrationForm).Single(c=>c.Name=="login-gate");
+            if(shell.Visible || !gate.Visible)return 1;
+            pending["device_registered"]=true;pending["registration"]!["status"]="registered";
+            registrationForm.Display(pending);Application.DoEvents();
+            if(!shell.Visible || gate.Visible)return 1;
         }
         var unconfirmed=new JsonObject{["account"]=new JsonObject{["status"]="active"},["registration"]=new JsonObject{["status"]="pending"},["device"]=new JsonObject{["registered"]=false},["tunnel"]=null};
         if(DeviceRegistration.Confirmed(unconfirmed) || DeviceRegistration.ReportMode("connected",false,false)!="pending")return 1;
@@ -777,7 +764,11 @@ internal static class ProductTests
             foreach(bool pending in new[]{false,true}){
                 state["device_registered"]=!pending;state["registration"]!["status"]=pending?"pending":"registered";
                 form.Display(state);Application.DoEvents();
-                foreach(bool expandedDetails in pending?new[]{true}:new[]{false,true}){
+                if(pending){
+                    UiAssert(UiDescendants(form).Single(c=>c.Name=="login-gate").Visible && !UiDescendants(form).Single(c=>c.Name=="dashboard").Visible,"UNREGISTERED_DEVICE_REVEALED_CONNECTION_PAGE");
+                    UiRecoveryReachable(form,"PENDING_ADMISSION");continue;
+                }
+                foreach(bool expandedDetails in new[]{false,true}){
                     if(!pending && details.Visible!=expandedDetails){viewport.ScrollControlIntoView(deviceToggle);deviceToggle.PerformClick();Application.DoEvents();}
                     UiAssert(details.Visible==expandedDetails,"REGISTRATION_DISCLOSURE_DID_NOT_CHANGE");
                     foreach(bool expandedMaintenance in new[]{false,true}){
@@ -945,7 +936,7 @@ internal static class ProductTests
     private static void Rescue()
     {
         try{using var service=new ServiceController(Platform.Service);if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(15));}}catch{}
-        try{foreach(var p in Process.GetProcessesByName("OracleProxy.Core"))using(p){if(p.MainModule?.FileName==Platform.Core)p.Kill(true);}}catch{}
+        try{foreach(var p in Process.GetProcessesByName("Proxy.Core"))using(p){if(p.MainModule?.FileName==Platform.Core)p.Kill(true);}}catch{}
         try{IntPtr module=NativeLibrary.Load(Platform.Guard);uint result=Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))();if(result==0)File.WriteAllText(Path.Combine(Root,"rescued"),"OWNED_FILTERS_CLEARED");}catch{}
     }
     private sealed class Fixture:ServiceBase

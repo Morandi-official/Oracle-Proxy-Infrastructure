@@ -240,7 +240,7 @@ internal sealed partial class MainForm : Form
         _loginGate=new Panel{Name="login-gate",Dock=DockStyle.Fill,AutoScroll=true,Margin=new Padding(0),BackColor=Canvas,Visible=false};content.Controls.Add(_loginGate);_loginGate.BringToFront();
         var loginContent=Stack("loginContent");
         Row(loginContent,new Label{Text="登录账号",AutoSize=true,Font=new Font(Font.FontFamily,18,FontStyle.Bold),Margin=new Padding(0,0,0,10)});
-        Row(loginContent,new Label{Text="使用管理员提供的账号和密码。",AutoSize=true,ForeColor=Muted,Margin=new Padding(0,0,0,18)});
+        Row(loginContent,new Label{Text="使用管理员提供的账号和密码，登录时自动登记本机设备。",AutoSize=true,ForeColor=Muted,Margin=new Padding(0,0,0,18)});
         _credentials=Stack("credentials");_username.Dock=_password.Dock=DockStyle.Fill;_username.Height=_password.Height=36;_username.Margin=_password.Margin=new Padding(0,0,0,12);
         Row(_credentials,new Label{Text="账号",AutoSize=true,Margin=new Padding(0,0,0,4)});Row(_credentials,_username);Row(_credentials,new Label{Text="密码",AutoSize=true,Margin=new Padding(0,0,0,4)});Row(_credentials,_password);Row(loginContent,_credentials);
         _rememberLogin.Margin=new Padding(0,0,0,12);Row(loginContent,_rememberLogin);_help.SetToolTip(_rememberLogin,"最多保留 30 天的加密登录令牌，不保存明文密码；退出账号后立即清除。");
@@ -386,7 +386,7 @@ internal sealed partial class MainForm : Form
         if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
         bool acquired=false,sentMutation=false;
-        if(!passive){_busy=true;if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号…";RefreshActions();}
+        if(!passive){_busy=true;if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";RefreshActions();}
         try{
             if(passive){if(!_requests.Wait(0))return;acquired=true;}
             else{await _requests.WaitAsync(deadline.Token);acquired=true;}
@@ -504,9 +504,9 @@ internal sealed partial class MainForm : Form
             var account=state["login_authenticated"]?.GetValue<bool>()==true?state["account"]?.AsObject():null;
             bool hasAccount=account is not null;
             if(_hasAccount!=hasAccount){
-                _hasAccount=hasAccount;_credentials.Visible=!hasAccount;_login.Visible=!hasAccount;_logout.Visible=hasAccount;
+                _hasAccount=hasAccount;_credentials.Visible=!LoginAdmission.DashboardReady(state);_login.Visible=!LoginAdmission.DashboardReady(state);_logout.Visible=hasAccount;
             }
-            _authenticated=state["login_authenticated"]?.GetValue<bool>()==true && hasAccount;
+            _authenticated=LoginAdmission.DashboardReady(state);
             if(_dashboardShown && !_authenticated){_username.Clear();_password.Clear();}
             // Reveal only after every label and child layout below is ready.
             if(!_authenticated){
@@ -608,7 +608,8 @@ internal sealed partial class MainForm : Form
         "DIAGNOSTIC_BUSY"=>"UDP 诊断正在运行，可先取消诊断。",
         "DIAGNOSTIC_RATE_LIMITED"=>"诊断请求过于频繁，请稍后重试。",
         "UDP_DIAGNOSTIC_NOT_AVAILABLE"=>"服务器尚未提供 UDP 配对诊断，请稍后刷新状态。",
-        "DEVICE_CONFIRMATION_REQUIRED"=>"请先核对本机名称和识别码，勾选归属并登记此设备。",
+        "DEVICE_CONFIRMATION_REQUIRED"=>"设备登记尚未完成，请重新登录；登记成功后才能进入连接页面。",
+        "DEVICE_REVOKED"=>"此设备身份已撤销，请重新登录以检查名额并登记。",
         "DISCONNECT_BEFORE_ENROLLMENT"=>"请先断开 VPN，再确认本机设备。",
         "CLIENT_UPDATE_REQUIRED"=>"请升级客户端并在账号与设备区完成设备确认。",
 

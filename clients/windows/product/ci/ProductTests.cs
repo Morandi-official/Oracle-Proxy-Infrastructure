@@ -764,7 +764,11 @@ internal static class ProductTests
             foreach(bool pending in new[]{false,true}){
                 state["device_registered"]=!pending;state["registration"]!["status"]=pending?"pending":"registered";
                 form.Display(state);Application.DoEvents();
-                foreach(bool expandedDetails in pending?new[]{true}:new[]{false,true}){
+                if(pending){
+                    UiAssert(UiDescendants(form).Single(c=>c.Name=="login-gate").Visible && !UiDescendants(form).Single(c=>c.Name=="dashboard").Visible,"UNREGISTERED_DEVICE_REVEALED_CONNECTION_PAGE");
+                    UiRecoveryReachable(form,"PENDING_ADMISSION");continue;
+                }
+                foreach(bool expandedDetails in new[]{false,true}){
                     if(!pending && details.Visible!=expandedDetails){viewport.ScrollControlIntoView(deviceToggle);deviceToggle.PerformClick();Application.DoEvents();}
                     UiAssert(details.Visible==expandedDetails,"REGISTRATION_DISCLOSURE_DID_NOT_CHANGE");
                     foreach(bool expandedMaintenance in new[]{false,true}){

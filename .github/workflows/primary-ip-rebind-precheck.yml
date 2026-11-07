@@ -1,0 +1,43 @@
+name: Primary public IP rebind management precheck
+on:
+  pull_request:
+    paths: ['ops/primary-ip-rebind/**', '.github/workflows/primary-ip-rebind-precheck.yml']
+  push:
+    branches: [main]
+    paths: ['ops/primary-ip-rebind/**', 'ops/oracle-project/request.json', '.github/workflows/primary-ip-rebind-precheck.yml']
+permissions:
+  contents: read
+concurrency:
+  group: oracle-project-root-operations
+  cancel-in-progress: false
+jobs:
+  source-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s ops/primary-ip-rebind -p 'test_*.py' -v
+  real-precheck:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: source-tests
+    runs-on: ubuntu-24.04
+    environment: oracle-ops
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify both management entrances using the same pinned host key
+        env:
+          CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_CI_KNOWN_HOSTS }}
+        run: python3 ops/primary-ip-rebind/precheck.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: primary-ip-rebind-management-precheck
+          path: dist/primary-ip-rebind/precheck.json
+          if-no-files-found: ignore
+          retention-days: 7

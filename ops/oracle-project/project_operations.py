@@ -141,6 +141,10 @@ def preflight():
     ingress=importlib.util.module_from_spec(ingress_spec);ingress_spec.loader.exec_module(ingress)
     value['public_ingress_readiness']=ingress.observe()
     diagnostic_request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if diagnostic_request.get('operation')=='preflight' and diagnostic_request.get('request_id')=='udp-return-host-audit-20261107':
+        audit_spec=importlib.util.spec_from_file_location('udp_return_host_audit',Path(__file__).with_name('udp_return_host_audit.py'))
+        audit=importlib.util.module_from_spec(audit_spec);audit_spec.loader.exec_module(audit)
+        value['udp_return_host_audit']=audit.observe()
     if diagnostic_request.get('operation')=='preflight' and diagnostic_request.get('request_id','').startswith('network-performance-'):
         try:
             measured=subprocess.run([sys.executable,'-I',str(Path(__file__).with_name('performance_probe.py'))],capture_output=True,text=True,check=True,timeout=120)

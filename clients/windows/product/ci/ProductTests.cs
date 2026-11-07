@@ -128,10 +128,10 @@ internal static class ProductTests
         // This clock is supplied to the production decision, never wall-clock
         // sleeps or a second implementation of the fallback condition.
         var events=new NativeUdpEvidence();
-        if(!events.Record("NATIVE_UDP_51820_SEND_INIT"))return false;
+        if(!events.Record("NATIVE_UDP_51820_SEND_INIT") || !events.Record("NATIVE_UDP_51820_INIT_INDEX_123"))return false;
         bool Decide(long age,bool pending,int failures=2,bool verified=false,bool reply=false)=>CarrierFallbackPolicy.ShouldFallback(TunnelTransport.WireGuardUdp,verified,reply,events.Snapshot(),failures,age,pending);
         if(Decide(5000,false,1) || CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,false,events.Snapshot()))return false;
-        if(!events.Record("NATIVE_UDP_443_SEND_INIT") || !CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,false,events.Snapshot()))return false;
+        if(!events.Record("NATIVE_UDP_443_SEND_INIT") || !events.Record("NATIVE_UDP_443_INIT_INDEX_456") || !CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,false,events.Snapshot()))return false;
         foreach(long age in new[]{7999L,8000,8333,10000,10665,11999})
             if(Decide(age,false) || Decide(age,true))return false;
         if(!events.Record("NATIVE_UDP_51820_SEND_INIT"))return false;
@@ -165,6 +165,12 @@ internal static class ProductTests
             if(!socket.Record(error) || !Baseline(TunnelTransport.WireGuardUdp,socket.Snapshot()))return false;
         }
         foreach(var malformed in new JsonObject[]{
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["sender_indices"]=new JsonArray("123")}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["sender_indices"]=new JsonArray(-1)}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["sender_indices"]=new JsonArray(4294967296UL)}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["sender_indices"]=new JsonArray(1,1)}},
+            new(){["51820"]=new JsonObject{["tx_initiations"]=2,["sender_indices"]=new JsonArray(Enumerable.Range(0,17).Select(n=>(JsonNode?)JsonValue.Create(n)).ToArray())}},
+            new(){["51820"]=new JsonObject{["sender_indices"]=new JsonArray(1,2)}},
             new(){["22"]=new JsonObject{["tx_initiations"]=2}},
             new(){["51820"]=new JsonObject{["tx_initiations"]=-2}},
             new(){["51820"]=new JsonObject{["tx_initiations"]="2"}},

@@ -26,6 +26,16 @@ internal static class CarrierFallbackPolicy
             foreach(var port in evidence){
                 if(port.Key is not ("51820" or "443" or "8443") || port.Value is not JsonObject counters)return false;
                 foreach(var item in counters){
+                    // Correlation indices are bounded metadata, not handshake
+                    // success or extra attempts. NativeUdpEvidence emits these
+                    // alongside SEND_INIT; accept its exact array shape.
+                    if(item.Key=="sender_indices"){
+                        if(item.Value is not JsonArray indices || indices.Count>16)return false;
+                        var seen=new HashSet<ulong>();
+                        foreach(var index in indices)
+                            if(!Unsigned(index,out ulong sender) || sender>uint.MaxValue || !seen.Add(sender))return false;
+                        continue;
+                    }
                     if(!Unsigned(item.Value,out ulong value))return false;
                     switch(item.Key){
                     case "tx_initiations":

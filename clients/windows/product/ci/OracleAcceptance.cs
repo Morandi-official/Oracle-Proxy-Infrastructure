@@ -473,7 +473,7 @@ internal static class OracleAcceptance
             // not control the SYSTEM tunnel lifetime.
             stage="GUI_PROCESS_LOSS";using(var gui=Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"..","product","Proxy.exe")){UseShellExecute=false})!){await Task.Delay(1500);if(!gui.HasExited)gui.Kill(true);}
             Check((await Send("Status"))["mode"]?.GetValue<string>()=="connected" && await ExitIp()=="152.67.156.100","REAL_GUI_PROCESS_LOSS_KEEPS_SYSTEM_TUNNEL");
-            stage="SERVICE_CRASH_RECOVERY";var service=Process.GetProcessesByName("OracleProxy.Service").Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe);
+            stage="SERVICE_CRASH_RECOVERY";var service=Process.GetProcessesByName(Path.GetFileNameWithoutExtension(Platform.Exe)).Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe);
             using(service){service.Kill(true);await service.WaitForExitAsync();}
             // Recovery may finish during this probe. Any successful probe must
             // still use Oracle; a direct runner exit is always a failure.
@@ -538,7 +538,7 @@ internal static class OracleAcceptance
                 Check(await DualStackExit() && await Ipv6Stun(),"REAL_HTTPS_FALLBACK_DUALSTACK_IPV6_HTTPS_AND_STUN");
                 Check(await CarrierDirectBlocked() && await AdminThroughVPN(),"REAL_HTTPS_ADMIN_THROUGH_VPN_AND_PHYSICAL_DIRECT_BLOCKED");
                 stage="HTTPS_SERVICE_CRASH_RECOVERY";
-                using(var carrierService=Process.GetProcessesByName("OracleProxy.Service").Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe)){
+                using(var carrierService=Process.GetProcessesByName(Path.GetFileNameWithoutExtension(Platform.Exe)).Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe)){
                     carrierService.Kill(true);await carrierService.WaitForExitAsync();
                 }
                 try{Check(await ExitIp()=="152.67.156.100","REAL_HTTPS_SERVICE_CRASH_NO_DIRECT_EXIT");}catch(IOException){throw;}catch{Console.WriteLine("REAL_HTTPS_SERVICE_CRASH_PROBE_BLOCKED=PASS");}

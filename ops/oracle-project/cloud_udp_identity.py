@@ -168,16 +168,7 @@ def execute(value):
     if peer and (peer['user_id'] != marker['user_id'] or peer['name'] != name or not peer['owned']):
         raise ValueError('DIAGNOSTIC_PEER_OWNER_MISMATCH')
     if value['action'].startswith('endpoint-'):
-        if peer is None or marker['cleaned'] or marker['expires_at']<=time.time():
-            raise ValueError('ACTIVE_DIAGNOSTIC_MARKER_REQUIRED')
-        spec=importlib.util.spec_from_file_location('udp_return_ab',Path(__file__).with_name('udp_return_ab_endpoint.py'))
-        endpoint=importlib.util.module_from_spec(spec);spec.loader.exec_module(endpoint)
-        if value['action']=='endpoint-prepare':endpoint.install()
-        elif value['action']=='endpoint-rollback':endpoint.rollback()
-        observed=endpoint.observe()
-        if value['action']=='endpoint-prepare' and (observed.get('phase')!='active' or not observed.get('alias_present') or not observed.get('allocation_confirmed')):
-            raise ValueError('TEMPORARY_ENDPOINT_NOT_READY')
-        return {'address':'79.72.85.11','private_address':'10.0.0.157','state':observed}
+        raise ValueError('THIRD_ENDPOINT_EXPERIMENT_RETIRED')
     if value['action'] == 'host-audit':
         if peer is None or marker['cleaned'] or marker['expires_at']<=time.time():
             raise ValueError('ACTIVE_DIAGNOSTIC_MARKER_REQUIRED')

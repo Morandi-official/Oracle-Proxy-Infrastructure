@@ -1,4 +1,4 @@
-name: Third-IP UDP A/B experiment and return audit
+name: Independent cloud UDP data-path and return audit
 on:
   pull_request:
     paths: ['ops/cloud-udp/**', 'ops/oracle-project/cloud_udp_identity.py', 'ops/oracle-project/udp_return_ab_endpoint.py', 'ops/oracle-project/udp-return-ab-allocation.json', '.github/workflows/cloud-udp-diagnosis.yml']
@@ -12,6 +12,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   source-tests:
+    outputs:
+      live_enabled: ${{ steps.mode.outputs.enabled }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -23,8 +25,18 @@ jobs:
           python-version: '3.12'
       - run: pip install cryptography==50.0.2 paramiko==4.0.0
       - run: python -m unittest discover -s ops/cloud-udp -p 'test_*.py' -v
+      - id: mode
+        run: |
+          python - <<'PYMODE'
+          import json,os
+          from pathlib import Path
+          request=json.loads(Path('ops/oracle-project/request.json').read_text())
+          enabled=request.get('request_id','').startswith('cloud-udp-')
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              output.write('enabled='+str(enabled).lower()+'\n')
+          PYMODE
   real-cloud:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.source-tests.outputs.live_enabled == 'true'
     needs: source-tests
     strategy:
       fail-fast: false
@@ -45,7 +57,7 @@ jobs:
       - name: Native kernel tooling on disposable Linux runner
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y wireguard-tools iproute2 curl
-      - name: Real nine-endpoint authenticated UDP and forwarding checks
+      - name: Real six-endpoint authenticated UDP and forwarding checks
         env:
           CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}
           KNOWN_HOSTS: ${{ secrets.ORACLE_CI_KNOWN_HOSTS }}

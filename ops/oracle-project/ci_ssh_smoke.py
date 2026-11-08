@@ -80,8 +80,15 @@ X11Forwarding no
             gate = importlib.util.module_from_spec(gate_spec); gate_spec.loader.exec_module(gate)
             # Mock only GitHub transport: the reviewed operation runs in a real
             # separate root process, through the same argument/env validation.
-            with patch.dict(os.environ, {'SUDO_USER':'oracle-project-ci'}), patch.object(gate, 'ROOT', directory/'gate-state'), patch.object(gate, 'verify_main'), patch.object(gate, 'source_tree', return_value=root.parents[1]):
-                assert gate.main(['preflight', 'a'*40]) == 0
+            # Test delegation with an explicit read-only fixture request. Never
+            # run the checkout's production maintenance request in this harness.
+            request_file=root/'request.json';reviewed_request=request_file.read_bytes()
+            try:
+                request_file.write_text('{"operation":"preflight","request_id":"ci-ssh-readonly-preflight"}\n')
+                with patch.dict(os.environ, {'SUDO_USER':'oracle-project-ci'}), patch.object(gate, 'ROOT', directory/'gate-state'), patch.object(gate, 'verify_main'), patch.object(gate, 'source_tree', return_value=root.parents[1]):
+                    assert gate.main(['preflight', 'a'*40]) == 0
+            finally:
+                request_file.write_bytes(reviewed_request)
             operations_spec = importlib.util.spec_from_file_location('project_operations', root / 'project_operations.py')
             operations = importlib.util.module_from_spec(operations_spec); operations_spec.loader.exec_module(operations)
             before = operations.host.read_environment()

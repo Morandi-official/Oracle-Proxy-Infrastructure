@@ -10,7 +10,7 @@ import tempfile
 import time
 
 INTERFACE='wgcloud0'
-ENDPOINTS=[(a,p) for a in ('152.67.156.100','141.147.78.44','79.72.85.11') for p in (443,8443,51820)]
+ENDPOINTS=[(a,p) for a in ('152.67.156.100','141.147.78.44') for p in (443,8443,51820)]
 
 
 def run(args):

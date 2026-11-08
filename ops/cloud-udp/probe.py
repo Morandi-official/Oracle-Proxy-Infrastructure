@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 ROOT = Path(__file__).resolve().parents[2]
-ENDPOINTS = [(address, port) for address in ('152.67.156.100', '141.147.78.44', '79.72.85.11') for port in (443,8443,51820)]
+ENDPOINTS = [(address, port) for address in ('152.67.156.100', '141.147.78.44') for port in (443,8443,51820)]
 PINS = {
     'Linux':('mihomo-linux-amd64-v1-v1.19.33.gz','8ec92e7b2fdc6b853ba00156bab7e4e965c8b0d843b8c4ac8ab98795f02ad524'),
     'Windows':('mihomo-windows-amd64-v1-v1.19.33.zip','fb0b960eff568459502d4ebe53e9cca203053d86ec9024fe935f19615d74d9aa'),
@@ -153,8 +153,6 @@ def main():
             if results['reconciliation']['errors']:raise ValueError('OWNED_DIAGNOSTIC_RECONCILIATION_FAILED')
             attempted=True
             info=rpc('prepare')
-            results['temporary_endpoint']=rpc('endpoint-prepare')
-            print('CLOUD_UDP_TEMPORARY_ENDPOINT='+json.dumps(results['temporary_endpoint'],sort_keys=True),flush=True)
             results['host_return_before']=rpc('host-audit')
             if platform.system()=='Linux':
                 native=folder/'native.json';native.write_text(json.dumps({**info,'private_key':private}));native.chmod(0o600)
@@ -209,10 +207,6 @@ def main():
             tests_completed=True
         finally:
             if attempted:
-                failed=not tests_completed or len(results['endpoints'])!=len(ENDPOINTS) or any(not x.get('passed') for x in results['endpoints']+results.get('kernel',[])+results.get('kernel_sticky',[])) or bool(results.get('kernel_error') or results.get('kernel_sticky_error'))
-                if failed:
-                    try:results['temporary_endpoint_rollback']=rpc('endpoint-rollback')
-                    except Exception as error:results['temporary_endpoint_rollback_error']=type(error).__name__
                 try:results['host_return_after']=rpc('host-audit')
                 except Exception as error:results['host_return_audit_error']=type(error).__name__
                 for attempt in range(3):

@@ -9,7 +9,7 @@ import re
 import subprocess
 import time
 
-REQUEST = 'cloud-udp-return-recheck-20261108'
+REQUEST = 'cloud-udp-third-ip-ab-20261108'
 STATE = Path('/var/lib/oracle-proxy-control/cloud-udp-diagnostics')
 ACTOR = 'github:204281968'
 
@@ -17,7 +17,7 @@ ACTOR = 'github:204281968'
 def validate(value):
     if not isinstance(value, dict) or set(value) != {'action', 'probe_id', 'public_key'}:
         raise ValueError('INVALID_DIAGNOSTIC_REQUEST')
-    if value['action'] not in ('prepare', 'observe', 'cleanup', 'host-audit'):
+    if value['action'] not in ('prepare', 'observe', 'cleanup', 'host-audit', 'endpoint-prepare', 'endpoint-observe', 'endpoint-rollback'):
         raise ValueError('INVALID_DIAGNOSTIC_ACTION')
     if not isinstance(value['probe_id'], str) or not re.fullmatch(r'[a-f0-9]{32}', value['probe_id']):
         raise ValueError('INVALID_DIAGNOSTIC_ID')
@@ -130,6 +130,17 @@ def execute(value):
     peer = next((p for p in snapshot['peers'] if p['public_key'] == key), None)
     if peer and (peer['user_id'] != marker['user_id'] or peer['name'] != name or not peer['owned']):
         raise ValueError('DIAGNOSTIC_PEER_OWNER_MISMATCH')
+    if value['action'].startswith('endpoint-'):
+        if peer is None or marker['cleaned'] or marker['expires_at']<=time.time():
+            raise ValueError('ACTIVE_DIAGNOSTIC_MARKER_REQUIRED')
+        spec=importlib.util.spec_from_file_location('udp_return_ab',Path(__file__).with_name('udp_return_ab_endpoint.py'))
+        endpoint=importlib.util.module_from_spec(spec);spec.loader.exec_module(endpoint)
+        if value['action']=='endpoint-prepare':endpoint.install()
+        elif value['action']=='endpoint-rollback':endpoint.rollback()
+        observed=endpoint.observe()
+        if value['action']=='endpoint-prepare' and (observed.get('phase')!='active' or not observed.get('alias_present') or not observed.get('allocation_confirmed')):
+            raise ValueError('TEMPORARY_ENDPOINT_NOT_READY')
+        return {'address':'79.72.85.11','private_address':'10.0.0.157','state':observed}
     if value['action'] == 'host-audit':
         if peer is None or marker['cleaned'] or marker['expires_at']<=time.time():
             raise ValueError('ACTIVE_DIAGNOSTIC_MARKER_REQUIRED')

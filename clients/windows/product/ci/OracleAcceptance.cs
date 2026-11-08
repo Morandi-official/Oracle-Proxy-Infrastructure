@@ -338,7 +338,9 @@ internal static class OracleAcceptance
             // Connection admission already requires the IPv6 exit probe as well.
             Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");
             await Send("Disconnect");await VerifyDiagnostics(devices,extended:false);
-            await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
+            var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));
+            Check(deleted["login_authenticated"]?.GetValue<bool>()==false && deleted["account"] is null && deleted["core_pid"]?.GetValue<uint>()==0 && deleted["intent"]?.GetValue<bool>()==false,"MIGRATION_DEVICE_SELF_DELETE_CLEARS_LOGIN_AND_RETIRES_ONLY_THIS_CI_SLOT");
+            Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
         }catch(Exception error){Console.WriteLine("MIGRATION_ERROR_TYPE="+error.GetType().Name);Console.WriteLine("MIGRATION_ASSERTION="+_lastAssertion);try{await ControlPipe.Send("Disconnect");}catch{}return 1;}
     }
     internal static async Task<int> Run()

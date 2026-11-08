@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 ROOT = Path(__file__).resolve().parents[2]
-ENDPOINTS = [(address, port) for address in ('152.67.156.100', '141.147.78.44') for port in (443,8443,51820)]
+ENDPOINTS = [(address, port) for address in ('152.67.154.225', '150.230.113.158') for port in (443,8443,51820)]
 PINS = {
     'Linux':('mihomo-linux-amd64-v1-v1.19.33.gz','8ec92e7b2fdc6b853ba00156bab7e4e965c8b0d843b8c4ac8ab98795f02ad524'),
     'Windows':('mihomo-windows-amd64-v1-v1.19.33.zip','fb0b960eff568459502d4ebe53e9cca203053d86ec9024fe935f19615d74d9aa'),

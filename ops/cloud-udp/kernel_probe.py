@@ -10,7 +10,7 @@ import tempfile
 import time
 
 INTERFACE='wgcloud0'
-ENDPOINTS=[(a,p) for a in ('152.67.156.100','141.147.78.44') for p in (443,8443,51820)]
+ENDPOINTS=[(a,p) for a in ('152.67.154.225','150.230.113.158') for p in (443,8443,51820)]
 
 
 def run(args):
@@ -21,7 +21,7 @@ def endpoint_order(sticky=False):
     if not sticky:return list(ENDPOINTS)
     # Prime the same server peer through the working alias before changing the
     # local destination IP. The client socket port stays fixed across fresh handshakes.
-    return [('141.147.78.44',443)]+[x for x in ENDPOINTS if x!=('141.147.78.44',443)]
+    return [('152.67.154.225',443)]+[x for x in ENDPOINTS if x!=('152.67.154.225',443)]
 
 
 def main(path,sticky=False):

@@ -661,7 +661,14 @@ def main(arguments):
     operation, revision = arguments
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
-        if request.get('request_id')=='prepare-selected-ip-pair-20261108':
+        if request.get('request_id')=='cloud-udp-selected-pair-20261108':
+            body=sys.stdin.buffer.read(4097)
+            if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')
+            if body.strip():
+                spec=importlib.util.spec_from_file_location('cloud_udp_identity',Path(__file__).with_name('cloud_udp_identity.py'))
+                diagnostic=importlib.util.module_from_spec(spec);spec.loader.exec_module(diagnostic)
+                print('CLOUD_UDP_IDENTITY='+json.dumps(diagnostic.execute(json.loads(body)),sort_keys=True),flush=True)
+                return
             for role in ('primary','backup'):
                 endpoint_spec=importlib.util.spec_from_file_location('migration_'+role,Path(__file__).with_name('migration_'+role+'_endpoint.py'))
                 endpoint=importlib.util.module_from_spec(endpoint_spec);endpoint_spec.loader.exec_module(endpoint)

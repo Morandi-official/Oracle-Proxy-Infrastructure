@@ -10,7 +10,7 @@ import subprocess
 import sqlite3
 import time
 
-REQUEST = 'cloud-udp-third-ip-reconcile-20261108'
+REQUEST = 'cloud-udp-selected-pair-20261108'
 STATE = Path('/var/lib/oracle-proxy-control/cloud-udp-diagnostics')
 ACTOR = 'github:204281968'
 

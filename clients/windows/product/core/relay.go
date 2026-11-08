@@ -51,8 +51,8 @@ func newRelayOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger
 		Proxy: nil, ForceAttemptHTTP2: false, DisableCompression: true,
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout: 8 * time.Second, ResponseHeaderTimeout: 8 * time.Second,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			if network != "tcp" || address != "vpn-admin.morandi.dpdns.org:443" {
+		DialContext: func(ctx context.Context, network, destination string) (net.Conn, error) {
+			if network != "tcp" || destination != "vpn-admin.morandi.dpdns.org:443" {
 				return nil, errors.New("RELAY_DESTINATION_REJECTED")
 			}
 			// Preserve the native physical-interface dialer's loop prevention; TLS

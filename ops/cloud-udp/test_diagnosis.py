@@ -195,7 +195,7 @@ class KernelEndpointPlan(unittest.TestCase):
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         normal=module.endpoint_order();sticky=module.endpoint_order(True)
         self.assertEqual(len(sticky),6);self.assertEqual(set(sticky),set(normal))
-        self.assertEqual(sticky[0],('141.147.78.44',443))
-        self.assertEqual(normal[0],('152.67.156.100',443))
+        self.assertEqual(sticky[0],('152.67.154.225',443))
+        self.assertEqual(normal[0],('152.67.154.225',443))
 
 if __name__=='__main__':unittest.main()

@@ -57,6 +57,20 @@ jobs:
       - name: Native kernel tooling on disposable Linux runner
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y wireguard-tools iproute2 curl
+      - name: Prepare selected pair through the authorized root gate
+        env:
+          CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_CI_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          folder=$(mktemp -d)
+          trap 'rm -rf "$folder"' EXIT
+          chmod 700 "$folder"
+          printf '%s\n' "$CI_KEY" > "$folder/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$folder/hosts"
+          chmod 600 "$folder/key" "$folder/hosts"
+          unset CI_KEY KNOWN_HOSTS
+          ssh -T -i "$folder/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$folder/hosts" -o ConnectTimeout=15 oracle-project-ci@152.67.156.100 "preflight $GITHUB_SHA" < /dev/null
       - name: Real six-endpoint authenticated UDP and forwarding checks
         env:
           CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}

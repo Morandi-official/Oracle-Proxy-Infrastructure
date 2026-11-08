@@ -13,7 +13,7 @@ from relay.settings import PUBLIC_QUIC_ENABLED
 TRANSPORT_STATE=Path('/etc/oracle-proxy-quic/transport.json')
 
 
-def transport_address():
+def legacy_transport_address():
     # Root-owned public metadata. Missing/invalid/foreign state uses the original
     # entrance; ordinary GUI input can never supply an arbitrary destination.
     try:
@@ -23,6 +23,12 @@ def transport_address():
         if value=={'schema':1,'owner':'oracle-proxy-secondary-endpoint','transport_address':'141.147.78.44'}:return '141.147.78.44'
     except (OSError,ValueError):pass
     return '152.67.156.100'
+
+
+def transport_address():
+    from .endpoint_config import advertised
+    catalog=advertised()
+    return catalog['primary'] if catalog else legacy_transport_address()
 
 
 def quic_info():

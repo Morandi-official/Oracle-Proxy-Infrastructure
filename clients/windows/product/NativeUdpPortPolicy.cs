@@ -19,10 +19,10 @@ internal static class NativeUdpPortPolicy
 
     internal static int[] Select(JsonObject state,DurableState secret,int endpointPort)
     {
-        if(secret.NativeUdpPortPreference is not (0 or 8443))throw new IOException("INVALID_NATIVE_PORT_PREFERENCE");
-        if(secret.NativeUdpPortPreference==8443){
-            if(endpointPort!=51820 || !TransportPolicy.Native8443Available(state))throw new IOException("NATIVE_UDP8443_NOT_AVAILABLE");
-            return [8443];
+        if(secret.NativeUdpPortPreference is not (0 or 443 or 8443 or 51820))throw new IOException("INVALID_NATIVE_PORT_PREFERENCE");
+        if(secret.NativeUdpPortPreference>0){
+            if(state["tunnel"]?["native_udp_ports"] is not JsonArray available || !available.Any(p=>p?.GetValue<int>()==secret.NativeUdpPortPreference))throw new IOException("NATIVE_UDP_PORT_NOT_AVAILABLE");
+            return [secret.NativeUdpPortPreference];
         }
         bool available443=state["tunnel"]?["native_udp_ports"] is JsonArray ports && ports.Any(n=>n?.GetValue<int>()==443);
         if(endpointPort!=51820 || !available443)return [endpointPort];

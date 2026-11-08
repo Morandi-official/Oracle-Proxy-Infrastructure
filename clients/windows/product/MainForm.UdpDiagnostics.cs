@@ -61,7 +61,9 @@ internal sealed partial class MainForm
         text.AppendLine("客户端收包层：UDP 套接字；物理网卡层未采集。计数不能确定具体中间网络节点。\r\n");
         text.AppendLine("服务端报文头计数用于配对，不等同于认证成功；内核握手与出口验证分别记录。\r\n");
         if(report["trials"] is JsonArray trials)for(int i=0;i<6 && i<trials.Count;i++){
-            var target=UdpDiagnosticTarget.All[i];var trial=trials[i];
+            var trial=trials[i];UdpDiagnosticTarget target;
+            try{target=new UdpDiagnosticTarget(UdpText(trial?["address"]),(int)(UdpNumber(trial?["port"])??0));}catch(IOException){continue;}
+            _udpGrid.Rows[i].Cells[0].Value=target.Address;_udpGrid.Rows[i].Cells[1].Value=target.Port;
             if(UdpText(trial?["address"])!=target.Address || UdpNumber(trial?["port"])!=target.Port)continue;
             string pending=UdpText(trial?["phase"]);
             string result=UdpResults.TryGetValue(UdpText(trial?["verdict"]),out var known)?known:

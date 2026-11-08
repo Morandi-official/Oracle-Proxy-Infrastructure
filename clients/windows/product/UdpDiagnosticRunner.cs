@@ -10,6 +10,7 @@ internal sealed class UdpDiagnosticRunner : IDisposable
     private volatile CoreProcess? _core;
     private Task? _task;
     private int _disposed;
+    private UdpDiagnosticTarget[] _targets=UdpDiagnosticTarget.All;
     private readonly JsonObject _report=new(){["schema"]=1,["phase"]="idle",["trials"]=new JsonArray(),["client_receive_layer"]="connected_udp_socket",["physical_nic_observation"]="not_collected"};
     internal bool Running=>_task is not null && !_task.IsCompleted;
     internal JsonObject Snapshot(){lock(_sync){
@@ -17,13 +18,14 @@ internal sealed class UdpDiagnosticRunner : IDisposable
         var core=_core;
         if(Running && core is not null && value["current_trial"] is JsonValue node && node.TryGetValue<int>(out int i) && i is >=0 and <6 && value["trials"]?[i] is JsonObject row && row["phase"]?.GetValue<string>()=="running"){
             if(row["client"] is not JsonObject)row["client"]=new JsonObject();
-            row["client"]!["counters"]=Counters(core.NativeEvidence,UdpDiagnosticTarget.All[i].Port);
+            row["client"]!["counters"]=Counters(core.NativeEvidence,_targets[i].Port);
         }
         return value;
     }}
     internal void Start(JsonObject state,DurableState secret)
     {
         if(_task is not null)throw new IOException("DIAGNOSTIC_ALREADY_STARTED");
+        _targets=UdpDiagnosticTarget.ForState(state);
         var copy=new DurableState{PrivateKey=secret.PrivateKey,PublicKey=secret.PublicKey,Token=secret.Token,
             UuPaths=secret.UuPaths.ToArray(),NativeUdpAdaptive=false,TransportPreference="udp"};
         _task=Task.Run(()=>Run((JsonObject)state.DeepClone(),copy));
@@ -70,13 +72,13 @@ internal sealed class UdpDiagnosticRunner : IDisposable
         _stop.CancelAfter(TimeSpan.FromSeconds(155));
         Phase("starting");
         lock(_sync)_report["ipv6_requested"]=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
-        lock(_sync){_report["diagnostic_id"]=id;_report["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();foreach(var target in UdpDiagnosticTarget.All)_report["trials"]!.AsArray().Add(new JsonObject{["address"]=target.Address,["port"]=target.Port,["phase"]="pending"});}
+        lock(_sync){_report["diagnostic_id"]=id;_report["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();foreach(var target in _targets)_report["trials"]!.AsArray().Add(new JsonObject{["address"]=target.Address,["port"]=target.Port,["phase"]="pending"});}
         try{
             var begin=await _api.Call("udp-diagnostics",secret.Token,new JsonObject{["action"]="start",["diagnostic_id"]=id});
             if(begin["diagnostic_id"]?.GetValue<string>()!=id)throw new IOException("INVALID_DIAGNOSTIC_ID");
             Phase("running");
             int index=0;
-            foreach(var target in UdpDiagnosticTarget.All){
+            foreach(var target in _targets){
                 _stop.Token.ThrowIfCancellationRequested();
                 if(started.Elapsed>TimeSpan.FromSeconds(145))throw new OperationCanceledException();
                 JsonObject row;lock(_sync){row=_report["trials"]![index]!.AsObject();row["phase"]="running";_report["current_trial"]=index;}

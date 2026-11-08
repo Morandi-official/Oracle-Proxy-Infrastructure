@@ -23,7 +23,11 @@ internal static class LoginAdmission
         }
         string token=login["token"]?.GetValue<string>() ?? throw new IOException("INVALID_API_RESPONSE");
         if(!DeviceRegistration.Confirmed(login)){
-            var registered=await call("enroll",token,new JsonObject{["device_name"]=deviceName,["confirm"]=true});
+            JsonObject registered;
+            try{registered=await call("enroll",token,new JsonObject{["device_name"]=deviceName,["confirm"]=true});}
+            catch(ApiException error)when(error.Message=="DEVICE_LIMIT_REACHED"){
+                login["admission_error"]="DEVICE_LIMIT_REACHED";return login;
+            }
             if(!DeviceRegistration.Confirmed(registered))throw new IOException("DEVICE_CONFIRMATION_REQUIRED");
             registered["token"]=token;
             // The enroll endpoint extends to 30 days; older servers omit the

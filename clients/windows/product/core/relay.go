@@ -24,7 +24,8 @@ const relayType = "oracle-https"
 var relayToken = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 type relayOptions struct {
-	Token string `json:"token"`
+	Address string `json:"address,omitempty"`
+	Token   string `json:"token"`
 }
 type relayOutbound struct {
 	outbound.Adapter
@@ -42,6 +43,10 @@ func newRelayOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger
 	if err != nil {
 		return nil, err
 	}
+	address, err := ingressAddress(options.Address)
+	if err != nil {
+		return nil, err
+	}
 	transport := &http.Transport{
 		Proxy: nil, ForceAttemptHTTP2: false, DisableCompression: true,
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
@@ -52,7 +57,7 @@ func newRelayOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger
 			}
 			// Preserve the native physical-interface dialer's loop prevention; TLS
 			// still validates the fixed hostname. No proxy, DNS or redirect is used.
-			return physical.DialContext(ctx, N.NetworkTCP, M.ParseSocksaddr("152.67.156.100:443"))
+			return physical.DialContext(ctx, N.NetworkTCP, M.ParseSocksaddr(net.JoinHostPort(address, "443")))
 		},
 	}
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

@@ -41,14 +41,14 @@ internal static class CoreConfig
             config["endpoints"]![0]!["detour"]="oracle-native-udp";
             config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["ipv6_payload"]=dual,["address"]=ingress,["tag"]="oracle-native-udp",["ports"]=new JsonArray(NativeUdpPortPolicy.Select(state,secret,port).Select(p=>(JsonNode?)JsonValue.Create(p)).ToArray())});
         }
-        if(secret.NativeUdpPortPreference is not (0 or 8443))throw new IOException("INVALID_NATIVE_PORT_PREFERENCE");
+        if(secret.NativeUdpPortPreference is not (0 or 443 or 8443 or 51820))throw new IOException("INVALID_NATIVE_PORT_PREFERENCE");
         if(transport==TunnelTransport.WireGuardQuic){
             config["endpoints"]![0]!["detour"]="oracle-quic-relay";
             config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-quic",["address"]=ingress,["tag"]="oracle-quic-relay",["token"]=secret.Token,["certificate"]=tunnel["quic"]!["certificate"]!.DeepClone()});
         }
         if(transport==TunnelTransport.WireGuardHttps){
             config["endpoints"]![0]!["detour"]="oracle-https-relay";
-            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-https",["tag"]="oracle-https-relay",["token"]=secret.Token});
+            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-https",["address"]=ingress,["tag"]="oracle-https-relay",["token"]=secret.Token});
         }
         diagnosticTarget?.Apply(config,transport);
         return config;

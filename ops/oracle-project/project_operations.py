@@ -273,6 +273,9 @@ def enable_web_firewall():
 
 
 def deploy(revision):
+    catalog_spec=importlib.util.spec_from_file_location('endpoint_addresses',Path(__file__).with_name('endpoint_addresses.py'))
+    catalog=importlib.util.module_from_spec(catalog_spec);catalog_spec.loader.exec_module(catalog)
+    print('ENDPOINT_CATALOG='+json.dumps(catalog.install(),sort_keys=True),flush=True)
     request=json.loads(Path(__file__).with_name('request.json').read_text())
     if request.get('request_id')=='rc21-console-deploy-20261027':
         spec=importlib.util.spec_from_file_location('previous_owned_browser_ci',Path(__file__).with_name('cleanup_rc20_webrtc_ci.py'))
@@ -661,7 +664,13 @@ def main(arguments):
     operation, revision = arguments
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
-        if request.get('request_id')=='cloud-udp-selected-pair-20261108':
+        if request.get('request_id')=='endpoint-catalog-apply':
+            catalog_spec=importlib.util.spec_from_file_location('endpoint_addresses',Path(__file__).with_name('endpoint_addresses.py'))
+            catalog=importlib.util.module_from_spec(catalog_spec);catalog_spec.loader.exec_module(catalog)
+            print('ENDPOINT_CATALOG='+json.dumps(catalog.install(),sort_keys=True),flush=True)
+            run(['systemctl','restart','oracle-proxy-control.service'])
+            verify_control()
+        elif request.get('request_id')=='cloud-udp-selected-pair-20261108':
             body=sys.stdin.buffer.read(4097)
             if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')
             if body.strip():

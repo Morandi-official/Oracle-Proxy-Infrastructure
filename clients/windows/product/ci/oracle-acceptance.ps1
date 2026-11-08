@@ -16,10 +16,10 @@ Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'
 try{
   $setup=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
   if($setup.ExitCode -ne 0){throw 'Oracle acceptance setup failed'}
-  New-CIUuNetworkFixture
+  if($env:ORACLE_ACCEPTANCE_SCOPE -ne "endpoint-migration"){New-CIUuNetworkFixture}
   & $test --oracle-client
   if($LASTEXITCODE -ne 0){throw 'Real Oracle acceptance failed; no credential or private-key logs are exported'}
-  Remove-CIUuNetworkFixture
+  if($env:ORACLE_ACCEPTANCE_SCOPE -ne "endpoint-migration"){Remove-CIUuNetworkFixture}
   $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
   if($remove.ExitCode -ne 0){throw 'Post-acceptance uninstall failed'}
 }finally{

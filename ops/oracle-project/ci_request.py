@@ -32,6 +32,7 @@ def choose():
     before = os.environ.get('BEFORE_REVISION', '')
     if re.fullmatch(r'[a-f0-9]{40}', before) and before != '0' * 40:
         changed = subprocess.check_output(['git', 'diff', '--name-only', before, 'HEAD'], text=True).splitlines()
+        if changed and all(path.startswith('ops/network/') for path in changed):return 'preflight'
         # An explicitly updated request may accompany a diagnostics implementation fix.
         if REQUEST in changed: return parse_request(Path(REQUEST).read_bytes())
     return 'deploy'

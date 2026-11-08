@@ -6,7 +6,7 @@ internal static class EgressProbe
     // Keep one HTTP request alive when this generation has received a WG reply.
     // The outer HTTP/3 200 alone does not qualify. A silent carrier retains its
     // short deadline; progress can extend the total budget only up to 12 seconds.
-    internal static async Task<long> Verify(HttpClient client,int seconds,Func<bool> replyReceived,CancellationToken stop,string target="https://www.cloudflare.com/cdn-cgi/trace",string expected="152.67.156.100")
+    internal static async Task<long> Verify(HttpClient client,int seconds,Func<bool> replyReceived,CancellationToken stop,string target="https://www.cloudflare.com/cdn-cgi/trace",string expected="152.67.156.100",IReadOnlySet<string>? allowed=null,Action<string>? observed=null)
     {
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(stop);
         deadline.CancelAfter(TimeSpan.FromSeconds(seconds));
@@ -20,7 +20,9 @@ internal static class EgressProbe
                 using var memory=new MemoryStream();var buffer=new byte[1024];int read;
                 while((read=await stream.ReadAsync(buffer,probeToken))>0){if(memory.Length+read>8192)throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");memory.Write(buffer,0,read);}
                 string body=System.Text.Encoding.UTF8.GetString(memory.ToArray());
-                if(!body.Split('\n').Any(line=>line=="ip="+expected))throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");
+                string? actual=body.Split('\n').Where(line=>line.StartsWith("ip=",StringComparison.Ordinal)).Select(line=>line[3..]).FirstOrDefault();
+                if(actual is null || (allowed is null?actual!=expected:!allowed.Contains(actual)))throw new IOException("ORACLE_EGRESS_NOT_VERIFIED");
+                observed?.Invoke(actual);
             }
             catch(OperationCanceledException error) when(!stop.IsCancellationRequested){throw new IOException("ORACLE_PROBE_TIMEOUT",error);}
             catch(HttpRequestException error){throw new IOException("ORACLE_PROBE_HTTP_FAILED",error);}

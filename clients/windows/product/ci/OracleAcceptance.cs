@@ -61,7 +61,7 @@ internal static class OracleAcceptance
         }
         throw new IOException("DIAGNOSTIC_ACCEPTANCE_DEADLINE");
     }
-    private static async Task VerifyDiagnostics(int devices)
+    private static async Task VerifyDiagnostics(int devices,bool extended=true)
     {
         await Send("Quit");
         var before=await Send("Status");
@@ -74,6 +74,7 @@ internal static class OracleAcceptance
         foreach(string field in new[]{"transport_preference","native_udp_adaptive","native_udp_port_preference"})Check(JsonNode.DeepEquals(before[field],result[field]),"DIAGNOSTIC_PRESERVES_"+field.ToUpperInvariant());
         Check(result["account"]?["device_count"]?.GetValue<int>()==devices,"DIAGNOSTIC_USES_EXISTING_DEVICE_SLOT");
         Directory.CreateDirectory("dist/review");File.WriteAllText("dist/review/udp-six-acceptance.json",report.ToJsonString());
+        if(!extended){await Send("Quit");return;}
         IntPtr fault=IntPtr.Zero;
         try{
             Check(fixture_udp_diagnostic_primary_replies_begin(out fault)==0,"DIAGNOSTIC_DISPOSABLE_PRIMARY_RETURN_FAULT_CREATED");
@@ -320,8 +321,29 @@ internal static class OracleAcceptance
                 Enumerable.Range(0,3).All(i=>Marshal.ReadInt32(actions.Actions,i*8)==1 && Marshal.ReadInt32(actions.Actions,i*8+4)==new[]{3000,5000,10000}[i]),"REAL_SCM_RESTART_BACKOFF_3_5_10_SECONDS_WITH_FIVE_MINUTE_RESET");
         }finally{if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);if(service!=IntPtr.Zero)CloseServiceHandle(service);CloseServiceHandle(manager);}
     }
+    private static async Task<int> RunEndpointMigration()
+    {
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
+        string? username=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),password=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
+        if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password))return 2;
+        try{
+            var login=RequireSuccess("LoginRemembered",await ControlPipe.Send("LoginRemembered",username,password));password=null;
+            Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
+            string primary=login["network_endpoints"]!["primary"]!.GetValue<string>();
+            Check(primary=="152.67.154.225" && login["network_endpoints"]!["backup"]!.GetValue<string>()=="150.230.113.158","MIGRATION_AUTHENTICATED_PRIMARY_BACKUP_CATALOG");
+            int devices=login["account"]!["device_count"]!.GetValue<int>();
+            await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
+            var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
+            Check(connected["transport_address"]?.GetValue<string>()==primary && connected["transport_port"]?.GetValue<int>()==443 && connected["transport_private_address"]?.GetValue<string>()==login["network_endpoints"]!["private_ipv4"]![primary]!.GetValue<string>() && allowed.Contains(await ExitIp()),"MIGRATION_NORMAL_CONNECT_ACTUAL_PRIMARY_PRIVATE_AND_PORT_WITH_VERIFIED_EXIT");
+            // Connection admission already requires the IPv6 exit probe as well.
+            Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");
+            await Send("Disconnect");await VerifyDiagnostics(devices,extended:false);
+            await Send("Logout");Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
+        }catch(Exception error){Console.WriteLine("MIGRATION_ERROR_TYPE="+error.GetType().Name);Console.WriteLine("MIGRATION_ASSERTION="+_lastAssertion);try{await ControlPipe.Send("Disconnect");}catch{}return 1;}
+    }
     internal static async Task<int> Run()
     {
+        if(Environment.GetEnvironmentVariable("ORACLE_ACCEPTANCE_SCOPE")=="endpoint-migration")return await RunEndpointMigration();
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
         string? username=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),password=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
         if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password)){Console.WriteLine("ORACLE_ACCEPTANCE_CREDENTIALS_MISSING");return 2;}

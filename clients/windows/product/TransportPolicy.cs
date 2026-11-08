@@ -7,14 +7,13 @@ internal static class TransportPolicy
     {
         var node=state?["tunnel"]?["transport_address"];
         if(node is null)return "152.67.156.100";
-        if(node is JsonValue value && value.TryGetValue<string>(out var address) && address is "152.67.156.100" or "141.147.78.44")return address;
+        if(node is JsonValue value && value.TryGetValue<string>(out var address))return EndpointCatalog.Public(address);
         throw new IOException("INVALID_TRANSPORT_ADDRESS");
     }
     internal static string Name(TunnelTransport value)=>value switch{
         TunnelTransport.WireGuardUdp=>"wireguard-udp",TunnelTransport.WireGuardQuic=>"wireguard-quic",_=>"wireguard-https"};
     internal static bool Native8443Available(JsonObject? state)=>state?["tunnel"]?["native_udp_ports"] is JsonArray ports && ports.Any(n=>n?.GetValue<int>()==8443);
-    internal static string ClientSelection(int index,bool native8443)=>index switch{
-        0=>native8443?"PreferAutoAdaptive":"PreferAuto",1=>native8443?"PreferUdpAdaptive":"PreferUdp",2=>"PreferQuic",_=>throw new IOException("INVALID_TRANSPORT_SELECTION")};
+    internal static string ClientSelection(int index,bool native8443)=>index switch{0=>native8443?"PreferUdpAdaptive":"PreferUdp",1=>"PreferQuic",_=>throw new IOException("INVALID_TRANSPORT_SELECTION")};
     internal static TunnelTransport First(string preference,JsonObject? state)=>preference=="quic"?TunnelTransport.WireGuardQuic:TunnelTransport.WireGuardUdp;
     internal static bool QuicAvailable(JsonObject state)=>state["tunnel"]?["quic"] is JsonObject quic &&
         quic["enabled"]?.GetValue<bool>()==true && quic["port"]?.GetValue<int>()==8443 &&

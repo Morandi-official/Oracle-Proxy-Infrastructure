@@ -17,6 +17,14 @@ ADDRESSES={'152.67.156.100':socket.inet_aton('10.0.0.6'),
            '141.147.78.44':socket.inet_aton('10.0.0.10'),
            '152.67.154.225':socket.inet_aton('10.0.0.220'),
            '150.230.113.158':socket.inet_aton('10.0.0.246')}
+# Read the same root-owned catalog used by API/profile exports.
+import importlib.util
+from pathlib import Path
+_catalog_spec=importlib.util.spec_from_file_location('proxy_endpoint_catalog',Path(__file__).resolve().parents[1]/'console/endpoint_config.py')
+_catalog=importlib.util.module_from_spec(_catalog_spec);_catalog_spec.loader.exec_module(_catalog)
+_config=_catalog.read()
+if _config:
+    ADDRESSES={row['public_ipv4']:socket.inet_aton(row['private_ipv4']) for row in [_config['primary'],_config['backup']]+_config['legacy']}
 # SOCK_DGRAM AF_PACKET begins at IP. BPF rejects data packets and truncates an initiation/cookie
 # packet after type+index; a response after type+sender+receiver. No part of
 # the handshake's ephemeral key, cookie, authenticator or data is copied.

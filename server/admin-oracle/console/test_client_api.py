@@ -48,6 +48,27 @@ class ClientApiTests(TestCase):
     def state(self,token,path='/api/client/state'):
         return self.client.get(path,secure=True,HTTP_AUTHORIZATION='Bearer '+token)
 
+    def test_native_device_delete_scopes_account_and_frees_admission_slot(self):
+        first=self.login(3).json();self.login(5);self.login(6)
+        pending=self.login(7,confirm=False).json();token=pending['token']
+        self.assertEqual(self.enroll(token).json()['error'],'DEVICE_LIMIT_REACHED')
+        def remove(device):return self.client.post('/api/client/device-delete',json.dumps({'device_id':device}),content_type='application/json',secure=True,HTTP_AUTHORIZATION='Bearer '+token)
+        self.assertEqual(remove('0123456789ab').json()['error'],'DEVICE_NOT_FOUND')
+        target=first['registration']['device_id']
+        removed=remove(target);self.assertEqual(removed.status_code,200,removed.content)
+        self.assertFalse(removed.json()['current'])
+        self.assertNotIn(target,[d['id'] for d in self.state(token).json()['devices']])
+        admitted=self.enroll(token);self.assertEqual(admitted.status_code,200,admitted.content)
+        self.assertEqual(admitted.json()['account']['device_count'],3)
+        self.assertEqual(self.state(first['token']).status_code,401)
+        # A valid token belonging to another account may not delete this account's devices.
+        self.engine.dispatch({'operation':'user.put','actor':'github:204281968','data':{'id':None,'name':'Other','quota_bytes':100000,'expires_at':None,'enabled':True}})
+        own=ClientSession.objects.get(token_hash=__import__('hashlib').sha256(token.encode()).hexdigest())
+        other_user=next(u for u in self.engine.snapshot()['users'] if u['id']!=self.user['id'])
+        other_account=ClientAccount.objects.create(user_id=other_user['id'],username='other-client',password=make_password('unneeded-test-password'))
+        own.account=other_account;own.save(update_fields=['account'])
+        self.assertEqual(remove(admitted.json()['registration']['device_id']).json()['error'],'DEVICE_NOT_FOUND')
+
     def test_dualstack_capability_preserves_legacy_client_and_device_slot(self):
         self.driver.value['networks'].append('fd42:6f70:78:77::1/64')
         self.engine.tick()

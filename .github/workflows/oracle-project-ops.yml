@@ -14,6 +14,7 @@ on:
     paths:
       - 'server/admin-oracle/**'
       - 'ops/oracle-project/**'
+      - 'ops/network/**'
       # Cloud diagnostics use the pinned gate directly; do not redeploy the application.
       - '!ops/oracle-project/cloud_udp_identity.py'
       - '.github/workflows/oracle-project-ops.yml'
@@ -79,7 +80,15 @@ jobs:
           SSH=(ssh -T -i "$credential_dir/key" -o BatchMode=yes -o IdentitiesOnly=yes
             -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$credential_dir/known_hosts"
             -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2
-            oracle-project-ci@152.67.156.100)
+            -o HostKeyAlias=152.67.156.100)
+          # HostKeyAlias is the existing pinned server identity, not a network IP.
+          mapfile -t endpoint_targets < <(python3 -c 'import json;v=json.load(open("ops/network/endpoints.json"));print("\n".join(dict.fromkeys(r["public_ipv4"] for r in [v["primary"],v["backup"]]+v["legacy"])))')
+          endpoint_target=''
+          for candidate in "${endpoint_targets[@]}"; do
+            if "${SSH[@]}" -o ConnectTimeout=3 "oracle-project-ci@$candidate" "status $REVISION" >/dev/null; then endpoint_target=$candidate; break; fi
+          done
+          [[ -n "$endpoint_target" ]] || { echo 'NO_CONFIGURED_MANAGEMENT_ENDPOINT' >&2; exit 2; }
+          SSH+=("oracle-project-ci@$endpoint_target")
           configure() {
             if [[ -n "$LOCAL_USERNAME" || -n "$LOCAL_PASSWORD" ]]; then
               [[ -n "$LOCAL_USERNAME" && -n "$LOCAL_PASSWORD" ]] || { echo 'Both local admin secrets are required' >&2; return 2; }

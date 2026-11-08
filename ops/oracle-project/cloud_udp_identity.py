@@ -7,9 +7,10 @@ from pathlib import Path
 import pwd
 import re
 import subprocess
+import sqlite3
 import time
 
-REQUEST = 'cloud-udp-third-ip-ab-20261108'
+REQUEST = 'cloud-udp-third-ip-reconcile-20261108'
 STATE = Path('/var/lib/oracle-proxy-control/cloud-udp-diagnostics')
 ACTOR = 'github:204281968'
 
@@ -17,7 +18,7 @@ ACTOR = 'github:204281968'
 def validate(value):
     if not isinstance(value, dict) or set(value) != {'action', 'probe_id', 'public_key'}:
         raise ValueError('INVALID_DIAGNOSTIC_REQUEST')
-    if value['action'] not in ('prepare', 'observe', 'cleanup', 'host-audit', 'endpoint-prepare', 'endpoint-observe', 'endpoint-rollback'):
+    if value['action'] not in ('prepare', 'observe', 'cleanup', 'host-audit', 'endpoint-prepare', 'endpoint-observe', 'endpoint-rollback', 'reconcile-owned'):
         raise ValueError('INVALID_DIAGNOSTIC_ACTION')
     if not isinstance(value['probe_id'], str) or not re.fullmatch(r'[a-f0-9]{32}', value['probe_id']):
         raise ValueError('INVALID_DIAGNOSTIC_ID')
@@ -35,12 +36,16 @@ def validate(value):
 
 def rpc(operation, data):
     account = pwd.getpwnam('oracle-proxy-admin')
-    code = "import json,sys;sys.path.insert(0,'/opt/oracle-proxy-admin/current');from console.control import call;v=json.load(sys.stdin);print(json.dumps(call(v['operation'],v['actor'],v['data'])))"
+    code = "import json,re,sys;sys.path.insert(0,'/opt/oracle-proxy-admin/current');from console.control import call;v=json.load(sys.stdin)\ntry: print(json.dumps(call(v['operation'],v['actor'],v['data'])))\nexcept Exception as e:\n c=str(e);print(json.dumps({'control_error':c if re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}',c) else type(e).__name__}));sys.exit(2)"
     result = subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python', '-I', '-c', code],
                             input=json.dumps({'operation':operation, 'actor':ACTOR, 'data':data}),
                             text=True, capture_output=True, timeout=25, user=account.pw_uid,
                             group=account.pw_gid, extra_groups=[])
-    if result.returncode != 0 or len(result.stdout) > 1024 * 1024:
+    if len(result.stdout)>1024*1024:raise ValueError('DIAGNOSTIC_CONTROL_RPC_FAILED')
+    if result.returncode!=0:
+        try:code=json.loads(result.stdout).get('control_error','')
+        except (ValueError,AttributeError):code=''
+        if isinstance(code,str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}',code):raise ValueError(code)
         raise ValueError('DIAGNOSTIC_CONTROL_RPC_FAILED')
     return json.loads(result.stdout)
 
@@ -85,8 +90,40 @@ def host_audit():
     return result
 
 
+RECOVER_PROBES=('f196708c29374e26b72c9d35b2063f00','1f5b2e103fa64bb0804b2b77fbd3dfb6')
+
+
+def reconcile_owned():
+    if STATE.is_symlink() or not STATE.is_dir() or STATE.stat().st_uid!=0 or STATE.stat().st_mode&0o077:
+        raise ValueError('UNTRUSTED_DIAGNOSTIC_STATE')
+    result={'recovered':[],'errors':[]}
+    for tag in RECOVER_PROBES:
+        path=STATE/(tag+'.json')
+        if not path.exists():continue
+        if path.is_symlink() or path.stat().st_uid!=0 or path.stat().st_mode&0o077 or path.stat().st_size>2048:
+            raise ValueError('UNTRUSTED_DIAGNOSTIC_MARKER')
+        marker=json.loads(path.read_text())
+        if marker.get('name')!='Cloud UDP diagnostic '+tag:raise ValueError('DIAGNOSTIC_OWNER_MISMATCH')
+        try:
+            value=execute({'action':'cleanup','probe_id':tag,'public_key':marker['public_key']})
+            result['recovered'].append({'probe_id':tag,'cleaned':value['cleaned']})
+        except Exception as error:
+            code=str(error)
+            result['errors'].append({'probe_id':tag,'code':code if re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}',code) else type(error).__name__})
+    ledger=Path('/var/lib/oracle-proxy-control/ledger.sqlite3')
+    if ledger.exists() and not ledger.is_symlink() and ledger.stat().st_uid==0:
+        with sqlite3.connect('file:'+str(ledger)+'?mode=ro',uri=True,timeout=3) as db:
+            result['ledger_counts']={label:db.execute(query).fetchone()[0] for label,query in (
+                ('all_users','SELECT count(*) FROM users'),
+                ('deleted_users','SELECT count(*) FROM deleted_users'),
+                ('active_users','SELECT count(*) FROM users WHERE id NOT IN (SELECT user_id FROM deleted_users)'))}
+    result['marker_file_count']=len(list(STATE.glob('*.json')))
+    return result
+
+
 def execute(value):
     validate(value)
+    if value['action']=='reconcile-owned':return reconcile_owned()
     key, tag = value['public_key'], value['probe_id']
     name = 'Cloud UDP diagnostic ' + tag
     if STATE.is_symlink(): raise ValueError('UNTRUSTED_DIAGNOSTIC_STATE')

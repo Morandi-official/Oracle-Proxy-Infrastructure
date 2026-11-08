@@ -128,11 +128,19 @@ def main():
                     incoming,outgoing,errors=client.exec_command('preflight '+revision,timeout=120)
                     incoming.write(body);incoming.flush();incoming.channel.shutdown_write()
                     received=outgoing.read(2*1024*1024+1)
-                    if len(received)>2*1024*1024 or outgoing.channel.recv_exit_status()!=0:
-                        raise ValueError('DIAGNOSTIC_REMOTE_COMMAND_FAILED')
+                    status=outgoing.channel.recv_exit_status()
                     output=received.decode('utf-8')
+                    if len(received)>2*1024*1024 or status!=0:
+                        safe=[x for x in output.splitlines() if x.startswith('CLOUD_UDP_ERROR=')]
+                        if len(safe)==1:print(safe[0],flush=True)
+                        raise ValueError('DIAGNOSTIC_REMOTE_COMMAND_FAILED')
                 finally:client.close()
-            else:output=run(command,input=body,timeout=120)
+            else:
+                try:output=run(command,input=body,timeout=120)
+                except subprocess.CalledProcessError as error:
+                    safe=[x for x in error.stdout.splitlines() if x.startswith('CLOUD_UDP_ERROR=')]
+                    if len(safe)==1:print(safe[0],flush=True)
+                    raise ValueError('DIAGNOSTIC_REMOTE_COMMAND_FAILED') from None
             lines=[line.split('=',1)[1] for line in output.splitlines() if line.startswith('CLOUD_UDP_IDENTITY=')]
             if len(lines)!=1:raise ValueError('DIAGNOSTIC_RPC_PROTOCOL_FAILED')
             return json.loads(lines[0])
@@ -140,6 +148,9 @@ def main():
         tests_completed=False
         try:
             executable=binary(folder)
+            results['reconciliation']=rpc('reconcile-owned')
+            print('CLOUD_UDP_RECONCILIATION='+json.dumps(results['reconciliation'],sort_keys=True),flush=True)
+            if results['reconciliation']['errors']:raise ValueError('OWNED_DIAGNOSTIC_RECONCILIATION_FAILED')
             attempted=True
             info=rpc('prepare')
             results['temporary_endpoint']=rpc('endpoint-prepare')

@@ -53,6 +53,22 @@ class IdentityTest(unittest.TestCase):
         if operation=='user.save':value['saved_user_id']='diagnostic'
         return value
 
+    def test_reconcile_recovers_only_exact_failed_run_markers(self):
+        request={**self.request(),'probe_id':identity.RECOVER_PROBES[0]}
+        identity.execute(request)
+        result=identity.reconcile_owned()
+        self.assertEqual(result['errors'],[])
+        self.assertEqual(result['recovered'],[{'probe_id':request['probe_id'],'cleaned':True}])
+        self.assertEqual(len(self.snapshot['users']),1)
+        self.assertEqual(self.snapshot['peers'][0]['public_key'],OTHER)
+
+    def test_reconcile_refuses_changed_marker_owner_before_mutation(self):
+        request={**self.request(),'probe_id':identity.RECOVER_PROBES[0]}
+        identity.execute(request)
+        path=self.root/(request['probe_id']+'.json');value=json.loads(path.read_text());value['name']='Real user';path.write_text(json.dumps(value));self.calls.clear()
+        with self.assertRaisesRegex(ValueError,'OWNER_MISMATCH'):identity.reconcile_owned()
+        self.assertEqual(self.calls,[])
+
     def test_host_audit_is_read_only_and_bound_to_active_owned_marker(self):
         with patch.object(identity,'host_audit',return_value={'host':{'scope':'CURRENT_HOST_ONLY'}}) as audit:
             with self.assertRaises(ValueError):identity.execute(self.request('host-audit'))
@@ -134,6 +150,18 @@ class IdentityTest(unittest.TestCase):
         for data in ({}, {**self.request(),'probe_id':'../x'}, {**self.request(),'action':'user.delete'},
                      {**self.request(),'public_key':'invalid'}, {**self.request(),'extra':'value'}):
             with self.assertRaises(ValueError):identity.validate(data)
+
+
+class ControlRpcDiagnosticsTest(unittest.TestCase):
+    def test_control_error_code_survives_without_raw_exception_text(self):
+        from types import SimpleNamespace
+        account=SimpleNamespace(pw_uid=1001,pw_gid=1001)
+        for output,expected in ((json.dumps({'control_error':'USER_LIMIT'}),'USER_LIMIT'),
+                                (json.dumps({'control_error':'secret value with spaces'}),'DIAGNOSTIC_CONTROL_RPC_FAILED')):
+            result=SimpleNamespace(returncode=2,stdout=output)
+            with patch.object(identity.pwd,'getpwnam',return_value=account),patch.object(identity.subprocess,'run',return_value=result) as run:
+                with self.assertRaisesRegex(ValueError,expected):identity.rpc('state',{})
+                compile(run.call_args.args[0][3],'<rpc-code>','exec')
 
 
 class ConfigurationTest(unittest.TestCase):

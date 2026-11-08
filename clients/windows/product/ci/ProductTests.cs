@@ -388,6 +388,7 @@ internal static class ProductTests
     private static void UdpDiagnosticRegression()
     {
         UiAssert(UdpDiagnosticTarget.All.Select(t=>$"{t.Address}:{t.Port}").Distinct().Count()==6,"UDP_SIX_FIXED_UNIQUE_TARGETS");
+        UiAssert(UdpDiagnosticTarget.All.Select(t=>t.Address).Distinct().ToHashSet().SetEquals(new[]{"152.67.154.225","150.230.113.158"}),"UDP_SELECTED_PRIMARY_BACKUP_TARGETS");
         foreach(var target in UdpDiagnosticTarget.All){
             var config=new JsonObject{["outbounds"]=new JsonArray(new JsonObject{["type"]="oracle-native-udp",["address"]="141.147.78.44",["ports"]=new JsonArray(443,8443)})};
             target.Apply(config,TunnelTransport.WireGuardUdp);
@@ -447,7 +448,7 @@ internal static class ProductTests
         form.Display(snapshot);
         var udpReport=(string)typeof(MainForm).GetField("_udpReport",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.GetValue(form)!;
         var udpTable=Descendants(form).OfType<DataGridView>().Single(c=>c.Name=="udp-six-results");
-        UiAssert(udpTable.Rows.Count==6 && udpReport.Contains("152.67.156.100:51820") && !udpReport.Contains("SYNTHETIC_UDP_SECRET"),"UDP_SIX_RESULTS_COPY_ALLOWLIST");
+        UiAssert(udpTable.Rows.Count==6 && udpReport.Contains("152.67.154.225:51820") && !udpReport.Contains("SYNTHETIC_UDP_SECRET"),"UDP_SIX_RESULTS_COPY_ALLOWLIST");
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-start").Enabled,"UDP_DIAGNOSTIC_BLOCKED_WHILE_PROTECTED");
         snapshot.Remove("udp_diagnostic");form.Display(snapshot);
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-copy").Enabled,"UDP_REPORT_CLEARED_ON_SESSION_RESET");

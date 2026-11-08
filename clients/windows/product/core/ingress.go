@@ -9,7 +9,7 @@ func ingressAddress(value string) (string, error) {
 	switch value {
 	case "", "152.67.156.100":
 		return "152.67.156.100", nil
-	case "141.147.78.44":
+	case "141.147.78.44", "152.67.154.225", "150.230.113.158":
 		return value, nil
 	default:
 		return "", errors.New("INGRESS_ADDRESS_REJECTED")

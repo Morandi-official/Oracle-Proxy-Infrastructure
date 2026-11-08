@@ -661,13 +661,18 @@ def main(arguments):
     operation, revision = arguments
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
-        if request.get('request_id')=='cloud-udp-third-ip-ab-20261108':
+        if request.get('request_id')=='cloud-udp-third-ip-reconcile-20261108':
             body=sys.stdin.buffer.read(4097)
             if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')
             if body.strip():
                 diagnostic_spec=importlib.util.spec_from_file_location('cloud_udp_identity',Path(__file__).with_name('cloud_udp_identity.py'))
                 diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic)
-                print('CLOUD_UDP_IDENTITY='+json.dumps(diagnostic.execute(json.loads(body)),sort_keys=True),flush=True)
+                try:result=diagnostic.execute(json.loads(body))
+                except Exception as error:
+                    code=str(error)
+                    print('CLOUD_UDP_ERROR='+(code if re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}',code) else type(error).__name__),flush=True)
+                    raise
+                print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
             else:preflight()
         else:preflight()
     elif operation == 'install-runtime': install_runtime()

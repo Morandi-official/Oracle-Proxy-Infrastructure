@@ -62,7 +62,7 @@ internal static class ProductSelfTests
             var secondary=CoreConfig.Build(state,secret,"synthetic-only",carrier);
             if(secondary["outbounds"]?[1]?["address"]?.GetValue<string>()!="141.147.78.44" || secondary["endpoints"]?[0]?["peers"]?[0]?["address"]?.GetValue<string>()!="152.67.156.100")return false;
         }
-        if(CarrierMemory.NetworkHash(state)==oldScope || CoreConfig.Build(state,secret,"synthetic-only",true)["outbounds"]?[1]?["address"] is not null)return false;
+        if(CarrierMemory.NetworkHash(state)==oldScope || CoreConfig.Build(state,secret,"synthetic-only",true)["outbounds"]?[1]?["address"]?.GetValue<string>()!="141.147.78.44")return false;
         foreach(JsonNode bad in new JsonNode[]{JsonValue.Create("127.0.0.1")!,JsonValue.Create("141.147.78.44:443")!,JsonValue.Create(123)!,new JsonObject()}){
             state["tunnel"]!["transport_address"]=bad;
             try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}

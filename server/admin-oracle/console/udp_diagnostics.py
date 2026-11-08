@@ -12,7 +12,11 @@ from django.views.decorators.http import require_POST,require_GET
 from . import client_api,control
 from .models import UdpDiagnostic,ClientLoginThrottle
 
-TARGETS={(a,p) for a in ('152.67.156.100','141.147.78.44','152.67.154.225','150.230.113.158') for p in (443,8443,51820)}
+def targets():
+    from .endpoint_config import read
+    config=read()
+    addresses=[r['public_ipv4'] for r in [config['primary'],config['backup']]+config['legacy']] if config else ['152.67.156.100','141.147.78.44','152.67.154.225','150.230.113.158']
+    return {(a,p) for a in addresses for p in (443,8443,51820)}
 COUNTERS={'tx_initiations','rx_responses','rx_cookies','rx_invalid','rx_obsolete','read_errors','write_errors',
           'last_read_error','last_write_error','rcvbuf_before','sndbuf_before','rcvbuf_after','sndbuf_after','socket_buffer_error'}
 ERRORS={'','CORE_START_FAILED','CORE_READY_TIMEOUT','ORACLE_PROBE_TIMEOUT','ORACLE_PROBE_HTTP_FAILED',
@@ -105,7 +109,7 @@ def native(request):
             data={'diagnostic_id':identity,'public_key':credential.public_key}
             if action=='begin':
                 if row.phase!='running':raise ValueError('DIAGNOSTIC_NOT_RUNNING')
-                if type(value['port'])!=int or (value['address'],value['port']) not in TARGETS:raise ValueError('INVALID_DIAGNOSTIC_TARGET')
+                if type(value['port'])!=int or (value['address'],value['port']) not in targets():raise ValueError('INVALID_DIAGNOSTIC_TARGET')
                 server=control.call('udp-diagnostic.begin',client_api.actor(request),{**data,'address':value['address'],'port':value['port']})
                 row.report['trials'].append({'address':value['address'],'port':value['port'],'server':server})
             elif action=='sample':

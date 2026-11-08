@@ -38,9 +38,13 @@ internal static class LoginAdmissionTests
             try{await LoginAdmission.Run((_,_,_)=>{calls++;throw new ApiException("DEVICE_REVOKED");},()=>"key",()=>rotations++,"u","p","PC");throw new Exception("UNBOUNDED_ROTATION");}
             catch(ApiException){Check(rotations==1 && calls==2);}
         }
-        foreach(string failure in new[]{"DEVICE_LIMIT_REACHED","ACCOUNT_UNAVAILABLE","DEVICE_REVOKED"}){
+        foreach(string failure in new[]{"ACCOUNT_UNAVAILABLE","DEVICE_REVOKED"}){
             try{await LoginAdmission.Run((action,_,_)=>action=="authenticate"?Task.FromResult(Login(false)):throw new ApiException(failure),()=>"key",()=>throw new Exception("MUST_NOT_ROTATE_ON_ENROLL"),"u","p","PC");throw new Exception("QUOTA_BYPASSED");}
             catch(ApiException error){Check(error.Message==failure);}
+        }
+        {
+            var quotaPending=await LoginAdmission.Run((action,_,_)=>action=="authenticate"?Task.FromResult(Login(false)):throw new ApiException("DEVICE_LIMIT_REACHED"),()=>"key",()=>throw new Exception("MUST_NOT_ROTATE"),"u","p","PC");
+            Check(!DeviceRegistration.Confirmed(quotaPending) && quotaPending["token"]!.GetValue<string>()=="synthetic-token" && quotaPending["admission_error"]!.GetValue<string>()=="DEVICE_LIMIT_REACHED");
         }
         try{await LoginAdmission.Run((action,_,_)=>Task.FromResult(action=="authenticate"?Login(false):State(false)),()=>"key",()=>{},"u","p","PC");throw new Exception("UNCONFIRMED_ACCEPTED");}
         catch(IOException error){Check(error.Message=="DEVICE_CONFIRMATION_REQUIRED");}

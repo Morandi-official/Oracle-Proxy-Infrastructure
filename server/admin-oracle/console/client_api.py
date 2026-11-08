@@ -19,7 +19,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from .transports import quic_info, transport_address, ipv6_info
+from .transports import legacy_transport_address, quic_info, transport_address, ipv6_info
 from . import control
 from .models import Audit, ClientAccount, ClientSession, ClientLoginThrottle
 
@@ -93,18 +93,20 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
     status='unavailable' if snapshot['error'] or stale else 'server_budget' if snapshot['budget']['guard_blocked'] else user['status']
     owned=[p for p in snapshot['peers'] if p['user_id']==str(account.user_id)]
     active=[p for p in owned if not p.get('revoked')]
-    retired=sorted((p for p in owned if p.get('revoked')),key=lambda p:(p.get('enrollment') or {}).get('confirmed_at',0),reverse=True)
-    devices=[{'id':fingerprint(p['public_key']),'name':p['name'],'current':p['public_key']==key,'revoked':p['revoked'],'confirmed_at':(p.get('enrollment') or {}).get('confirmed_at')} for p in active+retired[:8]]
+    devices=[{'id':fingerprint(p['public_key']),'name':p['name'],'current':p['public_key']==key,'revoked':p['revoked'],'confirmed_at':(p.get('enrollment') or {}).get('confirmed_at')} for p in active]
     data={'schema':1,'udp_diagnostics_available':True,'observed_at':snapshot['observed_at'],'period':snapshot['period'],
         'account':{'username':account.username,'status':status,'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
         'registration':{'status':'registered' if is_confirmed else 'legacy' if peer else 'pending','device_id':fingerprint(key),'device_name':peer['name'] if peer else proposed_name,'confirmed_at':receipt['confirmed_at'] if is_confirmed else None,'requires_confirmation':not is_confirmed,'requires_slot':not bool(peer)},
-        'devices':devices,'devices_history_truncated':len(retired)>8,
+        'devices':devices,'devices_history_truncated':False,
         'device':{'public_key':key,'registered':registered,'handshake_at':peer['handshake'] if peer else 0,'usage':peer['usage'] if peer else {'rx':0,'tx':0}},'tunnel':None}
     if registered:
         ipv6 = ipv6_info() if dual_stack else None
         dual = bool(ipv6 and any(ipaddress.ip_interface(a).version == 6 and ipaddress.ip_interface(a).ip in ipaddress.ip_network(ipv6['prefix']) for a in peer['allowed_ips']))
         addresses = [a for a in peer['allowed_ips'] if dual or ipaddress.ip_interface(a).version == 4]
-        data['tunnel']={'transport_address':transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':addresses,'allowed_ips':['0.0.0.0/0','::/0'] if dual else ['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'tunnel' if dual else 'block','ipv6_egress':ipv6['egress'] if dual else None,'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
+        data['tunnel']={'transport_address':legacy_transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':addresses,'allowed_ips':['0.0.0.0/0','::/0'] if dual else ['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'tunnel' if dual else 'block','ipv6_egress':ipv6['egress'] if dual else None,'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
+    from .endpoint_config import advertised
+    catalog=advertised()
+    if catalog:data['network_endpoints']=catalog
     return data
 
 
@@ -334,3 +336,25 @@ def delete_device(request,value):
             ClientSession.objects.filter(public_key=key).delete()
             Audit.objects.create(actor=actor(request),action='device.deleted',resource=fingerprint(key))
         return snapshot
+
+
+@csrf_exempt
+@require_POST
+def remove_device(request):
+    credential=session(request)
+    if not credential:return response({'error':'LOGIN_REQUIRED'},401)
+    try:
+        if request.content_type!='application/json' or len(request.body)>1024:raise ValueError('INVALID_REQUEST')
+        value=json.loads(request.body)
+        if not isinstance(value,dict) or set(value)!={'device_id'} or not isinstance(value['device_id'],str) or not re.fullmatch(r'[a-f0-9]{12}',value['device_id']):raise ValueError('INVALID_DEVICE_ID')
+        with management_lock():
+            snapshot=control.call('state',actor(request),{})
+            matching=[peer for peer in snapshot.get('peers',[]) if peer['user_id']==str(credential.account.user_id) and fingerprint(peer['public_key'])==value['device_id']]
+            if len(matching)!=1:raise ValueError('DEVICE_NOT_FOUND')
+            key=matching[0]['public_key'];current=key==credential.public_key
+            control.call('peer.delete-owned',actor(request),{'public_key':key,'user_id':str(credential.account.user_id)})
+            with transaction.atomic():
+                ClientSession.objects.filter(account=credential.account,public_key=key).delete()
+                Audit.objects.create(actor=actor(request),action='device.deleted',resource=fingerprint(key))
+            return response({'removed':value['device_id'],'current':current})
+    except (ValueError,KeyError,TypeError,json.JSONDecodeError) as error:return failed(error)

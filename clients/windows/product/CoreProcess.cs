@@ -11,6 +11,8 @@ internal sealed class CoreProcess : IDisposable
     private IntPtr _job;
     private string _probeSecret="";
     private bool _dualStack;
+    private HashSet<string> _expectedIPv4=new(){"152.67.156.100"};
+    internal string? VerifiedIPv4 {get;private set;}
     private HttpClient? _probeClient;
     internal bool StandbyCapable{get;private set;}
     internal bool TunActive{get;private set;}
@@ -30,7 +32,7 @@ internal sealed class CoreProcess : IDisposable
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
         if(_process is not null)await Stop();
-        _dualStack=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
+        _expectedIPv4=EndpointCatalog.Egress(state).ToHashSet();VerifiedIPv4=null;_dualStack=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
         _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
         if(standby)info.ArgumentList.Add("--standby");
@@ -83,7 +85,7 @@ internal sealed class CoreProcess : IDisposable
         }
         var client=_probeClient;
         try{
-            var ipv4=EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,_stop.Token,_dualStack?"https://1.1.1.1/cdn-cgi/trace":"https://www.cloudflare.com/cdn-cgi/trace");
+            var ipv4=EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,_stop.Token,_dualStack?"https://1.1.1.1/cdn-cgi/trace":"https://www.cloudflare.com/cdn-cgi/trace",allowed:_expectedIPv4,observed:ip=>VerifiedIPv4=ip);
             if(!_dualStack)return await ipv4;
             var ipv6=EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,_stop.Token,"https://[2606:4700:4700::1111]/cdn-cgi/trace","2603:c020:c015:8100::10");
             var verified=await Task.WhenAll(ipv4,ipv6);

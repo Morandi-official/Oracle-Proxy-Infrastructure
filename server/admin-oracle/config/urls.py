@@ -14,6 +14,7 @@ urlpatterns = [
     path('api/client/enroll', client_api.enroll),
     path('api/client/presence', client_api.presence),
     path('api/client/state', client_api.state),
+    path('api/client/device-delete', client_api.remove_device),
     path('api/client/udp-diagnostics', udp_diagnostics.native),
     path('api/udp-diagnostics', udp_diagnostics.administrator),
     path('api/client/quic-certificate', transports.public_certificate),

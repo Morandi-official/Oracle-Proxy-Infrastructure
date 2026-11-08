@@ -387,6 +387,12 @@ internal static class ProductTests
     }
     private static void UdpDiagnosticRegression()
     {
+        var catalog=JsonNode.Parse("""{"network_endpoints":{"schema":1,"revision":5,"primary":"143.47.230.196","backup":"150.230.115.65","egress_ipv4":["143.47.230.196"],"private_ipv4":{"143.47.230.196":"10.0.0.6"}},"tunnel":{}}""")!.AsObject();
+        EndpointCatalog.Normalize(catalog);
+        UiAssert(TransportPolicy.IngressAddress(catalog)=="143.47.230.196" && TransportPolicy.IngressAddress(EndpointCatalog.ForIngress(catalog,true))=="150.230.115.65" && EndpointCatalog.Egress(catalog).SequenceEqual(new[]{"143.47.230.196"}) && UdpDiagnosticTarget.ForState(catalog).Length==6,"ENDPOINT_CATALOG_REFRESHES_INGRESS_BACKUP_EGRESS_AND_DIAGNOSTICS_WITHOUT_BUILD");
+        foreach(string invalid in new[]{"127.0.0.1","10.0.0.6","100.64.0.1","192.0.2.1","203.0.113.1","::1","152.67.154.225:443"}){
+            bool rejected=false;try{EndpointCatalog.Public(invalid);}catch(IOException){rejected=true;}UiAssert(rejected,"CATALOG_REJECTS_NONPUBLIC_OR_NONCANONICAL_ADDRESS");
+        }
         UiAssert(UdpDiagnosticTarget.All.Select(t=>$"{t.Address}:{t.Port}").Distinct().Count()==6,"UDP_SIX_FIXED_UNIQUE_TARGETS");
         UiAssert(UdpDiagnosticTarget.All.Select(t=>t.Address).Distinct().ToHashSet().SetEquals(new[]{"152.67.154.225","150.230.113.158"}),"UDP_SELECTED_PRIMARY_BACKUP_TARGETS");
         foreach(var target in UdpDiagnosticTarget.All){
@@ -455,7 +461,7 @@ internal static class ProductTests
         snapshot["mode"]="connected";snapshot["transport"]="wireguard-quic";snapshot["verified_exit_ip"]="152.67.156.100";snapshot["latency_ms"]=186L;snapshot["core_pid"]=123U;
         snapshot["traffic"]=new JsonObject{["sample_ms"]=1000L,["rx_bytes"]=10000L,["tx_bytes"]=20000L};form.Display(snapshot);
         snapshot["traffic"]=new JsonObject{["sample_ms"]=2000L,["rx_bytes"]=12048L,["tx_bytes"]=21024L};form.Display(snapshot);
-        if(form.DownloadRate!="2.0 KiB/s" || form.UploadRate!="1.0 KiB/s")return 1;
+        if(form.DownloadRate!="2.0 KB/s" || form.UploadRate!="1.0 KB/s")return 1;
         snapshot["traffic"]=new JsonObject{["sample_ms"]=3000L,["rx_bytes"]=0L,["tx_bytes"]=0L};form.Display(snapshot);
         if(form.DownloadRate!="采样中…" || form.UploadRate!="采样中…")return 1;
         snapshot["mode"]="protected";form.Display(snapshot);if(form.DownloadRate!="—" || form.UploadRate!="—")return 1;
@@ -485,9 +491,9 @@ internal static class ProductTests
         using var idle=new MainForm((command,_,_)=>{pollCalls.Add(command);return Task.FromResult((JsonObject)snapshot.DeepClone());});
         idle.Display(snapshot);idle.CreateControl();idle.PerformLayout();
         IEnumerable<Control> Descendants(Control parent){foreach(Control control in parent.Controls){yield return control;foreach(var child in Descendants(control))yield return child;}}
-        var protocolChoices=Descendants(idle).OfType<ComboBox>().Single();
-        if(protocolChoices.Items.Count!=3 || protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTPS",StringComparison.Ordinal)) || !protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTP/3",StringComparison.Ordinal)))return 1;
-        Console.WriteLine("PROTOCOL_CHOICES_ARE_AUTO_NATIVE_UDP_HTTP3_WITHOUT_HTTPS_OPTION=PASS");
+        var protocolChoices=Descendants(idle).OfType<ComboBox>().Single(c=>c.Name=="transport-choice");
+        if(protocolChoices.Items.Count!=2 || protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTPS",StringComparison.Ordinal)) || !protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTP/3",StringComparison.Ordinal)))return 1;
+        Console.WriteLine("PROTOCOL_CHOICES_ARE_UDP_HTTP3_WITH_SEPARATE_PORT_SELECTOR=PASS");
         int textChanges=0,buttonChanges=0,layouts=0;
         foreach(var control in Descendants(idle)){
             control.TextChanged+=(_,_)=>textChanges++;
@@ -517,7 +523,7 @@ internal static class ProductTests
         var preferenceCalls=new List<string>();
         using var reselect=new MainForm((command,_,_)=>{preferenceCalls.Add(command);return Task.FromResult((JsonObject)preferenceState.DeepClone());});
         reselect.Display(preferenceState);
-        var sameChoice=Descendants(reselect).OfType<ComboBox>().Single();
+        var sameChoice=Descendants(reselect).OfType<ComboBox>().Single(c=>c.Name=="transport-choice");
         typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
         if(!preferenceCalls.SequenceEqual(new[]{"PreferUdpAdaptive"}))return 1;
         Console.WriteLine("RESELECTING_NORMAL_UDP_RESTORES_ADAPTIVE_PORT_SELECTION=PASS");
@@ -538,7 +544,7 @@ internal static class ProductTests
             rejected.Display(denied);rejected.Act("PreferUdp").GetAwaiter().GetResult();
             if(!deniedCalls.SequenceEqual(new[]{"PreferUdp"}))return 1;
         }
-        if(TransportPolicy.ClientSelection(1,false)!="PreferUdp" || TransportPolicy.ClientSelection(0,false)!="PreferAuto" || TransportPolicy.ClientSelection(2,true)!="PreferQuic" || TransportPolicy.ClientSelection(1,true)!="PreferUdpAdaptive" || TransportPolicy.ClientSelection(0,true)!="PreferAutoAdaptive")return 1;
+        if(TransportPolicy.ClientSelection(0,false)!="PreferUdp" || TransportPolicy.ClientSelection(1,false)!="PreferQuic" || TransportPolicy.ClientSelection(1,true)!="PreferQuic" || TransportPolicy.ClientSelection(0,true)!="PreferUdpAdaptive")return 1;
         Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_PRESERVE_ADAPTIVE_PORT_SELECTION=PASS");
         var pending=(JsonObject)snapshot.DeepClone();pending["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
         pending["registration"]=new JsonObject{["status"]="pending",["device_id"]="112233aabbcc",["device_name"]="DESKTOP-NEW",["requires_slot"]=true};pending["devices"]=new JsonArray();

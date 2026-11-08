@@ -161,4 +161,13 @@ class ConfigurationTest(unittest.TestCase):
         self.assertEqual(result,{'error_category':'OSError'})
 
 
+class KernelEndpointPlan(unittest.TestCase):
+    def test_sticky_source_primes_working_alias_and_tests_exact_same_six_targets(self):
+        spec=importlib.util.spec_from_file_location('kernel_plan',Path(__file__).with_name('kernel_probe.py'))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        normal=module.endpoint_order();sticky=module.endpoint_order(True)
+        self.assertEqual(len(sticky),6);self.assertEqual(set(sticky),set(normal))
+        self.assertEqual(sticky[0],('141.147.78.44',443))
+        self.assertEqual(normal[0],('152.67.156.100',443))
+
 if __name__=='__main__':unittest.main()

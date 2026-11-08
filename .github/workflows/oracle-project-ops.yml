@@ -85,7 +85,7 @@ jobs:
           mapfile -t endpoint_targets < <(python3 -c 'import json;v=json.load(open("ops/network/endpoints.json"));print("\n".join(dict.fromkeys(r["public_ipv4"] for r in [v["primary"],v["backup"]]+v["legacy"])))')
           endpoint_target=''
           for candidate in "${endpoint_targets[@]}"; do
-            if "${SSH[@]}" -o ConnectTimeout=3 "oracle-project-ci@$candidate" "status $REVISION" >/dev/null; then endpoint_target=$candidate; break; fi
+            if "${SSH[@]}" -o ConnectTimeout=3 "oracle-project-ci@$candidate" "logs $REVISION" >/dev/null; then endpoint_target=$candidate; break; fi
           done
           [[ -n "$endpoint_target" ]] || { echo 'NO_CONFIGURED_MANAGEMENT_ENDPOINT' >&2; exit 2; }
           SSH+=("oracle-project-ci@$endpoint_target")

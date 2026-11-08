@@ -3,6 +3,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -32,6 +33,7 @@ def write(path,body,mode=0o600):
     temporary=path.with_name(path.name+'.new')
     descriptor=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,mode)
     try:
+        os.fchmod(descriptor,mode)  # The root bridge deliberately uses umask077.
         with os.fdopen(descriptor,'wb') as stream:stream.write(body);stream.flush();os.fsync(stream.fileno())
         os.replace(temporary,path)
     finally:temporary.unlink(missing_ok=True)
@@ -41,7 +43,8 @@ def addresses(device):return json.loads(run(['ip','-j','-4','address','show','de
 def routes():return [json.loads(run(['ip','-j',family,'route','show','default'])) for family in ('-4','-6')]+[json.loads(run(['ip','-j','-4','rule','show']))]
 
 def stop_timer(unit):
-    run(['systemctl','stop',unit+'.timer',unit+'.service'])
+    stopped=subprocess.run(['systemctl','stop',unit+'.timer',unit+'.service'],capture_output=True,text=True,timeout=15)
+    if stopped.returncode not in (0,5):raise ValueError('EXPERIMENT_TIMER_STOP_FAILED')
     for suffix in ('.timer','.service'):
         value=subprocess.run(['systemctl','is-active',unit+suffix],capture_output=True,text=True,timeout=10)
         if value.returncode not in (3,4) or value.stdout.strip() in ('active','activating','deactivating'):raise ValueError('EXPERIMENT_TIMER_NOT_STOPPED')
@@ -109,7 +112,7 @@ def apply():
         return apply_locked(catalog)
     finally:os.close(fd)
 
-def install():
+def _install():
     catalog=module().validate(json.loads((REPO/'ops/network/endpoints.json').read_text()))
     if os.geteuid()!=0:raise ValueError('ROOT_REQUIRED')
     fd=os.open(ROOT/'endpoint-addresses.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
@@ -125,5 +128,15 @@ def install():
     body=b'[Unit]\nDescription=Proxy configured endpoint addresses\nAfter=network-online.target\nWants=network-online.target\nBefore=oracle-proxy-quic.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/endpoint_addresses.py\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n'
     write(UNIT,body,0o644);run(['systemctl','daemon-reload']);run(['systemctl','enable','proxy-endpoint-addresses.service'])
     run(['systemctl','start','proxy-endpoint-addresses.service']);return result
+
+def install():
+    try:return _install()
+    except Exception as error:
+        code=str(error)
+        safe=code if re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}',code) else type(error).__name__
+        print('ENDPOINT_CATALOG_ERROR='+safe,flush=True)
+        if isinstance(error,subprocess.CalledProcessError):
+            print('ENDPOINT_CATALOG_COMMAND='+str(error.cmd[0])+';RETURN_CODE='+str(error.returncode),flush=True)
+        raise
 
 if __name__=='__main__':print(json.dumps(apply(),sort_keys=True))

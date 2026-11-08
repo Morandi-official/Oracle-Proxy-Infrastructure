@@ -20,7 +20,9 @@ ADDRESSES={'152.67.156.100':socket.inet_aton('10.0.0.6'),
 # Read the same root-owned catalog used by API/profile exports.
 import importlib.util
 from pathlib import Path
-_catalog_spec=importlib.util.spec_from_file_location('proxy_endpoint_catalog',Path(__file__).resolve().parents[1]/'console/endpoint_config.py')
+_catalog_path=Path(__file__).with_name('endpoint_config.py')
+if not _catalog_path.exists():_catalog_path=Path(__file__).resolve().parents[1]/'console/endpoint_config.py'
+_catalog_spec=importlib.util.spec_from_file_location('proxy_endpoint_catalog',_catalog_path)
 _catalog=importlib.util.module_from_spec(_catalog_spec);_catalog_spec.loader.exec_module(_catalog)
 _config=_catalog.read()
 if _config:

@@ -25,7 +25,7 @@ LEASE = 20
 MAX_BYTES = 10**16
 SYSTEM_OPERATIONS = {
     'system:health': frozenset(('state',)),
-    'system:client-api': frozenset(('state', 'peer.enroll', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
+    'system:client-api': frozenset(('state', 'peer.enroll', 'peer.delete-owned', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
 }
 _ipv6_spec = importlib.util.spec_from_file_location('oracle_ipv6_addresses', Path(__file__).with_name('ipv6_addresses.py'))
 ipv6_addresses = importlib.util.module_from_spec(_ipv6_spec)
@@ -518,7 +518,14 @@ class Engine:
         if operation == 'usage.history':
             if actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')
             return self.usage_history(data)
-        if operation == 'peer.delete' and actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')
+        owned_delete=operation=='peer.delete-owned'
+        if owned_delete:
+            if set(data)!={'public_key','user_id'}:raise ValueError('INVALID_FIELDS')
+            key=public_key(data['public_key'])
+            saved=self.db.execute('SELECT user_id FROM devices WHERE key=?',(key,)).fetchone()
+            if not isinstance(data['user_id'],str) or not saved or saved['user_id']!=data['user_id']:raise ValueError('DEVICE_NOT_FOUND')
+            operation='peer.delete';data={'public_key':key}
+        if operation == 'peer.delete' and actor.startswith('system:') and not owned_delete:raise ValueError('ADMINISTRATOR_REQUIRED')
         # Account all current counters under the old ownership before any binding/config mutation.
         self.tick()
         saved_user_id = None

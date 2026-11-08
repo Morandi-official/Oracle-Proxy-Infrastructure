@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.hashers import make_password
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 from .models import ClientAccount, ClientSession, ClientLoginThrottle
 from .tests import HOST
@@ -48,6 +48,7 @@ class ClientApiTests(TestCase):
     def state(self,token,path='/api/client/state'):
         return self.client.get(path,secure=True,HTTP_AUTHORIZATION='Bearer '+token)
 
+    @override_settings(ADMIN_AUTH_MODE="local")
     def test_native_device_delete_scopes_account_and_frees_admission_slot(self):
         first=self.login(3).json();self.login(5);self.login(6)
         pending=self.login(7,confirm=False).json();token=pending['token']

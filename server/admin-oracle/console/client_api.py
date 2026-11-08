@@ -352,7 +352,7 @@ def remove_device(request):
             matching=[peer for peer in snapshot.get('peers',[]) if peer['user_id']==str(credential.account.user_id) and fingerprint(peer['public_key'])==value['device_id']]
             if len(matching)!=1:raise ValueError('DEVICE_NOT_FOUND')
             key=matching[0]['public_key'];current=key==credential.public_key
-            control.call('peer.delete',actor(request),{'public_key':key})
+            control.call('peer.delete-owned',actor(request),{'public_key':key,'user_id':str(credential.account.user_id)})
             with transaction.atomic():
                 ClientSession.objects.filter(account=credential.account,public_key=key).delete()
                 Audit.objects.create(actor=actor(request),action='device.deleted',resource=fingerprint(key))

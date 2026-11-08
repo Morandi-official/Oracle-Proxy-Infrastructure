@@ -30,11 +30,11 @@ internal sealed partial class MainForm : Form
     private readonly CheckBox _deviceConfirmation=new(){Name="device-confirm",Text="这是我的设备，我确认将它登记到当前账号。",AutoSize=false,Height=44,Dock=DockStyle.Fill};
     private readonly Button _registerDevice=new(){Name="register-device",Text="确认并登记此设备",Width=190,Height=38,Enabled=false};
     private sealed record ListedDevice(string Id,string Name,bool Current){public override string ToString()=>(Current?"[本机] ":"")+Name+"  ·  "+Id;}
-    private readonly Button _deleteDevice=new(){Name="delete-device",Text="删除选中设备",AutoSize=true};
+    private readonly Button _deleteDevice=new(){Name="delete-device",Text="删除选中设备",Enabled=false,AutoSize=true};
     private string? _deleteDeviceId;
     private readonly TableLayoutPanel _admissionDevicesPanel=Stack("admission-devices");
     private readonly ListBox _admissionDevices=new(){Name="admission-device-list",Height=110,Dock=DockStyle.Fill};
-    private readonly Button _admissionDelete=new(){Name="admission-delete-device",Text="删除选中旧设备并登记本机",Height=42};
+    private readonly Button _admissionDelete=new(){Name="admission-delete-device",Enabled=false,Text="删除选中旧设备并登记本机",Height=42};
     private readonly ListBox _knownDevices=new(){Name="my-devices",Dock=DockStyle.Fill,Height=90,HorizontalScrollbar=true};
     private readonly TableLayoutPanel _registrationGroup;
     private readonly TableLayoutPanel _deviceDetails;

@@ -81,4 +81,30 @@ class RetirementTest(unittest.TestCase):
         self.assertTrue(r.execute()['cleaned'])
 
 
+class FixtureReadinessTest(unittest.TestCase):
+    def helper(self):
+        filename=Path(__file__).resolve().parents[2]/'server/admin-oracle/deploy/ci_flclash_mihomo.py'
+        spec=importlib.util.spec_from_file_location('mihomo_ready',filename)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        return module.expect_tunnel
+
+    def test_listening_proxy_wrong_response_is_not_treated_as_ready(self):
+        clock=[0];calls=[]
+        def fetch(url):
+            calls.append(url)
+            return (502,b'') if len(calls)<3 else (200,b'SYNTHETIC_WG_ONLY_RESPONSE')
+        self.helper()(fetch,'http://synthetic',lambda:True,lambda:clock[0],lambda t:clock.__setitem__(0,clock[0]+t))
+        self.assertEqual(len(calls),3)
+
+    def test_no_success_response_still_fails_with_bounded_diagnostic(self):
+        clock=[0]
+        with self.assertRaisesRegex(AssertionError,'WG_NOT_READY_HTTP_502'):
+            self.helper()(lambda u:(502,b''),'http://synthetic',lambda:True,lambda:clock[0],lambda t:clock.__setitem__(0,clock[0]+t))
+        self.assertEqual(clock[0],12)
+
+    def test_dead_child_is_not_restarted_or_silently_accepted(self):
+        with self.assertRaisesRegex(AssertionError,'MIHOMO_EXITED'):
+            self.helper()(lambda u:(200,b'SYNTHETIC_WG_ONLY_RESPONSE'),'http://synthetic',lambda:False)
+
+
 if __name__=='__main__':unittest.main()

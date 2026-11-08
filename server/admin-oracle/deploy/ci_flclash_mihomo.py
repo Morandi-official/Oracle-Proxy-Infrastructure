@@ -21,6 +21,20 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def run(*args,input=None):return subprocess.run(args,input=input,text=True,capture_output=True,check=True).stdout.strip()
 
+def expect_tunnel(fetch,url,alive,clock=time.monotonic,pause=time.sleep):
+ # A listening mixed proxy does not establish that its WireGuard outbound has
+ # finished cold startup. Require the same exact response within a bounded wait.
+ deadline=clock()+12;last='NO_RESPONSE'
+ while True:
+  if not alive():raise AssertionError('MIHOMO_EXITED_BEFORE_WG_READY')
+  try:
+   status,body=fetch(url)
+   if status==200 and body==b'SYNTHETIC_WG_ONLY_RESPONSE':return
+   last='HTTP_'+str(status)+'_BYTES_'+str(len(body))
+  except (OSError,TimeoutError,http.client.HTTPException) as error:last=type(error).__name__
+  if clock()>=deadline:raise AssertionError('MIHOMO_COLD_START_WG_NOT_READY_'+last)
+  pause(.25)
+
 def main(binary):
  if os.geteuid()!=0 or os.environ.get('ORACLE_ADMIN_DISPOSABLE_CI')!='1':raise ValueError('DISPOSABLE_NAMESPACE_REQUIRED')
  # Caller starts unshare -n: loopback down, no physical network/default route.
@@ -98,13 +112,16 @@ def main(binary):
     try:
      with socket.create_connection(('127.0.0.1',7890),timeout=.1):break
     except OSError:time.sleep(.05)
-   def fetch(url,timeout=8):
+   def response(url,timeout=4):
     client=http.client.HTTPConnection('127.0.0.1',7890,timeout=timeout)
-    try:client.request('GET',url,headers={'Connection':'close'});return client.getresponse().read()
+    try:
+     client.request('GET',url,headers={'Connection':'close'});reply=client.getresponse()
+     return reply.status,reply.read()
     finally:client.close()
+   def fetch(url,timeout=8):return response(url,timeout)[1]
    for host in ('10.77.0.1','[fd42:6f70:78:77::1]'):
-    assert fetch('http://'+host+':18080/test')==b'SYNTHETIC_WG_ONLY_RESPONSE'
-   assert fetch('http://doh-wireguard-test.invalid:18080/test')==b'SYNTHETIC_WG_ONLY_RESPONSE'
+    expect_tunnel(response,'http://'+host+':18080/test',lambda:process.poll() is None)
+   expect_tunnel(response,'http://doh-wireguard-test.invalid:18080/test',lambda:process.poll() is None)
    assert dns_sources and all(ipaddress.ip_address(a)==ipaddress.ip_address('10.77.0.2') for a in dns_sources)
    print('MIHOMO_REMOTE_DOH_REAL_TLS_DNS_THROUGH_WIREGUARD_NO_DIRECT_RESOLVER=PASS',flush=True)
    rows=run('wg','show','wg0','transfer').splitlines();assert any(int(r.split()[1])>0 and int(r.split()[2])>0 for r in rows)

@@ -2,6 +2,7 @@
 import ipaddress
 import json
 import os
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -16,7 +17,14 @@ def run(args):
     return subprocess.run(args,text=True,capture_output=True,check=True,timeout=20).stdout.strip()
 
 
-def main(path):
+def endpoint_order(sticky=False):
+    if not sticky:return list(ENDPOINTS)
+    # Prime the same server peer through the working alias before changing the
+    # local destination IP. The client socket port stays fixed across fresh handshakes.
+    return [('141.147.78.44',443)]+[x for x in ENDPOINTS if x!=('141.147.78.44',443)]
+
+
+def main(path,sticky=False):
     if os.geteuid()!=0 or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('RUNNER_ENVIRONMENT')!='github-hosted':
         # sudo may omit these environment flags; the caller must explicitly pass them.
         raise ValueError('DISPOSABLE_RUNNER_REQUIRED')
@@ -26,13 +34,17 @@ def main(path):
     for target in ('1.1.1.1/32','2606:4700:4700::1111/128'):
         family='-6' if ':' in target else '-4'
         if run(['ip',family,'route','show',target]):raise ValueError('PREEXISTING_TARGET_ROUTE_REFUSED')
+    local_port=0
+    if sticky:
+        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as pick:
+            pick.bind(('0.0.0.0',0));local_port=pick.getsockname()[1]
     with tempfile.TemporaryDirectory(prefix='kernel-wg-private-') as folder:
         key=Path(folder)/'key';key.write_text(info['private_key']+'\n');key.chmod(0o600)
-        for address,port in ENDPOINTS:
-            created=False;row={'address':address,'port':port,'started_at':int(time.time())}
+        for address,port in endpoint_order(sticky):
+            created=False;row={'address':address,'port':port,'started_at':int(time.time()),'fixed_client_port':local_port if sticky else None}
             try:
                 run(['ip','link','add',INTERFACE,'type','wireguard']);created=True
-                run(['wg','set',INTERFACE,'private-key',str(key),'peer',info['server_public_key'],
+                run(['wg','set',INTERFACE,'listen-port',str(local_port),'private-key',str(key),'peer',info['server_public_key'],
                      'allowed-ips','0.0.0.0/0,::/0','endpoint',address+':'+str(port),'persistent-keepalive','5'])
                 for value in info['allowed_ips']:
                     run(['ip','address','add',value,'dev',INTERFACE])
@@ -63,7 +75,11 @@ def main(path):
             except Exception as error:row['error_category']=type(error).__name__;row['passed']=False
             finally:
                 if created:run(['ip','link','delete',INTERFACE])
-            print('CLOUD_KERNEL_ENDPOINT='+json.dumps(row,sort_keys=True),flush=True)
+            prefix='CLOUD_KERNEL_STICKY_ENDPOINT=' if sticky else 'CLOUD_KERNEL_ENDPOINT='
+            print(prefix+json.dumps(row,sort_keys=True),flush=True)
+            if sticky:time.sleep(0.1)
 
 
-if __name__=='__main__':main(sys.argv[1])
+if __name__=='__main__':
+    if len(sys.argv) not in (2,3) or len(sys.argv)==3 and sys.argv[2]!='--sticky-source':raise ValueError('FIXED_KERNEL_PROBE_MODE_REQUIRED')
+    main(sys.argv[1],len(sys.argv)==3)

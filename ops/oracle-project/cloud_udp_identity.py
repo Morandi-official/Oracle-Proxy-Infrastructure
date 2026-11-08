@@ -1,6 +1,7 @@
 """Bounded, separately owned diagnostic peer via the existing policy service."""
 import base64
 import json
+import importlib.util
 import os
 from pathlib import Path
 import pwd
@@ -8,7 +9,7 @@ import re
 import subprocess
 import time
 
-REQUEST = 'cloud-udp-autonomous-20261106'
+REQUEST = 'cloud-udp-return-recheck-20261108'
 STATE = Path('/var/lib/oracle-proxy-control/cloud-udp-diagnostics')
 ACTOR = 'github:204281968'
 
@@ -16,7 +17,7 @@ ACTOR = 'github:204281968'
 def validate(value):
     if not isinstance(value, dict) or set(value) != {'action', 'probe_id', 'public_key'}:
         raise ValueError('INVALID_DIAGNOSTIC_REQUEST')
-    if value['action'] not in ('prepare', 'observe', 'cleanup'):
+    if value['action'] not in ('prepare', 'observe', 'cleanup', 'host-audit'):
         raise ValueError('INVALID_DIAGNOSTIC_ACTION')
     if not isinstance(value['probe_id'], str) or not re.fullmatch(r'[a-f0-9]{32}', value['probe_id']):
         raise ValueError('INVALID_DIAGNOSTIC_ID')
@@ -75,6 +76,15 @@ def pending_diagnostics():
     return pending
 
 
+def host_audit():
+    result={}
+    for label,filename in (('host','udp_return_host_audit.py'),('ingress','ingress_readiness.py'),('secondary','secondary_endpoint.py'),('native','native_udp_readiness.py'),('transport','udp_transport_diagnostics.py')):
+        spec=importlib.util.spec_from_file_location('cloud_readonly_'+label,Path(__file__).with_name(filename))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        result[label]=module.observe()
+    return result
+
+
 def execute(value):
     validate(value)
     key, tag = value['public_key'], value['probe_id']
@@ -120,6 +130,10 @@ def execute(value):
     peer = next((p for p in snapshot['peers'] if p['public_key'] == key), None)
     if peer and (peer['user_id'] != marker['user_id'] or peer['name'] != name or not peer['owned']):
         raise ValueError('DIAGNOSTIC_PEER_OWNER_MISMATCH')
+    if value['action'] == 'host-audit':
+        if peer is None or marker['cleaned'] or marker['expires_at']<=time.time():
+            raise ValueError('ACTIVE_DIAGNOSTIC_MARKER_REQUIRED')
+        return host_audit()
     if value['action'] == 'cleanup':
         # These mutations can select only the exact identity recorded before creation.
         if marker['user_id']: rpc('peer.delete', {'public_key':key})

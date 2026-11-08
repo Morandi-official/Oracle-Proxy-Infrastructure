@@ -141,6 +141,7 @@ def main():
             executable=binary(folder)
             attempted=True
             info=rpc('prepare')
+            results['host_return_before']=rpc('host-audit')
             if platform.system()=='Linux':
                 native=folder/'native.json';native.write_text(json.dumps({**info,'private_key':private}));native.chmod(0o600)
                 native_result=subprocess.run(['sudo','-n','env','GITHUB_ACTIONS=true','RUNNER_ENVIRONMENT=github-hosted',sys.executable,str(Path(__file__).with_name('kernel_probe.py')),str(native)],text=True,capture_output=True,timeout=240)
@@ -148,6 +149,11 @@ def main():
                     if line.startswith('CLOUD_KERNEL_ENDPOINT='):print(line,flush=True)
                 if native_result.returncode!=0:results['kernel_error']='KERNEL_PROBE_FAILED'
                 else:results['kernel']=[json.loads(line.split('=',1)[1]) for line in native_result.stdout.splitlines() if line.startswith('CLOUD_KERNEL_ENDPOINT=')]
+                sticky_result=subprocess.run(['sudo','-n','env','GITHUB_ACTIONS=true','RUNNER_ENVIRONMENT=github-hosted',sys.executable,str(Path(__file__).with_name('kernel_probe.py')),str(native),'--sticky-source'],text=True,capture_output=True,timeout=240)
+                for line in sticky_result.stdout.splitlines():
+                    if line.startswith('CLOUD_KERNEL_STICKY_ENDPOINT='):print(line,flush=True)
+                if sticky_result.returncode!=0:results['kernel_sticky_error']='KERNEL_STICKY_PROBE_FAILED'
+                else:results['kernel_sticky']=[json.loads(line.split('=',1)[1]) for line in sticky_result.stdout.splitlines() if line.startswith('CLOUD_KERNEL_STICKY_ENDPOINT=')]
                 native.unlink(missing_ok=True)
             for address,port in ENDPOINTS:
                 with socket.socket() as pick:
@@ -188,6 +194,8 @@ def main():
                 print('CLOUD_UDP_ENDPOINT='+json.dumps(row,sort_keys=True),flush=True)
         finally:
             if attempted:
+                try:results['host_return_after']=rpc('host-audit')
+                except Exception as error:results['host_return_audit_error']=type(error).__name__
                 for attempt in range(3):
                     try:
                         cleanup=rpc('cleanup')
@@ -201,7 +209,8 @@ def main():
             result_path.write_text(json.dumps(results,indent=2)+'\n')
             print('CLOUD_UDP_IDENTITY_CLEANED='+str(results['cleaned']),flush=True)
             print('CLOUD_UDP_PENDING_DIAGNOSTICS='+str(len(results.get('pending_diagnostics',[]))),flush=True)
-    if not results['cleaned'] or len(results['endpoints'])!=6 or not all(r.get('passed') for r in results['endpoints']) or results.get('kernel_error') or any(not row.get('passed') for row in results.get('kernel',[])):
+    missing_kernel_rows=platform.system()=='Linux' and (len(results.get('kernel',[]))!=6 or len(results.get('kernel_sticky',[]))!=6)
+    if missing_kernel_rows or not results['cleaned'] or len(results['endpoints'])!=6 or not all(r.get('passed') for r in results['endpoints']) or results.get('kernel_error') or results.get('kernel_sticky_error') or any(not row.get('passed') for row in results.get('kernel',[])+results.get('kernel_sticky',[])):
         raise SystemExit(1)
 
 

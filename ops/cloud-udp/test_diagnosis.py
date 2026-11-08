@@ -53,6 +53,21 @@ class IdentityTest(unittest.TestCase):
         if operation=='user.save':value['saved_user_id']='diagnostic'
         return value
 
+    def test_host_audit_is_read_only_and_bound_to_active_owned_marker(self):
+        with patch.object(identity,'host_audit',return_value={'host':{'scope':'CURRENT_HOST_ONLY'}}) as audit:
+            with self.assertRaises(ValueError):identity.execute(self.request('host-audit'))
+            audit.assert_not_called()
+            identity.execute(self.request())
+            before=copy.deepcopy(self.snapshot);self.calls.clear()
+            self.assertEqual(identity.execute(self.request('host-audit')),{'host':{'scope':'CURRENT_HOST_ONLY'}})
+            self.assertEqual(self.calls,[('state',{})]);self.assertEqual(self.snapshot,before)
+            audit.reset_mock()
+            with self.assertRaises(ValueError):identity.execute(self.request('host-audit',OTHER))
+            audit.assert_not_called()
+            identity.execute(self.request('cleanup'))
+            with self.assertRaises(ValueError):identity.execute(self.request('host-audit'))
+            audit.assert_not_called()
+
     def test_expiring_separate_identity_and_exact_cleanup(self):
         identity.execute(self.request())
         saved=next(d for op,d in self.calls if op=='user.save')
@@ -145,5 +160,14 @@ class ConfigurationTest(unittest.TestCase):
             connection.assert_called_once_with('127.0.0.1',18790,timeout=12)
         self.assertEqual(result,{'error_category':'OSError'})
 
+
+class KernelEndpointPlan(unittest.TestCase):
+    def test_sticky_source_primes_working_alias_and_tests_exact_same_six_targets(self):
+        spec=importlib.util.spec_from_file_location('kernel_plan',Path(__file__).with_name('kernel_probe.py'))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        normal=module.endpoint_order();sticky=module.endpoint_order(True)
+        self.assertEqual(len(sticky),6);self.assertEqual(set(sticky),set(normal))
+        self.assertEqual(sticky[0],('141.147.78.44',443))
+        self.assertEqual(normal[0],('152.67.156.100',443))
 
 if __name__=='__main__':unittest.main()

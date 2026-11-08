@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -45,6 +46,12 @@ class EndpointCatalogTests(unittest.TestCase):
             try:manager.write(target,b'{}',0o644)
             finally:os.umask(old)
             self.assertEqual(stat.S_IMODE(target.stat().st_mode),0o644)
+
+    def test_collected_transient_service_is_safe_only_when_both_units_are_inactive(self):
+        done=lambda code,state='':subprocess.CompletedProcess([],code,state,'')
+        with patch.object(manager.subprocess,'run',side_effect=[done(5),done(3,'inactive'),done(4,'unknown')]):manager.stop_timer('known-owned-unit')
+        with patch.object(manager.subprocess,'run',side_effect=[done(5),done(0,'active')]):
+            with self.assertRaisesRegex(ValueError,'EXPERIMENT_TIMER_NOT_STOPPED'):manager.stop_timer('known-owned-unit')
 
     def test_route_inspection_requests_json(self):
         with patch.object(manager,'run',return_value='[]') as run:manager.routes()

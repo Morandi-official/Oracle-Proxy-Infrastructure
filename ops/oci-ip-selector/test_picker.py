@@ -25,9 +25,13 @@ class PickerTest(unittest.TestCase):
         self.addresses = ['79.72.82.' + str(n) for n in range(100, 107)]
         self.created = []; self.deleted = []; self.bad_owner = False; self.fail_delete = False
         self.lose_creation = False
+        self.limit_at = None
+        self.quota = {'used': 4, 'available': 2}
         self.addCleanup(patch.stopall)
         self.real_cli = m.cli
         patch.object(m, 'cli', side_effect=self.cli).start()
+        patch.object(m, 'quota', side_effect=lambda c: dict(self.quota)).start()
+        patch.object(m.time, 'sleep').start()
 
     def cli(self, args, request_id=None):
         op = args[0]
@@ -40,6 +44,7 @@ class PickerTest(unittest.TestCase):
             self.assertEqual(saved['attempts'][-1]['status'], 'creation_intent')
             self.assertIsNotNone(request_id)
             n = len(self.created)
+            if self.limit_at == n:raise m.CliError('LimitExceeded',400,{'message':'test limit'})
             key = 'ocid1.publicip.oc1.uk-london-1.new' + str(n)
             row = {'id': key, 'ip-address': self.addresses[n], 'compartment-id': COMP,
                    'lifetime': 'RESERVED', 'lifecycle-state': 'AVAILABLE',
@@ -106,6 +111,52 @@ class PickerTest(unittest.TestCase):
         self.rows['foreign'] = {**next(iter(self.rows.values())), 'id': 'foreign', 'ip-address': '145.1.1.1'}
         with self.assertRaisesRegex(m.Stop, 'EXPECTED_FOUR'):m.select(COMP, self.journal)
         self.assertEqual(self.created, [])
+
+    def test_resume_after_two_deletes_and_one_limit_rejection_keeps_four_slots(self):
+        self.limit_at = 2
+        with self.assertRaises(m.CliError):m.select(COMP,self.journal)
+        original=json.loads(self.journal.read_text())
+        self.assertEqual(len(original['attempts']),3)
+        self.limit_at = None
+        result=m.select(COMP,self.journal,resume=True)
+        self.assertEqual(len(result['attempts']),7)
+        self.assertEqual(len(self.created),6)  # One rejected attempt remains spent.
+        self.assertEqual(result['run'],original['run'])
+        self.assertEqual(self.rows,self.initial)
+
+    def test_resume_refuses_lost_response(self):
+        self.lose_creation=True
+        with self.assertRaises(TimeoutError):m.select(COMP,self.journal)
+        # Even when somebody removes the resource later, a lost response is not a limit rejection.
+        self.rows=copy.deepcopy(self.initial)
+        with self.assertRaisesRegex(m.Stop,'ONLY_LIMIT'):m.select(COMP,self.journal,resume=True)
+        self.assertEqual(len(self.created),1)
+
+    def test_resume_refuses_changed_existing_binding(self):
+        self.limit_at=0
+        with self.assertRaises(m.CliError):m.select(COMP,self.journal)
+        next(iter(self.rows.values()))['private-ip-id']='changed-by-other-actor'
+        with self.assertRaisesRegex(m.Stop,'ONLY_LIMIT'):m.select(COMP,self.journal,resume=True)
+        self.assertEqual(self.created,[])
+
+    def test_cli_keeps_limit_error_details_for_future_diagnosis(self):
+        from types import SimpleNamespace
+        result=SimpleNamespace(returncode=1,stdout='',stderr='ServiceError:\n'+json.dumps({'code':'LimitExceeded','status':400,'message':'reserved-public-ip-count','opc-request-id':'test-request'}))
+        with patch.object(m.subprocess,'run',return_value=result):
+            with self.assertRaises(m.CliError) as caught:self.real_cli(['list'])
+        self.assertEqual(caught.exception.details['message'],'reserved-public-ip-count')
+        self.assertEqual(caught.exception.details['opc-request-id'],'test-request')
+
+    def test_quota_zero_refuses_create(self):
+        self.quota={'used':6,'available':0}
+        with self.assertRaisesRegex(m.Stop,'NO_QUOTA'):m.select(COMP,self.journal)
+        self.assertEqual(self.created,[])
+
+    def test_quota_not_reclaimed_stops_before_next_create(self):
+        with patch.object(m,'quota',side_effect=[{'used':4,'available':2}]+[{'used':6,'available':0}]*10):
+            with self.assertRaisesRegex(m.Stop,'QUOTA_NOT_RECOVERED'):m.select(COMP,self.journal)
+        self.assertEqual(len(self.created),1)
+        self.assertEqual(self.rows,self.initial)
 
     def test_pattern_uses_actual_requested_second_two_digits_and_last_three_digits(self):
         self.assertTrue(m.matches('144.21.55.100'))

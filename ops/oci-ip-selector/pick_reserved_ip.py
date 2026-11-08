@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import uuid
 
 REGION = 'uk-london-1'
@@ -21,26 +22,55 @@ class Stop(Exception):
 
 
 class CliError(Stop):
-    def __init__(self, code, status=None):
+    def __init__(self, code, status=None, details=None):
         self.code, self.status = code, status
+        self.details = details or {}
         super().__init__('OCI_CLI_' + code)
 
 
-def cli(args, request_id=None):
+def invoke(args, request_id=None):
     command = ['oci', '--region', REGION, '--output', 'json', '--no-retry']
     if request_id:command += ['--opc-client-request-id', request_id]
-    p = subprocess.run([*command, 'network', 'public-ip', *args], text=True, capture_output=True, timeout=120)
+    p = subprocess.run([*command, *args], text=True, capture_output=True, timeout=120)
     if p.returncode:
         try:
             error = json.loads(p.stderr[p.stderr.index('{'):])
             code = error.get('code', 'FAILED')
             status = error.get('status')
         except (ValueError, KeyError):
-            code, status = 'FAILED', None
+            code, status, error = 'FAILED', None, {}
         if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9_]{1,80}', code):
             code = 'FAILED'
-        raise CliError(code, status)
+        details = {k: error.get(k) for k in ('code', 'status', 'message', 'opc-request-id')
+                   if isinstance(error.get(k), (str, int))}
+        raise CliError(code, status, details)
     return json.loads(p.stdout) if p.stdout.strip() else {}
+
+
+def cli(args, request_id=None):
+    return invoke(['network', 'public-ip', *args], request_id)
+
+
+def quota(compartment):
+    response = invoke(['limits', 'resource-availability', 'get',
+                       '--compartment-id', compartment, '--service-name', 'vcn',
+                       '--limit-name', 'reserved-public-ip-count'])
+    data = response.get('data', {})
+    if any(type(data.get(k)) not in (int, float) or not 0 <= data[k] < 10**9
+           for k in ('used', 'available')):
+        raise Stop('QUOTA_OBSERVATION_REQUIRED')
+    return {'used': data['used'], 'available': data['available']}
+
+
+def wait_after_delete(compartment, baseline_count):
+    # Verified deletion and quota accounting can become visible at different times.
+    for tick in range(10):
+        q = quota(compartment)
+        print('QUOTA_WAIT=' + json.dumps({'elapsed_seconds': tick * 10, **q}), flush=True)
+        if tick >= 6 and q['used'] <= baseline_count and q['available'] >= 1:
+            return
+        if tick == 9:raise Stop('QUOTA_NOT_RECOVERED_NO_NEW_CREATION')
+        time.sleep(10)
 
 
 def binding(row):
@@ -93,30 +123,56 @@ def owned_new(row, record, compartment, original_ids):
             row.get('freeform-tags', {}).get('selector-run') == record.get('run'))
 
 
-def select(compartment, journal):
+def select(compartment, journal, resume=False):
     fd = os.open(journal.with_name("run.lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         try:fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:raise Stop("RUN_ALREADY_ACTIVE") from None
-        return select_locked(compartment, journal)
+        return select_locked(compartment, journal, resume)
     finally:
         os.close(fd)
 
 
-def select_locked(compartment, journal):
-    # Never restart a spent budget or overwrite an unresolved creation response.
-    if journal.exists() or journal.is_symlink():
+def select_locked(compartment, journal, resume=False):
+    if journal.is_symlink():raise Stop('JOURNAL_SYMLINK_REFUSED')
+    if journal.exists() and not resume:
         raise Stop('JOURNAL_EXISTS_USE_STATUS_DO_NOT_RESTART')
     rows = inventory(compartment)
     if {r['ip-address'] for r in rows} != PROTECTED_IPS or len(rows) != len(PROTECTED_IPS):
         raise Stop('EXPECTED_FOUR_EXISTING_IPS_REQUIRED')
     baseline = snapshot(rows)
-    run_id = uuid.uuid4().hex
-    state = {'schema': 1, 'region': REGION, 'compartment': compartment, 'limit': LIMIT,
-             'run': run_id, 'original': baseline, 'attempts': [], 'status': 'running'}
-    save(journal, state)
+    if resume:
+        info = journal.stat()
+        if info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 131072:
+            raise Stop('UNTRUSTED_JOURNAL')
+        state = json.loads(journal.read_text())
+        attempts = state.get('attempts', [])
+        if (state.get('schema') != 1 or state.get('region') != REGION or
+            state.get('compartment') != compartment or state.get('limit') != LIMIT or
+            state.get('original') != baseline or not 1 <= len(attempts) < LIMIT or
+            state.get('status') != 'STOPPED_REVIEW_JOURNAL_NO_RESTART' or
+            state.get('error') != 'OCI_CLI_LimitExceeded' or
+            not re.fullmatch(r'[a-f0-9]{32}', state.get('run', '')) or
+            any(a.get('number') != n for n, a in enumerate(attempts, 1)) or
+            any(a.get('status') != 'ABSENCE_VERIFIED' for a in attempts[:-1]) or
+            attempts[-1].get('status') != 'creation_intent' or attempts[-1].get('id')):
+            raise Stop('ONLY_LIMIT_REJECTION_WITH_NO_RETAINED_RESOURCE_CAN_RESUME')
+        save(journal.with_name('before-resume-' + uuid.uuid4().hex + '.json'), state)
+        attempts[-1]['status'] = 'REJECTED_LIMIT_NO_RESOURCE_IN_COMPLETE_INVENTORY'
+        state['status'] = 'running'; run_id = state['run']
+        state.pop('error', None)
+        save(journal, state)
+        print('RESUME_REMAINING=' + str(LIMIT - len(attempts)), flush=True)
+    else:
+        run_id = uuid.uuid4().hex
+        state = {'schema': 1, 'region': REGION, 'compartment': compartment, 'limit': LIMIT,
+                 'run': run_id, 'original': baseline, 'attempts': [], 'status': 'running'}
+        save(journal, state)
     try:
-        for number in range(1, LIMIT + 1):
+        for number in range(len(state['attempts']) + 1, LIMIT + 1):
+            q = quota(compartment)
+            state['latest_quota'] = q; save(journal, state)
+            if q['available'] < 1:raise Stop('NO_QUOTA_AVAILABLE_NO_CREATE')
             # Each successful creation and each uncertain creation consumes a slot.
             entry = {'number': number, 'run': run_id,
                      'name': 'udp-primary-shell-' + run_id[:8] + '-' + str(number + 13),
@@ -168,6 +224,7 @@ def select_locked(compartment, journal):
             entry['status'] = 'ABSENCE_VERIFIED'
             save(journal, state)
             print('ABSENCE_VERIFIED=' + entry['id'], flush=True)
+            if number < LIMIT:wait_after_delete(compartment, len(baseline))
         else:
             state['status'] = 'no_match_budget_exhausted'
         final = snapshot(inventory(compartment))
@@ -182,6 +239,7 @@ def select_locked(compartment, journal):
     except BaseException as e:
         state['status'] = 'STOPPED_REVIEW_JOURNAL_NO_RESTART'
         state['error'] = str(e) if isinstance(e, Stop) else type(e).__name__
+        if isinstance(e, CliError):state['error_details'] = e.details
         save(journal, state)
         raise
 
@@ -189,12 +247,14 @@ def select_locked(compartment, journal):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--compartment-id', required=True)
-    parser.add_argument('--apply', action='store_true', help='Actually create up to7 new IPs and delete only own nonmatches.')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--apply', action='store_true', help='Start the bounded seven-slot allocation run.')
+    mode.add_argument('--resume', action='store_true', help='Continue only a verified LimitExceeded rejection without resetting the saved budget.')
     args = parser.parse_args()
     if not re.fullmatch(r'ocid1\.(?:tenancy|compartment)\.oc1\.[A-Za-z0-9.]+', args.compartment_id):
         raise Stop('EXPLICIT_COMPARTMENT_OCID_REQUIRED')
     directory = Path.home() / '.proxy-ip-selection-20261108'
-    if not args.apply:
+    if not (args.apply or args.resume):
         print(json.dumps({'scope': 'READ_ONLY', 'region': REGION,
                          'inventory': snapshot(inventory(args.compartment_id)),
                          'journal_exists': (directory / 'state.json').exists()}, indent=2))
@@ -205,7 +265,7 @@ def main():
     info = directory.stat()
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise Stop('PRIVATE_OWNED_JOURNAL_DIRECTORY_REQUIRED')
-    state = select(args.compartment_id, directory / 'state.json')
+    state = select(args.compartment_id, directory / 'state.json', resume=args.resume)
     print('FINAL_STATUS=' + state['status'])
     print('JOURNAL=' + str(directory / 'state.json'))
 

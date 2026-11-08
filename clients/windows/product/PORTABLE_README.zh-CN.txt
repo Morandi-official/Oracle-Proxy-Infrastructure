@@ -1,4 +1,4 @@
-Proxy 0.3.0-rc32 · Windows 10/11 x64
+Proxy 0.3.0-rc33 · Windows 10/11 x64
 
 未签名预发行版，Windows 仍可能提示未知发布者。本包自带 .NET 10 LTS，无需另装运行时。
 

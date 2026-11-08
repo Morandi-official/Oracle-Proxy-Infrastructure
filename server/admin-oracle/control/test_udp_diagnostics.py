@@ -34,6 +34,20 @@ class CaptureTest(unittest.TestCase):
         self.assertFalse(result['authentication_proof'])
         self.assertNotIn('192.0.2.7',str(rows))
 
+    def test_selected_alias_headers_correlate_to_public_targets(self):
+        for public,private in [('152.67.154.225','10.0.0.220'),('150.230.113.158','10.0.0.246')]:
+            rows=[]
+            for kind,out in [(1,False),(2,True)]:
+                header=packet(kind=kind,index=123,receiver=123,outgoing=out)
+                header[12:16] = socket.inet_aton(private if out else '192.0.2.7')
+                header[16:20] = socket.inet_aton('192.0.2.7' if out else private)
+                parsed=module.parse(header,out)
+                self.assertEqual(parsed['address'],public)
+                rows.append({**parsed,'at':10})
+            result=module.summarize(rows,public,443,[123],9)
+            self.assertEqual((result['rx_initiations'],result['tx_responses']),(1,1))
+            self.assertFalse(result['authentication_proof'])
+
     def test_address_port_and_window_scope(self):
         row={**module.parse(packet(index=123),False),'at':10}
         for address,port,since in [('141.147.78.44',443,9),('152.67.156.100',8443,9),('152.67.156.100',443,11)]:
@@ -85,7 +99,7 @@ class ManagerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'EXPIRED_OR_RESTARTED'):self.call('finish')
         self.assertTrue(captured.closed);self.assertFalse(self.manager.sessions)
     def test_six_steps_no_duplicates_and_authentication_separate(self):
-        for address in module.ADDRESSES:
+        for address in ('152.67.154.225','150.230.113.158'):
             for port in module.PORTS:
                 self.call('begin',address=address,port=port)
                 with self.assertRaisesRegex(ValueError,'STEP_CONFLICT'):self.call('begin',address=address,port=port)

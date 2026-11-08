@@ -14,7 +14,9 @@ import time
 
 PORTS=(443,8443,51820)
 ADDRESSES={'152.67.156.100':socket.inet_aton('10.0.0.6'),
-           '141.147.78.44':socket.inet_aton('10.0.0.10')}
+           '141.147.78.44':socket.inet_aton('10.0.0.10'),
+           '152.67.154.225':socket.inet_aton('10.0.0.220'),
+           '150.230.113.158':socket.inet_aton('10.0.0.246')}
 # SOCK_DGRAM AF_PACKET begins at IP. BPF rejects data packets and truncates an initiation/cookie
 # packet after type+index; a response after type+sender+receiver. No part of
 # the handshake's ephemeral key, cookie, authenticator or data is copied.

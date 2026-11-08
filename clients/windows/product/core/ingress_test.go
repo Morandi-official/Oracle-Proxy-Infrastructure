@@ -4,7 +4,7 @@ package main
 import "testing"
 
 func TestFixedIngressAllowlist(t *testing.T) {
-	for _, address := range []string{"", "152.67.156.100", "141.147.78.44"} {
+	for _, address := range []string{"", "152.67.156.100", "141.147.78.44", "152.67.154.225", "150.230.113.158"} {
 		got, err := ingressAddress(address)
 		if err != nil || got == "" {
 			t.Fatal("valid fixed ingress rejected")

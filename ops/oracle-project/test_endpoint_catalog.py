@@ -2,6 +2,8 @@
 import copy
 import importlib.util
 import json
+import os
+import stat
 from pathlib import Path
 import tempfile
 import unittest
@@ -37,6 +39,13 @@ class EndpointCatalogTests(unittest.TestCase):
             self.assertEqual([c[4] for c in calls],['10.0.0.220/32','10.0.0.246/32'])
             self.assertTrue(all('noprefixroute' in c for c in calls))
             self.assertIn('10.0.0.99',[r['local'] for r in rows])
+    def test_public_catalog_mode_survives_private_root_umask(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target=Path(directory)/'catalog.json';old=os.umask(0o077)
+            try:manager.write(target,b'{}',0o644)
+            finally:os.umask(old)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode),0o644)
+
     def test_route_inspection_requests_json(self):
         with patch.object(manager,'run',return_value='[]') as run:manager.routes()
         self.assertTrue(all('-j' in c.args[0] for c in run.call_args_list))

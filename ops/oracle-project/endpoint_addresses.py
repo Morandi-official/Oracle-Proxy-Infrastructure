@@ -32,6 +32,7 @@ def write(path,body,mode=0o600):
     temporary=path.with_name(path.name+'.new')
     descriptor=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,mode)
     try:
+        os.fchmod(descriptor,mode)  # The root bridge deliberately uses umask077.
         with os.fdopen(descriptor,'wb') as stream:stream.write(body);stream.flush();os.fsync(stream.fileno())
         os.replace(temporary,path)
     finally:temporary.unlink(missing_ok=True)

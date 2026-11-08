@@ -32,6 +32,7 @@ internal sealed partial class MainForm : Form
     private sealed record ListedDevice(string Id,string Name,bool Current){public override string ToString()=>(Current?"[本机] ":"")+Name+"  ·  "+Id;}
     private readonly Button _deleteDevice=new(){Name="delete-device",Text="删除选中设备",Enabled=false,AutoSize=true};
     private string? _deleteDeviceId;
+    private string _admissionListSignature="";
     private readonly TableLayoutPanel _admissionDevicesPanel=Stack("admission-devices");
     private readonly ListBox _admissionDevices=new(){Name="admission-device-list",Height=110,Dock=DockStyle.Fill};
     private readonly Button _admissionDelete=new(){Name="admission-delete-device",Enabled=false,Text="删除选中旧设备并登记本机",Height=42};
@@ -656,7 +657,7 @@ internal sealed partial class MainForm : Form
             if(_knownDevices.Items.Count==0)_knownDevices.Items.Add("尚无已登记设备。");_knownDevices.EndUpdate();
         }
         _admissionDevicesPanel.Visible=account is not null && !_deviceRegistered;
-        if(_admissionDevicesPanel.Visible){_admissionDevices.BeginUpdate();_admissionDevices.Items.Clear();foreach(var item in _knownDevices.Items.OfType<ListedDevice>().Where(d=>!d.Current))_admissionDevices.Items.Add(item);_admissionDevices.EndUpdate();}
+        if(_admissionDevicesPanel.Visible && _admissionListSignature!=signature){_admissionListSignature=signature;_admissionDevices.BeginUpdate();_admissionDevices.Items.Clear();foreach(var item in _knownDevices.Items.OfType<ListedDevice>().Where(d=>!d.Current))_admissionDevices.Items.Add(item);_admissionDevices.EndUpdate();}
         RegistrationDisclosure();
         UpdateRegistrationActions();
     }

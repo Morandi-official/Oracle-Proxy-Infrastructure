@@ -141,6 +141,7 @@ def main():
             executable=binary(folder)
             attempted=True
             info=rpc('prepare')
+            results['host_return_before']=rpc('host-audit')
             if platform.system()=='Linux':
                 native=folder/'native.json';native.write_text(json.dumps({**info,'private_key':private}));native.chmod(0o600)
                 native_result=subprocess.run(['sudo','-n','env','GITHUB_ACTIONS=true','RUNNER_ENVIRONMENT=github-hosted',sys.executable,str(Path(__file__).with_name('kernel_probe.py')),str(native)],text=True,capture_output=True,timeout=240)
@@ -188,6 +189,8 @@ def main():
                 print('CLOUD_UDP_ENDPOINT='+json.dumps(row,sort_keys=True),flush=True)
         finally:
             if attempted:
+                try:results['host_return_after']=rpc('host-audit')
+                except Exception as error:results['host_return_audit_error']=type(error).__name__
                 for attempt in range(3):
                     try:
                         cleanup=rpc('cleanup')

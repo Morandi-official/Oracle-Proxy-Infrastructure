@@ -661,7 +661,7 @@ def main(arguments):
     operation, revision = arguments
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
-        if request.get('request_id')=='cloud-udp-autonomous-20261106':
+        if request.get('request_id')=='cloud-udp-return-recheck-20261108':
             body=sys.stdin.buffer.read(4097)
             if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')
             if body.strip():

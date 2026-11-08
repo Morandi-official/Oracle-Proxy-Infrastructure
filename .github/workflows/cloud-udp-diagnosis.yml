@@ -1,4 +1,4 @@
-name: Independent cloud UDP data-path diagnosis
+name: Independent cloud UDP data-path and return audit
 on:
   pull_request:
     paths: ['ops/cloud-udp/**', 'ops/oracle-project/cloud_udp_identity.py', '.github/workflows/cloud-udp-diagnosis.yml']

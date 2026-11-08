@@ -53,6 +53,21 @@ class IdentityTest(unittest.TestCase):
         if operation=='user.save':value['saved_user_id']='diagnostic'
         return value
 
+    def test_host_audit_is_read_only_and_bound_to_active_owned_marker(self):
+        with patch.object(identity,'host_audit',return_value={'host':{'scope':'CURRENT_HOST_ONLY'}}) as audit:
+            with self.assertRaises(ValueError):identity.execute(self.request('host-audit'))
+            audit.assert_not_called()
+            identity.execute(self.request())
+            before=copy.deepcopy(self.snapshot);self.calls.clear()
+            self.assertEqual(identity.execute(self.request('host-audit')),{'host':{'scope':'CURRENT_HOST_ONLY'}})
+            self.assertEqual(self.calls,[('state',{})]);self.assertEqual(self.snapshot,before)
+            audit.reset_mock()
+            with self.assertRaises(ValueError):identity.execute(self.request('host-audit',OTHER))
+            audit.assert_not_called()
+            identity.execute(self.request('cleanup'))
+            with self.assertRaises(ValueError):identity.execute(self.request('host-audit'))
+            audit.assert_not_called()
+
     def test_expiring_separate_identity_and_exact_cleanup(self):
         identity.execute(self.request())
         saved=next(d for op,d in self.calls if op=='user.save')

@@ -190,8 +190,7 @@ internal sealed partial class VpnRuntime : IDisposable
                                 await StartCore(!_secret.ConnectIntent);
                             }
                             if(_core.Running && _probePending is null && DateTimeOffset.UtcNow>=_nextProbe){
-                                _stage="ORACLE_EGRESS_PROBE";_probePid=_core.Pid;_probeGeneration=_generation;_probePending=_core.Probe(_verified==default?3:12);
-                                _nextProbe=DateTimeOffset.UtcNow.AddSeconds(_verified==default?2:10);
+                                BeginEgressProbe();
                             }
                         }
                     }else if(!_secret.ConnectIntent && _core.Running){await StopCore();_transport=Preferred();_probeFailures=0;}
@@ -213,6 +212,11 @@ internal sealed partial class VpnRuntime : IDisposable
         if(pending is not null)_=pending.ContinueWith(t=>{_ = t.Exception;},CancellationToken.None,TaskContinuationOptions.OnlyOnFaulted|TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
         _verified=default;_verifiedGeneration=-1;_latency=null;_runningProfile="";_nextProbe=default;
         await _core.Stop();
+    }
+    private void BeginEgressProbe()
+    {
+        _stage="ORACLE_EGRESS_PROBE";_probePid=_core.Pid;_probeGeneration=_generation;_probePending=_core.Probe(_verified==default?3:12);
+        _nextProbe=DateTimeOffset.UtcNow.AddSeconds(_verified==default?2:10);
     }
     private async Task Refresh(){_stage="ACCOUNT_STATE";_state=await _api.Call("state",_secret.Token);_received=DateTimeOffset.UtcNow;_error="";}
     private bool ActivePolicy()=>DeviceRegistration.Confirmed(_state) && _state?["account"]?["status"]?.GetValue<string>()=="active" && _state["observed_at"]?.GetValue<long>() is long at && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
@@ -240,9 +244,13 @@ internal sealed partial class VpnRuntime : IDisposable
                 ["endpoint_port"]=int.Parse(_state!["tunnel"]!["endpoint"]!.GetValue<string>().Split(':')[1]),
                 ["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["started_without_tun"]=standby,
                 ["inner_mtu"]=_state!["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel"?1280:1200,["preferred_port"]=_secret.NativeUdpPortPreference,["socket_binding"]=_secret.NativeUdpPortPreference==8443?"native_udp_fixed_8443":_secret.NativeUdpAdaptive?"native_udp_adaptive_pair":"native_udp_dual_port",["probe_result"]="pending",["probe_failures"]=0,["core_age_ms"]=0};
+            var coreTimer=System.Diagnostics.Stopwatch.StartNew();
             await _core.Start(EffectiveState(),_secret,_transport,standby:true);
+            if(_switchTimings is not null)_switchTimings["core_process_ms"]=coreTimer.ElapsedMilliseconds;
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
+            if(_switchTimings is not null)_switchTimings["core_active_and_authorized_ms"]=coreTimer.ElapsedMilliseconds;
             _runningProfile=Profile();_nextProbe=default;
+            if(!standby)BeginEgressProbe();
         }catch{await StopCore();if(!standby)_mode="protected";throw;}
     }
     internal async Task<JsonObject> Command(JsonObject value,CancellationToken admission=default,ClientIdentity? client=null)

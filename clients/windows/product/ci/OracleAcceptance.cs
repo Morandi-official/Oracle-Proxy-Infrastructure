@@ -358,13 +358,22 @@ internal static class OracleAcceptance
             Check(!VpnRuntime.TunnelInactive() ? false : await ExitIp()!="152.67.154.225","LIFETIME_CONTROLLER_CRASH_STOPS_BACKGROUND_AND_RESTORES_DIRECT");
         }finally{if(!controller.HasExited){controller.Kill(true);await controller.WaitForExitAsync();}}
     }
+    internal static async Task<int> PrintLiveTimings()
+    {
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
+        var state=RequireSuccess("Status",await ControlPipe.Send("Status"));
+        foreach(string key in new[]{"click_to_ready_ms","connect_switch_ms"})if(state[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
+        if(state["switch_timings"] is JsonObject phases)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","core_process_ms","core_active_and_authorized_ms","complete_ms"})
+            if(phases[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
+        return 0;
+    }
     private static async Task LiveGuiUdpToggle()
     {
         string script=Path.GetFullPath("clients/windows/product/ci/test-live-udp-toggle.ps1");
         string client=Path.GetFullPath("dist/product/Proxy.exe");
         if(!File.Exists(script) || !File.Exists(client))throw new IOException("LIVE_GUI_FIXTURE_UNAVAILABLE");
         var start=new ProcessStartInfo("powershell.exe"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        foreach(string value in new[]{"-NoProfile","-STA","-ExecutionPolicy","Bypass","-File",script,"-Client",client})start.ArgumentList.Add(value);
+        foreach(string value in new[]{"-NoProfile","-STA","-ExecutionPolicy","Bypass","-File",script,"-Client",client,"-SnapshotReader",Environment.ProcessPath!})start.ArgumentList.Add(value);
         start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_USERNAME");start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
         using var process=Process.Start(start)??throw new IOException("LIVE_GUI_FIXTURE_START_FAILED");
         var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();

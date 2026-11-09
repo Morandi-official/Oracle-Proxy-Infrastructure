@@ -28,6 +28,13 @@ internal static class ControlFrameTests
     }
     private static async Task<int> Main()
     {
+        foreach(bool fail in new[]{false,true}){
+            int finalized=0;
+            try{await ControlResponse.Deliver(()=>fail?Task.FromException(new IOException("DISCONNECTED_PIPE")):Task.CompletedTask,()=>finalized++);}
+            catch(IOException error)when(fail && error.Message=="DISCONNECTED_PIPE"){}
+            if(finalized!=1)throw new Exception("COMMITTED_OFF_MUST_FINALIZE_AFTER_REPLY_FAILURE");
+        }
+        Console.WriteLine("COMMITTED_OFF_FINALIZES_AFTER_REPLY_WRITE_OR_DISCONNECT=PASS");
         await Expect(Encoding.UTF8.GetBytes("abc"),32,"INCOMPLETE_FRAME");
         await Expect(Encoding.UTF8.GetBytes("abc\nsecond\n"),32,"INVALID_FRAME");
         await Expect(Encoding.UTF8.GetBytes("abcde\n"),4,"FRAME_TOO_LARGE");

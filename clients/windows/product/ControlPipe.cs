@@ -73,8 +73,9 @@ internal static class ControlPipe
                 }
                 using var responseDeadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);
                 responseDeadline.CancelAfter(TimeSpan.FromSeconds(4));
-                await WriteFrame(pipe,response.ToJsonString(),65536,responseDeadline.Token);
-                runtime.ResponseDelivered(response);
+                await ControlResponse.Deliver(
+                    ()=>WriteFrame(pipe,response.ToJsonString(),65536,responseDeadline.Token),
+                    ()=>runtime.ResponseDelivered(response));
             }catch{ /* Drop malformed/unauthorized frames; never echo secrets. */ }
         }
     }

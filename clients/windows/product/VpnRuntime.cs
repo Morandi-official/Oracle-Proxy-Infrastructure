@@ -388,11 +388,15 @@ internal sealed partial class VpnRuntime : IDisposable
                     _nextProbe=default;
                 }
                 _connectMs=timer.ElapsedMilliseconds;_switchTimings["complete_ms"]=_connectMs;
-                if(command=="AttachConnect" && _probePending is not null){
+                if(command=="AttachConnect" && _probePending is Task<long> firstProbe){
                     // The pending task verifies both configured address families.
                     // Consume the same generation-bound proof used by Run, then
                     // return its real state without a GUI polling round trip.
-                    await CompleteEgressProbe();
+                    // Slow or silent networks must not keep the command gate
+                    // and the GUI Disconnect button waiting for the full probe
+                    // retry budget. Leave the same pending proof to Run.
+                    await Task.WhenAny(firstProbe,Task.Delay(750));
+                    if(firstProbe.IsCompleted)await CompleteEgressProbe();
                     _switchTimings["initial_probe_ms"]=timer.ElapsedMilliseconds;
                 }
                 break;}

@@ -320,6 +320,9 @@ def verify_control():
             with urllib.request.urlopen(request,timeout=4) as response:
                 summary=json.load(response)['control']
             if summary['ready']:
+                current=host.ROOT/'current'
+                if (current/'console/management/commands/sync_account_cycles.py').is_file():
+                    host.as_user(host.APP_USER,[current/'.venv/bin/python','manage.py','sync_account_cycles'],cwd=current,env=host.read_environment())
                 print('PROJECT_POLICY_CONTROL_HEALTH='+json.dumps(summary,sort_keys=True));return
         except (OSError,ValueError,KeyError):pass
         time.sleep(1)

@@ -1,0 +1,16 @@
+{
+  "version": "0.3.0-rc36",
+  "run_id": 42583413406,
+  "uu_path_run_id": 42583413542,
+  "source_revision": "7b1f2885c605ad09b570c9360def099834e04ac7",
+  "artifacts": [
+    {
+      "id": 13657549800,
+      "sha256": "8cb46f60ace212ece548f9d4ab2934f4e61cf70063b5719d0814af3cbbc669a0"
+    },
+    {
+      "id": 13658741739,
+      "sha256": "5df30b28316077a6ea7e0cd1ac9403e68785b5485211b0611856a12208595ba6"
+    }
+  ]
+}

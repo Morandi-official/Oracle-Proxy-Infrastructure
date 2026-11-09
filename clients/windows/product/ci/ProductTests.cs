@@ -48,12 +48,13 @@ internal static class ProductTests
                 ServiceBootstrap.Ensure("new-candidate",async token=>{
                     try{return await ControlPipe.Send("Status",null,null,token);}
                     catch(IOException error){
-                        expected=args[1]=="absent"?error.Message=="SERVICE_ABSENT":error.Message=="SERVICE_START_REQUIRES_ELEVATION";
+                        Console.WriteLine("SCM_PROBE_CODE="+error.Message);
+                        expected=args[1]=="absent"?error.Message is "SERVICE_ABSENT" or "SERVICE_START_REQUIRES_ELEVATION":error.Message=="SERVICE_START_REQUIRES_ELEVATION";
                         throw;
                     }
                 },_=>throw new IOException("ELEVATION_BOUNDARY_REACHED"),deadline.Token).GetAwaiter().GetResult();
-            }catch(IOException error)when(error.Message=="ELEVATION_BOUNDARY_REACHED"){return expected?0:1;}
-            catch{return 1;}
+            }catch(IOException error)when(error.Message=="ELEVATION_BOUNDARY_REACHED"){Console.WriteLine("SCM_PROBE_BOUNDARY="+expected);return expected?0:1;}
+            catch(Exception error){Console.WriteLine("SCM_PROBE_ERROR_TYPE="+error.GetType().Name+";HRESULT="+error.HResult.ToString("X8"));return 1;}
             return 1;
         }
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return UiOnMessageLoop();

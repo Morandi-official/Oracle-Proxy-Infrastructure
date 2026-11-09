@@ -400,7 +400,7 @@ internal sealed partial class MainForm : Form
     private void RefreshActions()
     {
         if(IsDisposed)return;
-        _emergencyRecovery.Enabled=!_provisioning && !_recovering && !_closing;
+        _emergencyRecovery.Enabled=!_provisioning && !_recovering;
         bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
         _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
         _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_udpPortChoice.Enabled=_transportChoice.Enabled && _transportChoice.SelectedIndex==0;_native8443Test.Enabled=available && !_connectionIntent && !_udpDiagnosing && _native8443Available;

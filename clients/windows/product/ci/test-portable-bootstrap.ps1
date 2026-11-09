@@ -1,4 +1,4 @@
-# Runs under Windows PowerShell STA for UI Automation of the actual packaged EXE.
+﻿# Runs under Windows PowerShell STA for UI Automation of the actual packaged EXE.
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted'){throw 'DISPOSABLE_HOSTED_WINDOWS_REQUIRED'}
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
@@ -79,12 +79,20 @@ if(Get-LocalUser $probeUser -ErrorAction SilentlyContinue){throw 'PREEXISTING_TE
 $password=ConvertTo-SecureString ('Q!a'+[guid]::NewGuid().ToString('N')) -AsPlainText -Force
 $credential=New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\$probeUser",$password)
 function Probe-Standard([string]$Case){
- $p=Start-Process $fixture -ArgumentList @('--bootstrap-scm-probe',$Case) -Credential $credential -WorkingDirectory $env:WINDIR -LoadUserProfile -PassThru
- try{if(!$p.WaitForExit(20000) -or $p.ExitCode -ne 0){throw ('STANDARD_USER_BOOTSTRAP_FAILED_'+$Case)}}finally{$p.Dispose()}
+ $stdout=Join-Path $work ('scm-probe-'+$Case+'.out')
+ $stderr=Join-Path $work ('scm-probe-'+$Case+'.err')
+ $p=Start-Process $fixture -ArgumentList @('--bootstrap-scm-probe',$Case) -Credential $credential -WorkingDirectory $env:WINDIR -LoadUserProfile -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+ try{
+  $ended=$p.WaitForExit(20000)
+  Write-Host ('SCM_PROBE_PROCESS='+$Case+';ENDED='+$ended+';EXIT='+$p.ExitCode)
+  if(Test-Path $stdout){Get-Content $stdout | Where-Object {$_ -match '^SCM_PROBE_'} | Write-Host}
+  if($p.ExitCode -ne 0 -and (Test-Path $stderr)){Get-Content $stderr | Select-Object -First 4 | Write-Host}
+  if(!$ended -or $p.ExitCode -ne 0){throw ('STANDARD_USER_BOOTSTRAP_FAILED_'+$Case)}
+ }finally{if(!$p.HasExited){$p.Kill();$p.WaitForExit()};$p.Dispose()}
 }
 try {
  New-LocalUser $probeUser -Password $password -AccountNeverExpires -PasswordNeverExpires | Out-Null
- Probe-Standard 'absent'
+ Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $probeUser
  # Reproduce the shipped rc36 first-start defect with no CLI preinstallation.
  Launch $brokenRelease
  Wait-For { (Enabled 'bootstrap-retry') -and !(Enabled 'login') } 'PUBLISHED_RC36_FRESH_DEFECT_NOT_REPRODUCED'
@@ -123,6 +131,7 @@ try {
  Wait-For { (Get-Service OracleProxyService).Status -eq 'Stopped' } 'REAL_GUI_X_DID_NOT_STOP_BACKEND' 15
  Remove-Owned
  Write-Host 'ACTUAL_PORTABLE_FIRST_GUI_UAC_RECOVERY_LOGIN_REATTACH_AND_X=PASS'
+ Probe-Standard 'absent'
  # Real old payload / stopped service reproduces the user's exact diagnostic.
  Run-Step $old @('--install',$owner)
  Stop-Service OracleProxyService

@@ -18,6 +18,12 @@ function Invoke-SetupProcess([string]$File,[string[]]$Arguments) {
  if(-not $process.WaitForExit(120000)){Stop-Process -Id $process.Id -Force;throw 'SETUP_PROCESS_DEADLINE'}
  if($process.ExitCode -ne 0){throw ('SETUP_PROCESS_FAILED_'+$process.ExitCode)}
 }
+function Check-InstalledGui {
+ & powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'test-installed-gui.ps1') -Client (Join-Path $desktopRoot 'Proxy.exe')
+ if($LASTEXITCODE -ne 0){throw 'REAL_INSTALLED_GUI_ACCEPTANCE_FAILED'}
+ Start-Service OracleProxyService
+ (Get-Service OracleProxyService).WaitForStatus('Running',[TimeSpan]::FromSeconds(25))
+}
 function Check-Installed {
  $service=Get-CimInstance Win32_Service -Filter "Name='OracleProxyService'"
  $expected='"'+(Join-Path $serviceRoot 'Proxy.Service.exe')+'" --service'
@@ -92,6 +98,8 @@ try {
  $started=$true
  Invoke-SetupProcess $setup $arguments
  $firstPid=Check-Installed
+ Check-InstalledGui
+ $firstPid=Check-Installed
  $response=[SetupAcceptancePipe]::PreferUdp([uint32]$firstPid) | ConvertFrom-Json
  if(-not $response.ok -or $response.mode -ne 'disconnected' -or $response.transport_preference -ne 'udp'){throw 'SYNTHETIC_NON_ACCOUNT_STATE_NOT_SAVED'}
  $savedState=(Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash
@@ -99,6 +107,7 @@ try {
  $secondPid=Check-Installed
  if($secondPid -eq $firstPid){throw 'UPGRADE_DID_NOT_REPLACE_SERVICE_PROCESS'}
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $savedState){throw 'UPGRADE_DID_NOT_PRESERVE_DPAPI_STATE'}
+ Check-InstalledGui
  Write-Host 'REAL_EXE_SETUP_UPGRADE_SHORTCUT_ARP_PID_HASH_OWNER_AND_DPAPI_PRESERVATION=PASS'
  Invoke-SetupProcess (Join-Path $desktopRoot 'unins000.exe') @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
  if((Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path $arp) -or (Test-Path $shortcut) -or (Test-Path (Join-Path $desktopRoot 'Proxy.exe')) -or (Test-Path (Join-Path $stateRoot 'state.dpapi'))){throw 'STANDARD_UNINSTALL_NOT_COMPLETE'}

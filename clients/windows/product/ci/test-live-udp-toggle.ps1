@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Client)
+﻿param([Parameter(Mandatory=$true)][string]$Client)
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:GITHUB_REF -ne 'refs/heads/main'){throw 'MAIN_DISPOSABLE_WINDOWS_REQUIRED'}
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes

@@ -262,7 +262,7 @@ internal sealed partial class VpnRuntime : IDisposable
             if(client is not null && command=="AttachClient")Attach(client);
             if(Diagnosing && command is not ("Status" or "CancelUdpDiagnostics" or "Disconnect" or "Quit" or "Logout"))throw new IOException("DIAGNOSTIC_BUSY");
             switch(command){
-            case "AttachClient":break;
+            case "AttachClient":if(SessionAuthorized && _state is null)await Refresh();break;
             case "DeleteDevice":
                 if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
                 string deviceId=value["device_id"]?.GetValue<string>()??"";

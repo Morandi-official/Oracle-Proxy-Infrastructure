@@ -72,7 +72,8 @@ internal sealed partial class MainForm : Form
     private readonly TimeSpan _requestTimeout,_quitTimeout,_statusTimeout;
     private readonly Func<string,string?,string?,Task<JsonObject>> _send;
     private readonly bool _realService;
-    private bool _needsReconcile,_startupPrepared,_uuMaintaining,_statusReadSucceeded;
+    private bool _needsReconcile,_startupPrepared,_uuMaintaining,_statusReadSucceeded,_recovering;
+    private readonly Func<CancellationToken,Task<int>> _recover;
     private string _lastMode="unknown";
     private sealed class BufferedFlowPanel : FlowLayoutPanel
     {
@@ -159,8 +160,9 @@ internal sealed partial class MainForm : Form
         if(_deviceToggle.Text!=caption)_deviceToggle.Text=caption;
     }
     private static BufferedFlowPanel Actions()=>new(){AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Fill,WrapContents=true,Margin=new Padding(0,6,0,6),Padding=new Padding(0)};
-    internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null,TimeSpan? requestTimeout=null,TimeSpan? quitTimeout=null)
+    internal MainForm(Func<string,string?,string?,Task<JsonObject>>? send=null,TimeSpan? requestTimeout=null,TimeSpan? quitTimeout=null,Func<CancellationToken,Task<int>>? recover=null)
     {
+        _recover=recover ?? Installer.ElevateRecoveryAsync;
         _send=send ?? ControlPipe.Send;_realService=send is null;_serviceReady=!_realService;DoubleBuffered=true;
         _requestTimeout=requestTimeout??TimeSpan.FromSeconds(45);_quitTimeout=quitTimeout??TimeSpan.FromSeconds(45);
         if(_requestTimeout<=TimeSpan.Zero || _requestTimeout>TimeSpan.FromMinutes(1) || _quitTimeout<=TimeSpan.Zero || _quitTimeout>TimeSpan.FromMinutes(1))throw new ArgumentOutOfRangeException(nameof(requestTimeout));
@@ -287,11 +289,9 @@ internal sealed partial class MainForm : Form
         _startupGate.Controls.Add(new Label{Name="startup-message",Text="正在准备安全连接…",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=Muted});content.Controls.Add(_startupGate);_startupGate.BringToFront();
         var safety=Actions();safety.Name="safety-actions";safety.BackColor=Canvas;safety.Margin=new Padding(0);safety.Padding=new Padding(22,8,22,10);
         _emergencyRecovery.Margin=new Padding(0,0,12,0);safety.Controls.Add(_emergencyRecovery);safety.Controls.Add(new Label{Text="连接异常时，可在本机恢复直连。",AutoSize=true,ForeColor=Muted,Margin=new Padding(0,8,0,0)});root.Controls.Add(safety,0,2);
-        _emergencyRecovery.Click+=(_,_)=>{
-            if(MessageBox.Show(this,"将停止隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","恢复直连",MessageBoxButtons.OKCancel)!=DialogResult.OK)return;
-            CancelRequests();_needsReconcile=true;RefreshActions();
-            try{Installer.ElevateRecovery();_loginFeedback.Text=_detail.Text="恢复请求已提交，等待系统服务确认。";}
-            catch{_loginFeedback.Text=_detail.Text="恢复请求未完成，请检查 UAC 提示。";}
+        _emergencyRecovery.Click+=async(_,_)=>{
+            if(_recovering || MessageBox.Show(this,"将停止隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","恢复直连",MessageBoxButtons.OKCancel)!=DialogResult.OK)return;
+            await RecoverDirect();
         };
         _login.Click+=async(_,_)=>await Act(_rememberLogin.Checked?"LoginRemembered":"Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
         _password.KeyDown+=async(_,e)=>{if(e.KeyCode==Keys.Enter && _login.Enabled){e.SuppressKeyPress=true;await Act(_rememberLogin.Checked?"LoginRemembered":"Login");}};
@@ -364,7 +364,7 @@ internal sealed partial class MainForm : Form
     private void RefreshActions()
     {
         if(IsDisposed)return;
-        bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining;
+        bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
         _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
         _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_udpPortChoice.Enabled=_transportChoice.Enabled && _transportChoice.SelectedIndex==0;_native8443Test.Enabled=available && !_connectionIntent && !_udpDiagnosing && _native8443Available;
         _udpStart.Enabled=available && _udpAvailable && _lastMode=="disconnected" && !_udpDiagnosing && !_connectionIntent && _authenticated && _deviceRegistered;_udpCancel.Enabled=available && _udpDiagnosing;_maintenance.Enabled=available && !_udpDiagnosing;
@@ -388,9 +388,31 @@ internal sealed partial class MainForm : Form
             throw;
         }
     }
+    internal async Task RecoverDirect()
+    {
+        if(_recovering || _closing || IsDisposed)return;
+        _recovering=true;CancelRequests();_needsReconcile=true;RefreshActions();_emergencyRecovery.Enabled=false;
+        string result="恢复结果尚未确认，请查看连接诊断。";
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(TimeSpan.FromMinutes(2));
+        try{
+            _loginFeedback.Text=_detail.Text="正在等待管理员授权及本机恢复，请稍候…";
+            int code=await _recover(deadline.Token);
+            result=code==4?"已取消管理员授权，正在重新读取服务状态。":code==0?"恢复程序已完成，正在核对直连状态。":"恢复未完成，正在重新读取服务诊断；保护状态以服务确认为准。";
+        }catch(OperationCanceledException){result="恢复等待已结束，后台恢复可能仍在执行；请先查看诊断，不要重复提交。";}
+        catch{result="恢复程序未完成，正在重新读取服务诊断。";}
+        finally{
+            _recovering=false;
+            if(!IsDisposed){
+                _emergencyRecovery.Enabled=true;
+                await Act("Status");
+                if(!IsDisposed){_loginFeedback.Text=_detail.Text=result+" "+_detail.Text;RefreshActions();}
+            }
+        }
+    }
     internal async Task<bool> QuitClient()
     {
         if(_closing || IsDisposed)return false;
+        if(_recovering){_detail.Text="正在恢复直连，请等待本次恢复结果后再关闭。";return false;}
         _closing=true;_timer.Stop();CancelRequests();RefreshActions();
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(_quitTimeout);
         bool acquired=false,sentQuit=false;
@@ -419,7 +441,7 @@ internal sealed partial class MainForm : Form
     }
     internal async Task Act(string command)
     {
-        if(_closing || IsDisposed)return;
+        if(_closing || IsDisposed || _recovering)return;
         bool passive=command=="Status";
         if(passive)_statusReadSucceeded=false;
         if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
@@ -519,7 +541,7 @@ internal sealed partial class MainForm : Form
                 _udpPortChoice.SelectedIndex=Math.Max(0,_udpPortChoice.Items.Cast<UdpPortChoice>().ToList().FindIndex(p=>p.Port==preferred));
             }finally{_renderingPort=false;}
             _udpPortChoice.Enabled=!_connectionIntent && !_busy && !_udpDiagnosing && _transportChoice.SelectedIndex==0;
-            _transportChoice.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining;
+            _transportChoice.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";

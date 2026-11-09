@@ -333,12 +333,7 @@ internal static class OracleAcceptance
             await Task.Delay(Timeout.Infinite);return 0;
         }catch{return 1;}
     }
-    private static async Task StoppedService()
-    {
-        using var service=new System.ServiceProcess.ServiceController(Platform.Service);
-        for(int i=0;i<150;i++){service.Refresh();if(service.Status==System.ServiceProcess.ServiceControllerStatus.Stopped)return;await Task.Delay(100);}
-        throw new IOException("BACKGROUND_DID_NOT_STOP");
-    }
+    private static Task StoppedService()=>ControlPipe.WaitStopped(CancellationToken.None);
     private static async Task CrashController(string username,string password)
     {
         var start=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};

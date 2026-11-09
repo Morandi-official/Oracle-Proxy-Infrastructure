@@ -3,6 +3,7 @@ using System.Security.Principal;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using Microsoft.Win32;
+using System.Text.Json.Nodes;
 namespace OracleProxy.Product;
 internal static class Installer
 {
@@ -22,11 +23,29 @@ internal static class Installer
         VerifyService();
         if(Registered()){
             using var service=new ServiceController(Platform.Service);
-            if(service.Status!=ServiceControllerStatus.Stopped){if(service.Status!=ServiceControllerStatus.StopPending)service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));}
+            if(service.Status!=ServiceControllerStatus.Stopped){
+                if(service.Status!=ServiceControllerStatus.StopPending){
+                    try{service.Stop();}
+                    catch(Exception error)when(error is InvalidOperationException or System.ComponentModel.Win32Exception){
+                        service.Refresh();
+                        // A verified Off reply can start graceful self-stop
+                        // between our status read and SCM control request.
+                        if(service.Status is not (ServiceControllerStatus.Stopped or ServiceControllerStatus.StopPending))throw;
+                    }
+                }
+                service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));
+            }
         }
         string installedExe=File.Exists(Platform.Exe)?Platform.Exe:Path.Combine(Platform.Root,LegacyFiles[0]);
         if(!File.Exists(installedExe))return;
-        // SCM status can become Stopped just before Windows unloads DLLs.
+        // SCM Stopped precedes final process teardown. Wait for only our
+        // exact SYSTEM service image before deleting its extraction cache.
+        foreach(var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(installedExe)))using(process){
+            try{
+                if(process.HasExited || process.SessionId!=0)continue;
+                if(string.Equals(process.MainModule?.FileName,installedExe,StringComparison.OrdinalIgnoreCase) && !process.WaitForExit(10000))throw new IOException("SERVICE_PROCESS_STILL_RUNNING");
+            }catch(InvalidOperationException)when(process.HasExited){}
+        }
         for(int i=0;i<150;i++){try{using var f=File.Open(installedExe,FileMode.Open,FileAccess.ReadWrite,FileShare.None);return;}catch(IOException){Thread.Sleep(100);}}
         throw new IOException("SERVICE_IMAGE_STILL_IN_USE");
     }
@@ -123,10 +142,27 @@ internal static class Installer
             throw;
         }
     }
+    private static bool RetiringPipeFailure(IOException error)=>
+        error.Message is "SERVICE_BUSY" or "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" ||
+        unchecked((uint)error.HResult) is 0x8007006D or 0x800700E8 or 0x800700E9; // broken/closing/disconnected Windows pipe
+    private static async Task<JsonObject> DisconnectForMaintenance()
+    {
+        for(int attempt=0;;attempt++){
+            try{return await ControlPipe.Send("Disconnect");}
+            catch(IOException error)when(attempt==0 && RetiringPipeFailure(error)){
+                // The previous GUI may have exited before this installer could
+                // authenticate its retiring pipe. Retry only idempotent Off,
+                // after SCM proves stop; each new pipe is authenticated anew.
+                // Pipe cancellation can precede SCM StopPending. Waiting is
+                // read-only; a still-running service times out, never replays.
+                await ControlPipe.WaitStopped(CancellationToken.None);VerifyService();
+            }
+        }
+    }
     internal static async Task Remove()
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();VerifyService();Platform.VerifyProtected(Platform.Root);
-        var status=await ControlPipe.Send("Disconnect");
+        var status=await DisconnectForMaintenance();
         if(status["ok"]?.GetValue<bool>()!=true || status["mode"]?.GetValue<string>()!="disconnected")throw new IOException("SAFE_DISCONNECT_REQUIRED");
         Stop();
         try{Platform.ClearBundleCache();}catch{try{Sc("start",Platform.Service);}catch{}throw;}

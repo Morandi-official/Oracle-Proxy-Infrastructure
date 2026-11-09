@@ -35,7 +35,11 @@ try{
   }
   if($env:ORACLE_ACCEPTANCE_SCOPE -ne "endpoint-migration"){Remove-CIUuNetworkFixture}
   $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
-  if($remove.ExitCode -ne 0){throw 'Post-acceptance uninstall failed'}
+  if($remove.ExitCode -ne 0){
+    $diag=Join-Path $env:ProgramFiles 'OracleProxy/diagnostics.json'
+    if(Test-Path $diag){Get-Content -LiteralPath $diag -Raw}
+    throw 'Post-acceptance uninstall failed'
+  }
 }finally{
   Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD -ErrorAction SilentlyContinue
   if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){

@@ -152,19 +152,7 @@ internal sealed partial class VpnRuntime : IDisposable
                         if(_refreshToken==_secret.Token){_state=await pending;_received=DateTimeOffset.UtcNow;}
                         else{try{await pending;}catch{}}
                     }
-                    if(_probePending?.IsCompleted==true){
-                        var pending=_probePending;_probePending=null;
-                        if(_core.Running && _probePid==_core.Pid && _probeGeneration==_generation){
-                            try{
-                                _latency=await pending;RememberVerifiedCarrier();RecordNativeProbe(true);_verified=DateTimeOffset.UtcNow;_verifiedGeneration=_generation;_failure=null;_probeFailures=0;_error="";
-                                if(_secret.ConnectIntent && NativeGuard.TunPermitted)MarkConnected();
-                            }catch(Exception error){
-                                _verified=default;_stage="ORACLE_EGRESS_PROBE";Failed(error);RecordNativeProbe(false);
-                                if(_secret.ConnectIntent){_mode="protected";_latency=null;}
-                                if(_error is not ("ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED"))await StopCore();
-                            }
-                        }else{try{await pending;}catch{}}
-                    }
+                    if(_probePending?.IsCompleted==true)await CompleteEgressProbe();
                     if(_secret.Token.Length>0 && _refreshPending is null && DateTimeOffset.UtcNow>=_nextRefresh){
                         _refreshToken=_secret.Token;_refreshPending=_api.Call("presence",_refreshToken,new JsonObject{["mode"]=DeviceRegistration.ReportMode(_mode,DeviceRegistration.Confirmed(_state),_secret.RecoveryRequired),["transport"]=_mode=="connected" && _secret.ConnectIntent && NativeGuard.TunPermitted?TransportPolicy.Name(_transport):null});_nextRefresh=DateTimeOffset.UtcNow.AddSeconds(5);
                     }
@@ -219,6 +207,24 @@ internal sealed partial class VpnRuntime : IDisposable
         _verified=default;_verifiedGeneration=-1;_latency=null;_runningProfile="";_nextProbe=default;
         await _core.Stop();
     }
+    private async Task CompleteEgressProbe()
+    {
+        if(_probePending is not Task<long> pending)return;
+        _probePending=null;
+        uint pid=_probePid;long generation=_probeGeneration;
+        try{
+            long latency=await pending;
+            if(!_core.Running || pid!=_core.Pid || generation!=_generation)return;
+            _latency=latency;RememberVerifiedCarrier();RecordNativeProbe(true);
+            _verified=DateTimeOffset.UtcNow;_verifiedGeneration=_generation;_failure=null;_probeFailures=0;_error="";
+            if(_secret.ConnectIntent && NativeGuard.TunPermitted)MarkConnected();
+        }catch(Exception error){
+            if(!_core.Running || pid!=_core.Pid || generation!=_generation)return;
+            _verified=default;_stage="ORACLE_EGRESS_PROBE";Failed(error);RecordNativeProbe(false);
+            if(_secret.ConnectIntent){_mode="protected";_latency=null;}
+            if(_error is not ("ORACLE_PROBE_TIMEOUT" or "ORACLE_PROBE_HTTP_FAILED"))await StopCore();
+        }
+    }
     private void BeginEgressProbe()
     {
         _stage="ORACLE_EGRESS_PROBE";_probePid=_core.Pid;_probeGeneration=_generation;_probePending=_core.Probe(_verified==default?3:12);
@@ -252,21 +258,25 @@ internal sealed partial class VpnRuntime : IDisposable
                 ["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["started_without_tun"]=standby,
                 ["inner_mtu"]=_state!["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel"?1280:1200,["preferred_port"]=_secret.NativeUdpPortPreference,["socket_binding"]=_secret.NativeUdpPortPreference==8443?"native_udp_fixed_8443":_secret.NativeUdpAdaptive?"native_udp_adaptive_pair":"native_udp_dual_port",["probe_result"]="pending",["probe_failures"]=0,["core_age_ms"]=0};
             var coreTimer=System.Diagnostics.Stopwatch.StartNew();
-            await _core.Start(EffectiveState(),_secret,_transport,standby:true);
+            await _core.Start(EffectiveState(),_secret,_transport,standby:true,probeReady:standby?null:BeginEgressProbe);
             if(_switchTimings is not null)_switchTimings["core_process_ms"]=coreTimer.ElapsedMilliseconds;
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             if(_switchTimings is not null)_switchTimings["core_active_and_authorized_ms"]=coreTimer.ElapsedMilliseconds;
-            _runningProfile=Profile();_nextProbe=default;
-            if(!standby)BeginEgressProbe();
+            _runningProfile=Profile();
+            // Preserve the retry schedule of an already-started private probe.
+            if(_probePending is null)_nextProbe=default;
+            if(!standby && _probePending is null)BeginEgressProbe();
         }catch{await StopCore();if(!standby)_mode="protected";throw;}
     }
     internal async Task<JsonObject> Command(JsonObject value,CancellationToken admission=default,ClientIdentity? client=null)
     {
         if(!value.TryGetPropertyValue("version",out var version)||version?.GetValue<int>()!=1)throw new IOException("INVALID_PROTOCOL");
         string command=value["command"]?.GetValue<string>() ?? "";
-        var fields=command is "Login" or "LoginRemembered"?new[]{"version","command","username","password"}:command=="ConfirmDevice"?new[]{"version","command","device_name","confirm"}:command=="DeleteDevice"?new[]{"version","command","device_id"}:new[]{"version","command"};
+        var fields=command=="AttachConnect"?new[]{"version","command","expected_version"}:command is "Login" or "LoginRemembered"?new[]{"version","command","username","password"}:command=="ConfirmDevice"?new[]{"version","command","device_name","confirm"}:command=="DeleteDevice"?new[]{"version","command","device_id"}:new[]{"version","command"};
         if(value.Count!=fields.Length || fields.Any(field=>!value.ContainsKey(field)))throw new IOException("INVALID_FIELDS");
-        if(command is not ("Status" or "Login" or "LoginRemembered" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferUdpAdaptive" or "PreferAutoAdaptive" or "PreferUdp8443" or "PreferAuto8443" or "PreferQuic" or "PreferUdp443" or "PreferUdp51820" or "DeleteDevice" or "StartUdpDiagnostics" or "CancelUdpDiagnostics" or "AttachClient"))throw new IOException("UNKNOWN_COMMAND");
+        if(command is not ("Status" or "Login" or "LoginRemembered" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferAuto" or "PreferUdp" or "PreferUdpAdaptive" or "PreferAutoAdaptive" or "PreferUdp8443" or "PreferAuto8443" or "PreferQuic" or "PreferUdp443" or "PreferUdp51820" or "DeleteDevice" or "StartUdpDiagnostics" or "CancelUdpDiagnostics" or "AttachClient" or "AttachConnect"))throw new IOException("UNKNOWN_COMMAND");
+        if(command=="AttachConnect" && value["expected_version"]?.GetValue<string>()!=DeviceRegistration.Version)throw new IOException("SERVICE_VERSION_NOT_VERIFIED");
+        if(command=="AttachConnect" && client is null)throw new IOException("CLIENT_IDENTITY_REQUIRED");
         await _gate.WaitAsync(admission);
         bool admitted=false;
         try{
@@ -274,7 +284,7 @@ internal sealed partial class VpnRuntime : IDisposable
             // point is passed, finish its intent changes under this same gate.
             admission.ThrowIfCancellationRequested();
             admitted=true;
-            if(client is not null && command=="AttachClient")Attach(client);
+            if(client is not null && command is "AttachClient" or "AttachConnect")Attach(client);
             if(Diagnosing && command is not ("Status" or "CancelUdpDiagnostics" or "Disconnect" or "Quit" or "Logout"))throw new IOException("DIAGNOSTIC_BUSY");
             switch(command){
             case "AttachClient":if(SessionAuthorized && _state is null)await Refresh();break;
@@ -334,7 +344,7 @@ internal sealed partial class VpnRuntime : IDisposable
                 LoginPolicy.Enrolled(_secret,DateTimeOffset.UtcNow.ToUnixTimeSeconds());_secret.Save();_state=registered;_received=DateTimeOffset.UtcNow;_error="";_failure=null;_mode="disconnected";_prepareUntil=DateTimeOffset.UtcNow.AddMinutes(5);_prepareMayStartCore=true;_prepareRetryAfter=default;
                 break;
             }
-            case "Connect":{
+            case "AttachConnect":case "Connect":{
                 _prepareRetryAfter=default;
                 var timer=System.Diagnostics.Stopwatch.StartNew();_connectMs=null;_switchTimings=new JsonObject();
                 if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
@@ -377,7 +387,19 @@ internal sealed partial class VpnRuntime : IDisposable
                     if(warm){MarkConnected();_error="";_failure=null;}
                     _nextProbe=default;
                 }
-                _connectMs=timer.ElapsedMilliseconds;_switchTimings["complete_ms"]=_connectMs;break;}
+                _connectMs=timer.ElapsedMilliseconds;_switchTimings["complete_ms"]=_connectMs;
+                if(command=="AttachConnect" && _probePending is Task<long> firstProbe){
+                    // The pending task verifies both configured address families.
+                    // Consume the same generation-bound proof used by Run, then
+                    // return its real state without a GUI polling round trip.
+                    // Slow or silent networks must not keep the command gate
+                    // and the GUI Disconnect button waiting for the full probe
+                    // retry budget. Leave the same pending proof to Run.
+                    await Task.WhenAny(firstProbe,Task.Delay(750));
+                    if(firstProbe.IsCompleted)await CompleteEgressProbe();
+                    _switchTimings["initial_probe_ms"]=timer.ElapsedMilliseconds;
+                }
+                break;}
             case "Disconnect":await EndUdpDiagnostics();await Disconnect(keepPrepared:false);break;
             case "Quit":await EndUdpDiagnostics();await Disconnect(keepPrepared:false);if(_secret.RememberLoginUntil==0)ForgetLogin();break;
             case "Logout":

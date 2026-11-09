@@ -249,7 +249,7 @@ internal sealed partial class MainForm : Form
         var diagnostics=ButtonGrid("diagnostic-actions");
         Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=false,Height=40,Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
         void Add(TableLayoutPanel grid,Button button){int index=grid.Controls.Count;int row=index/3;if(row>=grid.RowCount){grid.RowCount=row+1;grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.Height=grid.RowCount*48;}button.Dock=DockStyle.Fill;grid.Controls.Add(button,index%3,row);}
-        Add(diagnostics,Tool("连接诊断",()=>ShowReport("连接诊断",ConnectionReport)));
+        var connectionDiagnostics=Tool("连接诊断",()=>ShowReport("连接诊断",ConnectionReport));connectionDiagnostics.Name="connection-diagnostics";Add(diagnostics,connectionDiagnostics);
         Add(diagnostics,Tool("GitHub 连通性",async()=>await ShowGitHubReport()));Add(diagnostics,Tool("UU 检查详情",ShowUuReport));
         Add(diagnostics,Tool("重新识别 UU",async()=>await Act("RefreshUu")));
         _native8443Test=Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443"));Add(diagnostics,_native8443Test);
@@ -416,13 +416,23 @@ internal sealed partial class MainForm : Form
         cancel.ThrowIfCancellationRequested();
         async Task<JsonObject> Real(){
             while(true){try{
-                    if(command!="Status"){
+                    if(command is not ("Status" or "Connect")){
                         var attachTimer=System.Diagnostics.Stopwatch.StartNew();
                         var attached=await ControlPipe.Send("AttachClient",null,null,cancel);
                         if(command is "Connect" or "Disconnect")_lastUiAttachMs=attachTimer.ElapsedMilliseconds;
                         if(!ServiceBootstrap.Current(attached,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
                         _sessionAttached=true;_recoveryProvedDirect=false;
                         _backendIdle=false;if(!_closing)_timer.Start();
+                    }
+                    if(command=="Connect"){
+                        // One authenticated service transaction attaches this live
+                        // window, starts the tunnel and returns its verified state.
+                        _lastUiAttachMs=0;
+                        var connected=await ControlPipe.Send("AttachConnect",null,null,cancel);
+                        if(!ServiceBootstrap.Current(connected,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
+                        _sessionAttached=true;_recoveryProvedDirect=false;_backendIdle=false;
+                        if(!_closing)_timer.Start();
+                        return connected;
                     }
                     return await ControlPipe.Send(command,username,password,cancel);
                 }
@@ -584,7 +594,7 @@ internal sealed partial class MainForm : Form
     private void ShowReport(string title,string report)
     {
         using var dialog=new Form{Text=title,StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(760,400),MinimizeBox=false,MaximizeBox=false};
-        var text=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Text=report};
+        var text=new TextBox{Name="diagnostic-report",Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Text=report};
         var copy=new Button{Text="复制诊断（不含账号密码或密钥）",Dock=DockStyle.Bottom,Height=40};copy.Click+=(_,_)=>Clipboard.SetText(report);
         dialog.Controls.Add(text);dialog.Controls.Add(copy);dialog.ShowDialog(this);
     }
@@ -625,7 +635,8 @@ internal sealed partial class MainForm : Form
             _transportChoice.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
-            if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
+            if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","initial_probe_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
+            if(state["control_timings"] is JsonObject controlTimings)foreach(string key in new[]{"service_ready_ms","attested_pipe_ms","response_ms"})_connectionReport+=$"control.{key}: {controlTimings[key]}\r\n";
             if(state["disconnect_timings"] is JsonObject offTimings)foreach(string key in new[]{"core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"})_connectionReport+=$"disconnect.{key}: {offTimings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
             string entry=state["transport_address"]?.GetValue<string>()??"";

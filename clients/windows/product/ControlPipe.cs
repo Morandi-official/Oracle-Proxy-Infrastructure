@@ -62,7 +62,7 @@ internal static class ControlPipe
                     // Cancellation withdraws queued admission, not a mutation
                     // already executing. Never detach a timed-out command.
                     ClientIdentity? client=null;
-                    if(value["command"]?.GetValue<string>()=="AttachClient"){
+                    if(value["command"]?.GetValue<string>() is "AttachClient" or "AttachConnect"){
                         if(!GetNamedPipeClientProcessId(pipe.SafePipeHandle,out uint clientPid))throw new IOException("CLIENT_IDENTITY_UNAVAILABLE");
                         client=ClientIdentity.Capture(clientPid,clientSid);
                     }
@@ -86,17 +86,21 @@ internal static class ControlPipe
         cancel.ThrowIfCancellationRequested();
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancel);
         timeout.CancelAfter(TimeSpan.FromSeconds(60));
-        await EnsureStarted(timeout.Token);
+        var timer=System.Diagnostics.Stopwatch.StartNew();
+        await EnsureStarted(timeout.Token).ConfigureAwait(false);
+        long serviceReady=timer.ElapsedMilliseconds;
         using var pipe=new NamedPipeClientStream(".",Platform.Pipe,PipeDirection.InOut,PipeOptions.Asynchronous,TokenImpersonationLevel.Impersonation);
-        try{await pipe.ConnectAsync(3000,timeout.Token);}
+        try{await pipe.ConnectAsync(3000,timeout.Token).ConfigureAwait(false);}
         catch(TimeoutException error){throw new IOException("SERVICE_BUSY",error);}
         // Authenticate the server through the SCM-owned process, before sending
         // credentials. A pipe DACL alone authenticates only its client.
         if(!BoundToService(pipe))throw new IOException("SERVICE_IDENTITY_NOT_VERIFIED");
-        var frame=new JsonObject{["version"]=1,["command"]=command};if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}else if(command=="DeleteDevice"){frame["device_id"]=username;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
-        await WriteFrame(pipe,frame.ToJsonString(),8192,timeout.Token);
-        var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token))!.AsObject();
-        if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");return result;
+        long pipeReady=timer.ElapsedMilliseconds;
+        var frame=new JsonObject{["version"]=1,["command"]=command};if(command=="AttachConnect")frame["expected_version"]=DeviceRegistration.Version;if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}else if(command=="DeleteDevice"){frame["device_id"]=username;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
+        await WriteFrame(pipe,frame.ToJsonString(),8192,timeout.Token).ConfigureAwait(false);
+        var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token).ConfigureAwait(false))!.AsObject();
+        if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");
+        result["control_timings"]=new JsonObject{["service_ready_ms"]=serviceReady,["attested_pipe_ms"]=pipeReady,["response_ms"]=timer.ElapsedMilliseconds};return result;
     }
     internal static async Task WaitStopped(CancellationToken cancel)
     {
@@ -135,7 +139,7 @@ internal static class ControlPipe
             if(service.Status==System.ServiceProcess.ServiceControllerStatus.Stopped){
                 try{service.Start();}catch(InvalidOperationException){service.Refresh();if(service.Status==System.ServiceProcess.ServiceControllerStatus.Stopped)throw;}
             }
-            await Task.Delay(100,cancel);
+            await Task.Delay(20,cancel);
         }
         throw new IOException("SERVICE_START_TIMEOUT");
     }

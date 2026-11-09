@@ -27,7 +27,7 @@ internal sealed class CoreProcess : IDisposable
     internal string SafeStage=>Volatile.Read(ref _safeStage);
     internal uint Pid=>Running?(uint)_process!.Id:0;
     internal bool Running=>_process is not null && !_process.HasExited;
-    internal async Task Start(JsonObject state,DurableState secret,TunnelTransport transport=TunnelTransport.WireGuardUdp,bool standby=false,UdpDiagnosticTarget? diagnosticTarget=null)
+    internal async Task Start(JsonObject state,DurableState secret,TunnelTransport transport=TunnelTransport.WireGuardUdp,bool standby=false,UdpDiagnosticTarget? diagnosticTarget=null,Action? probeReady=null)
     {
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
@@ -35,7 +35,8 @@ internal sealed class CoreProcess : IDisposable
         _expectedIPv4=EndpointCatalog.Egress(state).ToHashSet();VerifiedIPv4=null;_dualStack=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
         _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        if(standby)info.ArgumentList.Add("--standby");
+        if(probeReady is not null && !standby)throw new IOException("PROBE_REQUIRES_PRIVATE_STANDBY");
+        if(standby)info.ArgumentList.Add(probeReady is null?"--standby":"--standby-probe");
         StandbyCapable=standby;TunActive=!standby;
         // A suspended native launch + job assignment would narrow the creation
         // race further. Persistent WFP already blocks direct user traffic.
@@ -57,7 +58,17 @@ internal sealed class CoreProcess : IDisposable
         };_process.BeginErrorReadLine();
         await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,transport,diagnosticTarget).ToJsonString());await _process.StandardInput.FlushAsync();
         string? ready;
-        try{ready=await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20),_stop.Token);}
+        async Task<string?> ReadStartup(){
+            string? line=await _process.StandardOutput.ReadLineAsync();
+            if(probeReady is not null && line=="PROBE_READY"){
+                // Start only this generation's private authenticated SOCKS
+                // probes while the core creates its unconfigured adapter.
+                probeReady();
+                return await _process.StandardOutput.ReadLineAsync();
+            }
+            return line;
+        }
+        try{ready=await ReadStartup().WaitAsync(TimeSpan.FromSeconds(20),_stop.Token);}
         catch(TimeoutException error){throw new IOException("CORE_READY_TIMEOUT",error);}
         if(ready!="READY"){
             try{await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));}catch{}

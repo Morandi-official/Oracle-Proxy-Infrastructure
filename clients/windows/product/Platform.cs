@@ -120,6 +120,8 @@ internal static class Platform
 internal sealed class DurableState
 {
     public ClientIdentity[] UiClients {get;set;}=[];
+    public System.Text.Json.Nodes.JsonObject? RecentAccountState {get;set;}
+    public string RecentAccountScope {get;set;}="";
     public bool GuiAuthenticated {get;set;}
     public string PrivateKey {get;set;}="";
     public string PublicKey {get;set;}="";

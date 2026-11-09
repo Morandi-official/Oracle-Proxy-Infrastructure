@@ -592,11 +592,23 @@ internal static class ProductTests
         using var refusedExit=new MainForm((_,_,_)=>Task.FromResult(new JsonObject{["ok"]=false,["intent"]=true,["core_pid"]=123U,["mode"]="protected"}));
         if(refusedExit.QuitClient().GetAwaiter().GetResult() || refusedExit.IsDisposed)return 1;
         Console.WriteLine("EXPLICIT_UI_QUIT_REQUESTS_FIXED_SERVICE_OPERATION_AND_REFUSES_UNVERIFIED_DISCONNECT=PASS");
+        foreach(uint closeMessage in new[]{0x0010u,0x0112u}){
+            var closeCalls=new List<string>();
+            using var closedWindow=new MainForm((command,_,_)=>{closeCalls.Add(command);return Task.FromResult((JsonObject)quitState.DeepClone());});
+            UiShow(closedWindow);closeCalls.Clear();
+            SendWindowMessage(closedWindow.Handle,closeMessage,closeMessage==0x0112u?new IntPtr(0xF060):IntPtr.Zero,IntPtr.Zero);
+            UiPumpUntil(()=>closedWindow.IsDisposed,"WINDOW_CLOSE_DID_NOT_FINISH_SAFE_QUIT");
+            if(closeCalls.Count(c=>c=="Quit")!=1)throw new IOException("WINDOW_CLOSE_BYPASSED_SAFE_QUIT");
+        }
+        Console.WriteLine("REAL_WM_CLOSE_AND_CLOSE_BUTTON_BOTH_REQUIRE_SERVICE_SAFE_OFF=PASS");
+
         UiRequestDeadlineRegression(snapshot);
         RuntimeQueuedCancellationRegression();
         ControlPipeCancellationRegression();
         return 0;
     }
+    [DllImport("user32.dll",EntryPoint="SendMessageW")]
+    private static extern IntPtr SendWindowMessage(IntPtr window,uint message,IntPtr wParam,IntPtr lParam);
     private static IEnumerable<Control> UiDescendants(Control root)
     {
         foreach(Control child in root.Controls){yield return child;foreach(var nested in UiDescendants(child))yield return nested;}

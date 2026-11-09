@@ -363,7 +363,7 @@ internal static class OracleAcceptance
         string script=Path.GetFullPath("clients/windows/product/ci/test-live-udp-toggle.ps1");
         string client=Path.GetFullPath("dist/product/Proxy.exe");
         if(!File.Exists(script) || !File.Exists(client))throw new IOException("LIVE_GUI_FIXTURE_UNAVAILABLE");
-        var start=new ProcessStartInfo("powershell.exe"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        var start=new ProcessStartInfo("pwsh.exe"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
         foreach(string value in new[]{"-NoProfile","-ExecutionPolicy","Bypass","-File",script,"-Client",client})start.ArgumentList.Add(value);
         start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_USERNAME");start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
         using var process=Process.Start(start)??throw new IOException("LIVE_GUI_FIXTURE_START_FAILED");

@@ -97,8 +97,9 @@ internal sealed partial class VpnRuntime : IDisposable
         _interactiveAuthenticated=_secret.GuiAuthenticated && _secret.UiClients.Any(x=>x.Alive()==true);
         var recent=RecentAccountProof.Restore(_secret.RecentAccountState,_secret.RecentAccountScope,_secret.Token,_secret.PublicKey,
             _secret.UiClients.Any(x=>x.Alive()==true),SessionAuthorized,_secret.ConnectIntent,_secret.RecoveryRequired,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        if(recent is not null){_state=recent;_received=DateTimeOffset.FromUnixTimeSeconds(recent["observed_at"]!.GetValue<long>());_recentAccountRestored=true;}
+        if(recent is not null){_state=recent;_received=DateTimeOffset.FromUnixTimeSeconds(recent["observed_at"]!.GetValue<long>());_recentAccountRestored=true;_nextRefresh=DateTimeOffset.UtcNow.AddSeconds(1);}
         _carriers.Observe(CarrierMemory.Scope(_state));
+        _nextNetworkCheck=DateTimeOffset.UtcNow.AddSeconds(1);
         // Independent protected-state reads may overlap the first full image
         // digest. Never load the native module or admit a pipe command first.
         await bundle;

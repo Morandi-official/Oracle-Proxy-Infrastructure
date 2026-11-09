@@ -667,6 +667,11 @@ def main(arguments):
     operation, revision = arguments
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
+        if request.get('request_id')=='retire-migrated-legacy-endpoints-20261109':
+            spec=importlib.util.spec_from_file_location('retire_migrated_endpoints',Path(__file__).with_name('retire_migrated_endpoints.py'))
+            retirement=importlib.util.module_from_spec(spec);spec.loader.exec_module(retirement)
+            print('LEGACY_ENDPOINT_RETIREMENT='+json.dumps(retirement.apply(),sort_keys=True),flush=True)
+            return # Exact old aliases/helper and one completed CI identity; no deployment or OCI deletion.
         if request.get('request_id')=='endpoint-retirement-audit-20261109':
             spec=importlib.util.spec_from_file_location('endpoint_retirement_audit',Path(__file__).with_name('endpoint_retirement_audit.py'))
             audit=importlib.util.module_from_spec(spec);spec.loader.exec_module(audit)

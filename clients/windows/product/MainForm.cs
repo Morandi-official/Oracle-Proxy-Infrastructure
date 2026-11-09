@@ -8,7 +8,7 @@ internal sealed partial class MainForm : Form
         try{string report=await GitHubDiagnostics.Run();if(!IsDisposed && !_closing)ShowReport("GitHub 连通性",report);}
         finally{_githubChecking=false;}
     }
-    private readonly Label _mode=new(){Text="正在读取系统服务…",AutoSize=true,Font=new Font("Microsoft YaHei UI",23,FontStyle.Bold)};
+    private readonly Label _mode=new(){Name="connection-status",Text="正在读取系统服务…",AutoSize=true,Font=new Font("Microsoft YaHei UI",23,FontStyle.Bold)};
     private readonly Label _detail=new(){Text="",AutoSize=true,MaximumSize=new Size(680,0)};
     private readonly Label _usage=new(){Text="用量未知",AutoSize=true};
     private readonly Label _expiry=new(){Text="到期日未知",AutoSize=true};
@@ -17,8 +17,10 @@ internal sealed partial class MainForm : Form
     private readonly TextBox _username=new(){PlaceholderText="管理员分配的账号",Width=215,MaxLength=64};
     private readonly TextBox _password=new(){PlaceholderText="管理员分配的密码",Width=215,UseSystemPasswordChar=true,MaxLength=128};
     private readonly Button _login=new(){Name="login",Text="登录",AutoSize=true};
-    private readonly Button _connect=new(){Text="连接",Width=155,Height=48,Enabled=false};
-    private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
+    private readonly Button _connect=new(){Name="connect",Text="连接",Width=155,Height=48,Enabled=false};
+    private readonly Button _disconnect=new(){Name="disconnect",Text="断开并恢复直连",Width=180,Height=48};
+    private string _lastUiCommand="";
+    private long? _lastUiQueueMs,_lastUiAttachMs,_lastUiResponseMs,_lastUiCompleteMs;
     private bool _backendIdle,_sessionAttached,_recoveryProvedDirect;
     private string _startupReport="尚未读取初始化结果。";
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
@@ -415,7 +417,9 @@ internal sealed partial class MainForm : Form
         async Task<JsonObject> Real(){
             while(true){try{
                     if(command!="Status"){
+                        var attachTimer=System.Diagnostics.Stopwatch.StartNew();
                         var attached=await ControlPipe.Send("AttachClient",null,null,cancel);
+                        if(command is "Connect" or "Disconnect")_lastUiAttachMs=attachTimer.ElapsedMilliseconds;
                         if(!ServiceBootstrap.Current(attached,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
                         _sessionAttached=true;_recoveryProvedDirect=false;
                         _backendIdle=false;_timer.Start();
@@ -508,10 +512,18 @@ internal sealed partial class MainForm : Form
         if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
         bool acquired=false,sentMutation=false;
-        if(!passive){_busy=true;if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";RefreshActions();}
+        bool toggle=command is "Connect" or "Disconnect";var operationTimer=System.Diagnostics.Stopwatch.StartNew();
+        if(toggle){_lastUiCommand=command;_lastUiQueueMs=_lastUiAttachMs=_lastUiResponseMs=_lastUiCompleteMs=null;}
+        if(!passive){
+            _busy=true;
+            if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";
+            if(toggle){_mode.Text=command=="Connect"?"正在连接…":"正在断开…";_detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";}
+            RefreshActions();
+        }
         try{
             if(passive){if(!_requests.Wait(0))return;acquired=true;}
             else{await _requests.WaitAsync(deadline.Token);acquired=true;}
+            if(toggle)_lastUiQueueMs=operationTimer.ElapsedMilliseconds;
             // Ordinary Connect preserves the service's adaptive port plan.
             // A diagnostic pin is set only by its explicit diagnostic button.
             if(command is "Login" or "LoginRemembered" && _connectionIntent){
@@ -519,6 +531,7 @@ internal sealed partial class MainForm : Form
                 if(off["ok"]?.GetValue<bool>()!=true || off["intent"]?.GetValue<bool>()!=false)throw new IOException("SAFE_OFF_NOT_VERIFIED");
             }
             sentMutation=!passive;var state=await SendRequest(command,command is "Login" or "LoginRemembered"?_username.Text:command=="ConfirmDevice"?_deviceName.Text:command=="DeleteDevice"?_deleteDeviceId:null,command is "Login" or "LoginRemembered"?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
+            if(toggle)_lastUiResponseMs=operationTimer.ElapsedMilliseconds;
             if(command is "Login" or "LoginRemembered")_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
             Display(state);
@@ -546,7 +559,7 @@ internal sealed partial class MainForm : Form
                 _loginFeedback.Text=_detail.Text;
             }
         }
-        finally{if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
+        finally{if(toggle)_lastUiCompleteMs=operationTimer.ElapsedMilliseconds;if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
     }
     private async Task MaintainUu(bool restore)
     {
@@ -586,7 +599,7 @@ internal sealed partial class MainForm : Form
         "UU_DIRECTORY_UNREADABLE"=>"安装目录不可读取或超出扫描限制",
         _=>"尚未通过检查"};
     internal string UuReport=>_uuReport;
-    internal string ConnectionReport=>_connectionReport+"\r\nui_snapshot_age_seconds: "+(_snapshotAt==default?"unavailable":Math.Max(0,(long)(DateTimeOffset.UtcNow-_snapshotAt).TotalSeconds).ToString())+"\r\n"+CompatibilityDiagnostics.Read();
+    internal string ConnectionReport=>_connectionReport+"\r\nui_snapshot_age_seconds: "+(_snapshotAt==default?"unavailable":Math.Max(0,(long)(DateTimeOffset.UtcNow-_snapshotAt).TotalSeconds).ToString())+"\r\n"+CompatibilityDiagnostics.Read()+$"\r\nui_last_command: {_lastUiCommand}\r\nui_queue_ms: {_lastUiQueueMs}\r\nui_attach_ms: {_lastUiAttachMs}\r\nui_response_ms: {_lastUiResponseMs}\r\nui_complete_ms: {_lastUiCompleteMs}";
     internal int UsageProgress=>_progress.Value;
     internal bool UsageFresh=>_progress.Enabled;
     internal int PollInterval=>_timer.Interval;
@@ -612,6 +625,7 @@ internal sealed partial class MainForm : Form
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
+            if(state["disconnect_timings"] is JsonObject offTimings)foreach(string key in new[]{"core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"})_connectionReport+=$"disconnect.{key}: {offTimings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
             string entry=state["transport_address"]?.GetValue<string>()??"";
             string local=state["transport_private_address"]?.GetValue<string>()??"";

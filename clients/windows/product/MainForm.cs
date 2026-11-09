@@ -312,7 +312,7 @@ internal sealed partial class MainForm : Form
         _help.SetToolTip(_emergencyRecovery,"独立的本机恢复入口，需要管理员授权；恢复完成前不会把网络状态当作已断开。");
         AcceptButton=null;viewport.SizeChanged+=(_,_)=>FitBody();FitBody();FitLogin();
         var area=Screen.FromControl(this).WorkingArea;Size=new Size(Math.Min(Width,area.Width),Math.Min(Height,area.Height));
-        FormClosing+=async(_,e)=>{if(e.CloseReason==CloseReason.UserClosing && !_allowClose){e.Cancel=true;await QuitClient();}};
+        FormClosing+=async(_,e)=>{if((e.CloseReason is CloseReason.UserClosing or CloseReason.TaskManagerClosing) && !_allowClose){e.Cancel=true;await QuitClient();}};
     }
 
     private void RevealView(bool? dashboard)

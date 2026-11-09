@@ -2,6 +2,14 @@
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:GITHUB_REF -ne 'refs/heads/main'){throw 'MAIN_DISPOSABLE_WINDOWS_REQUIRED'}
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class ProxyGuiCloseButton {
+ [DllImport("user32.dll", SetLastError=true)]
+ public static extern bool PostMessage(IntPtr hwnd,uint message,IntPtr wParam,IntPtr lParam);
+}
+'@
 $gui=Start-Process -FilePath $Client -PassThru
 function Find-Control([string]$Id){
  $gui.Refresh();if($gui.HasExited){throw 'LIVE_GUI_EXITED'}
@@ -85,7 +93,9 @@ try {
  }
  $script:stage='close-window'
  Service-Witness 'BEFORE'
- $null=$gui.CloseMainWindow();if(!$gui.WaitForExit(15000)){throw 'LIVE_GUI_X_DID_NOT_CLOSE'}
+ $gui.Refresh()
+ if(![ProxyGuiCloseButton]::PostMessage($gui.MainWindowHandle,0x0112,[IntPtr]0xF060,[IntPtr]::Zero)){throw 'LIVE_GUI_CLOSE_BUTTON_MESSAGE_FAILED'}
+ if(!$gui.WaitForExit(15000)){throw 'LIVE_GUI_X_DID_NOT_CLOSE'}
  $watch.Restart()
  while((Get-Service OracleProxyService).Status -ne 'Stopped' -and $watch.Elapsed.TotalSeconds -lt 15){Start-Sleep -Milliseconds 20}
  if((Get-Service OracleProxyService).Status -ne 'Stopped'){throw 'LIVE_GUI_X_LEFT_BACKEND'}

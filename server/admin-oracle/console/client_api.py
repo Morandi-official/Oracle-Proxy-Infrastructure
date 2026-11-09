@@ -95,7 +95,7 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
     active=[p for p in owned if not p.get('revoked')]
     devices=[{'id':fingerprint(p['public_key']),'name':p['name'],'current':p['public_key']==key,'revoked':p['revoked'],'confirmed_at':(p.get('enrollment') or {}).get('confirmed_at')} for p in active]
     data={'schema':1,'udp_diagnostics_available':True,'observed_at':snapshot['observed_at'],'period':snapshot['period'],
-        'account':{'username':account.username,'status':status,'cycle':user.get('cycle'),'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
+        'account':{'username':account.username,'status':status,'cycle':user.get('cycle'),'rate':user.get('rate'),'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
         'registration':{'status':'registered' if is_confirmed else 'legacy' if peer else 'pending','device_id':fingerprint(key),'device_name':peer['name'] if peer else proposed_name,'confirmed_at':receipt['confirmed_at'] if is_confirmed else None,'requires_confirmation':not is_confirmed,'requires_slot':not bool(peer)},
         'devices':devices,'devices_history_truncated':False,
         'device':{'public_key':key,'registered':registered,'handshake_at':peer['handshake'] if peer else 0,'usage':peer['usage'] if peer else {'rx':0,'tx':0}},'tunnel':None}

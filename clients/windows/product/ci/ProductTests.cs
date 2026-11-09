@@ -1089,7 +1089,9 @@ internal static class ProductTests
             Require(guardedDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==emptyLuid && OffUnchanged(offCipher) &&
                 File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(emptyReceipt) && await Tcp() && await Dns(),"REAL_GUARDED_ORPHAN_RECOVERY_STILL_REFUSES_PERSISTENT_OFF_WITHOUT_GUARD");
             Task<bool> duringTcp=Tcp(),duringDns=Dns();
-            await VpnRuntime.RecoverStoppedTunnel(CancellationToken.None);
+            // Reproduce service restart after an Off/prepared core was killed:
+            // initialization must use the same receipt-bound recovery as UAC.
+            using(var restarting=new VpnRuntime())await restarting.Initialize();
             Require(await duringTcp && await duringDns && !NativeGuard.TunPresent && OffUnchanged(offCipher) && await Tcp() && await Dns(),
                 "REAL_EMPTY_DORMANT_ORPHAN_RECOVERY_REMOVES_NATIVE_ROW_PRESERVES_OFF_AND_DIRECT_TCP_DNS_BEFORE_DURING_AFTER");
 

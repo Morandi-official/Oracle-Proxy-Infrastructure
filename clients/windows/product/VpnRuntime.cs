@@ -97,7 +97,7 @@ internal sealed partial class VpnRuntime : IDisposable
         // Persist this hint migration with the next normal state mutation.
         NativeUdpPortPolicy.Upgrade(_secret);
         if(_secret.ConnectIntent){NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());_mode="protected";}
-        else{await EnsureTunnelRemoved();NativeGuard.Clear();_mode="disconnected";}
+        else{await AuditStoppedTunnel(EnsureTunnelRemoved,RecoverStoppedTunnel);NativeGuard.Clear();_mode="disconnected";}
     }
     internal async Task Run(CancellationToken cancel)
     {

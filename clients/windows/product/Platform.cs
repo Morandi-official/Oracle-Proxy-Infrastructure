@@ -83,6 +83,13 @@ internal static class Platform
         if(!Pinned(BundleFile(root,"Proxy.Core.exe"),BuildPins.Core) || !Pinned(BundleFile(root,"Proxy.Guard.dll"),BuildPins.Guard))
             throw new IOException("BUNDLE_INTEGRITY_FAILED");
     }
+    internal static void VerifySourceBundle(string root)
+    {
+        try{VerifyBundle(root);}
+        catch(IOException error)when(error is FileNotFoundException or DirectoryNotFoundException || error.Message=="BUNDLE_INTEGRITY_FAILED"){
+            throw new IOException("CLIENT_PACKAGE_INCOMPLETE",error);
+        }
+    }
     internal static void WriteAtomic(string path,byte[] content)
     {
         NoLinks(Path.GetDirectoryName(path)!);var pending=path+".pending";

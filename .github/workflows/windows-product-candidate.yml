@@ -200,8 +200,15 @@ jobs:
           if(!(Test-Path $iscc)){throw 'Pinned runner Inno Setup compiler unavailable'}
           python ./clients/windows/product/ci/build-setup.py --iscc $iscc
           if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
+      - name: Real packaged portable first GUI old upgrade and UAC recovery matrix
+        if: success()
+        shell: pwsh
+        timeout-minutes: 9
+        run: |
+          powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ./clients/windows/product/ci/test-portable-bootstrap.ps1
+          if($LASTEXITCODE -ne 0){throw 'Actual packaged portable bootstrap or recovery failed'}
       - name: Real EXE install upgrade shortcuts ARP and safe uninstall acceptance
-        if: success() && env.ORACLE_ACCEPTANCE_SCOPE != 'endpoint-migration'
+        if: success()
         shell: pwsh
         timeout-minutes: 6
         run: |

@@ -40,6 +40,22 @@ internal static class ProductTests
                 ["name"]=n.Name,["status"]=n.OperationalStatus.ToString(),["type"]=n.NetworkInterfaceType.ToString()}).ToArray());
             Console.WriteLine("DOTNET_TUN_PRESENCE="+value.ToJsonString());return 0;
         }
+        if(args.Length==2 && args[0]=="--bootstrap-scm-probe"){
+            if(Platform.IsAdmin || Platform.IsSystem)return 2;
+            bool expected=false;
+            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            try{
+                ServiceBootstrap.Ensure("new-candidate",async token=>{
+                    try{return await ControlPipe.Send("Status",null,null,token);}
+                    catch(IOException error){
+                        expected=args[1]=="absent"?error.Message=="SERVICE_ABSENT":error.Message=="SERVICE_START_REQUIRES_ELEVATION";
+                        throw;
+                    }
+                },_=>throw new IOException("ELEVATION_BOUNDARY_REACHED"),deadline.Token).GetAwaiter().GetResult();
+            }catch(IOException error)when(error.Message=="ELEVATION_BOUNDARY_REACHED"){return expected?0:1;}
+            catch{return 1;}
+            return 1;
+        }
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return UiOnMessageLoop();
         if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--native-denial"})){
@@ -624,6 +640,15 @@ internal static class ProductTests
         reads=installs=0;
         var fresh=ServiceBootstrap.Ensure(version,token=>{token.ThrowIfCancellationRequested();if(++reads==1)throw new IOException("SERVICE_ABSENT");return Task.FromResult((JsonObject)current.DeepClone());},Install,CancellationToken.None).GetAwaiter().GetResult();
         UiAssert(installs==1 && reads==2 && ServiceBootstrap.Current(fresh,version),"MISSING_SERVICE_WAS_NOT_INITIALIZED_BEFORE_LOGIN");
+        foreach(var sample in new[]{(1060,"SERVICE_ABSENT"),(5,"SERVICE_START_REQUIRES_ELEVATION"),(1058,"SERVICE_DISABLED")}){
+            var native=new InvalidOperationException("outer",new System.ComponentModel.Win32Exception(sample.Item1));
+            UiAssert(ControlPipe.ServiceAccessFailure(native).Message==sample.Item2,"SCM_NATIVE_ERROR_NOT_NORMALIZED_FOR_BOOTSTRAP");
+        }
+        string missing=Path.Combine(Path.GetTempPath(),"ProxyMissing-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(missing);
+        try{
+            bool incomplete=false;try{Platform.VerifySourceBundle(missing);}catch(IOException error)when(error.Message=="CLIENT_PACKAGE_INCOMPLETE"){incomplete=true;}
+            UiAssert(incomplete,"MISSING_SOURCE_PACKAGE_WAS_NOT_EXPLAINED");
+        }finally{Directory.Delete(missing);}
         Console.WriteLine("STARTUP_SERVICE_MATCH_SKIPS_UAC_OLD_OR_MISSING_INSTALLS_ONCE_CANCEL_OR_FAILURE_NEVER_ENABLES_LOGIN=PASS");
     }
 

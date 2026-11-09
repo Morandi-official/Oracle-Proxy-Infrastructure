@@ -12,6 +12,21 @@ official WireGuard GUI, FlClash or daily SSH commands are required.
 - [Oracle administrator console](server/admin-oracle/README.md)
 - [Controlled main-branch operations and verified Oracle downloads](ops/oracle-project/README.md)
 
+## GitHub Environments 与主备 IP 参数
+
+后续换 IP 无需手动 SSH 或重新打包客户端。将主备公网/服务器私网地址填入 `oracle-ops` 的 **Environment variables**，运行 **Primary and backup IP settings** 生成可查看的配置 PR，合并后由既有工作流应用到服务器。OCI 绑定和 DNS 仍需独立核对，保存变量本身不会改动云资源。
+
+| 场景 | 修改哪些参数 |
+| --- | --- |
+| 准备新主入口 | `PROXY_PRIMARY_IPV4`、`PROXY_PRIMARY_PRIVATE_IPV4` |
+| 准备新备用入口 | `PROXY_BACKUP_IPV4`、`PROXY_BACKUP_PRIVATE_IPV4` |
+| 本轮主绑定交换完成 | 只将 `PROXY_PRIMARY_PRIVATE_IPV4` 从 `10.0.0.220` 改为 `10.0.0.6`，运行 `cutover` |
+| 临时优先使用备用入口 | 可选 `PROXY_ACTIVE_INGRESS=backup`；恢复时设为 `primary` |
+| 暂停/恢复 main 自动项目部署 | `ORACLE_PROJECT_AUTODEPLOY`；不会禁用显式手动维护入口 |
+| 密码、SSH 或 OAuth 身份轮换 | 对应 Secrets；同实例换 IP 通常不需要改任何密钥 |
+
+完整的三个 Environment 用途、所有当前引用的 Variables/Secrets、每项参数何时修改及工作流临时参数区别，见 **[GitHub Environments 参数说明](docs/github-environments.md)**；地址变更顺序见 [主备目录操作说明](ops/network/README.md)。请保留尚未核实用途的历史环境及现有 Secrets。
+
 Since rc22, both Windows distribution forms bundle .NET 10 LTS; users do not need
 a shared .NET installation. A weekly check detects new stable runtime patches
 and approaching support expiry; installed clients receive fixes through tested

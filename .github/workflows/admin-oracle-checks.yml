@@ -56,7 +56,7 @@ jobs:
       - run: python -m unittest discover -s control -p 'test_*.py' -v
       - run: python -m unittest discover -s relay -p 'test_*.py' -v
       - name: Require public QUIC TLS before advertising the backup
-        if: matrix.python == '3.12'
+        if: matrix.python == '3.12' && github.event_name == 'push'
         run: |
           python - <<'PYQUIC'
           import subprocess, sys
@@ -65,7 +65,7 @@ jobs:
               subprocess.run([sys.executable, '../../ops/oracle-project/verify_quic.py', '--require-reachable'], check=True)
           PYQUIC
       - name: Read-only public HTTP3 control on existing UDP443
-        if: matrix.python == '3.12'
+        if: matrix.python == '3.12' && github.event_name == 'push'
         run: python ../../ops/oracle-project/verify_web_http3.py
       - run: node --check static/console/app.js
       - run: node ../../ops/oracle-project/privacy-classifier-test.cjs

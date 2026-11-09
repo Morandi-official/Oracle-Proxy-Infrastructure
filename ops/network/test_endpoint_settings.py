@@ -52,3 +52,13 @@ class SshFallbackTests(unittest.TestCase):
    values=targets();result=subprocess.run(['bash','-c','source ops/network/select_ssh_endpoint.sh; select_proxy_ssh_endpoint oracle-ci agent-status "$1"; echo "$PROXY_SSH_TARGET"','fixture',str(fake)],cwd=ROOT,env={**os.environ,'FAKE_SSH_LOG':str(log),'FAIL_ENDPOINT':values[0]},text=True,capture_output=True,check=True)
    self.assertEqual(result.stdout.strip(),'oracle-ci@'+values[1])
    self.assertEqual(log.read_text().splitlines(),['oracle-ci@'+values[0],'oracle-ci@'+values[1]])
+
+class EnvironmentDocumentationTests(unittest.TestCase):
+ def test_all_current_secret_and_variable_names_are_documented(self):
+  import re
+  text=(ROOT/'docs/github-environments.md').read_text()
+  names=set()
+  for path in (ROOT/'.github/workflows').glob('*.yml'):
+   names.update(re.findall(r'\b(?:secrets|vars)\.([A-Z][A-Z0-9_]+)',path.read_text()))
+  self.assertTrue(names)
+  self.assertEqual(sorted(name for name in names if '`'+name+'`' not in text),[])

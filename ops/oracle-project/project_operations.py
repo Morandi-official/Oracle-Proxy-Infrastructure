@@ -669,6 +669,7 @@ def main(arguments):
             catalog=importlib.util.module_from_spec(catalog_spec);catalog_spec.loader.exec_module(catalog)
             print('ENDPOINT_CATALOG='+json.dumps(catalog.install(),sort_keys=True),flush=True)
             run(['systemctl','restart','oracle-proxy-control.service'])
+            run(['systemctl','try-restart','oracle-proxy-quic.service'])
             verify_control()
         elif request.get('request_id')=='cloud-udp-selected-pair-20261108':
             body=sys.stdin.buffer.read(4097)

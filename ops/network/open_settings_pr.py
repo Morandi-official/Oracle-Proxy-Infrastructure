@@ -20,7 +20,9 @@ def main():
     base=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
     if api('git/ref/heads/main')['object']['sha']!=base:raise ValueError('MAIN_MOVED_RERUN_SETTINGS')
     changed=subprocess.check_output(['git','diff','--name-only'],text=True).splitlines()
-    if not changed:print('ENDPOINT_SETTINGS=NO_CHANGES');return
+    if not changed:
+        Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('当前 Environment 参数与仓库配置一致，无需创建变更，也未修改服务器。\n')
+        print('ENDPOINT_SETTINGS=NO_CHANGES');return
     if not set(changed)<=set(FILES):raise ValueError('ONLY_ENDPOINT_METADATA_MAY_CHANGE')
     load()
     if json.loads((ROOT/FILES[1]).read_text())!={'operation':'preflight','request_id':'endpoint-catalog-apply'}:raise ValueError('FIXED_ENDPOINT_APPLY_REQUEST_REQUIRED')

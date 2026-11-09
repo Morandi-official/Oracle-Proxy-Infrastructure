@@ -1,15 +1,29 @@
 {
   "schema": 1,
-  "revision": 1,
+  "revision": 2,
   "api_host": "vpn-admin.morandi.dpdns.org",
   "interface": "enp0s6",
   "subnet": "10.0.0.0/24",
-  "primary": {"public_ipv4": "152.67.154.225", "private_ipv4": "10.0.0.220"},
-  "backup": {"public_ipv4": "150.230.113.158", "private_ipv4": "10.0.0.246"},
+  "primary": {
+    "public_ipv4": "152.67.154.225",
+    "private_ipv4": "10.0.0.6"
+  },
+  "backup": {
+    "public_ipv4": "150.230.113.158",
+    "private_ipv4": "10.0.0.246"
+  },
   "active": "primary",
-  "egress_ipv4": ["152.67.156.100", "152.67.154.225"],
+  "egress_ipv4": [
+    "152.67.154.225"
+  ],
   "legacy": [
-    {"public_ipv4": "152.67.156.100", "private_ipv4": "10.0.0.6"},
-    {"public_ipv4": "141.147.78.44", "private_ipv4": "10.0.0.10"}
+    {
+      "public_ipv4": "152.67.156.100",
+      "private_ipv4": "10.0.0.220"
+    },
+    {
+      "public_ipv4": "141.147.78.44",
+      "private_ipv4": "10.0.0.10"
+    }
   ]
 }

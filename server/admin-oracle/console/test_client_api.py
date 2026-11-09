@@ -63,6 +63,13 @@ class ClientApiTests(TestCase):
         self.assertEqual(result['users'][0]['rate'],{'download_bps':12500000,'upload_bps':3000000})
         self.assertEqual(int(self.account.assigned_at.timestamp()),before)
 
+    def test_native_account_response_does_not_expose_admin_only_speed_limits(self):
+        self.engine.dispatch({'actor':'github:204281968','operation':'user.put','data':{'id':self.user['id'],'name':'Only me','enabled':True,'quota_bytes':100000,'expires_at':None,'download_bps':1_000_000,'upload_bps':2_000_000}})
+        data=self.login().json()
+        for field in ('rate','download_bps','upload_bps','rate_limited','speed_limit'):
+            self.assertNotIn(field,data['account'])
+        self.assertIn('used_bytes',data['account'])
+
     def login(self,index=3,confirm=True,**extra):
         value={'username':'client01','password':'test-only-password-012345','public_key':base64.b64encode(bytes([index])*32).decode(),'device_name':'Synthetic Win11','client_version':'0.3.0-rc18'}
         value.update(extra)

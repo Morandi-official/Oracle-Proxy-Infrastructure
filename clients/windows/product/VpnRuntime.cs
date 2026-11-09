@@ -262,7 +262,9 @@ internal sealed partial class VpnRuntime : IDisposable
             if(_switchTimings is not null)_switchTimings["core_process_ms"]=coreTimer.ElapsedMilliseconds;
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             if(_switchTimings is not null)_switchTimings["core_active_and_authorized_ms"]=coreTimer.ElapsedMilliseconds;
-            _runningProfile=Profile();_nextProbe=default;
+            _runningProfile=Profile();
+            // Preserve the retry schedule of an already-started private probe.
+            if(_probePending is null)_nextProbe=default;
             if(!standby && _probePending is null)BeginEgressProbe();
         }catch{await StopCore();if(!standby)_mode="protected";throw;}
     }

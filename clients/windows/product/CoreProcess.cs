@@ -100,6 +100,9 @@ internal sealed class CoreProcess : IDisposable
     {
         if(_process is null)return;
         NativeGuard.SuspendTun();
+        // Cancel in-flight and idle probe sockets before asking the core to
+        // close its router, so its shutdown never waits on our HTTP reader.
+        _probeClient?.Dispose();_probeClient=null;
         if(!_process.HasExited){
             _process.StandardInput.Close();
             try{await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));}

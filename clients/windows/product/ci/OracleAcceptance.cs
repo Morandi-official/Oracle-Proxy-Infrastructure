@@ -127,7 +127,16 @@ internal static class OracleAcceptance
         state["core_pid"]=0u;state["intent"]=true;
         Check(!CanCloseDeviceBudget(state,100),"CI_BUDGET_CANNOT_CLOSE_WHILE_CONNECTION_INTENT_EXISTS");
     }
-    private static async Task<JsonObject> Send(string command)=>RequireSuccess(command,await ControlPipe.Send(command));
+    private static async Task<JsonObject> Send(string command)
+    {
+        var timer=Stopwatch.StartNew();var result=RequireSuccess(command,await ControlPipe.Send(command));
+        if(command is "Connect" or "Disconnect"){
+            Console.WriteLine("REAL_CONTROL_"+command.ToUpperInvariant()+"_ROUNDTRIP_MS="+timer.ElapsedMilliseconds);
+            if(result["disconnect_timings"] is JsonObject timings && command=="Disconnect")
+                foreach(string phase in new[]{"core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"})Console.WriteLine("REAL_DISCONNECT_"+phase.ToUpperInvariant()+"="+timings[phase]);
+        }
+        return result;
+    }
     private static async Task<string> ExitIp()
     {
         using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false}){Timeout=TimeSpan.FromSeconds(10)};
@@ -349,6 +358,26 @@ internal static class OracleAcceptance
             Check(!VpnRuntime.TunnelInactive() ? false : await ExitIp()!="152.67.154.225","LIFETIME_CONTROLLER_CRASH_STOPS_BACKGROUND_AND_RESTORES_DIRECT");
         }finally{if(!controller.HasExited){controller.Kill(true);await controller.WaitForExitAsync();}}
     }
+    private static async Task LiveGuiUdpToggle()
+    {
+        string script=Path.GetFullPath("clients/windows/product/ci/test-live-udp-toggle.ps1");
+        string client=Path.GetFullPath("dist/product/Proxy.exe");
+        if(!File.Exists(script) || !File.Exists(client))throw new IOException("LIVE_GUI_FIXTURE_UNAVAILABLE");
+        var start=new ProcessStartInfo("powershell.exe"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        foreach(string value in new[]{"-NoProfile","-ExecutionPolicy","Bypass","-File",script,"-Client",client})start.ArgumentList.Add(value);
+        start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_USERNAME");start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
+        using var process=Process.Start(start)??throw new IOException("LIVE_GUI_FIXTURE_START_FAILED");
+        var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();
+        try{
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2));
+            string evidence=await output;await error;
+            if(evidence.Length>8192)throw new IOException("LIVE_GUI_EVIDENCE_TOO_LARGE");
+            foreach(string line in evidence.Split('\n'))if(line.StartsWith("ACTUAL_",StringComparison.Ordinal))Console.WriteLine(line.Trim());
+            Check(process.ExitCode==0,"REAL_PRODUCT_GUI_UDP_ON_OFF_AND_SHUTDOWN");
+        }finally{
+            if(!process.HasExited){process.Kill(true);await process.WaitForExitAsync();}
+        }
+    }
     private static async Task<int> RunEndpointMigration()
     {
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
@@ -370,6 +399,13 @@ internal static class OracleAcceptance
             Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");
             Check(connected["tun_route_mask"]?.GetValue<uint>()==15,"ORDINARY_ROUTE_BOTH_IPV4_AND_IPV6_HALVES_USE_OWNED_TUN");
             await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
+            await LiveGuiUdpToggle();
+            // X intentionally clears a non-remembered login. Reauthenticate the
+            // same durable key; never allocate a second CI device for GUI timing.
+            await Send("AttachClient");
+            var resumed=RequireSuccess("Login",await ControlPipe.Send("Login",username,Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD")));
+            Check(resumed["registration"]?["device_id"]?.GetValue<string>()==login["registration"]?["device_id"]?.GetValue<string>() && resumed["account"]?["device_count"]?.GetValue<int>()==devices,"LIVE_GUI_TIMING_REUSES_EXISTING_CI_DEVICE_IDENTITY");
+            await Send("Connect");await Connected();
             var off=await Send("Disconnect");await StoppedService();
             Check(off["core_pid"]?.GetValue<uint>()==0 && off["preparing"]?.GetValue<bool>()==false && await ExitIp()!=primary,"DISCONNECT_STOPS_CORE_AND_SERVICE_AND_RESTORES_DIRECT");
             await Send("AttachClient");

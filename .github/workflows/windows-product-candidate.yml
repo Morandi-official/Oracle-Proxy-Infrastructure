@@ -55,6 +55,15 @@ jobs:
           if((dotnet --version).Trim() -ne $expected){throw 'Exact pinned SDK is required'}
           python -m unittest discover -s ci -p test_dotnet_runtime_policy.py -v
           if($LASTEXITCODE -ne 0){throw 'Runtime policy regression failed'}
+      - name: Bounded local control framing and real named-pipe response latency
+        shell: pwsh
+        working-directory: clients/windows/product
+        run: |
+          dotnet run --project ci/ControlFrame.Tests.csproj -c Release
+          if($LASTEXITCODE -ne 0){throw 'Control framing or local response latency failed'}
+          $tokens=$null;$errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'ci/test-live-udp-toggle.ps1'),[ref]$tokens,[ref]$errors) | Out-Null
+          if($errors.Count -gt 0){throw 'Live GUI toggle fixture syntax failed'}
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64

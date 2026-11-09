@@ -10,12 +10,8 @@ using Microsoft.Win32.SafeHandles;
 namespace OracleProxy.Product;
 internal static class ControlPipe
 {
-    internal static async Task<string> ReadFrame(Stream stream,int maximum,CancellationToken token)
-    {
-        var data=new byte[maximum+1];int count=0;
-        while(count<=maximum){int n=await stream.ReadAsync(data.AsMemory(count,1),token);if(n==0)throw new IOException("INCOMPLETE_FRAME");if(data[count]==10)return new UTF8Encoding(false,true).GetString(data,0,count);count++;}
-        throw new IOException("FRAME_TOO_LARGE");
-    }
+    internal static Task<string> ReadFrame(Stream stream,int maximum,CancellationToken token)=>
+        ControlFrame.Read(stream,maximum,token);
     internal static async Task WriteFrame(Stream stream,string frame,int maximum,CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

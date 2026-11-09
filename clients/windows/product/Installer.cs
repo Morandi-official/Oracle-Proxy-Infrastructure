@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using Microsoft.Win32;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 namespace OracleProxy.Product;
 internal static class Installer
 {
@@ -93,15 +94,16 @@ internal static class Installer
         if(!File.Exists(marker))Platform.WriteAtomic(marker,System.Text.Encoding.UTF8.GetBytes("OracleProxy.Desktop.v1"));
         return Install(owner);
     }
-    internal static async Task Install(string owner)
+    internal static Task Install(string owner)=>InstallPayload(owner,startController:true);
+    private static async Task InstallPayload(string owner,bool startController)
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
         _=new SecurityIdentifier(owner);VerifyService();bool registered=Registered();
         string source=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
         if(string.Equals(source,Platform.Root,StringComparison.OrdinalIgnoreCase))throw new IOException("USE_PORTABLE_PACKAGE_TO_UPGRADE");
-        Platform.VerifyBundle(source);Platform.NoLinks(Platform.Root);Platform.NoLinks(Platform.StateRoot);
+        Platform.VerifySourceBundle(source);Platform.NoLinks(Platform.Root);Platform.NoLinks(Platform.StateRoot);
         bool existing=Directory.Exists(Platform.Root);string previous=Path.Combine(Platform.Root,"previous");
-        if(existing){Platform.VerifyProtected(Platform.Root);if(!File.Exists(Path.Combine(Platform.Root,"product.marker")))throw new IOException("INSTALL_DIRECTORY_COLLISION");}
+        if(existing){Platform.VerifyProtected(Platform.Root);if(!File.Exists(Path.Combine(Platform.Root,"product.marker")) || File.ReadAllText(Path.Combine(Platform.Root,"product.marker"))!="OracleProxy.Product.v1")throw new IOException("INSTALL_DIRECTORY_COLLISION");}
         else{
             Directory.CreateDirectory(Platform.Root);Platform.Protect(Platform.Root,true);
             Platform.WriteAtomic(Path.Combine(Platform.Root,"product.marker"),System.Text.Encoding.UTF8.GetBytes("OracleProxy.Product.v1"));
@@ -121,12 +123,16 @@ internal static class Installer
             }
             foreach(string name in Files)File.Copy(Platform.BundleFile(source,name=="Proxy.Service.exe"?"Proxy.exe":name),Path.Combine(Platform.Root,name),true);
             if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Proxy VPN");
-            else Sc("config",Platform.Service,"binPath=",Image,"DisplayName=","Proxy VPN");
+            else Sc("config",Platform.Service,"binPath=",Image,"start=","auto","DisplayName=","Proxy VPN");
             // Only query and start are delegated to the registered desktop owner.
             // No stop, configuration, DACL, or arbitrary service rights.
             Sc("sdset",Platform.Service,"D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;LCRP;;;"+File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim()+")");
             Platform.ServiceEnvironment(Platform.Service);
             Sc("failure",Platform.Service,"reset=","300","actions=","restart/3000/restart/5000/restart/10000");
+            // Recovery repairs the trusted files without requiring the very
+            // controller that may be unable to start with an orphaned TUN.
+            Platform.VerifyBundle(Platform.Root);
+            if(!startController)return;
             Sc("start",Platform.Service);
             using var service=new ServiceController(Platform.Service);service.WaitForStatus(ServiceControllerStatus.Running,TimeSpan.FromSeconds(25));
             bool ready=false;for(int i=0;i<20;i++){try{await ControlPipe.Send("Status");ready=true;break;}catch{await Task.Delay(500);}}
@@ -187,11 +193,28 @@ internal static class Installer
         if(!Directory.EnumerateFileSystemEntries(Platform.StateRoot).Any())Directory.Delete(Platform.StateRoot);
         if(!Directory.EnumerateFileSystemEntries(Platform.Root).Any())Directory.Delete(Platform.Root);
     }
+    private static bool CurrentRecoveryPayload()
+    {
+        try{
+            Platform.VerifyBundle(Platform.Root);
+            using var source=File.OpenRead(Environment.ProcessPath!);
+            return Platform.Pinned(Platform.Exe,Convert.ToHexString(SHA256.HashData(source)));
+        }catch(IOException){return false;}
+    }
     internal static async Task Recover()
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();
-        VerifyService();Platform.VerifyProtected(Platform.Root);Platform.VerifyBundle(Platform.Root);
-        Stop();
+        VerifyService();Platform.VerifyProtected(Platform.Root);
+        if(!File.Exists(Path.Combine(Platform.Root,"product.marker")) || File.ReadAllText(Path.Combine(Platform.Root,"product.marker"))!="OracleProxy.Product.v1")throw new IOException("INSTALL_DIRECTORY_COLLISION");
+        if(!CurrentRecoveryPayload()){
+            // A new portable UI must not run a stale/mixed service image as
+            // SYSTEM. Verify its complete source bundle and stage its pinned
+            // payload first; preserve the existing owner, keys and guard intent.
+            Platform.VerifySourceBundle(AppContext.BaseDirectory);
+            string owner=File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim();
+            await InstallPayload(owner,startController:false);
+        }
+        Platform.VerifyBundle(Platform.Root);Stop();
         string image="\""+Platform.Exe+"\" --recovery-service";
         using(var existing=Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\"+RecoveryService.Name)){
             if(existing is not null && existing.GetValue("ImagePath") as string!=image)throw new IOException("RECOVERY_SERVICE_COLLISION");
@@ -259,13 +282,19 @@ internal static class Installer
             return process.ExitCode;
         }
     }
+    private static readonly SemaphoreSlim MaintenanceChildren=new(1,1);
+    private static async Task<int> MaintenanceChild(Func<Task<int>> action)
+    {
+        await MaintenanceChildren.WaitAsync().ConfigureAwait(false);
+        try{return await action().ConfigureAwait(false);}finally{MaintenanceChildren.Release();}
+    }
     private static readonly object RecoveryLock=new();
     private static Task<int>? _pendingRecovery;
     internal static Task<int> ElevateRecoveryAsync(CancellationToken cancel)
     {
         Task<int> pending;
         lock(RecoveryLock){
-            if(_pendingRecovery is null || _pendingRecovery.IsCompleted)_pendingRecovery=RecoveryChild();
+            if(_pendingRecovery is null || _pendingRecovery.IsCompleted)_pendingRecovery=Task.Run(()=>MaintenanceChild(RecoveryChild));
             pending=_pendingRecovery;
         }
         // Cancelling the GUI wait must not kill an elevated recovery worker.
@@ -287,14 +316,14 @@ internal static class Installer
         lock(InstallLock){
             // Cancelling the GUI wait must not interrupt file replacement or
             // rollback. A retry joins this same child while it is still running.
-            if(_pendingInstall is null || _pendingInstall.IsCompleted)_pendingInstall=InstallChild();
+            if(_pendingInstall is null || _pendingInstall.IsCompleted)_pendingInstall=Task.Run(()=>MaintenanceChild(InstallChild));
             pending=_pendingInstall;
         }
         return pending.WaitAsync(cancel);
     }
     private static async Task<int> InstallChild()
     {
-        Platform.VerifyBundle(AppContext.BaseDirectory);
+        Platform.VerifySourceBundle(AppContext.BaseDirectory);
         var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};
         info.ArgumentList.Add("--install");info.ArgumentList.Add(WindowsIdentity.GetCurrent().User!.Value);
         Process process;

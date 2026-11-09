@@ -16,10 +16,11 @@ internal sealed partial class MainForm : Form
     private readonly ProgressBar _progress=new(){Minimum=0,Maximum=1000,Value=0,Width=650,Height=18};
     private readonly TextBox _username=new(){PlaceholderText="管理员分配的账号",Width=215,MaxLength=64};
     private readonly TextBox _password=new(){PlaceholderText="管理员分配的密码",Width=215,UseSystemPasswordChar=true,MaxLength=128};
-    private readonly Button _login=new(){Text="登录",AutoSize=true};
+    private readonly Button _login=new(){Name="login",Text="登录",AutoSize=true};
     private readonly Button _connect=new(){Text="连接",Width=155,Height=48,Enabled=false};
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
-    private bool _backendIdle;
+    private bool _backendIdle,_sessionAttached,_recoveryProvedDirect;
+    private string _startupReport="尚未读取初始化结果。";
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _githubChecking;
     private bool _native8443Available;
@@ -274,7 +275,7 @@ internal sealed partial class MainForm : Form
         Row(_credentials,new Label{Text="账号",AutoSize=true,Margin=new Padding(0,0,0,4)});Row(_credentials,_username);Row(_credentials,new Label{Text="密码",AutoSize=true,Margin=new Padding(0,0,0,4)});Row(_credentials,_password);Row(loginContent,_credentials);
         _rememberLogin.Margin=new Padding(0,0,0,12);Row(loginContent,_rememberLogin);_help.SetToolTip(_rememberLogin,"最多保留 30 天的加密登录令牌，不保存明文密码；退出账号后立即清除。");
         _login.AutoSize=false;_login.Height=44;_login.Margin=new Padding(0,0,0,12);Row(loginContent,_login);
-        _loginFeedback.AutoSize=false;_loginFeedback.Height=44;_loginFeedback.AutoEllipsis=true;_loginFeedback.ForeColor=Muted;Row(loginContent,_loginFeedback);
+        _loginFeedback.AutoSize=true;_loginFeedback.AutoEllipsis=false;_loginFeedback.ForeColor=Muted;Row(loginContent,_loginFeedback);
         Row(_admissionDevicesPanel,new Label{Text="设备名额已满，请先删除不再使用的设备。",AutoSize=true,ForeColor=Muted});
         Row(_admissionDevicesPanel,_admissionDevices);Row(_admissionDevicesPanel,_admissionDelete);_admissionDevicesPanel.Visible=false;Row(loginContent,_admissionDevicesPanel);
         _admissionDevices.SelectedIndexChanged+=(_,_)=>RefreshActions();
@@ -283,6 +284,8 @@ internal sealed partial class MainForm : Form
             if(MessageBox.Show(this,$"删除旧设备“{selected.Name}”并登记本机？","释放设备名额",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK)return;
             _deleteDeviceId=selected.Id;try{await Act("DeleteDevice");}finally{_deleteDeviceId=null;}
         };
+        var copyStartup=new Button{Name="copy-startup-diagnostics",Text="复制初始化诊断",Height=36};
+        Row(loginContent,copyStartup);copyStartup.Click+=(_,_)=>Clipboard.SetText(_startupReport);
         Row(loginContent,_bootstrapRetry);_bootstrapRetry.Click+=async(_,_)=>{if(await ProvisionService())await StartReadyClient();};
         var loginCard=Card("login-card","",loginContent);loginCard.Dock=DockStyle.None;loginCard.AutoSize=true;loginCard.Padding=new Padding(28,24,28,24);_loginGate.Controls.Add(loginCard);
         void FitLogin(){int width=Math.Min(470,Math.Max(1,_loginGate.ClientSize.Width-40));loginCard.Width=width;loginCard.MaximumSize=new Size(width,0);loginCard.Left=Math.Max(0,(_loginGate.ClientSize.Width-width)/2);loginCard.Top=Math.Max(12,(_loginGate.ClientSize.Height-loginCard.Height)/2);}
@@ -342,21 +345,51 @@ internal sealed partial class MainForm : Form
         }
         if(!IsDisposed && !_closing && _serviceReady)_timer.Start();
     }
+    private static string ClientVersion=>typeof(MainForm).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+    private async Task AttachReadyService(CancellationToken cancel)
+    {
+        // Only the authenticated current controller may enable login. Attach
+        // returns a fresh snapshot; never display the pre-attachment read.
+        var state=await ControlPipe.Send("AttachClient",null,null,cancel);
+        if(!ServiceBootstrap.Current(state,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
+        if(IsDisposed || _closing)return;
+        _sessionAttached=true;_backendIdle=false;_serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;
+        _bootstrapRetry.Visible=false;_startupReport="初始化已完成。版本："+ClientVersion;Display(state);
+    }
+    private string StartupFailure(Exception error)
+    {
+        string code=error.Message;
+        if(code.Length>80 || !code.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_'))code=error is OperationCanceledException?"SETUP_RESULT_PENDING":"SETUP_FAILED";
+        string installed="";
+        try{
+            string path=Path.Combine(Platform.Root,"diagnostics.json");
+            if(new FileInfo(path).Length<=4096){
+                var value=JsonNode.Parse(File.ReadAllText(path))?["code"]?.GetValue<string>();
+                if(value is {Length:>0 and <=80} && value.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_'))installed="；后台记录："+value;
+            }
+        }catch{}
+        _startupReport="版本："+ClientVersion+"\r\n初始化："+code+installed;
+        return code switch{
+            "CLIENT_PACKAGE_INCOMPLETE"=>"客户端文件不完整或版本不一致。请完整解压便携包，保留 runtime 文件夹，再重试初始化。",
+            "SERVICE_SETUP_CANCELLED"=>"已取消初始化。可以重试或关闭窗口。",
+            "SETUP_RESULT_PENDING"=>"初始化尚未结束。可以关闭此窗口，后台维护将继续；结束后重新打开。",
+            _=>"系统服务尚未准备完成。可重试、复制初始化诊断或关闭窗口。"
+        }+"\r\n诊断："+code+installed;
+    }
     private async Task<bool> ProvisionService()
     {
         if(_provisioning || _closing || IsDisposed)return false;
         _provisioning=true;_serviceReady=false;_timer.Stop();_bootstrapRetry.Visible=false;_loginFeedback.Text="正在准备系统服务，请完成可能出现的 Windows 授权。";RefreshActions();
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(TimeSpan.FromMinutes(3));
         try{
-            string version=typeof(MainForm).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+            string version=ClientVersion;
             async Task<JsonObject> Read(CancellationToken cancel){using var limit=CancellationTokenSource.CreateLinkedTokenSource(cancel);limit.CancelAfter(TimeSpan.FromSeconds(8));try{return await ControlPipe.Send("Status",null,null,limit.Token);}catch(OperationCanceledException)when(!cancel.IsCancellationRequested){throw new IOException("SERVICE_STATUS_TIMEOUT");}}
             var state=await ServiceBootstrap.Ensure(version,Read,Installer.ElevateInstallAsync,deadline.Token);
             if(IsDisposed || _closing)return false;
-            await ControlPipe.Send("AttachClient",null,null,deadline.Token);
-            _backendIdle=false;_serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;Display(state);return true;
+            await AttachReadyService(deadline.Token);return !IsDisposed && !_closing;
         }catch(Exception error){
             if(!IsDisposed && !_closing){
-                _loginFeedback.Text=error.Message=="SERVICE_SETUP_CANCELLED"?"已取消初始化。完成系统服务准备后才可登录。":error is OperationCanceledException?"初始化结果尚未确认，请等待安装窗口结束后重试。":"系统服务尚未准备完成，请重试初始化。";
+                _loginFeedback.Text=StartupFailure(error);
                 _bootstrapRetry.Visible=true;RevealView(false);
             }
             return false;
@@ -367,6 +400,7 @@ internal sealed partial class MainForm : Form
     private void RefreshActions()
     {
         if(IsDisposed)return;
+        _emergencyRecovery.Enabled=!_provisioning && !_recovering;
         bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
         _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
         _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_udpPortChoice.Enabled=_transportChoice.Enabled && _transportChoice.SelectedIndex==0;_native8443Test.Enabled=available && !_connectionIntent && !_udpDiagnosing && _native8443Available;
@@ -381,7 +415,9 @@ internal sealed partial class MainForm : Form
         async Task<JsonObject> Real(){
             while(true){try{
                     if(command!="Status"){
-                        await ControlPipe.Send("AttachClient",null,null,cancel);
+                        var attached=await ControlPipe.Send("AttachClient",null,null,cancel);
+                        if(!ServiceBootstrap.Current(attached,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
+                        _sessionAttached=true;_recoveryProvedDirect=false;
                         _backendIdle=false;_timer.Start();
                     }
                     return await ControlPipe.Send(command,username,password,cancel);
@@ -399,28 +435,43 @@ internal sealed partial class MainForm : Form
     }
     internal async Task RecoverDirect()
     {
-        if(_recovering || _closing || IsDisposed)return;
+        if(_recovering || _provisioning || _closing || IsDisposed)return;
         _recovering=true;CancelRequests();_needsReconcile=true;RefreshActions();_emergencyRecovery.Enabled=false;
         string result="恢复结果尚未确认，请查看连接诊断。";
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(TimeSpan.FromMinutes(2));
         try{
             _loginFeedback.Text=_detail.Text="正在等待管理员授权及本机恢复，请稍候…";
             int code=await _recover(deadline.Token);
+            _recoveryProvedDirect=code==0;
             result=code==4?"已取消管理员授权，正在重新读取服务状态。":code==0?"恢复程序已完成，正在核对直连状态。":"恢复未完成，正在重新读取服务诊断；保护状态以服务确认为准。";
         }catch(OperationCanceledException){result="恢复等待已结束，后台恢复可能仍在执行；请先查看诊断，不要重复提交。";}
-        catch{result="恢复程序未完成，正在重新读取服务诊断。";}
+        catch(Exception error){result=StartupFailure(error);}
         finally{
             _recovering=false;
             if(!IsDisposed){
-                _emergencyRecovery.Enabled=true;_backendIdle=false;_timer.Start();
-                await Act("Status");
-                if(!IsDisposed){_loginFeedback.Text=_detail.Text=result+" "+_detail.Text;RefreshActions();}
+                _emergencyRecovery.Enabled=true;_backendIdle=false;
+                if(_realService){
+                    using var verify=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);verify.CancelAfter(TimeSpan.FromSeconds(12));
+                    try{
+                        var current=await ControlPipe.Send("Status",null,null,verify.Token);
+                        if(!ServiceBootstrap.Current(current,ClientVersion))throw new IOException("SERVICE_VERSION_NOT_VERIFIED");
+                        await AttachReadyService(verify.Token);if(!IsDisposed)_timer.Start();
+                    }
+                    catch(Exception error){if(!IsDisposed){_serviceReady=false;_bootstrapRetry.Visible=true;result+="\r\n"+StartupFailure(error);RevealView(false);}}
+                }else{_timer.Start();await Act("Status");}
+                if(!IsDisposed){_loginFeedback.Text=_detail.Text=result;RefreshActions();}
             }
         }
     }
     internal async Task<bool> QuitClient()
     {
         if(_closing || IsDisposed)return false;
+        // An uninitialized window has never attached or admitted a network
+        // command. Closing its UI does not alter/claim the prior network state.
+        // Elevated maintenance is independent and must finish its transaction.
+        if(_realService && !_sessionAttached || _recoveryProvedDirect && !_recovering){
+            _closing=true;_allowClose=true;_timer.Stop();Close();return true;
+        }
         if(_recovering){_detail.Text="正在恢复直连，请等待本次恢复结果后再关闭。";return false;}
         _closing=true;_timer.Stop();CancelRequests();RefreshActions();
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(_quitTimeout);

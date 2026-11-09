@@ -111,7 +111,22 @@ internal static class ControlPipe
             await Task.Delay(50,deadline.Token);
         }
     }
+    internal static IOException ServiceAccessFailure(Exception error)
+    {
+        Exception? native=error;
+        for(int depth=0;depth<4 && native is not null;depth++,native=native.InnerException){
+            if(native is System.ComponentModel.Win32Exception windows)return new IOException(windows.NativeErrorCode switch{
+                1060=>"SERVICE_ABSENT",5=>"SERVICE_START_REQUIRES_ELEVATION",1058=>"SERVICE_DISABLED",_=>"SERVICE_START_FAILED"
+            },error);
+        }
+        return new IOException("SERVICE_STATUS_UNAVAILABLE",error);
+    }
     private static async Task EnsureStarted(CancellationToken cancel)
+    {
+        try{await EnsureStartedCore(cancel);}
+        catch(Exception error)when(error is InvalidOperationException or System.ComponentModel.Win32Exception){throw ServiceAccessFailure(error);}
+    }
+    private static async Task EnsureStartedCore(CancellationToken cancel)
     {
         using var service=new System.ServiceProcess.ServiceController(Platform.Service);
         service.Refresh();

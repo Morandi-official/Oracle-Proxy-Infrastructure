@@ -28,6 +28,8 @@ class EndpointCatalogTests(unittest.TestCase):
             config=copy.deepcopy(self.config);config.update(change)
             with self.assertRaises(ValueError):catalog.validate(config)
     def test_apply_preserves_routes_and_foreign_aliases(self):
+        # Explicit transition fixture: production may already have retired legacy.
+        self.config['legacy']=[{'public_ipv4':'152.67.156.100','private_ipv4':'10.0.0.220'}]
         rows=[{'local':'10.0.0.6','prefixlen':24,'label':'enp0s6'},{'local':'10.0.0.10','prefixlen':32,'label':'enp0s6:existing'},{'local':'10.0.0.99','prefixlen':32,'label':'enp0s6:foreign'}]
         calls=[]
         def run(args):
@@ -40,6 +42,23 @@ class EndpointCatalogTests(unittest.TestCase):
             self.assertEqual([c[4] for c in calls],['10.0.0.220/32','10.0.0.246/32'])
             self.assertTrue(all('noprefixroute' in c for c in calls))
             self.assertIn('10.0.0.99',[r['local'] for r in rows])
+    def test_retired_catalog_removes_only_ledger_owned_old_alias(self):
+        self.config['legacy']=[]
+        rows=[{'local':'10.0.0.6','prefixlen':24,'label':'enp0s6'},{'local':'10.0.0.220','prefixlen':32,'label':'enp0s6:opmp'},{'local':'10.0.0.246','prefixlen':32,'label':'enp0s6:opmb'},{'local':'10.0.0.99','prefixlen':32,'label':'enp0s6:foreign'}]
+        calls=[]
+        def run(args):
+            calls.append(args)
+            if 'del' in args:rows[:]=[r for r in rows if r['local']!=args[4].split('/')[0]]
+            return ''
+        with tempfile.TemporaryDirectory() as directory:
+            state=Path(directory)/'state.json'
+            state.write_text(json.dumps({'schema':1,'device':'enp0s6','owned':{'10.0.0.220':'enp0s6:opmp','10.0.0.246':'enp0s6:opmb'}}))
+            with patch.object(manager,'ROOT',Path(directory)),patch.object(manager,'STATE',state),patch.object(manager,'owned'),patch.object(manager,'write',side_effect=lambda p,b,*a:p.write_bytes(b)),patch.object(manager,'addresses',side_effect=lambda d:copy.deepcopy(rows)),patch.object(manager,'routes',return_value=['v4','v6','rules']),patch.object(manager,'run',side_effect=run):
+                manager.apply_locked(self.config)
+            self.assertEqual([c[4] for c in calls],['10.0.0.220/32'])
+            self.assertEqual({r['local'] for r in rows},{'10.0.0.6','10.0.0.246','10.0.0.99'})
+            self.assertEqual(json.loads(state.read_text())['owned'],{'10.0.0.246':'enp0s6:opmb'})
+
     def test_public_catalog_mode_survives_private_root_umask(self):
         with tempfile.TemporaryDirectory() as directory:
             target=Path(directory)/'catalog.json';old=os.umask(0o077)

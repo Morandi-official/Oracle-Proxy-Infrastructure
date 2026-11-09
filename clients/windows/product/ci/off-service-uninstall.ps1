@@ -17,7 +17,15 @@ function Invoke-OffStep([string[]]$Arguments){
 try {
   foreach($cycle in 1..3){
     Invoke-OffStep -Arguments @('--install',$owner)
-    Invoke-OffStep -Arguments @('--uninstall')
+    # Actual no-account GUI owner: kill it immediately before uninstall so its
+    # independent lifetime cleanup can race both pipe admission and SCM Stop.
+    $gui=Start-Process $exe -PassThru
+    try {
+      if(!$gui.WaitForInputIdle(10000)){throw 'OWNED_GUI_DID_NOT_START'}
+      Start-Sleep -Seconds 1
+      $gui.Kill();$gui.WaitForExit()
+      Invoke-OffStep -Arguments @('--uninstall')
+    } finally {if(!$gui.HasExited){$gui.Kill();$gui.WaitForExit()};$gui.Dispose()}
     for($i=0;$i -lt 20;$i++){
       $service=Get-Service OracleProxyService -ErrorAction SilentlyContinue
       if(!$service){break};$service.Dispose();Start-Sleep -Milliseconds 100

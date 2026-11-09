@@ -3,6 +3,7 @@ using System.Security.Principal;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using Microsoft.Win32;
+using System.Text.Json.Nodes;
 namespace OracleProxy.Product;
 internal static class Installer
 {
@@ -141,10 +142,24 @@ internal static class Installer
             throw;
         }
     }
+    private static async Task<JsonObject> DisconnectForMaintenance()
+    {
+        for(int attempt=0;;attempt++){
+            try{return await ControlPipe.Send("Disconnect");}
+            catch(IOException error)when(attempt==0 && (error.Message is "SERVICE_BUSY" or "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED")){
+                using var service=new ServiceController(Platform.Service);service.Refresh();
+                if(service.Status is not (ServiceControllerStatus.StopPending or ServiceControllerStatus.Stopped))throw;
+                // The previous GUI may have exited before this installer could
+                // authenticate its retiring pipe. Retry only idempotent Off,
+                // after SCM proves stop; each new pipe is authenticated anew.
+                await ControlPipe.WaitStopped(CancellationToken.None);
+            }
+        }
+    }
     internal static async Task Remove()
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();VerifyService();Platform.VerifyProtected(Platform.Root);
-        var status=await ControlPipe.Send("Disconnect");
+        var status=await DisconnectForMaintenance();
         if(status["ok"]?.GetValue<bool>()!=true || status["mode"]?.GetValue<string>()!="disconnected")throw new IOException("SAFE_DISCONNECT_REQUIRED");
         Stop();
         try{Platform.ClearBundleCache();}catch{try{Sc("start",Platform.Service);}catch{}throw;}

@@ -47,6 +47,7 @@ jobs:
           BEFORE_REVISION: ${{ github.event.before }}
         run: python3 ops/oracle-project/ci_request.py
       - name: Execute the authorized project operation over pinned SSH
+        id: execute
         shell: bash
         env:
           CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}
@@ -85,6 +86,9 @@ jobs:
           source ops/network/select_ssh_endpoint.sh
           select_proxy_ssh_endpoint oracle-project-ci "logs $REVISION" "${SSH[@]}"
           SSH+=("$PROXY_SSH_TARGET")
+          operation_log="$credential_dir/operation.log"
+          : > "$operation_log"
+          run_project() { "${SSH[@]}" "$@" | tee -a "$operation_log"; }
           configure() {
             if [[ -n "$LOCAL_USERNAME" || -n "$LOCAL_PASSWORD" ]]; then
               [[ -n "$LOCAL_USERNAME" && -n "$LOCAL_PASSWORD" ]] || { echo 'Both local admin secrets are required' >&2; return 2; }
@@ -96,16 +100,18 @@ jobs:
               | "${SSH[@]}" "configure $REVISION"
           }
           if [[ "$OPERATION" == deploy ]]; then
-            "${SSH[@]}" "preflight $REVISION"
-            "${SSH[@]}" "install-runtime $REVISION"
+            run_project "preflight $REVISION"
+            run_project "install-runtime $REVISION"
             if [[ -n "$CLIENT_SECRET" || -n "$LOCAL_USERNAME" || -n "$LOCAL_PASSWORD" ]]; then configure; fi
-            "${SSH[@]}" "deploy $REVISION"
-            "${SSH[@]}" "enable-https $REVISION"
+            run_project "deploy $REVISION"
+            run_project "enable-https $REVISION"
           elif [[ "$OPERATION" == configure ]]; then
             configure
           else
-            "${SSH[@]}" "$OPERATION $REVISION"
+            run_project "$OPERATION $REVISION"
           fi
+          bootstrap_browser=$(sed -n 's/^ADMIN_BOOTSTRAP_BROWSER=\(READY\|CHANGED\|NOT_LOCAL\)$/\1/p' "$operation_log" | tail -n 1)
+          echo "bootstrap_browser=${bootstrap_browser:-UNKNOWN}" >> "$GITHUB_OUTPUT"
           if [[ "$OPERATION" == deploy || "$OPERATION" == enable-https ]] && [[ "$CI_RETIREMENT" != true ]]; then
             curl --fail --silent --show-error --connect-timeout 8 --max-time 10 --retry 12 --retry-delay 5 --retry-all-errors \
               --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
@@ -135,6 +141,7 @@ jobs:
         if: (steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https') && steps.request.outputs.ci_retirement != 'true'
         shell: bash
         env:
+          ADMIN_BOOTSTRAP_BROWSER_STATE: ${{ steps.execute.outputs.bootstrap_browser }}
           ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
           ADMIN_LOCAL_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
         run: |

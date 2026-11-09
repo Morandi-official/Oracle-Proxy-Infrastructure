@@ -27,6 +27,12 @@ def main():
                 assert any(cookie['name'] == '__Host-oracle_csrf' and cookie['secure']
                            for cookie in context.cookies())
                 if page.locator('input[name="password"]').count():
+                    if os.environ.get('ADMIN_BOOTSTRAP_BROWSER_STATE')=='CHANGED':
+                        expect(page.locator('input[name="username"]')).to_be_visible()
+                        expect(page.locator('input[name="password"]')).to_be_visible()
+                        print(f'BROWSER_{name.upper()}_LOCAL_LOGIN_FORM_AND_SECURE_CSRF_COOKIE=PASS',flush=True)
+                        print(f'BROWSER_{name.upper()}_AUTHENTICATED_LOGIN=NOT_TESTED_WEBSITE_PASSWORD_PRESERVED',flush=True)
+                        continue
                     username=os.environ.get('ADMIN_LOCAL_ACCEPTANCE_USERNAME','')
                     password=os.environ.get('ADMIN_LOCAL_ACCEPTANCE_PASSWORD','')
                     if not username or not password:raise RuntimeError('LOCAL_ADMIN_ACCEPTANCE_CREDENTIALS_REQUIRED')

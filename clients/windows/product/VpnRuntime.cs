@@ -86,8 +86,11 @@ internal sealed partial class VpnRuntime : IDisposable
         bool missing=!File.Exists(Path.Combine(Platform.StateRoot,"state.dpapi"));
         _secret=DurableState.Load();
         string owner=File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim();
+        var previousClients=_secret.UiClients;
+        _secret.UiClients=previousClients.Where(x=>x.Sid==owner && x.Alive()!=false).ToArray();
+        bool previousGuiExited=previousClients.Length>0 && _secret.UiClients.Length==0;
         _hadClient=_secret.UiClients.Length>0;
-        _interactiveAuthenticated=_secret.GuiAuthenticated && _secret.UiClients.Any(x=>x.Sid==owner && x.Alive()==true);
+        _interactiveAuthenticated=_secret.GuiAuthenticated && _secret.UiClients.Any(x=>x.Alive()==true);
         _carriers.Observe(CarrierMemory.Scope(_state));
         if(missing && NativeGuard.Active){
             // A lost state file is not an explicit Off request. Keep the last
@@ -101,6 +104,13 @@ internal sealed partial class VpnRuntime : IDisposable
         NativeUdpPortPolicy.Upgrade(_secret);
         if(_secret.ConnectIntent){NativeGuard.Apply(_secret.UuPaths.Where(UuDiscovery.Trusted).ToArray());_mode="protected";}
         else{await AuditStoppedTunnel(EnsureTunnelRemoved,RecoverStoppedTunnel);NativeGuard.Clear();_mode="disconnected";}
+        if(_manageClientLifetime && previousGuiExited){
+            // A previous GUI died while this backend was stopped. Clean its
+            // intent before admitting a new GUI, but keep startup grace so the
+            // new window does not race an immediate service self-stop.
+            await Disconnect(keepPrepared:false);
+            if(_secret.RememberLoginUntil==0)ForgetLogin();
+        }
     }
     internal async Task Run(CancellationToken cancel)
     {

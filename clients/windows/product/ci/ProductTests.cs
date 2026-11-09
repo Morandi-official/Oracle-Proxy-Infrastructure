@@ -33,6 +33,7 @@ internal static class ProductTests
             catch(IOException error) when(error.Message=="UU_MAINTENANCE_BUSY"){return 4;}
         }
         if(args.SequenceEqual(new[]{"--lifetime-controller"}))return OracleAcceptance.LifetimeController().GetAwaiter().GetResult();
+        if(args.SequenceEqual(new[]{"--live-udp-timing-snapshot"}))return OracleAcceptance.PrintLiveTimings().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--udp-loss-self-test"}))return OracleAcceptance.VerifyUdpFaultSession();
         if(args.SequenceEqual(new[]{"--tun-presence-diagnostic"})){
@@ -526,6 +527,8 @@ internal static class ProductTests
         for(int i=0;i<20;i++)idle.Act("Status").GetAwaiter().GetResult();
         if(textChanges!=preparingChanges || buttonChanges!=0){Console.WriteLine($"PREPARING_POLL_MUTATION text={textChanges} before={preparingChanges} buttons={buttonChanges}");return 1;}
         if(pollCalls.Count!=40 || pollCalls.Any(command=>command!="Status"))return 1;
+        snapshot["mode"]="protected";idle.Display(snapshot);if(idle.PollInterval!=100)return 1;
+        snapshot["mode"]="disconnected";
         Console.WriteLine("IDLE_AND_PREPARING_POLLS_DO_NOT_REWRITE_TEXT_OR_TOGGLE_BUTTONS=PASS");
         Console.WriteLine("PASSIVE_STATUS_POLL_IS_READ_ONLY_AND_NEVER_REPEATS_PREPARE=PASS");
         var pendingRead=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);

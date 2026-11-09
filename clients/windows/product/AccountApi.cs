@@ -27,7 +27,7 @@ internal sealed class AccountApi : IDisposable
                 var tried=new HashSet<string>();
                 async Task<Stream?> Try(string address){
                     if(!tried.Add(address))return null;
-                    var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp);
+                    var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp){NoDelay=true};
                     try{using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token);timeout.CancelAfter(TimeSpan.FromMilliseconds(1500));socket.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)physical));await socket.ConnectAsync(new IPEndPoint(IPAddress.Parse(EndpointCatalog.Public(address)),443),timeout.Token);return new NetworkStream(socket,true);}
                     catch(Exception e) when(e is SocketException or OperationCanceledException or IOException){socket.Dispose();token.ThrowIfCancellationRequested();return null;}
                 }

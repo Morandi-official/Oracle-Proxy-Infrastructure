@@ -422,7 +422,7 @@ internal sealed partial class MainForm : Form
                         if(command is "Connect" or "Disconnect")_lastUiAttachMs=attachTimer.ElapsedMilliseconds;
                         if(!ServiceBootstrap.Current(attached,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
                         _sessionAttached=true;_recoveryProvedDirect=false;
-                        _backendIdle=false;_timer.Start();
+                        _backendIdle=false;if(!_closing)_timer.Start();
                     }
                     return await ControlPipe.Send(command,username,password,cancel);
                 }
@@ -493,6 +493,7 @@ internal sealed partial class MainForm : Form
             sentQuit=true;var state=await SendRequest("Quit",null,null,deadline.Token);
             Display(state);
             if(state["ok"]?.GetValue<bool>()!=true || state["intent"]?.GetValue<bool>()!=false || state["core_pid"]?.GetValue<uint>()!=0 || state["mode"]?.GetValue<string>()!="disconnected")throw new IOException("SAFE_EXIT_NOT_VERIFIED");
+            if(_realService && state["shutdown_after_response"]?.GetValue<bool>()==true)await ControlPipe.WaitStopped(deadline.Token);
             _allowClose=true;Close();return true;
         }catch{
             if(sentQuit)_needsReconcile=true;
@@ -539,7 +540,7 @@ internal sealed partial class MainForm : Form
                 _backendIdle=true;_timer.Stop();
                 // Keep the window responsive but do not admit a reconnect into
                 // the previous service's acknowledged shutdown transition.
-                if(_realService){try{await ControlPipe.WaitStopped(deadline.Token);}catch{_backendIdle=false;_timer.Start();throw;}}
+                if(_realService){try{await ControlPipe.WaitStopped(deadline.Token);}catch{_backendIdle=false;if(!_closing)_timer.Start();throw;}}
             }
             if(command=="Logout" && state["ok"]?.GetValue<bool>()==true){_username.Clear();_password.Clear();_startupPrepared=false;}
             if(command is "Login" or "LoginRemembered" && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
@@ -644,7 +645,7 @@ internal sealed partial class MainForm : Form
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
             _lastMode=mode;
             DisplayUdpDiagnostics(state);
-            _timer.Interval=_udpDiagnosing?1000:mode is "protected" or "connecting" || (state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:mode=="connected"?1000:3000;
+            _timer.Interval=_udpDiagnosing?1000:mode is "protected" or "connecting"?100:(state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:mode=="connected"?1000:3000;
             _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 · HTTPS","wireguard-quic"=>"已连接 · QUIC / HTTP/3",_=>"已连接 · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?Color.FromArgb(11,137,108):mode=="disconnected"?Color.FromArgb(55,70,96):Color.DarkOrange;
             string policy=state["account"]?["status"]?.GetValue<string>() ?? "";

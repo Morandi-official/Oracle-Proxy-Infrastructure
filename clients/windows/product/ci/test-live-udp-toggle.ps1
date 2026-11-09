@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory=$true)][string]$Client)
+﻿param([Parameter(Mandatory=$true)][string]$Client,[Parameter(Mandatory=$true)][string]$SnapshotReader)
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:GITHUB_REF -ne 'refs/heads/main'){throw 'MAIN_DISPOSABLE_WINDOWS_REQUIRED'}
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
@@ -40,6 +40,8 @@ try {
   $onMs=$watch.ElapsedMilliseconds
   Write-Host "ACTUAL_PROXY_GUI_UDP_COLD_ON_AND_VERIFIED_DISPLAY_MS_${cycle}=$onMs"
   Write-Host "ACTUAL_PROXY_GUI_UDP_COLD_ON_UNDER_1000MS_${cycle}=$($onMs -lt 1000)"
+  & $SnapshotReader --live-udp-timing-snapshot
+  if($LASTEXITCODE -ne 0){throw 'LIVE_TIMING_SNAPSHOT_FAILED'}
  }
  $script:stage='close-window'
  $null=$gui.CloseMainWindow();if(!$gui.WaitForExit(15000)){throw 'LIVE_GUI_X_DID_NOT_CLOSE'}

@@ -667,6 +667,11 @@ def main(arguments):
     operation, revision = arguments
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
+        if request.get('request_id')=='endpoint-retirement-audit-20261109':
+            spec=importlib.util.spec_from_file_location('endpoint_retirement_audit',Path(__file__).with_name('endpoint_retirement_audit.py'))
+            audit=importlib.util.module_from_spec(spec);spec.loader.exec_module(audit)
+            print('ENDPOINT_RETIREMENT_AUDIT='+json.dumps(audit.observe(),sort_keys=True),flush=True)
+            return # Read-only inventory; no deployment, restarts, or resource deletion.
         if request.get('request_id')=='endpoint-catalog-apply':
             catalog_spec=importlib.util.spec_from_file_location('endpoint_addresses',Path(__file__).with_name('endpoint_addresses.py'))
             catalog=importlib.util.module_from_spec(catalog_spec);catalog_spec.loader.exec_module(catalog)

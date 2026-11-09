@@ -6,14 +6,23 @@ $root=Join-Path $env:ProgramData 'OracleProxyCandidateFixture'
 if(Test-Path $root){throw 'Preexisting fixture state refused'}
 $exe=(Resolve-Path './dist/product/Proxy.exe').Path
 $test=(Resolve-Path './dist/product-tests/OracleProxy.Product.Tests.exe').Path
-$owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if(Get-LocalUser OracleProxyOwner -ErrorAction SilentlyContinue){throw 'Preexisting fixture owner refused'}
+$ownerPassword=ConvertTo-SecureString ('Proxy!'+[Guid]::NewGuid().ToString('N')) -AsPlainText -Force
+$ownerUser=New-LocalUser -Name OracleProxyOwner -Password $ownerPassword -AccountNeverExpires -PasswordNeverExpires
+$owner=$ownerUser.SID.Value
+$ownerCredential=[Management.Automation.PSCredential]::new("$env:COMPUTERNAME\OracleProxyOwner",$ownerPassword)
 New-Item -ItemType Directory $root | Out-Null
 Set-Content "$root/authorized" 'DISPOSABLE_GITHUB_ONLY'
+Set-Content "$root/owner-created" 'OracleProxyOwner'
 $watch=New-ScheduledTaskAction -Execute $test -Argument '--watchdog'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog' -Action $watch -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'
 $install=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
 if($install.ExitCode -ne 0){throw 'Recovery fixture installation failed'}
+Stop-Service OracleProxyService
+$normalOwner=Start-Process $test -ArgumentList '--owner-status' -Credential $ownerCredential -WorkingDirectory $env:WINDIR -LoadUserProfile -Wait -PassThru
+if($normalOwner.ExitCode -ne 0 -or (Get-Service OracleProxyService).Status -ne 'Running'){throw 'Ordinary owner failed fixed service start without UAC'}
+Write-Host 'REAL_NONADMIN_OWNER_STARTS_STOPPED_CONTROL_SERVICE_WITHOUT_UAC=PASS'
 Stop-Service OracleProxyService
 $sc=[Diagnostics.ProcessStartInfo]::new('sc.exe');$sc.UseShellExecute=$false
 foreach($arg in @('create','OracleProxyCandidateFixture','binPath=',('"'+$test+'" --recovery-service'),'obj=','LocalSystem','start=','demand')){$sc.ArgumentList.Add($arg)}

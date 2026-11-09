@@ -70,6 +70,31 @@ function Exit-FailureWitness {
   }
  } catch {Write-Host 'ACTUAL_X_DOTNET_EVENTS=UNAVAILABLE'}
 }
+function Print-ControlTimings([int]$Cycle){
+ $toggle=Find-Control 'diagnostics-toggle'
+ if($toggle.Current.Name.StartsWith('展开')){$toggle.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()}
+ $button=Find-Control 'connection-diagnostics'
+ if(!$button){throw 'LIVE_DIAGNOSTICS_BUTTON_UNAVAILABLE'}
+ if(![ProxyGuiCloseButton]::PostMessage([IntPtr]$button.Current.NativeWindowHandle,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero)){throw 'LIVE_DIAGNOSTICS_OPEN_FAILED'}
+ $watch=[Diagnostics.Stopwatch]::StartNew();$report=$null
+ while(!$report -and $watch.Elapsed.TotalSeconds -lt 5){
+  $condition=New-Object Windows.Automation.AndCondition(
+   (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty,$gui.Id)),
+   (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,'diagnostic-report')))
+  $report=[Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)
+  if(!$report){Start-Sleep -Milliseconds 20}
+ }
+ if(!$report){throw 'LIVE_DIAGNOSTICS_REPORT_UNAVAILABLE'}
+ $value=$report.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value
+ foreach($line in ($value -split "`r?`n")){
+  if($line -match '^(control\.(service_ready_ms|attested_pipe_ms|response_ms)|ui_(queue_ms|attach_ms|response_ms|complete_ms)): ([0-9]+)$'){
+   Write-Host "ACTUAL_GUI_CONTROL_${Cycle}_$($Matches[1])=$($Matches[4])"
+  }
+ }
+ $dialog=[Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($report)
+ if(![ProxyGuiCloseButton]::PostMessage([IntPtr]$dialog.Current.NativeWindowHandle,0x0112,[IntPtr]0xF060,[IntPtr]::Zero)){throw 'LIVE_DIAGNOSTICS_CLOSE_FAILED'}
+ Start-Sleep -Milliseconds 50
+}
 $script:stage='initial-window' 
 try {
  Await-Mode '已连接' $false
@@ -88,6 +113,7 @@ try {
   $onMs=$watch.ElapsedMilliseconds
   Write-Host "ACTUAL_PROXY_GUI_UDP_COLD_ON_AND_VERIFIED_DISPLAY_MS_${cycle}=$onMs"
   Write-Host "ACTUAL_PROXY_GUI_UDP_COLD_ON_UNDER_1000MS_${cycle}=$($onMs -lt 1000)"
+  Print-ControlTimings $cycle
   & $SnapshotReader --live-udp-timing-snapshot
   if($LASTEXITCODE -ne 0){throw 'LIVE_TIMING_SNAPSHOT_FAILED'}
  }

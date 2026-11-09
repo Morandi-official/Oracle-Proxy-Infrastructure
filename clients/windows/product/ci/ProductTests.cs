@@ -928,6 +928,11 @@ internal static class ProductTests
     private static void RuntimeQueuedCancellationRegression()
     {
         using var runtime=new VpnRuntime();
+        bool identityRequired=false;
+        try{runtime.Command(new JsonObject{["version"]=1,["command"]="AttachConnect"}).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="CLIENT_IDENTITY_REQUIRED"){identityRequired=true;}
+        UiAssert(identityRequired,"FUSED_CONNECT_MUST_CAPTURE_ACTUAL_PIPE_CLIENT_IDENTITY");
+        Console.WriteLine("FUSED_CONNECT_WITHOUT_PIPE_CLIENT_IDENTITY_CANNOT_ENTER_RUNTIME=PASS");
         var gate=(SemaphoreSlim)typeof(VpnRuntime).GetField("_gate",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(runtime)!;
         static JsonObject Status()=>new(){["version"]=1,["command"]="Status"};
         gate.Wait();using(var cancel=new CancellationTokenSource()){

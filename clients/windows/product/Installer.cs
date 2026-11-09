@@ -178,7 +178,7 @@ internal static class Installer
             string path=Path.Combine(Platform.Root,name);if(File.Exists(path)){if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");File.Delete(path);}}
         string previous=Path.Combine(Platform.Root,"previous");if(Directory.Exists(previous)){Platform.VerifyProtected(previous);foreach(string name in Files.Concat(LegacyFiles))File.Delete(Path.Combine(previous,name));if(!Directory.EnumerateFileSystemEntries(previous).Any())Directory.Delete(previous);}
         Platform.VerifyProtected(Platform.StateRoot);
-        foreach(string name in new[]{"state.dpapi","state.dpapi.pending","tun-owner.json","tun-owner.json.pending"}){
+        foreach(string name in new[]{"state.dpapi","state.dpapi.pending","tun-owner.json","tun-owner.json.pending","api-addresses.json","api-addresses.json.new"}){
             string path=Path.Combine(Platform.StateRoot,name);
             if(File.Exists(path)){
                 if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))throw new IOException("REPARSE_POINT_REJECTED");

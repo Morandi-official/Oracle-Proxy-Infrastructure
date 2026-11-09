@@ -50,8 +50,8 @@ internal static class ControlPipe
             await pipe.WaitForConnectionAsync(cancel);
             try{
                 using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);deadline.CancelAfter(TimeSpan.FromSeconds(4));
-                string frame=await ReadFrame(pipe,8192,deadline.Token);bool authorized=false;
-                pipe.RunAsClient(()=>{using var identity=WindowsIdentity.GetCurrent();var principal=new WindowsPrincipal(identity);authorized=identity.IsAuthenticated && !principal.IsInRole(new SecurityIdentifier(WellKnownSidType.NetworkSid,null)) && (identity.User==owner || principal.IsInRole(WindowsBuiltInRole.Administrator));});
+                string frame=await ReadFrame(pipe,8192,deadline.Token);bool authorized=false;string clientSid="";
+                pipe.RunAsClient(()=>{using var identity=WindowsIdentity.GetCurrent();var principal=new WindowsPrincipal(identity);clientSid=identity.User?.Value??"";authorized=identity.IsAuthenticated && !principal.IsInRole(new SecurityIdentifier(WellKnownSidType.NetworkSid,null)) && (identity.User==owner || principal.IsInRole(WindowsBuiltInRole.Administrator));});
                 if(!authorized)throw new UnauthorizedAccessException();
                 using var document=JsonDocument.Parse(frame,new JsonDocumentOptions{MaxDepth=3});
                 if(document.RootElement.ValueKind!=JsonValueKind.Object)throw new IOException("INVALID_FRAME");
@@ -65,7 +65,12 @@ internal static class ControlPipe
                 try{
                     // Cancellation withdraws queued admission, not a mutation
                     // already executing. Never detach a timed-out command.
-                    response=await runtime.Command(value,admission.Token);
+                    ClientIdentity? client=null;
+                    if(value["command"]?.GetValue<string>()=="AttachClient"){
+                        if(!GetNamedPipeClientProcessId(pipe.SafePipeHandle,out uint clientPid))throw new IOException("CLIENT_IDENTITY_UNAVAILABLE");
+                        client=ClientIdentity.Capture(clientPid,clientSid);
+                    }
+                    response=await runtime.Command(value,admission.Token,client);
                 }finally{
                     observing.Cancel();
                     await observer;
@@ -73,6 +78,7 @@ internal static class ControlPipe
                 using var responseDeadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);
                 responseDeadline.CancelAfter(TimeSpan.FromSeconds(4));
                 await WriteFrame(pipe,response.ToJsonString(),65536,responseDeadline.Token);
+                runtime.ResponseDelivered(response);
             }catch{ /* Drop malformed/unauthorized frames; never echo secrets. */ }
         }
     }
@@ -83,6 +89,7 @@ internal static class ControlPipe
         cancel.ThrowIfCancellationRequested();
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancel);
         timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        await EnsureStarted(timeout.Token);
         using var pipe=new NamedPipeClientStream(".",Platform.Pipe,PipeDirection.InOut,PipeOptions.Asynchronous,TokenImpersonationLevel.Impersonation);
         try{await pipe.ConnectAsync(3000,timeout.Token);}
         catch(TimeoutException error){throw new IOException("SERVICE_BUSY",error);}
@@ -93,6 +100,22 @@ internal static class ControlPipe
         await WriteFrame(pipe,frame.ToJsonString(),8192,timeout.Token);
         var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");return result;
+    }
+    private static async Task EnsureStarted(CancellationToken cancel)
+    {
+        using var service=new System.ServiceProcess.ServiceController(Platform.Service);
+        service.Refresh();
+        if(service.Status==System.ServiceProcess.ServiceControllerStatus.Running)return;
+        var until=DateTimeOffset.UtcNow.AddSeconds(25);
+        while(DateTimeOffset.UtcNow<until){
+            cancel.ThrowIfCancellationRequested();service.Refresh();
+            if(service.Status==System.ServiceProcess.ServiceControllerStatus.Running)return;
+            if(service.Status==System.ServiceProcess.ServiceControllerStatus.Stopped){
+                try{service.Start();}catch(InvalidOperationException){service.Refresh();if(service.Status==System.ServiceProcess.ServiceControllerStatus.Stopped)throw;}
+            }
+            await Task.Delay(100,cancel);
+        }
+        throw new IOException("SERVICE_START_TIMEOUT");
     }
     internal static bool ServiceAbsent()
     {
@@ -113,6 +136,7 @@ internal static class ControlPipe
         finally{CloseServiceHandle(manager);}
     }
     [StructLayout(LayoutKind.Sequential)]private struct ServiceStatus{public uint Type,State,Accepted,Exit,Specific,Checkpoint,Wait,Pid,Flags;}
+    [DllImport("kernel32.dll")]private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe,out uint pid);
     [DllImport("kernel32.dll")]private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe,out uint pid);
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode)]private static extern IntPtr OpenSCManager(string? machine,string? database,uint access);
     [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]private static extern IntPtr OpenService(IntPtr manager,string name,uint access);

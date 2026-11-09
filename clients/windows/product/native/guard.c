@@ -227,6 +227,21 @@ API OpGuardCount(DWORD *persistent,DWORD *boot_count){
  e=enumerate_owned(engine,FALSE,persistent,boot_count);FwpmEngineClose0(engine);return e;
 }
 API OpTunLuid(UINT64 *value){NET_LUID luid={0};DWORD e=ConvertInterfaceAliasToLuid(L"OracleProxy",&luid);if(!e)*value=luid.Value;return e;}
+/* An unbound ordinary application must select our interface in both halves
+ * of IPv4 and IPv6. Core-bound/SOCKS probes cannot establish this invariant.
+ * This query never changes a route, interface metric or third-party policy. */
+API OpTunRoutes(void){
+ NET_LUID expected={0};if(ConvertInterfaceAliasToLuid(L"OracleProxy",&expected)||!expected.Value)return 0;
+ const BYTE probes[4][16]={{1,1,1,1},{208,67,222,222},{0x26,0x06,0x47,0x00,0x47,0x00,0,0,0,0,0,0,0,0,0x11,0x11},{0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1}};
+ DWORD mask=0;
+ for(int i=0;i<4;i++){
+  SOCKADDR_INET target={0},source={0};MIB_IPFORWARD_ROW2 route={0};
+  if(i<2){target.si_family=AF_INET;memcpy(&target.Ipv4.sin_addr,probes[i],4);}
+  else{target.si_family=AF_INET6;memcpy(&target.Ipv6.sin6_addr,probes[i],16);}
+  if(GetBestRoute2(NULL,0,NULL,&target,0,&route,&source)==NO_ERROR&&route.InterfaceLuid.Value==expected.Value)mask|=(1u<<i);
+ }
+ return mask;
+}
 /* Read-only cold-start/recovery proof. Metadata status is not absence: any
  * matching OS interface-table row, including Down, remains present. */
 API OpTunPresence(DWORD *present){

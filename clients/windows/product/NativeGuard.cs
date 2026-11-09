@@ -28,9 +28,12 @@ internal static class NativeGuard
     {
         // Persistent policy was installed before TUN activation. Only grant
         // the live, attested SYSTEM core's actual interface lease here.
+        if(!RoutesReady)throw new IOException("TUN_ROUTE_NOT_ACTIVE");
         uint result=Function<AuthorizeDelegate>("OpGuardAuthorizeTun")(Platform.Core,TunLuid(),pid);
         if(result!=0 || !TunPermitted)throw new IOException("TUN_AUTHORIZE_FAILED");
     }
+    internal static uint RouteMask=>Function<ClearDelegate>("OpTunRoutes")();
+    internal static bool RoutesReady=>RouteMask==15;
     internal static bool TunPermitted=>Function<ClearDelegate>("OpGuardTunReady")()==1;
     internal static bool TunDormant=>Function<ClearDelegate>("OpTunDormant")()==1;
     internal static uint QueryTunPresence(out uint present)=>Function<PresenceDelegate>("OpTunPresence")(out present);

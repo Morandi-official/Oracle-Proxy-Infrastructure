@@ -321,13 +321,48 @@ internal static class OracleAcceptance
                 Enumerable.Range(0,3).All(i=>Marshal.ReadInt32(actions.Actions,i*8)==1 && Marshal.ReadInt32(actions.Actions,i*8+4)==new[]{3000,5000,10000}[i]),"REAL_SCM_RESTART_BACKOFF_3_5_10_SECONDS_WITH_FIVE_MINUTE_RESET");
         }finally{if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);if(service!=IntPtr.Zero)CloseServiceHandle(service);CloseServiceHandle(manager);}
     }
+    internal static async Task<int> LifetimeController()
+    {
+        try{
+            string line=await Console.In.ReadLineAsync()??throw new IOException();
+            var credentials=JsonNode.Parse(line)!;
+            await Send("AttachClient");
+            RequireSuccess("Login",await ControlPipe.Send("Login",credentials["username"]!.GetValue<string>(),credentials["password"]!.GetValue<string>()));credentials=null;
+            await Send("PreferUdp443");await Send("Connect");await Connected();
+            Console.WriteLine("CONTROLLER_CONNECTED");Console.Out.Flush();
+            await Task.Delay(Timeout.Infinite);return 0;
+        }catch{return 1;}
+    }
+    private static async Task StoppedService()
+    {
+        using var service=new System.ServiceProcess.ServiceController(Platform.Service);
+        for(int i=0;i<150;i++){service.Refresh();if(service.Status==System.ServiceProcess.ServiceControllerStatus.Stopped)return;await Task.Delay(100);}
+        throw new IOException("BACKGROUND_DID_NOT_STOP");
+    }
+    private static async Task CrashController(string username,string password)
+    {
+        var start=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        start.ArgumentList.Add("--lifetime-controller");
+        start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_USERNAME");start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
+        using var controller=Process.Start(start)??throw new IOException("CONTROLLER_NOT_STARTED");
+        try{
+            await controller.StandardInput.WriteLineAsync(new JsonObject{["username"]=username,["password"]=password}.ToJsonString());await controller.StandardInput.FlushAsync();
+            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(80));bool connected=false;
+            while(await controller.StandardOutput.ReadLineAsync(deadline.Token) is string line){if(line=="CONTROLLER_CONNECTED"){connected=true;break;}}
+            Check(connected,"LIFETIME_REAL_CONTROLLER_CONNECTED");
+            controller.Kill(true);await controller.WaitForExitAsync();await StoppedService();
+            Check(!VpnRuntime.TunnelInactive() ? false : await ExitIp()!="152.67.154.225","LIFETIME_CONTROLLER_CRASH_STOPS_BACKGROUND_AND_RESTORES_DIRECT");
+        }finally{if(!controller.HasExited){controller.Kill(true);await controller.WaitForExitAsync();}}
+    }
     private static async Task<int> RunEndpointMigration()
     {
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
         string? username=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),password=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
         if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password))return 2;
         try{
-            var login=RequireSuccess("LoginRemembered",await ControlPipe.Send("LoginRemembered",username,password));password=null;
+            await CrashController(username,password);
+            await Send("AttachClient");
+            var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
             Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
             string primary=login["network_endpoints"]!["primary"]!.GetValue<string>();
             Check(primary=="152.67.154.225" && login["network_endpoints"]!["backup"]!.GetValue<string>()=="150.230.113.158","MIGRATION_AUTHENTICATED_PRIMARY_BACKUP_CATALOG");
@@ -337,7 +372,14 @@ internal static class OracleAcceptance
             Check(connected["transport_address"]?.GetValue<string>()==primary && connected["transport_port"]?.GetValue<int>()==443 && connected["transport_private_address"]?.GetValue<string>()==login["network_endpoints"]!["private_ipv4"]![primary]!.GetValue<string>() && allowed.Contains(await ExitIp()),"MIGRATION_NORMAL_CONNECT_ACTUAL_PRIMARY_PRIVATE_AND_PORT_WITH_VERIFIED_EXIT");
             // Connection admission already requires the IPv6 exit probe as well.
             Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");
-            await Send("Disconnect");await VerifyDiagnostics(devices,extended:false);
+            Check(connected["tun_route_mask"]?.GetValue<uint>()==15,"ORDINARY_ROUTE_BOTH_IPV4_AND_IPV6_HALVES_USE_OWNED_TUN");
+            await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
+            var off=await Send("Disconnect");await StoppedService();
+            Check(off["core_pid"]?.GetValue<uint>()==0 && off["preparing"]?.GetValue<bool>()==false && await ExitIp()!=primary,"DISCONNECT_STOPS_CORE_AND_SERVICE_AND_RESTORES_DIRECT");
+            await Send("AttachClient");
+            Check((await Send("Status"))["login_authenticated"]?.GetValue<bool>()==true,"LIVE_GUI_NONREMEMBERED_LOGIN_SURVIVES_ON_DEMAND_SERVICE_RESTART");
+            await Send("Connect");await Connected();await Send("Disconnect");await StoppedService();
+            await Send("AttachClient");await VerifyDiagnostics(devices,extended:false);
             var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));
             Check(deleted["login_authenticated"]?.GetValue<bool>()==false && deleted["account"] is null && deleted["core_pid"]?.GetValue<uint>()==0 && deleted["intent"]?.GetValue<bool>()==false,"MIGRATION_DEVICE_SELF_DELETE_CLEARS_LOGIN_AND_RETIRES_ONLY_THIS_CI_SLOT");
             Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;

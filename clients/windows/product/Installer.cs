@@ -22,7 +22,7 @@ internal static class Installer
         VerifyService();
         if(Registered()){
             using var service=new ServiceController(Platform.Service);
-            if(service.Status!=ServiceControllerStatus.Stopped){service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));}
+            if(service.Status!=ServiceControllerStatus.Stopped){if(service.Status!=ServiceControllerStatus.StopPending)service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));}
         }
         string installedExe=File.Exists(Platform.Exe)?Platform.Exe:Path.Combine(Platform.Root,LegacyFiles[0]);
         if(!File.Exists(installedExe))return;
@@ -103,6 +103,9 @@ internal static class Installer
             foreach(string name in Files)File.Copy(Platform.BundleFile(source,name=="Proxy.Service.exe"?"Proxy.exe":name),Path.Combine(Platform.Root,name),true);
             if(!registered)Sc("create",Platform.Service,"binPath=",Image,"start=","auto","obj=","LocalSystem","depend=","BFE/Tcpip","DisplayName=","Proxy VPN");
             else Sc("config",Platform.Service,"binPath=",Image,"DisplayName=","Proxy VPN");
+            // Only query and start are delegated to the registered desktop owner.
+            // No stop, configuration, DACL, or arbitrary service rights.
+            Sc("sdset",Platform.Service,"D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;LCRP;;;"+File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim()+")");
             Platform.ServiceEnvironment(Platform.Service);
             Sc("failure",Platform.Service,"reset=","300","actions=","restart/3000/restart/5000/restart/10000");
             Sc("start",Platform.Service);

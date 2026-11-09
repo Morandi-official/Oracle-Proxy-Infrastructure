@@ -2,16 +2,32 @@ name: Oracle self-hosted administrator console checks
 
 on:
   pull_request:
-    paths: ['server/admin-oracle/**', 'ops/oracle-project/**', '.github/workflows/admin-*.yml', '.github/workflows/oracle-project-ops.yml']
+    paths: ['server/admin-oracle/**', 'ops/oracle-project/**', 'ops/network/**', '.github/workflows/admin-*.yml', '.github/workflows/oracle-project-ops.yml']
   push:
     branches: [main]
-    paths: ['server/admin-oracle/**', 'ops/oracle-project/**', '.github/workflows/admin-*.yml', '.github/workflows/oracle-project-ops.yml']
+    paths: ['server/admin-oracle/**', 'ops/oracle-project/**', 'ops/network/**', '.github/workflows/admin-*.yml', '.github/workflows/oracle-project-ops.yml']
 
 permissions:
   contents: read
 
 jobs:
+  change-scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      endpoint_only: ${{ steps.scope.outputs.endpoint_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false, fetch-depth: 0}
+      - id: scope
+        env:
+          SCOPE_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: python3 ops/network/change_scope.py
+      - name: Validate endpoint metadata
+        run: python3 ops/network/endpoint_catalog.py
   application:
+    needs: change-scope
+    if: needs.change-scope.outputs.endpoint_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -40,7 +56,7 @@ jobs:
       - run: python -m unittest discover -s control -p 'test_*.py' -v
       - run: python -m unittest discover -s relay -p 'test_*.py' -v
       - name: Require public QUIC TLS before advertising the backup
-        if: matrix.python == '3.12'
+        if: matrix.python == '3.12' && github.event_name == 'push'
         run: |
           python - <<'PYQUIC'
           import subprocess, sys
@@ -49,7 +65,7 @@ jobs:
               subprocess.run([sys.executable, '../../ops/oracle-project/verify_quic.py', '--require-reachable'], check=True)
           PYQUIC
       - name: Read-only public HTTP3 control on existing UDP443
-        if: matrix.python == '3.12'
+        if: matrix.python == '3.12' && github.event_name == 'push'
         run: python ../../ops/oracle-project/verify_web_http3.py
       - run: node --check static/console/app.js
       - run: node ../../ops/oracle-project/privacy-classifier-test.cjs
@@ -64,6 +80,8 @@ jobs:
           retention-days: 14
           if-no-files-found: error
   management-browser-ui:
+    needs: change-scope
+    if: needs.change-scope.outputs.endpoint_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -85,7 +103,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
   disposable-host-lifecycle:
-    if: github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: change-scope
+    if: needs.change-scope.outputs.endpoint_only != 'true' && github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

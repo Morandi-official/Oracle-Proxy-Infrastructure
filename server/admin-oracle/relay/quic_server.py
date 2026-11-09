@@ -209,14 +209,36 @@ class RelayProtocol(QuicConnectionProtocol):
         except asyncio.CancelledError: return
 
 
+def listener_hosts():
+    from console.endpoint_config import read
+    value=read()
+    if value is None:return ['0.0.0.0']
+    return list(dict.fromkeys(row['private_ipv4'] for row in [value['primary'],value['backup']]+value['legacy']))
+
+
+async def start_listeners(config,state,hosts=None,port=8443):
+    # Pin UDP replies to the local address that received the request, so OCI
+    # translates them back to the matching public IP rather than the default.
+    servers=[]
+    try:
+        for host in listener_hosts() if hosts is None else hosts:
+            server=await serve(host,port,configuration=config,retry=True,
+                create_protocol=lambda *args,**kwargs:RelayProtocol(*args,state=state,**kwargs))
+            servers.append(server)
+            if port==0:port=server._transport.get_extra_info('sockname')[1]
+        return servers
+    except BaseException:
+        for server in servers:server.close()
+        raise
+
+
 async def run():
     config = QuicConfiguration(is_client=False, alpn_protocols=[H3_ALPN, ALPN], max_datagram_frame_size=1200,
                                idle_timeout=45, max_data=16384, max_stream_data=4096)
     config.load_cert_chain('/etc/oracle-proxy-quic/certificate.pem', '/etc/oracle-proxy-quic/private.pem')
     async with ClientSession(timeout=ClientTimeout(total=3), trust_env=False) as session:
         state = RelayState(session)
-        server = await serve('0.0.0.0', 8443, configuration=config, retry=True,
-                             create_protocol=lambda *args, **kwargs: RelayProtocol(*args, state=state, **kwargs))
+        servers=await start_listeners(config,state)
         app = web.Application()
         async def health(request): return web.json_response({'ready': True})
         app.router.add_get('/health', health)
@@ -227,7 +249,9 @@ async def run():
         loop = asyncio.get_running_loop()
         for signum in (signal.SIGINT, signal.SIGTERM): loop.add_signal_handler(signum, stopped.set)
         try: await stopped.wait()
-        finally: server.close(); await runner.cleanup()
+        finally:
+            for server in servers:server.close()
+            await runner.cleanup()
 
 
 if __name__ == '__main__': asyncio.run(run())

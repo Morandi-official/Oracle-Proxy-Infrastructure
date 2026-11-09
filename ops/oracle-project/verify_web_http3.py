@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from aioquic.asyncio import connect
 from aioquic.quic.configuration import QuicConfiguration
-from verify_quic import HOST, Http3Probe
+from verify_quic import HOST, Http3Probe, targets
 
 
 class WebProbe(Http3Probe):
@@ -31,7 +31,7 @@ def advertised():
 async def probe():
     config=QuicConfiguration(is_client=True,alpn_protocols=['h3'],server_name=HOST)
     async def request():
-        async with connect('152.67.156.100',443,configuration=config,create_protocol=WebProbe) as client:
+        async with connect(targets()[0],443,configuration=config,create_protocol=WebProbe) as client:
             return await client.blocked_health()
     try:return await asyncio.wait_for(request(),8)
     except (OSError,ValueError,ConnectionError,asyncio.TimeoutError):return False

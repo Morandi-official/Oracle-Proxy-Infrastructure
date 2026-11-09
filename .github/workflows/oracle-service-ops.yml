@@ -29,6 +29,8 @@ jobs:
     environment: oracle-ops
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
       - name: Call fixed Oracle service control (one allowlisted unit)
         shell: bash
         env:
@@ -48,8 +50,9 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           unset SSH_PRIVATE_KEY SSH_KNOWN_HOSTS
           trap 'rm -f "$HOME/.ssh/oracle_ci_ops" "$HOME/.ssh/known_hosts"' EXIT
-          ssh -T -i "$HOME/.ssh/oracle_ci_ops" \
-            -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
-            -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
-            oracle-ci@152.67.156.100 "$OPERATION"
+          SSH=(ssh -T -i "$HOME/.ssh/oracle_ci_ops" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15
+            -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o HostKeyAlias=152.67.156.100)
+          source ops/network/select_ssh_endpoint.sh
+          select_proxy_ssh_endpoint oracle-ci agent-status "${SSH[@]}"
+          "${SSH[@]}" "$PROXY_SSH_TARGET" "$OPERATION"

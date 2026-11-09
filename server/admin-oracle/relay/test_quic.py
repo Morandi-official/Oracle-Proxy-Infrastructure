@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from relay.fragments import CHUNK, Reassembly, fragment
 from relay.quic_keys import HOST, certificate
-from relay.quic_server import ALPN, H3_ALPN, CONNECT_PATH, RelayProtocol, RelayState
+from relay.quic_server import ALPN, H3_ALPN, CONNECT_PATH, RelayProtocol, RelayState, start_listeners
 from relay.server import Rate
 
 TOKEN = 'a' * 43
@@ -79,6 +79,25 @@ class QuicTLS(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.server.close();self.udp.close();await asyncio.sleep(0.02);self.directory.cleanup()
     def connection(self): return connect('127.0.0.1',self.port,configuration=self.client,create_protocol=Client)
+    async def test_two_local_addresses_keep_their_own_quic_reply_source(self):
+        import ipaddress
+        observed=[]
+        class RecordingClient(H3Client if H3_ALPN in self.client.alpn_protocols else Client):
+            def datagram_received(self,data,addr):
+                value=ipaddress.ip_address(addr[0]);observed.append(str(getattr(value,'ipv4_mapped',None) or value))
+                super().datagram_received(data,addr)
+        servers=await start_listeners(self.server._configuration,self.state,hosts=['127.0.0.2','127.0.0.3'],port=0)
+        try:
+            for server in servers:
+                host,port=server._transport.get_extra_info('sockname')[:2];observed.clear()
+                async with connect(host,port,configuration=self.client,create_protocol=RecordingClient) as client:
+                    self.assertEqual(await client.auth(),b'200' if H3_ALPN in self.client.alpn_protocols else b'OK\n');client.send(PACKET)
+                    self.assertEqual(await asyncio.wait_for(client.received.get(),2),PACKET)
+                    self.assertTrue(observed);self.assertEqual(set(observed),{host})
+        finally:
+            for server in servers:server.close()
+            await asyncio.sleep(0.02)
+
     async def test_real_tls_fragmented_datagram_and_revocation(self):
         async with self.connection() as client:
             self.assertEqual(await client.auth(),b'OK\n')

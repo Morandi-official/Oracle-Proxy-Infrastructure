@@ -471,7 +471,12 @@ internal sealed partial class MainForm : Form
             if(command is "Login" or "LoginRemembered")_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
             Display(state);
-            if(state["shutdown_after_response"]?.GetValue<bool>()==true && state["ok"]?.GetValue<bool>()==true){_backendIdle=true;_timer.Stop();}
+            if(state["shutdown_after_response"]?.GetValue<bool>()==true && state["ok"]?.GetValue<bool>()==true){
+                _backendIdle=true;_timer.Stop();
+                // Keep the window responsive but do not admit a reconnect into
+                // the previous service's acknowledged shutdown transition.
+                if(_realService){try{await ControlPipe.WaitStopped(deadline.Token);}catch{_backendIdle=false;_timer.Start();throw;}}
+            }
             if(command=="Logout" && state["ok"]?.GetValue<bool>()==true){_username.Clear();_password.Clear();_startupPrepared=false;}
             if(command is "Login" or "LoginRemembered" && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
         }catch(OperationCanceledException){

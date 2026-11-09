@@ -101,6 +101,16 @@ internal static class ControlPipe
         var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");return result;
     }
+    internal static async Task WaitStopped(CancellationToken cancel)
+    {
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        using var service=new System.ServiceProcess.ServiceController(Platform.Service);
+        while(true){
+            deadline.Token.ThrowIfCancellationRequested();service.Refresh();
+            if(service.Status==System.ServiceProcess.ServiceControllerStatus.Stopped)return;
+            await Task.Delay(50,deadline.Token);
+        }
+    }
     private static async Task EnsureStarted(CancellationToken cancel)
     {
         using var service=new System.ServiceProcess.ServiceController(Platform.Service);

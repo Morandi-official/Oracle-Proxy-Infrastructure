@@ -92,6 +92,7 @@ internal sealed partial class MainForm : Form
         }
     }
     private string _connectionReport="尚未读取系统服务。";
+    private DateTimeOffset _snapshotAt;
     private string _uuReport="请先在断开状态点击“重新识别 UU”。";
     private readonly Label _protocol=MetricValue(),_exitIp=MetricValue(),_download=MetricValue(),_upload=MetricValue(),_latency=MetricValue(),_uu=MetricValue();
     private readonly Label _accountName=new(){AutoSize=true,Text="尚未登录"};
@@ -244,7 +245,7 @@ internal sealed partial class MainForm : Form
         var diagnostics=ButtonGrid("diagnostic-actions");
         Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=false,Height=40,Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
         void Add(TableLayoutPanel grid,Button button){int index=grid.Controls.Count;int row=index/3;if(row>=grid.RowCount){grid.RowCount=row+1;grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.Height=grid.RowCount*48;}button.Dock=DockStyle.Fill;grid.Controls.Add(button,index%3,row);}
-        Add(diagnostics,Tool("连接诊断",()=>ShowReport("连接诊断",_connectionReport)));
+        Add(diagnostics,Tool("连接诊断",()=>ShowReport("连接诊断",ConnectionReport)));
         Add(diagnostics,Tool("GitHub 连通性",async()=>await ShowGitHubReport()));Add(diagnostics,Tool("UU 检查详情",ShowUuReport));
         Add(diagnostics,Tool("重新识别 UU",async()=>await Act("RefreshUu")));
         _native8443Test=Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443"));Add(diagnostics,_native8443Test);
@@ -519,13 +520,13 @@ internal sealed partial class MainForm : Form
         "UU_DIRECTORY_UNREADABLE"=>"安装目录不可读取或超出扫描限制",
         _=>"尚未通过检查"};
     internal string UuReport=>_uuReport;
-    internal string ConnectionReport=>_connectionReport;
+    internal string ConnectionReport=>_connectionReport+"\r\nui_snapshot_age_seconds: "+(_snapshotAt==default?"unavailable":Math.Max(0,(long)(DateTimeOffset.UtcNow-_snapshotAt).TotalSeconds).ToString())+"\r\n"+CompatibilityDiagnostics.Read();
     internal int UsageProgress=>_progress.Value;
     internal bool UsageFresh=>_progress.Enabled;
     internal int PollInterval=>_timer.Interval;
     internal void Display(JsonObject state)
     {
-            _connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
+            _snapshotAt=DateTimeOffset.UtcNow;_connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
             foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
             if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;

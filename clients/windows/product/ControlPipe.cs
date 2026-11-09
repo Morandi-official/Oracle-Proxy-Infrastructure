@@ -96,7 +96,7 @@ internal static class ControlPipe
         // credentials. A pipe DACL alone authenticates only its client.
         if(!BoundToService(pipe))throw new IOException("SERVICE_IDENTITY_NOT_VERIFIED");
         long pipeReady=timer.ElapsedMilliseconds;
-        var frame=new JsonObject{["version"]=1,["command"]=command};if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}else if(command=="DeleteDevice"){frame["device_id"]=username;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
+        var frame=new JsonObject{["version"]=1,["command"]=command};if(command=="AttachConnect")frame["expected_version"]=DeviceRegistration.Version;if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}else if(command=="DeleteDevice"){frame["device_id"]=username;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
         await WriteFrame(pipe,frame.ToJsonString(),8192,timeout.Token).ConfigureAwait(false);
         var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token).ConfigureAwait(false))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");

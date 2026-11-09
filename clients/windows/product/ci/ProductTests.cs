@@ -929,9 +929,13 @@ internal static class ProductTests
     {
         using var runtime=new VpnRuntime();
         bool identityRequired=false;
-        try{runtime.Command(new JsonObject{["version"]=1,["command"]="AttachConnect"}).GetAwaiter().GetResult();}
+        try{runtime.Command(new JsonObject{["version"]=1,["command"]="AttachConnect",["expected_version"]=DeviceRegistration.Version}).GetAwaiter().GetResult();}
         catch(IOException error)when(error.Message=="CLIENT_IDENTITY_REQUIRED"){identityRequired=true;}
         UiAssert(identityRequired,"FUSED_CONNECT_MUST_CAPTURE_ACTUAL_PIPE_CLIENT_IDENTITY");
+        bool versionRequired=false;
+        try{runtime.Command(new JsonObject{["version"]=1,["command"]="AttachConnect",["expected_version"]="unmatched-candidate"}).GetAwaiter().GetResult();}
+        catch(IOException error)when(error.Message=="SERVICE_VERSION_NOT_VERIFIED"){versionRequired=true;}
+        UiAssert(versionRequired,"FUSED_CONNECT_MUST_VERIFY_VERSION_BEFORE_ADMITTING_MUTATION");
         Console.WriteLine("FUSED_CONNECT_WITHOUT_PIPE_CLIENT_IDENTITY_CANNOT_ENTER_RUNTIME=PASS");
         var gate=(SemaphoreSlim)typeof(VpnRuntime).GetField("_gate",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(runtime)!;
         static JsonObject Status()=>new(){["version"]=1,["command"]="Status"};

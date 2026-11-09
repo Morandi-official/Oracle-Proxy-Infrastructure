@@ -54,7 +54,7 @@ class ClientApiTests(TestCase):
         from django.core.management import call_command
         call_command('sync_account_cycles',verbosity=0)
         before=self.engine.billing.window(self.user['id'])['assigned_at']
-        request=RequestFactory().post('/api/control');request.user=type('User',(),{'pk':1})()
+        request=RequestFactory().post('/api/control');request.user=type('User',(),{'pk':1,'is_authenticated':True})()
         value={'id':self.user['id'],'name':'Renamed','username':self.account.username,'password':'replacement-password-12345','device_limit':3,'quota_bytes':100000,'expires_at':None,'enabled':True,'download_bps':12_500_000,'upload_bps':3_000_000}
         with override_settings(ADMIN_AUTH_MODE='local'):
             result=client_api.save_account(request,value)

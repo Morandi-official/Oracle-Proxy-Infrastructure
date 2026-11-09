@@ -13,6 +13,14 @@ class Ledger:
         """)
 
     def anchor(self,user_id,assigned_at=None,basis='root_audit'):
+        self.db.execute('SAVEPOINT account_cycle_anchor')
+        try:
+            self._anchor(user_id,assigned_at,basis)
+            self.db.execute('RELEASE account_cycle_anchor')
+        except Exception:
+            self.db.execute('ROLLBACK TO account_cycle_anchor');self.db.execute('RELEASE account_cycle_anchor');raise
+
+    def _anchor(self,user_id,assigned_at=None,basis='root_audit'):
         row=self.db.execute('SELECT * FROM user_cycles WHERE user_id=?',(user_id,)).fetchone()
         if row and (assigned_at is None or row['basis'].startswith('account:')):
             if assigned_at is not None and (row['assigned_at']!=assigned_at or row['basis']!='account:'+basis):

@@ -233,8 +233,9 @@ internal sealed partial class VpnRuntime : IDisposable
     }
     private async Task Refresh(){_stage="ACCOUNT_STATE";_state=await _api.Call("state",_secret.Token);_received=DateTimeOffset.UtcNow;_error="";}
     private bool ActivePolicy()=>DeviceRegistration.Confirmed(_state) && _state?["account"]?["status"]?.GetValue<string>()=="active" && _state["observed_at"]?.GetValue<long>() is long at && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=RecentAccountProof.MaximumAgeSeconds;
-    private async Task StartCore(bool standby=false,bool guardInstalled=false)
+    private async Task StartCore(bool standby=false,bool guardInstalled=false,bool overlapProtection=false)
     {
+        if(overlapProtection && (standby || guardInstalled))throw new IOException("CORE_STARTUP_MODE_INVALID");
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
         if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
         // A dead prepared core's proof cannot survive cleanup failure or be
@@ -247,7 +248,7 @@ internal sealed partial class VpnRuntime : IDisposable
             else if(standby && !_secret.ConnectIntent && !_secret.RecoveryRequired)await TunReceipt.RecoverDormantOrphan();
         }
         await EnsureTunnelRemoved();
-        if(!standby){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
+        if(!standby && !overlapProtection){_stage="GUARD_INSTALL";if(!guardInstalled)NativeGuard.Apply(_secret.UuPaths);_mode="protected";}
         try{
             _stage="CORE_START";_probeFailures=0;_generation++;_verified=default;_verifiedGeneration=-1;_latency=null;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();
             _runningAddress=TransportPolicy.IngressAddress(EffectiveState());_coreStartedAt=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -258,7 +259,11 @@ internal sealed partial class VpnRuntime : IDisposable
                 ["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["started_without_tun"]=standby,
                 ["inner_mtu"]=_state!["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel"?1280:1200,["preferred_port"]=_secret.NativeUdpPortPreference,["socket_binding"]=_secret.NativeUdpPortPreference==8443?"native_udp_fixed_8443":_secret.NativeUdpAdaptive?"native_udp_adaptive_pair":"native_udp_dual_port",["probe_result"]="pending",["probe_failures"]=0,["core_age_ms"]=0};
             var coreTimer=System.Diagnostics.Stopwatch.StartNew();
-            await _core.Start(EffectiveState(),_secret,_transport,standby:true,probeReady:standby?null:BeginEgressProbe);
+            // Only private, unconfigured preparation may overlap WFP work.
+            // Both tasks must finish successfully before ACTIVATE is sent.
+            Task protection=overlapProtection?Task.Run(()=>NativeGuard.Apply(_secret.UuPaths)):Task.CompletedTask;
+            await Task.WhenAll(protection,_core.Start(EffectiveState(),_secret,_transport,standby:true,probeReady:standby?null:BeginEgressProbe));
+            if(overlapProtection){_mode="protected";if(_switchTimings is not null)_switchTimings["protection_joined_ms"]=coreTimer.ElapsedMilliseconds;}
             if(_switchTimings is not null)_switchTimings["core_process_ms"]=coreTimer.ElapsedMilliseconds;
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             if(_switchTimings is not null)_switchTimings["core_active_and_authorized_ms"]=coreTimer.ElapsedMilliseconds;
@@ -372,14 +377,15 @@ internal sealed partial class VpnRuntime : IDisposable
                 // Process exceptions are part of the prepared configuration.
                 if(reusable && !_secret.UuPaths.SequenceEqual(inventory.Paths,StringComparer.OrdinalIgnoreCase)){await StopCore();warm=false;reusable=false;_transport=Preferred();}
                 _secret.UuPaths=inventory.Paths;_secret.ConnectIntent=true;_secret.Save();_switchTimings["state_saved_ms"]=timer.ElapsedMilliseconds;
-                _stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";_switchTimings["guard_installed_ms"]=timer.ElapsedMilliseconds;
+                bool parallelProtection=!warm && !reusable && ActivePolicy();
+                if(!parallelProtection){_stage="GUARD_INSTALL";NativeGuard.Apply(_secret.UuPaths);_mode="protected";_switchTimings["guard_installed_ms"]=timer.ElapsedMilliseconds;}
                 if(!warm && !reusable){
                     // AttachClient/normal presence just obtained an authoritative
                     // account snapshot. Reuse the same bounded active-policy
                     // proof already required by warm activation, rather than
                     // paying for another identical WAN round trip.
                     if(!ActivePolicy())await Refresh();
-                    await StartCore(guardInstalled:true);
+                    await StartCore(guardInstalled:!parallelProtection,overlapProtection:parallelProtection);
                 }
                 else{
                     _stage="TUN_ACTIVATE";await _core.Activate();_switchTimings["tun_active_ms"]=timer.ElapsedMilliseconds;_stage="TUN_AUTHORIZE";

@@ -78,8 +78,18 @@ internal static class Platform
         using var input=File.OpenRead(path);return CryptographicOperations.FixedTimeEquals(SHA256.HashData(input),Convert.FromHexString(expected));
     }
     internal static string BundleFile(string root,string name)=>File.Exists(Path.Combine(root,"runtime",name))?Path.Combine(root,"runtime",name):Path.Combine(root,name);
+    private static readonly object BundleLeaseGate=new();
+    private static BundleLease? _bundleLease;
     internal static void VerifyBundle(string root)
     {
+        if(IsSystem && string.Equals(Path.GetFullPath(root),Path.GetFullPath(Root),StringComparison.OrdinalIgnoreCase)){
+            lock(BundleLeaseGate){
+                if(_bundleLease?.Current()==true)return;
+                _bundleLease?.Dispose();_bundleLease=null;
+                _bundleLease=BundleLease.Open(new[]{BundleFile(root,"Proxy.Core.exe"),BundleFile(root,"Proxy.Guard.dll")},new[]{BuildPins.Core,BuildPins.Guard});
+                return;
+            }
+        }
         if(!Pinned(BundleFile(root,"Proxy.Core.exe"),BuildPins.Core) || !Pinned(BundleFile(root,"Proxy.Guard.dll"),BuildPins.Guard))
             throw new IOException("BUNDLE_INTEGRITY_FAILED");
     }

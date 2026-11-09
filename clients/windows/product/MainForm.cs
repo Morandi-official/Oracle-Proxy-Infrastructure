@@ -428,7 +428,7 @@ internal sealed partial class MainForm : Form
                         // One authenticated service transaction attaches this live
                         // window, starts the tunnel and returns its verified state.
                         _lastUiAttachMs=0;
-                        var connected=await ControlPipe.Send("AttachConnect",null,null,cancel);
+                        var connected=await Task.Run(()=>ControlPipe.Send("AttachConnect",null,null,cancel),cancel);
                         if(!ServiceBootstrap.Current(connected,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
                         _sessionAttached=true;_recoveryProvedDirect=false;_backendIdle=false;
                         if(!_closing)_timer.Start();
@@ -529,7 +529,8 @@ internal sealed partial class MainForm : Form
             _busy=true;
             if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";
             if(toggle){_mode.Text=command=="Connect"?"正在连接…":"正在断开…";_detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";}
-            RefreshActions();
+            if(command=="Connect" && _realService && IsHandleCreated)BeginInvoke((Action)(()=>{if(!IsDisposed && !_closing)RefreshActions();}));
+            else RefreshActions();
         }
         try{
             if(passive){if(!_requests.Wait(0))return;acquired=true;}
@@ -635,7 +636,7 @@ internal sealed partial class MainForm : Form
             _transportChoice.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
-            if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","tun_active_ms","initial_probe_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
+            if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","protection_joined_ms","tun_active_ms","initial_probe_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
             if(state["control_timings"] is JsonObject controlTimings)foreach(string key in new[]{"service_ready_ms","attested_pipe_ms","response_ms"})_connectionReport+=$"control.{key}: {controlTimings[key]}\r\n";
             if(state["disconnect_timings"] is JsonObject offTimings)foreach(string key in new[]{"core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"})_connectionReport+=$"disconnect.{key}: {offTimings[key]}\r\n";
             if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";

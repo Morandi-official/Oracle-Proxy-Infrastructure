@@ -115,7 +115,7 @@ internal sealed partial class VpnRuntime : IDisposable
     internal async Task Run(CancellationToken cancel)
     {
         while(!cancel.IsCancellationRequested){
-            if(Diagnosing && !_manageClientLifetime){await Task.Delay(200,cancel);continue;}
+            if(Diagnosing){await Task.Delay(200,cancel);if(!_manageClientLifetime)continue;}
             await _gate.WaitAsync(cancel);
             try{
                 // A diagnostic can start while this loop waits for the gate.

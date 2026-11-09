@@ -11,6 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  change-scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      endpoint_only: ${{ steps.scope.outputs.endpoint_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false, fetch-depth: 0}
+      - id: scope
+        env:
+          SCOPE_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: python3 ops/network/change_scope.py
   no-ga-without-evidence:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -38,6 +50,8 @@ jobs:
           fi
           echo 'MAIN_SOURCE_GUARD_PASS: baseline is not an authorized VPN release'
   windows-build-only:
+    needs: change-scope
+    if: needs.change-scope.outputs.endpoint_only != 'true'
     runs-on: windows-latest
     timeout-minutes: 10
     steps:

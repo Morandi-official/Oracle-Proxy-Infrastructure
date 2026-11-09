@@ -1,0 +1,87 @@
+name: Primary and backup IP settings
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'inspect 只读查看；prepare 准备入口；cutover 已完成 OCI 主绑定交换'
+        type: choice
+        options: [inspect, prepare, cutover]
+        default: inspect
+        required: true
+      confirmed_bindings:
+        description: 'prepare/cutover：我已在 OCI 核对 Environment 中的公网/私网绑定实际存在'
+        type: boolean
+        default: false
+        required: true
+  pull_request:
+    paths: ['ops/network/**', '.github/workflows/endpoint-settings.yml']
+  push:
+    branches: [main]
+    paths: ['ops/network/**', '.github/workflows/endpoint-settings.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Validate catalog and focused proposal invariants
+        run: |
+          python3 ops/network/endpoint_catalog.py
+          python3 -m unittest discover -s ops/network -p 'test_*.py' -v
+          bash -n ops/network/select_ssh_endpoint.sh
+  inspect:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'))
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Read configured endpoints and public DNS without credentials
+        run: |
+          python3 - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          config=json.loads(Path('ops/network/endpoints.json').read_text())
+          text='## 仓库期望配置（不是 OCI 实时绑定查询）\n\n```json\n'+json.dumps(config,indent=2)+'\n```\n\n## 公共 DNS 只读结果\n'
+          for kind,name in [('A',config['api_host']),('AAAA',config['api_host']),('NS','morandi.dpdns.org'),('NS','dpdns.org')]:
+              result=subprocess.run(['dig','+time=3','+tries=1','+short',kind,name],capture_output=True,text=True,timeout=8)
+              text+='\n'+kind+' '+name+'\n```\n'+result.stdout[:4096]+'```\n'
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(text)
+          print(text)
+          PY
+  propose:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode != 'inspect' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: oracle-ops
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: endpoint-settings-proposal
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Generate proposal from non-secret Environment variables
+        env:
+          PROXY_PRIMARY_IPV4: ${{ vars.PROXY_PRIMARY_IPV4 }}
+          PROXY_PRIMARY_PRIVATE_IPV4: ${{ vars.PROXY_PRIMARY_PRIVATE_IPV4 }}
+          PROXY_BACKUP_IPV4: ${{ vars.PROXY_BACKUP_IPV4 }}
+          PROXY_BACKUP_PRIVATE_IPV4: ${{ vars.PROXY_BACKUP_PRIVATE_IPV4 }}
+          PROXY_ACTIVE_INGRESS: ${{ vars.PROXY_ACTIVE_INGRESS }}
+          SETTINGS_MODE: ${{ inputs.mode }}
+          CONFIRMED_BINDINGS: ${{ inputs.confirmed_bindings }}
+        run: |
+          [[ "$CONFIRMED_BINDINGS" == true ]] || { echo '请先核对 OCI 实际绑定，再勾选确认'; exit 2; }
+          python3 ops/network/propose_endpoints.py --mode "$SETTINGS_MODE" --confirmed-bindings
+          git diff -- ops/network/endpoints.json ops/oracle-project/request.json
+      - name: Open reviewable settings PR without deploying or changing OCI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ops/network/open_settings_pr.py

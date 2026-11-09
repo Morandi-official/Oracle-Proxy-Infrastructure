@@ -2,12 +2,16 @@
 import asyncio
 import json
 import sys
+from pathlib import Path
 import urllib.request
 
 from aioquic.asyncio import connect, QuicConnectionProtocol
 from aioquic.h3.connection import H3Connection
 from aioquic.h3.events import HeadersReceived
 from aioquic.quic.configuration import QuicConfiguration
+
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'network'))
+from endpoint_catalog import targets
 
 HOST = 'vpn-admin.morandi.dpdns.org'
 
@@ -23,8 +27,9 @@ class Http3Probe(QuicConnectionProtocol):
         return await asyncio.wait_for(self.status.get(),3)==b'200'
 
 
-async def probe(info, address='152.67.156.100'):
-    if address not in ('152.67.156.100','141.147.78.44'):raise ValueError('FIXED_INGRESS_REQUIRED')
+async def probe(info, address=None):
+    address=address or targets()[0]
+    if address not in targets():raise ValueError('CONFIGURED_INGRESS_REQUIRED')
     config = QuicConfiguration(is_client=True, alpn_protocols=['oracle-wireguard-quic-v1'],
                                server_name=HOST, max_datagram_frame_size=1200)
     config.load_verify_locations(cadata=info['certificate'].encode('ascii'))
@@ -54,7 +59,7 @@ def main():
     if not isinstance(info,dict) or info.get('port')!=8443 or not isinstance(info.get('certificate'),str):
         raise ValueError('QUIC_PUBLIC_CERTIFICATE_MISSING')
     if 'PRIVATE KEY' in info['certificate']: raise ValueError('QUIC_METADATA_REJECTED')
-    passed=asyncio.run(probe(info))
+    passed=all([asyncio.run(probe(info,address)) for address in targets()])
     # Preparation releases advertise disabled until the external gate passes.
     # Once advertised, a failed public handshake is a deployment failure.
     if (info.get('enabled') is True or '--require-reachable' in sys.argv[1:]) and not passed: raise SystemExit(1)

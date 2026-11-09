@@ -40,6 +40,12 @@ try{
     if(Test-Path $diag){Get-Content -LiteralPath $diag -Raw}
     throw 'Post-acceptance uninstall failed'
   }
+  if($env:ORACLE_ACCEPTANCE_SCOPE -eq 'endpoint-migration'){
+    if((Get-Service OracleProxyService,OracleProxyRecovery -ErrorAction SilentlyContinue) -or (Test-Path "$env:ProgramFiles/OracleProxy") -or (Test-Path "$env:ProgramData/OracleProxy")){
+      throw 'POST_REAL_ACCOUNT_UNINSTALL_LEFT_OWNED_RESOURCES'
+    }
+    Write-Host 'REAL_AUTHENTICATED_API_CACHE_UNINSTALL_LEAVES_NO_PRODUCT_RESOURCES=PASS'
+  }
 }finally{
   Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD -ErrorAction SilentlyContinue
   if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){

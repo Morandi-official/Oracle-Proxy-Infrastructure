@@ -17,6 +17,11 @@ function Invoke-OffStep([string[]]$Arguments){
 try {
   foreach($cycle in 1..3){
     Invoke-OffStep -Arguments @('--install',$owner)
+    # Real authenticated API calls leave this owned catalog cache. Include its
+    # interrupted-write name as well; uninstall must remove both exact files.
+    foreach($name in @('api-addresses.json','api-addresses.json.new')){
+      [IO.File]::WriteAllText((Join-Path $state $name),'["152.67.154.225","150.230.113.158"]')
+    }
     # Actual no-account GUI owner: kill it immediately before uninstall so its
     # independent lifetime cleanup can race both pipe admission and SCM Stop.
     $gui=Start-Process $exe -PassThru

@@ -95,15 +95,28 @@ if(Get-LocalUser $probeUser -ErrorAction SilentlyContinue){throw 'PREEXISTING_TE
 $password=ConvertTo-SecureString ('Q!a'+[guid]::NewGuid().ToString('N')) -AsPlainText -Force
 $credential=New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\$probeUser",$password)
 function Probe-Standard([string]$Case){
+ if($Case -notin @('absent','denied')){throw 'UNKNOWN_SCM_PROBE'}
  $stdout=Join-Path $work ('scm-probe-'+$Case+'.out')
  $stderr=Join-Path $work ('scm-probe-'+$Case+'.err')
- $p=Start-Process $fixture -ArgumentList @('--bootstrap-scm-probe',$Case) -Credential $credential -WorkingDirectory $env:WINDIR -LoadUserProfile -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+ # Windows PowerShell's alternate-logon Process can have no ExitCode after
+ # termination. A real standard-user shell runs the exact native fixture and
+ # reports its actual LASTEXITCODE; it never substitutes a successful value.
+ $quoted="'"+$fixture.Replace("'","''")+"'"
+ $command='& '+$quoted+' --bootstrap-scm-probe '+$Case+'; $opNativeExit=$LASTEXITCODE; Write-Output ("SCM_PROBE_NATIVE_EXIT=" + $opNativeExit); exit $opNativeExit'
+ $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+ $shell=Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
+ $p=Start-Process $shell -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand',$encoded) -Credential $credential -WorkingDirectory $env:WINDIR -LoadUserProfile -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
  try{
-  $ended=$p.WaitForExit(20000)
-  Write-Host ('SCM_PROBE_PROCESS='+$Case+';ENDED='+$ended+';EXIT='+$p.ExitCode)
-  if(Test-Path $stdout){Get-Content $stdout | Where-Object {$_ -match '^SCM_PROBE_'} | Write-Host}
-  if($p.ExitCode -ne 0 -and (Test-Path $stderr)){Get-Content $stderr | Select-Object -First 4 | Write-Host}
-  if(!$ended -or $p.ExitCode -ne 0){throw ('STANDARD_USER_BOOTSTRAP_FAILED_'+$Case)}
+  $ended=$p.WaitForExit(25000)
+  Write-Host ('SCM_PROBE_PROCESS='+$Case+';ENDED='+$ended+';WRAPPER_EXIT='+$p.ExitCode)
+  $lines=@(Get-Content $stdout | Where-Object {$_ -match '^SCM_PROBE_'})
+  $lines | Write-Host
+  $expectedCode=if($Case -eq 'absent'){'SCM_PROBE_CODE=SERVICE_ABSENT'}else{'SCM_PROBE_CODE=SERVICE_START_REQUIRES_ELEVATION'}
+  $complete=($lines -contains $expectedCode) -and ($lines -contains 'SCM_PROBE_BOUNDARY=True') -and ($lines -contains 'SCM_PROBE_NATIVE_EXIT=0')
+  if(!$ended -or !$complete){
+   if(Test-Path $stderr){Get-Content $stderr | Select-Object -First 4 | Write-Host}
+   throw ('STANDARD_USER_BOOTSTRAP_FAILED_'+$Case)
+  }
  }finally{if(!$p.HasExited){$p.Kill();$p.WaitForExit()};$p.Dispose()}
 }
 try {

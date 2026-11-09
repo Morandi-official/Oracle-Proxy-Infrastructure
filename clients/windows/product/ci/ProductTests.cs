@@ -49,7 +49,7 @@ internal static class ProductTests
                     try{return await ControlPipe.Send("Status",null,null,token);}
                     catch(IOException error){
                         Console.WriteLine("SCM_PROBE_CODE="+error.Message);
-                        expected=args[1]=="absent"?error.Message is "SERVICE_ABSENT" or "SERVICE_START_REQUIRES_ELEVATION":error.Message=="SERVICE_START_REQUIRES_ELEVATION";
+                        expected=args[1]=="absent"?error.Message=="SERVICE_ABSENT":error.Message=="SERVICE_START_REQUIRES_ELEVATION";
                         throw;
                     }
                 },_=>throw new IOException("ELEVATION_BOUNDARY_REACHED"),deadline.Token).GetAwaiter().GetResult();
@@ -1187,7 +1187,16 @@ internal static class ProductTests
         var creator=await Launch(config,standby:true);
         try{creator.Kill(true);await creator.WaitForExitAsync();}finally{creator.Dispose();}
         Require(NativeGuard.TunPresent && NativeGuard.TunDormant && !NativeGuard.Active,"RECOVERY_GATE_HAS_REAL_OFF_PREPARED_ORPHAN");
-        await Installer.Recover();
+        // Exercise the real product recovery worker. The fixture executable
+        // is deliberately not a product payload and must never be staged as
+        // the installed service when recovery compares the running host hash.
+        string product=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","product","Proxy.exe"));
+        Require(File.Exists(product) && SHA256.HashData(File.ReadAllBytes(product)).AsSpan().SequenceEqual(SHA256.HashData(File.ReadAllBytes(Platform.Exe))),"RECOVERY_GATE_USES_EXACT_INSTALLED_PRODUCT_SOURCE");
+        var start=new ProcessStartInfo(product){UseShellExecute=false,CreateNoWindow=true};start.ArgumentList.Add("--recover");
+        using(var recovery=Process.Start(start)??throw new IOException("RECOVERY_WORKER_NOT_STARTED")){
+            await recovery.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(90));
+            Require(recovery.ExitCode==0,"REAL_PRODUCT_RECOVERY_WORKER_COMPLETED");
+        }
         var status=await ControlPipe.Send("Status");
         Require(!NativeGuard.TunPresent && !NativeGuard.Active && status["mode"]?.GetValue<string>()=="disconnected" && status["intent"]?.GetValue<bool>()==false,
             "REAL_UAC_RECOVERY_TRANSACTION_REMOVES_DORMANT_ORPHAN_AND_RESTARTS_AUTHENTICATED_CONTROL_SERVICE");

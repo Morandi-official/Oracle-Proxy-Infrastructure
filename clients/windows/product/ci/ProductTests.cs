@@ -74,6 +74,7 @@ internal static class ProductTests
         }
         if(args.SequenceEqual(new[]{"--rescue"})){Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
+        if(args.SequenceEqual(new[]{"--recovery-service"})){ServiceBase.Run(new Fixture(true));return 0;}
         return 2;
     }
     private sealed class SlowTrace(bool correct) : HttpMessageHandler
@@ -971,10 +972,11 @@ internal static class ProductTests
     }
     private sealed class Fixture:ServiceBase
     {
-        internal Fixture(){ServiceName=Name;AutoLog=false;}
+        private readonly bool _recoveryOnly;
+        internal Fixture(bool recoveryOnly=false){_recoveryOnly=recoveryOnly;ServiceName=Name;AutoLog=false;}
         protected override void OnStart(string[] args)=>Task.Run(async()=>{
             bool success=false;string result;
-            try{await ProductTests.Run();success=true;result=string.Join('\n',Evidence)+"\nRESULT=PASS\n";}
+            try{if(_recoveryOnly)await RunRecoveryOnly();else await ProductTests.Run();success=true;result=string.Join('\n',Evidence)+"\nRESULT=PASS\n";}
             catch(Exception e){result=string.Join('\n',Evidence)+"\nRESULT=FAIL\nCATEGORY="+e.GetType().Name+"\nSTAGE="+e.Message.Replace('\n',' ')+"\n";}
             finally{if(!success)Rescue();}
             File.WriteAllText(Path.Combine(Root,"result.txt"),result);Stop();
@@ -1144,6 +1146,25 @@ internal static class ProductTests
             await Stop(creator);
             Platform.WriteAtomic(statePath,original);NativeGuard.Apply(uuPaths);
         }
+    }
+    private static async Task RunRecoveryOnly()
+    {
+        Require(!NativeGuard.TunPresent && !NativeGuard.Active,"RECOVERY_GATE_REFUSES_PREEXISTING_ADAPTER_OR_POLICY");
+        var key=KeyPair();new DurableState{PrivateKey=key.Private,PublicKey=key.Public}.Save();
+        var peer=KeyPair();
+        var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:59999",["server_public_key"]=peer.Public,["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
+        var config=CoreConfig.Build(state,DurableState.Load(),"synthetic-probe-only");
+        config["endpoints"]![0]!["peers"]![0]!["address"]="127.0.0.1";config["outbounds"]![1]!.AsObject().Remove("address");
+        await OffDormantRecovery(config,[]);
+        NativeGuard.Clear();
+        var creator=await Launch(config,standby:true);
+        try{creator.Kill(true);await creator.WaitForExitAsync();}finally{creator.Dispose();}
+        Require(NativeGuard.TunPresent && NativeGuard.TunDormant && !NativeGuard.Active,"RECOVERY_GATE_HAS_REAL_OFF_PREPARED_ORPHAN");
+        await Installer.Recover();
+        var status=await ControlPipe.Send("Status");
+        Require(!NativeGuard.TunPresent && !NativeGuard.Active && status["mode"]?.GetValue<string>()=="disconnected" && status["intent"]?.GetValue<bool>()==false,
+            "REAL_UAC_RECOVERY_TRANSACTION_REMOVES_DORMANT_ORPHAN_AND_RESTARTS_AUTHENTICATED_CONTROL_SERVICE");
+        Require(await Tcp() && await Dns(),"RECOVERY_GATE_FINISHES_WITH_DIRECT_TCP_AND_DNS");
     }
     private static async Task Run()
     {

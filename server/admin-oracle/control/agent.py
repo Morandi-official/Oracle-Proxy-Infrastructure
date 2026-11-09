@@ -567,7 +567,7 @@ class Engine:
         # Account all current counters under the old ownership before any binding/config mutation.
         try:self.tick()
         except Exception:
-            if operation not in ('user.put','user.save') or self.error!='BANDWIDTH_APPLY_FAILED':raise
+            if operation not in ('user.put','user.save') or not (self.error or '').startswith('BANDWIDTH_'):raise
         saved_user_id = None
         if operation in ('user.put','user.save'):
             expected = {'id','name','quota_bytes','expires_at','enabled'}

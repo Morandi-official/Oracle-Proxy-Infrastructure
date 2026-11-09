@@ -48,6 +48,21 @@ class ClientApiTests(TestCase):
         self.engine.error='OBSERVATION_UNAVAILABLE'
         self.assertIsNone(annotate_devices(self.engine.snapshot())['connections']['connected_devices'])
 
+    def test_account_edit_and_password_reset_preserve_original_30_day_anchor_and_shared_rate(self):
+        from . import client_api
+        from django.test import RequestFactory
+        from django.core.management import call_command
+        call_command('sync_account_cycles',verbosity=0)
+        before=self.engine.billing.window(self.user['id'])['assigned_at']
+        request=RequestFactory().post('/api/control');request.user=type('User',(),{'pk':1})()
+        value={'id':self.user['id'],'name':'Renamed','username':self.account.username,'password':'replacement-password-12345','device_limit':3,'quota_bytes':100000,'expires_at':None,'enabled':True,'download_bps':12_500_000,'upload_bps':3_000_000}
+        with override_settings(ADMIN_AUTH_MODE='local'):
+            result=client_api.save_account(request,value)
+        self.account.refresh_from_db()
+        self.assertEqual(result['users'][0]['cycle']['assigned_at'],before)
+        self.assertEqual(result['users'][0]['rate'],{'download_bps':12500000,'upload_bps':3000000})
+        self.assertEqual(int(self.account.assigned_at.timestamp()),before)
+
     def login(self,index=3,confirm=True,**extra):
         value={'username':'client01','password':'test-only-password-012345','public_key':base64.b64encode(bytes([index])*32).decode(),'device_name':'Synthetic Win11','client_version':'0.3.0-rc18'}
         value.update(extra)

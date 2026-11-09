@@ -5,6 +5,7 @@ from console.models import ClientAccount
 class Command(BaseCommand):
     help='Synchronize immutable credential-allocation dates to the restricted root ledger'
     def handle(self,**options):
+        if not ClientAccount.objects.exists():return
         snapshot=control.call('state','system:health',{})
         ids={u['id']:u for u in snapshot['users']}
         for account in ClientAccount.objects.all().iterator():

@@ -362,6 +362,7 @@ internal static class OracleAcceptance
     {
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
         var state=RequireSuccess("Status",await ControlPipe.Send("Status"));
+        Console.WriteLine("ACTUAL_SERVICE_RECENT_ACCOUNT_PROOF_RESTORED="+(state["recent_account_proof_restored"]?.GetValue<bool>()==true));
         foreach(string key in new[]{"click_to_ready_ms","connect_switch_ms"})if(state[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
         if(state["switch_timings"] is JsonObject phases)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","core_process_ms","core_active_and_authorized_ms","complete_ms"})
             if(phases[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);

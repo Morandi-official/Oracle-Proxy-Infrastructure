@@ -28,6 +28,7 @@ internal static class ControlFrameTests
     }
     private static async Task<int> Main()
     {
+        RecentAccountProofTests.Run();
         foreach(bool fail in new[]{false,true}){
             int finalized=0;
             try{await ControlResponse.Deliver(()=>fail?Task.FromException(new IOException("DISCONNECTED_PIPE")):Task.CompletedTask,()=>finalized++);}

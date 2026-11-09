@@ -1,4 +1,4 @@
-"""Promote only the pinned, accepted rc34 artifacts to a draft-first prerelease.
+"""Promote only the pinned, accepted rc35 artifacts to a draft-first prerelease.
 
 Runs downloaded archives through hashing/metadata checks, never executes them.
 No Oracle credentials are needed. Publishing is restricted to this repo's main.
@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-MANIFEST = Path(__file__).with_name('windows-rc34.json')
+MANIFEST = Path(__file__).with_name('windows-rc35.json')
 
 
 def gh(*args, output=None):
@@ -28,13 +28,13 @@ def api(path): return json.loads(gh('api',f'repos/{REPO}/{path}'))
 def validate_manifest(manifest):
     artifacts=manifest.get('artifacts')
     if (set(manifest)!={'version','run_id','uu_path_run_id','source_revision','artifacts'} or
-        manifest.get('version')!='0.3.0-rc34' or
+        manifest.get('version')!='0.3.0-rc35' or
         type(manifest.get('run_id')) is not int or manifest['run_id']<=0 or
         type(manifest.get('uu_path_run_id')) is not int or manifest['uu_path_run_id']<=0 or
         manifest['uu_path_run_id']==manifest['run_id'] or
         not re.fullmatch(r'[a-f0-9]{40}',str(manifest.get('source_revision',''))) or
         not isinstance(artifacts,list) or len(artifacts)!=2):
-        raise ValueError('COMPLETE_PINNED_RC34_MANIFEST_REQUIRED')
+        raise ValueError('COMPLETE_PINNED_RC35_MANIFEST_REQUIRED')
     ids=[]
     for item in artifacts:
         if (not isinstance(item,dict) or type(item.get('id')) is not int or item['id']<=0 or
@@ -63,7 +63,7 @@ def validate_path_run(run, manifest):
 
 
 def validate_dotnet_runtime(metadata):
-    """Require rc34's actual published self-contained runtime attestation.
+    """Require rc35's actual published self-contained runtime attestation.
 
     package-candidate.py creates this section from the MSBuild-selected runtime
     config after exact SDK verification. The outer accepted-artifact digest binds
@@ -155,7 +155,7 @@ def main():
                 not re.fullmatch(r'[a-f0-9]{64}',str(installer.get('compiler_sha256','')))):
             raise ValueError('ACCEPTED_INSTALLER_METADATA_REQUIRED')
         notes=root/'notes.md'
-        notes.write_text(Path(__file__).with_name('windows-rc34-notes.md').read_text(encoding='utf-8')+
+        notes.write_text(Path(__file__).with_name('windows-rc35-notes.md').read_text(encoding='utf-8')+
                          f"\n构建提交：`{manifest['source_revision']}`；[完整云端验收记录](https://github.com/{REPO}/actions/runs/{manifest['run_id']})。配套源码、SHA256SUMS.txt 和 BUILD.json 随包发布。\n",encoding='utf-8')
         tag='v'+manifest['version']
         if api('git/matching-refs/tags/'+tag): raise ValueError('EXISTING_RC_TAG_REQUIRES_REVIEW')

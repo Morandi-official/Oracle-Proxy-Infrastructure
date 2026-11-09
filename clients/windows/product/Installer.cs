@@ -193,9 +193,14 @@ internal static class Installer
                 ?"RECOVERY_"+helperCode:"RECOVERY_RESULT_INVALID");
         }finally{
             using var helper=new ServiceController(RecoveryService.Name);
-            if(helper.Status==ServiceControllerStatus.Stopped)Sc("delete",RecoveryService.Name);
+            if(helper.Status==ServiceControllerStatus.Stopped){
+                // Even a failed recovery must restore the authenticated control
+                // service. It reloads persisted recovery intent and retains the
+                // guard; restarting does not claim that direct access is safe.
+                try{Sc("delete",RecoveryService.Name);}
+                finally{Sc("start",Platform.Service);}
+            }
         }
-        Sc("start",Platform.Service);
     }
     internal static async Task<int> ElevateUuPermissionsAsync(bool restore,CancellationToken cancel=default)
     {
@@ -215,9 +220,25 @@ internal static class Installer
             return process.ExitCode;
         }
     }
-    internal static void ElevateRecovery()
+    private static readonly object RecoveryLock=new();
+    private static Task<int>? _pendingRecovery;
+    internal static Task<int> ElevateRecoveryAsync(CancellationToken cancel)
     {
-        var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};info.ArgumentList.Add("--recover");Process.Start(info);
+        Task<int> pending;
+        lock(RecoveryLock){
+            if(_pendingRecovery is null || _pendingRecovery.IsCompleted)_pendingRecovery=RecoveryChild();
+            pending=_pendingRecovery;
+        }
+        // Cancelling the GUI wait must not kill an elevated recovery worker.
+        return pending.WaitAsync(cancel);
+    }
+    private static async Task<int> RecoveryChild()
+    {
+        var info=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas"};info.ArgumentList.Add("--recover");
+        Process process;
+        try{process=Process.Start(info) ?? throw new IOException("RECOVERY_NOT_STARTED");}
+        catch(System.ComponentModel.Win32Exception error)when(error.NativeErrorCode==1223){return 4;}
+        using(process){await process.WaitForExitAsync().ConfigureAwait(false);return process.ExitCode;}
     }
     private static readonly object InstallLock=new();
     private static Task<int>? _pendingInstall;

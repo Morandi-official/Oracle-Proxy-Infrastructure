@@ -23,7 +23,7 @@ internal sealed class RecoveryService : ServiceBase
                     process.Kill(true);await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5),_cancel.Token);
                 }
             }
-            if(NativeGuard.TunPresent)await TunReceipt.RecoverOrphan(_cancel.Token);
+            if(NativeGuard.TunPresent)await VpnRuntime.RecoverStoppedTunnel(_cancel.Token);
             await VpnRuntime.EnsureTunnelRemoved();
             _cancel.Token.ThrowIfCancellationRequested();
             DurableState state;

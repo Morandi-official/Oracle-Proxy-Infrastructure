@@ -815,6 +815,23 @@ internal static class ProductTests
     {
         var ready=UiReady(source);var connected=(JsonObject)ready.DeepClone();connected["mode"]="connected";connected["intent"]=true;connected["guard"]=true;connected["tun_permitted"]=true;connected["core_pid"]=234U;connected["transport"]="wireguard-udp";connected["product_version"]="fixture-current-response";
         var budget=TimeSpan.FromMilliseconds(150);
+        UiAssert(CompatibilityDiagnostics.LoopbackPorts("http=127.0.0.1:7890;https=http://user:secret@localhost:10809/private?token=hidden;socks=[::1]:10808;remote.example:1234").SequenceEqual(new[]{7890,10808,10809}),"COMPATIBILITY_PROXY_PARSE_MUST_ONLY_RETURN_SORTED_LOOPBACK_PORTS");
+        UiAssert(CompatibilityDiagnostics.LoopbackPorts("https://secret.example/path?token=hidden").Length==0,"COMPATIBILITY_PROXY_PARSE_EXPORTED_REMOTE_ENDPOINT");
+        foreach(int recoveryResult in new[]{0,3,4}){
+            var helper=new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);var recoveryCalls=new List<string>();
+            using var recoveringForm=new MainForm((command,_,_)=>{recoveryCalls.Add(command);return Task.FromResult((JsonObject)ready.DeepClone());},budget,budget,_=>helper.Task);
+            UiShow(recoveringForm);recoveryCalls.Clear();Task recovery=recoveringForm.RecoverDirect();UiPumpFor(20);
+            int heartbeat=0;recoveringForm.BeginInvoke((Action)(()=>heartbeat++));UiPumpUntil(()=>heartbeat==1,"RECOVERY_BLOCKED_UI_HEARTBEAT");
+            UiAssert(!UiButton(recoveringForm,"emergency-recovery").Enabled,"RECOVERY_ALLOWED_DUPLICATE_UAC");
+            Task<bool> pendingClose=recoveringForm.QuitClient();UiPumpUntil(()=>pendingClose.IsCompleted,"RECOVERY_CLOSE_DID_NOT_RETURN");
+            UiAssert(!pendingClose.Result && !recoveringForm.IsDisposed && !recoveryCalls.Contains("Quit"),"RECOVERY_CLOSE_RACED_SERVICE_RESTART");
+            helper.SetResult(recoveryResult);UiPumpUntil(()=>recovery.IsCompleted,"RECOVERY_RESULT_DID_NOT_RECONCILE");
+            UiAssert(recovery.IsCompletedSuccessfully && recoveryCalls.Contains("Status"),"RECOVERY_RESULT_SKIPPED_FRESH_STATUS");
+            UiAssert(UiDescendants(recoveringForm).OfType<Button>().Single(button=>button.Text=="断开并恢复直连").Enabled,"RECOVERY_LEFT_ACTIONS_DISABLED");
+            Task<bool> closed=recoveringForm.QuitClient();UiPumpUntil(()=>closed.IsCompleted,"POST_RECOVERY_QUIT_STUCK");
+            UiAssert(closed.Result && recoveringForm.IsDisposed,"POST_RECOVERY_SAFE_QUIT_DID_NOT_CLOSE");
+        }
+        Console.WriteLine("RECOVERY_SUCCESS_FAILURE_AND_UAC_CANCEL_RECONCILE_SERVICE_REENABLE_ACTIONS_AND_ALLOW_SAFE_CLOSE=PASS");
         var oldRead=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);bool armed=false;var calls=new List<string>();
         using(var form=new MainForm((command,_,_)=>{calls.Add(command);if(armed && command=="Status")return oldRead.Task;return Task.FromResult((JsonObject)(command=="Connect"?connected:ready).DeepClone());},budget,budget)){
             UiShow(form);UiAssert(calls.SequenceEqual(new[]{"Status","Prepare"}),"STARTUP_DID_NOT_PREPARE_EXACTLY_ONCE");calls.Clear();armed=true;
@@ -1074,7 +1091,9 @@ internal static class ProductTests
             Require(guardedDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==emptyLuid && OffUnchanged(offCipher) &&
                 File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(emptyReceipt) && await Tcp() && await Dns(),"REAL_GUARDED_ORPHAN_RECOVERY_STILL_REFUSES_PERSISTENT_OFF_WITHOUT_GUARD");
             Task<bool> duringTcp=Tcp(),duringDns=Dns();
-            await TunReceipt.RecoverDormantOrphan();
+            // Reproduce service restart after an Off/prepared core was killed:
+            // initialization must use the same receipt-bound recovery as UAC.
+            using(var restarting=new VpnRuntime())await restarting.Initialize();
             Require(await duringTcp && await duringDns && !NativeGuard.TunPresent && OffUnchanged(offCipher) && await Tcp() && await Dns(),
                 "REAL_EMPTY_DORMANT_ORPHAN_RECOVERY_REMOVES_NATIVE_ROW_PRESERVES_OFF_AND_DIRECT_TCP_DNS_BEFORE_DURING_AFTER");
 
@@ -1086,7 +1105,7 @@ internal static class ProductTests
                 OffUnchanged(offCipher) && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),
                 "REAL_OFF_DIRTY_IPV4_IS_PRESENT_ON_FRESH_PREPARED_CREATOR_NATIVE_IDENTITY");
             bool liveDirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
-            try{await TunReceipt.RecoverDormantOrphan();}
+            try{await VpnRuntime.RecoverStoppedTunnel(CancellationToken.None);}
             catch(IOException error)when(error.Message=="TUN_OWNER_CREATOR_STILL_RUNNING"){liveDirtyDenied=true;}
             Require(liveDirtyDenied && NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==dirtyDormant &&
                 FixtureTunAddresses()==dirtyAddresses && File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt) &&
@@ -1103,7 +1122,7 @@ internal static class ProductTests
                 File.ReadAllBytes(TunReceipt.ReceiptPath).AsSpan().SequenceEqual(dirtyReceipt),"REAL_OFF_ORPHAN_AFTER_DIRTY_CREATOR_EXIT_RETAINS_RECORDED_NATIVE_IDENTITY");
             string orphanAddresses=FixtureTunAddresses();bool orphanDormant=NativeGuard.TunDormant,orphanInactive=VpnRuntime.TunnelInactive();
             bool nativeDirtyDenied=false;duringTcp=Tcp();duringDns=Dns();
-            try{await TunReceipt.RecoverDormantOrphan();}
+            try{await VpnRuntime.RecoverStoppedTunnel(CancellationToken.None);}
             catch(IOException error)when(error.Message=="TUN_OWNER_DORMANT_IP_NOT_EMPTY"){nativeDirtyDenied=true;}
             if(nativeDirtyDenied){
                 Require(NativeGuard.TunPresent && NativeGuard.TunLuid()==dirtyLuid && NativeGuard.TunDormant==orphanDormant &&
@@ -1112,7 +1131,7 @@ internal static class ProductTests
                     "REAL_OFF_ORPHAN_NATIVE_DIRTY_PARENT_REFUSAL_PRESERVES_CONFIGURATION_IDENTITY_RECEIPT_POLICY_AND_DIRECT_NETWORK");
                 // Only remove the exact address this fixture added. Unknown
                 // native errors/configuration never authorize broader cleanup.
-                await FixtureDormantAddress(true);await TunReceipt.RecoverDormantOrphan();
+                await FixtureDormantAddress(true);await VpnRuntime.RecoverStoppedTunnel(CancellationToken.None);
             }else{
                 // A managed empty list alone is not evidence. The strict Go
                 // native IP/route/DNS audit and final absence proof must pass.

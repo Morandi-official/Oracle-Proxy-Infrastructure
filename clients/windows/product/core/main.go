@@ -27,7 +27,8 @@ import (
 
 func run() error {
 	check := len(os.Args) == 2 && os.Args[1] == "--check"
-	standby := len(os.Args) == 2 && os.Args[1] == "--standby"
+	eagerProbe := len(os.Args) == 2 && os.Args[1] == "--standby-probe"
+	standby := len(os.Args) == 2 && os.Args[1] == "--standby" || eagerProbe
 	recoveryMode := parseAdapterRecoveryMode(os.Args[1:])
 	recoverAdapter := recoveryMode != recoveryNone
 	if !check && !standby && !recoverAdapter && len(os.Args) != 1 {
@@ -114,6 +115,11 @@ func run() error {
 	}
 	if err = instance.Start(); err != nil {
 		return fmt.Errorf("start")
+	}
+	// Only the attested parent uses this private startup mode. SOCKS is
+	// credential protected; ordinary TUN routing remains inactive.
+	if eagerProbe {
+		fmt.Println("PROBE_READY")
 	}
 	if standby {
 		if err = oracleTun.PrepareOracleAdapter(); err != nil {

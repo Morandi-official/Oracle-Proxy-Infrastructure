@@ -258,12 +258,12 @@ internal sealed partial class VpnRuntime : IDisposable
                 ["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["started_without_tun"]=standby,
                 ["inner_mtu"]=_state!["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel"?1280:1200,["preferred_port"]=_secret.NativeUdpPortPreference,["socket_binding"]=_secret.NativeUdpPortPreference==8443?"native_udp_fixed_8443":_secret.NativeUdpAdaptive?"native_udp_adaptive_pair":"native_udp_dual_port",["probe_result"]="pending",["probe_failures"]=0,["core_age_ms"]=0};
             var coreTimer=System.Diagnostics.Stopwatch.StartNew();
-            await _core.Start(EffectiveState(),_secret,_transport,standby:true);
+            await _core.Start(EffectiveState(),_secret,_transport,standby:true,probeReady:standby?null:BeginEgressProbe);
             if(_switchTimings is not null)_switchTimings["core_process_ms"]=coreTimer.ElapsedMilliseconds;
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}
             if(_switchTimings is not null)_switchTimings["core_active_and_authorized_ms"]=coreTimer.ElapsedMilliseconds;
             _runningProfile=Profile();_nextProbe=default;
-            if(!standby)BeginEgressProbe();
+            if(!standby && _probePending is null)BeginEgressProbe();
         }catch{await StopCore();if(!standby)_mode="protected";throw;}
     }
     internal async Task<JsonObject> Command(JsonObject value,CancellationToken admission=default,ClientIdentity? client=null)

@@ -617,6 +617,12 @@ internal sealed partial class MainForm : Form
     internal int PollInterval=>_timer.Interval;
     internal void Display(JsonObject state)
     {
+        SuspendLayout();_shell.SuspendLayout();_loginGate.SuspendLayout();
+        try{DisplaySnapshot(state);}
+        finally{_loginGate.ResumeLayout(true);_shell.ResumeLayout(true);ResumeLayout(true);}
+    }
+    private void DisplaySnapshot(JsonObject state)
+    {
             _snapshotAt=DateTimeOffset.UtcNow;_connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
             foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
             if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";

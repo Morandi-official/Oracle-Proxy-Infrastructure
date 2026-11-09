@@ -85,7 +85,8 @@ internal sealed partial class VpnRuntime : IDisposable
     internal async Task Initialize()
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();
-        Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);Platform.VerifyBundle(Platform.Root);
+        Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);
+        Task bundle=Task.Run(()=>Platform.VerifyBundle(Platform.Root));
         bool missing=!File.Exists(Path.Combine(Platform.StateRoot,"state.dpapi"));
         _secret=DurableState.Load();
         string owner=File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim();
@@ -98,6 +99,9 @@ internal sealed partial class VpnRuntime : IDisposable
             _secret.UiClients.Any(x=>x.Alive()==true),SessionAuthorized,_secret.ConnectIntent,_secret.RecoveryRequired,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         if(recent is not null){_state=recent;_received=DateTimeOffset.FromUnixTimeSeconds(recent["observed_at"]!.GetValue<long>());_recentAccountRestored=true;}
         _carriers.Observe(CarrierMemory.Scope(_state));
+        // Independent protected-state reads may overlap the first full image
+        // digest. Never load the native module or admit a pipe command first.
+        await bundle;
         if(missing && NativeGuard.Active){
             // A lost state file is not an explicit Off request. Keep the last
             // persistent policy (including existing UU exceptions) and require

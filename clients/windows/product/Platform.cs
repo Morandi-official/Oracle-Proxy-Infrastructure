@@ -73,6 +73,14 @@ internal static class Platform
     internal static bool Pinned(string path,string expected)
     {
         if(expected.Length!=64 || !expected.All(Uri.IsHexDigit))return false;
+        // The installed SYSTEM core's ownership receipt may reuse the same
+        // locked image proof. Portable/runtime-folder or unrelated files keep
+        // their independent full digest check.
+        if(IsSystem && ((expected==BuildPins.Core && string.Equals(Path.GetFullPath(path),Path.GetFullPath(Core),StringComparison.OrdinalIgnoreCase) && BundleFile(Root,"Proxy.Core.exe")==Core) ||
+            (expected==BuildPins.Guard && string.Equals(Path.GetFullPath(path),Path.GetFullPath(Guard),StringComparison.OrdinalIgnoreCase) && BundleFile(Root,"Proxy.Guard.dll")==Guard))){
+            try{VerifyBundle(Root);return true;}
+            catch(IOException error)when(error.Message=="BUNDLE_INTEGRITY_FAILED"){return false;}
+        }
         NoLinks(Path.GetDirectoryName(path)!);
         if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))return false;
         using var input=File.OpenRead(path);return CryptographicOperations.FixedTimeEquals(SHA256.HashData(input),Convert.FromHexString(expected));

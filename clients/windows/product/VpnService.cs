@@ -25,7 +25,7 @@ internal sealed class VpnService : ServiceBase
                 // SCM crash recovery while the installer waits for its image.
             }
             catch(Exception error){Platform.RecordFailure("service",error);Environment.Exit(3);} // SCM recovery; no raw exception/secret logs.
-            finally{_finished.Set();if(_runtime?.ShutdownRequested.IsCompleted==true)Stop();}
+            finally{_finished.Set();if(_runtime?.ShutdownRequested.IsCompleted==true)ThreadPool.QueueUserWorkItem(_=>Stop());}
         });
     }
     protected override void OnStop(){if(_finished.IsSet){_runtime?.Dispose();return;}RequestAdditionalTime(30000);_cancel.Cancel();_runtime?.BeginStop();try{if(_worker?.Wait(TimeSpan.FromSeconds(25))==false)Environment.Exit(3);}catch{} _runtime?.Dispose();}

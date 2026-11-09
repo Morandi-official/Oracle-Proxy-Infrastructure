@@ -142,17 +142,20 @@ internal static class Installer
             throw;
         }
     }
+    private static bool RetiringPipeFailure(IOException error)=>
+        error.Message is "SERVICE_BUSY" or "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED" ||
+        unchecked((uint)error.HResult) is 0x8007006D or 0x800700E8 or 0x800700E9; // broken/closing/disconnected Windows pipe
     private static async Task<JsonObject> DisconnectForMaintenance()
     {
         for(int attempt=0;;attempt++){
             try{return await ControlPipe.Send("Disconnect");}
-            catch(IOException error)when(attempt==0 && (error.Message is "SERVICE_BUSY" or "INCOMPLETE_FRAME" or "SERVICE_IDENTITY_NOT_VERIFIED")){
-                using var service=new ServiceController(Platform.Service);service.Refresh();
-                if(service.Status is not (ServiceControllerStatus.StopPending or ServiceControllerStatus.Stopped))throw;
+            catch(IOException error)when(attempt==0 && RetiringPipeFailure(error)){
                 // The previous GUI may have exited before this installer could
                 // authenticate its retiring pipe. Retry only idempotent Off,
                 // after SCM proves stop; each new pipe is authenticated anew.
-                await ControlPipe.WaitStopped(CancellationToken.None);
+                // Pipe cancellation can precede SCM StopPending. Waiting is
+                // read-only; a still-running service times out, never replays.
+                await ControlPipe.WaitStopped(CancellationToken.None);VerifyService();
             }
         }
     }

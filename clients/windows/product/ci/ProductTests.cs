@@ -433,8 +433,40 @@ internal static class ProductTests
         using var runner=new UdpDiagnosticRunner();runner.Cancel();runner.Dispose();runner.Dispose();
         Console.WriteLine("UDP_SIX_TARGETS_NO_FALLBACK_BOUNDED_PUBLIC_INDICES_AND_IDLE_CANCEL=PASS");
     }
+    private static void BundleLeaseRegression()
+    {
+        string root=Path.Combine(Path.GetTempPath(),"ProxyBundleLease-"+Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var paths=new[]{Path.Combine(root,"core.bin"),Path.Combine(root,"guard.bin")};
+        var content=new[]{Encoding.UTF8.GetBytes("owned-core"),Encoding.UTF8.GetBytes("owned-guard")};
+        var hashes=content.Select(bytes=>Convert.ToHexString(SHA256.HashData(bytes))).ToArray();
+        try{
+            for(int i=0;i<2;i++)File.WriteAllBytes(paths[i],content[i]);
+            using(var lease=BundleLease.Open(paths,hashes)){
+                UiAssert(lease.Current(),"BUNDLE_LEASE_DID_NOT_VERIFY_CURRENT_FILE_IDENTITIES");
+                for(int i=0;i<2;i++){
+                    UiAssert(File.ReadAllBytes(paths[i]).SequenceEqual(content[i]),"BUNDLE_LEASE_BLOCKED_READERS");
+                    bool writeDenied=false,deleteDenied=false;
+                    try{using var writer=new FileStream(paths[i],FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete);}
+                    catch(IOException){writeDenied=true;}
+                    try{File.Delete(paths[i]);}catch(IOException){deleteDenied=true;}
+                    UiAssert(writeDenied && deleteDenied,"BUNDLE_LEASE_DID_NOT_BLOCK_WRITES_AND_DELETION");
+                }
+            }
+            File.WriteAllText(paths[0],"replacement-core");
+            bool badDigest=false;
+            try{using var rejected=BundleLease.Open(paths,hashes);}catch(IOException error)when(error.Message=="BUNDLE_INTEGRITY_FAILED"){badDigest=true;}
+            UiAssert(badDigest,"BUNDLE_LEASE_ACCEPTED_REPLACEMENT_WITH_OLD_DIGEST");
+            File.WriteAllBytes(paths[0],content[0]);
+            using(var restored=BundleLease.Open(paths,hashes))UiAssert(restored.Current(),"BUNDLE_LEASE_FAILED_FRESH_REVALIDATION");
+            File.Delete(paths[1]);
+            UiAssert(!File.Exists(paths[1]),"BUNDLE_LEASE_DISPOSAL_RETAINED_A_FILE_LOCK");
+        }finally{Directory.Delete(root,true);}
+        Console.WriteLine("BUNDLE_LEASE_FULL_HASH_CURRENT_IDENTITIES_WRITE_DELETE_DENIAL_AND_DISPOSAL=PASS");
+    }
     private static int Ui()
     {
+        BundleLeaseRegression();
         BootstrapPolicyRegression();
         LoginAndCleanupPolicyRegression();
         UdpDiagnosticRegression();

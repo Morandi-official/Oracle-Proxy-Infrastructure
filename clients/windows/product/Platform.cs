@@ -73,13 +73,31 @@ internal static class Platform
     internal static bool Pinned(string path,string expected)
     {
         if(expected.Length!=64 || !expected.All(Uri.IsHexDigit))return false;
+        // The installed SYSTEM core's ownership receipt may reuse the same
+        // locked image proof. Portable/runtime-folder or unrelated files keep
+        // their independent full digest check.
+        if(IsSystem && ((expected==BuildPins.Core && string.Equals(Path.GetFullPath(path),Path.GetFullPath(Core),StringComparison.OrdinalIgnoreCase) && BundleFile(Root,"Proxy.Core.exe")==Core) ||
+            (expected==BuildPins.Guard && string.Equals(Path.GetFullPath(path),Path.GetFullPath(Guard),StringComparison.OrdinalIgnoreCase) && BundleFile(Root,"Proxy.Guard.dll")==Guard))){
+            try{VerifyBundle(Root);return true;}
+            catch(IOException error)when(error.Message=="BUNDLE_INTEGRITY_FAILED"){return false;}
+        }
         NoLinks(Path.GetDirectoryName(path)!);
         if(new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint))return false;
         using var input=File.OpenRead(path);return CryptographicOperations.FixedTimeEquals(SHA256.HashData(input),Convert.FromHexString(expected));
     }
     internal static string BundleFile(string root,string name)=>File.Exists(Path.Combine(root,"runtime",name))?Path.Combine(root,"runtime",name):Path.Combine(root,name);
+    private static readonly object BundleLeaseGate=new();
+    private static BundleLease? _bundleLease;
     internal static void VerifyBundle(string root)
     {
+        if(IsSystem && string.Equals(Path.GetFullPath(root),Path.GetFullPath(Root),StringComparison.OrdinalIgnoreCase)){
+            lock(BundleLeaseGate){
+                if(_bundleLease?.Current()==true)return;
+                _bundleLease?.Dispose();_bundleLease=null;
+                _bundleLease=BundleLease.Open(new[]{BundleFile(root,"Proxy.Core.exe"),BundleFile(root,"Proxy.Guard.dll")},new[]{BuildPins.Core,BuildPins.Guard});
+                return;
+            }
+        }
         if(!Pinned(BundleFile(root,"Proxy.Core.exe"),BuildPins.Core) || !Pinned(BundleFile(root,"Proxy.Guard.dll"),BuildPins.Guard))
             throw new IOException("BUNDLE_INTEGRITY_FAILED");
     }

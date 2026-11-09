@@ -14,7 +14,9 @@ internal sealed class VpnService : ServiceBase
         _worker=Task.Run(async ()=>{
             try{
                 _runtime=new VpnRuntime(manageClientLifetime:true);await _runtime.Initialize();
-                var tasks=new[]{_runtime.Run(_cancel.Token),ControlPipe.Serve(_runtime,_cancel.Token)};
+                // Open the attested pipe after full Initialize, before normal
+                // background maintenance occupies its first serialized pass.
+                var tasks=new[]{ControlPipe.Serve(_runtime,_cancel.Token),_runtime.Run(_cancel.Token)};
                 await Task.WhenAny(tasks.Append(_runtime.ShutdownRequested));
                 if(_runtime.ShutdownRequested.IsCompleted){_cancel.Cancel();_runtime.BeginStop();}
                 if(!_cancel.IsCancellationRequested)Environment.Exit(3);

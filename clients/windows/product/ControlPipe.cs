@@ -36,6 +36,7 @@ internal static class ControlPipe
     internal static async Task Serve(VpnRuntime runtime,CancellationToken cancel)
     {
         var owner=new SecurityIdentifier(File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim());
+        bool firstConnection=true;
         while(!cancel.IsCancellationRequested){
             var acl=new PipeSecurity();acl.SetAccessRuleProtection(true,false);
             acl.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid,null),PipeAccessRights.FullControl,AccessControlType.Deny));
@@ -43,6 +44,9 @@ internal static class ControlPipe
                 acl.AddAccessRule(new PipeAccessRule(sid,PipeAccessRights.ReadWrite,AccessControlType.Allow));
             acl.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),PipeAccessRights.FullControl,AccessControlType.Allow));
             using var pipe=NamedPipeServerStreamAcl.Create(Platform.Pipe,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.FirstPipeInstance,8192,8192,acl);
+            // Publish the first pipe, then let VpnService start its independent
+            // policy/lifetime loop even if a queued frame can complete inline.
+            if(firstConnection){firstConnection=false;await Task.Yield();}
             await pipe.WaitForConnectionAsync(cancel);
             try{
                 using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);deadline.CancelAfter(TimeSpan.FromSeconds(4));

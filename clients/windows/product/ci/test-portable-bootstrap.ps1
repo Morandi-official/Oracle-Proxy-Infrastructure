@@ -7,6 +7,22 @@ using System;
 using System.Runtime.InteropServices;
 public static class BootstrapUiClick {
  [DllImport("user32.dll",SetLastError=true)] public static extern bool PostMessage(IntPtr window,uint message,IntPtr first,IntPtr second);
+ delegate bool EnumWindow(IntPtr window,IntPtr data);
+ [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow visit,IntPtr data);
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window,System.Text.StringBuilder title,int count);
+ [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr window,int id);
+ public static bool AcceptConfirmation(int expectedPid,string expectedTitle) {
+  IntPtr found=IntPtr.Zero;
+  EnumWindows(delegate(IntPtr window,IntPtr data){
+   uint pid;GetWindowThreadProcessId(window,out pid);if(pid!=expectedPid)return true;
+   var title=new System.Text.StringBuilder(256);GetWindowText(window,title,title.Capacity);
+   if(title.ToString()==expectedTitle){found=window;return false;}return true;
+  },IntPtr.Zero);
+  if(found==IntPtr.Zero)return false;
+  var ok=GetDlgItem(found,1);if(ok==IntPtr.Zero)return false;
+  return PostMessage(ok,0x00F5,IntPtr.Zero,IntPtr.Zero);
+ }
 }
 '@
 $root=Join-Path $env:ProgramFiles 'OracleProxy'
@@ -81,7 +97,7 @@ $credential=New-Object Management.Automation.PSCredential("$env:COMPUTERNAME\$pr
 function Probe-Standard([string]$Case){
  $stdout=Join-Path $work ('scm-probe-'+$Case+'.out')
  $stderr=Join-Path $work ('scm-probe-'+$Case+'.err')
- $p=Start-Process $fixture -ArgumentList @('--bootstrap-scm-probe',$Case) -Credential $credential -WorkingDirectory $env:WINDIR -LoadUserProfile -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+ $p=Start-Process $fixture -ArgumentList @('--bootstrap-scm-probe',$Case) -Credential $credential -WorkingDirectory $env:WINDIR -LoadUserProfile -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
  try{
   $ended=$p.WaitForExit(20000)
   Write-Host ('SCM_PROBE_PROCESS='+$Case+';ENDED='+$ended+';EXIT='+$p.ExitCode)
@@ -116,16 +132,7 @@ try {
  # The actual shipped GUI -> confirmation -> runas worker -> SYSTEM recovery
  # -> authenticated fresh attachment -> enabled Login path, without CLI setup.
  Click 'emergency-recovery'
- Wait-For {
-  $condition=New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty,$script:gui.Id)
-  $windows=[Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children,$condition)
-  foreach($w in $windows){
-   if($w.Current.Name -eq '恢复直连'){
-    $ok=$w.FindFirst([Windows.Automation.TreeScope]::Descendants,(New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty,'1')))
-    if($ok){$ok.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke();return $true}
-   }
-  };return $false
- } 'RECOVERY_CONFIRMATION_NOT_FOUND' 10
+ Wait-For { [BootstrapUiClick]::AcceptConfirmation($script:gui.Id,'恢复直连') } 'RECOVERY_CONFIRMATION_NOT_FOUND' 10
  Wait-For { (Feedback) -match '恢复程序已完成' -and (Enabled 'login') -and (Enabled 'emergency-recovery') } 'REAL_GUI_RECOVERY_DID_NOT_REATTACH_ENABLE_LOGIN' 70
  Close-Gui
  Wait-For { (Get-Service OracleProxyService).Status -eq 'Stopped' } 'REAL_GUI_X_DID_NOT_STOP_BACKEND' 15

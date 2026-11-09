@@ -715,6 +715,10 @@ def main(arguments):
         run(['systemctl', operation, host.UNIT_NAMES[0]])
     elif operation == 'rollback': host.rollback()
     else: raise ValueError('OPERATION_REJECTED')
+    if operation in ('deploy','enable-https'):
+        current=host.ROOT/'current'
+        if (current/'console/management/commands/admin_bootstrap_status.py').is_file():
+            host.as_user(host.APP_USER,[current/'.venv/bin/python','manage.py','admin_bootstrap_status'],cwd=current,env=host.read_environment())
 
 
 if __name__ == '__main__':

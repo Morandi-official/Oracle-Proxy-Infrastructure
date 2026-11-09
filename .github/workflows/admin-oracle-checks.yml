@@ -95,6 +95,8 @@ jobs:
       - run: python -m playwright install --with-deps chromium firefox
       - name: Synthetic management UI with real persistent policy engine
         run: python ops/oracle-project/management_ui_acceptance.py
+      - name: Actual browsers preserve a website password without attempting old credentials
+        run: python ops/oracle-project/ci_preserved_admin_browser.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

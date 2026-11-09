@@ -139,3 +139,15 @@ class LocalAdminTests(TestCase):
         with override_settings(ADMIN_LOCAL_PASSWORD_HASH=make_password(self.password)):
             call_command('provision_local_admin',reset_password=True,verbosity=0)
         self.owner.refresh_from_db();self.assertTrue(self.owner.check_password(self.password))
+
+    def test_readonly_bootstrap_evidence_detects_web_password_without_disclosing_or_resetting_it(self):
+        from io import StringIO
+        encoded=self.owner.password
+        with override_settings(ADMIN_LOCAL_PASSWORD_HASH=encoded):
+            output=StringIO();call_command('admin_bootstrap_status',stdout=output)
+            self.assertEqual(output.getvalue().strip(),'ADMIN_BOOTSTRAP_BROWSER=READY')
+            self.owner.set_password('changed-synthetic-long-password');self.owner.save()
+            output=StringIO();call_command('admin_bootstrap_status',stdout=output)
+            self.assertEqual(output.getvalue().strip(),'ADMIN_BOOTSTRAP_BROWSER=CHANGED')
+            self.assertNotIn(encoded,output.getvalue())
+            self.owner.refresh_from_db();self.assertTrue(self.owner.check_password('changed-synthetic-long-password'))

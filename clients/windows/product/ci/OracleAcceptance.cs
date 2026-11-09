@@ -63,7 +63,7 @@ internal static class OracleAcceptance
     }
     private static async Task VerifyDiagnostics(int devices,bool extended=true)
     {
-        await Send("Quit");
+        await Send("Disconnect");await StoppedService();await Send("AttachClient");
         var before=await Send("Status");
         var start=Stopwatch.StartNew();await Send("StartUdpDiagnostics");
         Check(start.Elapsed<TimeSpan.FromSeconds(8),"DIAGNOSTIC_START_DOES_NOT_HOLD_RUNTIME_GATE_FOR_PROBES");
@@ -74,7 +74,7 @@ internal static class OracleAcceptance
         foreach(string field in new[]{"transport_preference","native_udp_adaptive","native_udp_port_preference"})Check(JsonNode.DeepEquals(before[field],result[field]),"DIAGNOSTIC_PRESERVES_"+field.ToUpperInvariant());
         Check(result["account"]?["device_count"]?.GetValue<int>()==devices,"DIAGNOSTIC_USES_EXISTING_DEVICE_SLOT");
         Directory.CreateDirectory("dist/review");File.WriteAllText("dist/review/udp-six-acceptance.json",report.ToJsonString());
-        if(!extended){await Send("Quit");return;}
+        if(!extended){await Send("Disconnect");await StoppedService();await Send("AttachClient");return;}
         IntPtr fault=IntPtr.Zero;
         try{
             Check(fixture_udp_diagnostic_primary_replies_begin(out fault)==0,"DIAGNOSTIC_DISPOSABLE_PRIMARY_RETURN_FAULT_CREATED");
@@ -86,7 +86,7 @@ internal static class OracleAcceptance
         await Send("StartUdpDiagnostics");await Task.Delay(1000);await Send("CancelUdpDiagnostics");
         result=await AwaitDiagnostic();report=result["udp_diagnostic"]!.AsObject();
         Check(report["phase"]?.GetValue<string>()=="cancelled" && report["server_capture_closed"]?.GetValue<bool>()==true,"REAL_DIAGNOSTIC_CANCEL_CLOSES_CORE_AND_SERVER_CAPTURE");
-        await Send("Quit");
+        await Send("Disconnect");await StoppedService();await Send("AttachClient");
     }
     private static long? _deviceUsageStart;
     private static string _lastAssertion="";
@@ -364,6 +364,7 @@ internal static class OracleAcceptance
             await Send("AttachClient");
             var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
             Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
+            Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+login["registration"]!["device_id"]!.GetValue<string>());
             string primary=login["network_endpoints"]!["primary"]!.GetValue<string>();
             Check(primary=="152.67.154.225" && login["network_endpoints"]!["backup"]!.GetValue<string>()=="150.230.113.158","MIGRATION_AUTHENTICATED_PRIMARY_BACKUP_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();

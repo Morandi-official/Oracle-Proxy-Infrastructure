@@ -667,6 +667,11 @@ def main(arguments):
     operation, revision = arguments
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
+        if request.get('request_id')=='retire-only-rc38-failed-ci-20261109':
+            spec=importlib.util.spec_from_file_location('cleanup_rc38_failed_main',Path(__file__).with_name('cleanup_rc38_failed_main.py'))
+            cleanup=importlib.util.module_from_spec(spec);spec.loader.exec_module(cleanup)
+            cleanup.apply()
+            return # Exact completed hosted CI peer only; no deployment or network changes.
         if request.get('request_id')=='retire-migrated-legacy-endpoints-20261109':
             spec=importlib.util.spec_from_file_location('retire_migrated_endpoints',Path(__file__).with_name('retire_migrated_endpoints.py'))
             retirement=importlib.util.module_from_spec(spec);spec.loader.exec_module(retirement)

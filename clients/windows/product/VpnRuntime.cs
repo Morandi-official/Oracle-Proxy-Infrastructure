@@ -13,6 +13,7 @@ internal sealed partial class VpnRuntime : IDisposable
     private UuInventory? _uuInventory;
     private DateTimeOffset _received;
     private bool _recentAccountRestored;
+    private readonly RuntimeWake _wake=new();
     private string _mode="starting",_error="";
     private string _stage="IDLE";
     private JsonObject? _failure;
@@ -208,7 +209,7 @@ internal sealed partial class VpnRuntime : IDisposable
                     if(_secret.ConnectIntent){if(!NativeGuard.Active)await StopCore();_mode=_secret.RecoveryRequired?"recovery":"protected";_latency=null;}
                 }
             }finally{_gate.Release();}
-            await Task.Delay(200,cancel);
+            await _wake.Wait(200,cancel);
         }
     }
     private async Task StopCore(){
@@ -222,9 +223,10 @@ internal sealed partial class VpnRuntime : IDisposable
     {
         _stage="ORACLE_EGRESS_PROBE";_probePid=_core.Pid;_probeGeneration=_generation;_probePending=_core.Probe(_verified==default?3:12);
         _nextProbe=DateTimeOffset.UtcNow.AddSeconds(_verified==default?2:10);
+        _=_probePending.ContinueWith(_=>_wake.Pulse(),CancellationToken.None,TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
     }
     private async Task Refresh(){_stage="ACCOUNT_STATE";_state=await _api.Call("state",_secret.Token);_received=DateTimeOffset.UtcNow;_error="";}
-    private bool ActivePolicy()=>DeviceRegistration.Confirmed(_state) && _state?["account"]?["status"]?.GetValue<string>()=="active" && _state["observed_at"]?.GetValue<long>() is long at && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
+    private bool ActivePolicy()=>DeviceRegistration.Confirmed(_state) && _state?["account"]?["status"]?.GetValue<string>()=="active" && _state["observed_at"]?.GetValue<long>() is long at && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=RecentAccountProof.MaximumAgeSeconds;
     private async Task StartCore(bool standby=false,bool guardInstalled=false)
     {
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
@@ -397,7 +399,7 @@ internal sealed partial class VpnRuntime : IDisposable
             return response;
         }catch(OperationCanceledException)when(!admitted && admission.IsCancellationRequested){throw;}
         catch(Exception e){if(e is ApiException && e.Message is "LOGIN_REQUIRED" or "DEVICE_REVOKED"){ForgetLogin();await StopCore();}Failed(e);if(!_secret.ConnectIntent)_prepareRetryAfter=DateTimeOffset.UtcNow.AddSeconds(30);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
-        finally{_gate.Release();}
+        finally{_gate.Release();if(command!="Status")_wake.Pulse();}
     }
     private JsonObject? _disconnectTimings;
     private async Task Disconnect(bool keepPrepared=true)
@@ -511,5 +513,5 @@ internal sealed partial class VpnRuntime : IDisposable
     }
     private static string Code(Exception e)=>e.Message.Length<=80 && e.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?e.Message:"SERVICE_OPERATION_FAILED";
     internal void BeginStop(){_udpDiagnostics?.Cancel();_api.Cancel();_core.Cancel();}
-    public void Dispose(){if(_udpDiagnostics is not null){try{_udpDiagnostics.Stop().GetAwaiter().GetResult();}catch{} _udpDiagnostics.Dispose();}_core.Dispose();_api.Dispose();_gate.Dispose();}
+    public void Dispose(){if(_udpDiagnostics is not null){try{_udpDiagnostics.Stop().GetAwaiter().GetResult();}catch{} _udpDiagnostics.Dispose();}_core.Dispose();_api.Dispose();_gate.Dispose();_wake.Dispose();}
 }

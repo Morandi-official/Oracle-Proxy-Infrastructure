@@ -7,13 +7,14 @@ namespace OracleProxy.Product;
 // active-policy window, and never skips tunnel/WFP/dual-stack egress checks.
 internal static class RecentAccountProof
 {
+    internal const long MaximumAgeSeconds=20;
     internal static string Scope(string token)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     internal static JsonObject? Restore(JsonObject? state,string scope,string token,string publicKey,bool sameController,bool authorized,bool intent,bool recovery,long now)
     {
         if(now<=0 || !sameController || !authorized || intent || recovery || state is null || token.Length==0 || publicKey.Length==0 || scope!=Scope(token))return null;
         try{
             if(!DeviceRegistration.Confirmed(state) || state["account"]?["status"]?.GetValue<string>()!="active" ||
-               state["observed_at"] is not JsonValue stamp || !stamp.TryGetValue<long>(out long at) || at<=0 || at>now || now-at>20)return null;
+               state["observed_at"] is not JsonValue stamp || !stamp.TryGetValue<long>(out long at) || at<=0 || at>now || now-at>MaximumAgeSeconds)return null;
             string id=Scope(publicKey).ToLowerInvariant()[..12];
             if(state["registration"]?["device_id"]?.GetValue<string>()!=id)return null;
             return (JsonObject)state.DeepClone();

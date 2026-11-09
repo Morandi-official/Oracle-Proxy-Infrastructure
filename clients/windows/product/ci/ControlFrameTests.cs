@@ -29,6 +29,16 @@ internal static class ControlFrameTests
     private static async Task<int> Main()
     {
         RecentAccountProofTests.Run();
+        using(var wake=new RuntimeWake()){
+            wake.Pulse();wake.Pulse();
+            if(!await wake.Wait(1000,CancellationToken.None) || await wake.Wait(1,CancellationToken.None))throw new Exception("RUNTIME_WAKE_DID_NOT_COALESCE");
+            var pending=wake.Wait(1000,CancellationToken.None);wake.Pulse();
+            if(!await pending)throw new Exception("RUNTIME_COMPLETION_DID_NOT_WAKE");
+            using var cancel=new CancellationTokenSource();cancel.Cancel();
+            try{await wake.Wait(1000,cancel.Token);throw new Exception("CANCELLED_RUNTIME_WAKE_ACCEPTED");}catch(OperationCanceledException){}
+        }
+        using(var retired=new RuntimeWake()){retired.Dispose();retired.Pulse();}
+        Console.WriteLine("RUNTIME_COMPLETION_WAKE_COALESCING_CANCELLATION_AND_LATE_GENERATION=PASS");
         foreach(bool fail in new[]{false,true}){
             int finalized=0;
             try{await ControlResponse.Deliver(()=>fail?Task.FromException(new IOException("DISCONNECTED_PIPE")):Task.CompletedTask,()=>finalized++);}

@@ -19,6 +19,7 @@ internal sealed partial class MainForm : Form
     private readonly Button _login=new(){Text="登录",AutoSize=true};
     private readonly Button _connect=new(){Text="连接",Width=155,Height=48,Enabled=false};
     private readonly Button _disconnect=new(){Text="断开并恢复直连",Width=180,Height=48};
+    private bool _backendIdle;
     private readonly System.Windows.Forms.Timer _timer=new(){Interval=3000};
     private bool _githubChecking;
     private bool _native8443Available;
@@ -351,7 +352,8 @@ internal sealed partial class MainForm : Form
             async Task<JsonObject> Read(CancellationToken cancel){using var limit=CancellationTokenSource.CreateLinkedTokenSource(cancel);limit.CancelAfter(TimeSpan.FromSeconds(8));try{return await ControlPipe.Send("Status",null,null,limit.Token);}catch(OperationCanceledException)when(!cancel.IsCancellationRequested){throw new IOException("SERVICE_STATUS_TIMEOUT");}}
             var state=await ServiceBootstrap.Ensure(version,Read,Installer.ElevateInstallAsync,deadline.Token);
             if(IsDisposed || _closing)return false;
-            _serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;Display(state);return true;
+            await ControlPipe.Send("AttachClient",null,null,deadline.Token);
+            _backendIdle=false;_serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;Display(state);return true;
         }catch(Exception error){
             if(!IsDisposed && !_closing){
                 _loginFeedback.Text=error.Message=="SERVICE_SETUP_CANCELLED"?"已取消初始化。完成系统服务准备后才可登录。":error is OperationCanceledException?"初始化结果尚未确认，请等待安装窗口结束后重试。":"系统服务尚未准备完成，请重试初始化。";
@@ -377,7 +379,13 @@ internal sealed partial class MainForm : Form
     {
         cancel.ThrowIfCancellationRequested();
         async Task<JsonObject> Real(){
-            while(true){try{return await ControlPipe.Send(command,username,password,cancel);}
+            while(true){try{
+                    if(command!="Status"){
+                        await ControlPipe.Send("AttachClient",null,null,cancel);
+                        _backendIdle=false;_timer.Start();
+                    }
+                    return await ControlPipe.Send(command,username,password,cancel);
+                }
                 catch(IOException error)when(error.Message=="SERVICE_BUSY"){await Task.Delay(200,cancel);}}
         }
         Task<JsonObject> pending=_realService?Real():_send(command,username,password);
@@ -419,7 +427,7 @@ internal sealed partial class MainForm : Form
         bool acquired=false,sentQuit=false;
         try{
             await _requests.WaitAsync(deadline.Token);acquired=true;
-            if(_realService && ControlPipe.ServiceAbsent()){_allowClose=true;Close();return true;}
+            if(_backendIdle || _realService && ControlPipe.ServiceAbsent()){_allowClose=true;Close();return true;}
             if(_needsReconcile){
                 // The service processes the pipe serially. Its fresh Status
                 // response is a barrier after the earlier uncertain command.
@@ -444,6 +452,7 @@ internal sealed partial class MainForm : Form
     {
         if(_closing || IsDisposed || _recovering)return;
         bool passive=command=="Status";
+        if(passive && _backendIdle)return;
         if(passive)_statusReadSucceeded=false;
         if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
@@ -462,6 +471,7 @@ internal sealed partial class MainForm : Form
             if(command is "Login" or "LoginRemembered")_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
             Display(state);
+            if(state["shutdown_after_response"]?.GetValue<bool>()==true && state["ok"]?.GetValue<bool>()==true){_backendIdle=true;_timer.Stop();}
             if(command=="Logout" && state["ok"]?.GetValue<bool>()==true){_username.Clear();_password.Clear();_startupPrepared=false;}
             if(command is "Login" or "LoginRemembered" && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
         }catch(OperationCanceledException){
@@ -527,7 +537,7 @@ internal sealed partial class MainForm : Form
     internal void Display(JsonObject state)
     {
             _snapshotAt=DateTimeOffset.UtcNow;_connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
             if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;
             _native8443Available=state["native_udp_8443_available"]?.GetValue<bool>()==true;
@@ -705,6 +715,7 @@ internal sealed partial class MainForm : Form
         "ORACLE_PROBE_TIMEOUT"=>"出口验证超时，保护保持启用。请复制“连接诊断”。",
         "ORACLE_PROBE_HTTP_FAILED"=>"出口请求失败，保护保持启用。请复制“连接诊断”。",
         "UU_MAINTENANCE_BUSY"=>"UU 权限维护进行中，请完成后再连接。",
+        "TUN_ROUTE_NOT_ACTIVE"=>"Windows 尚未将普通应用流量送入 VPN，连接未生效。请查看连接诊断；防泄漏保护保持开启。",
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",
         "LOGIN_SESSION_EXPIRED"=>"登录已过期，请重新登录。",

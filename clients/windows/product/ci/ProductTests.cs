@@ -32,6 +32,7 @@ internal static class ProductTests
             try{using var lease=UuAclRepair.AcquireMaintenance();return 0;}
             catch(IOException error) when(error.Message=="UU_MAINTENANCE_BUSY"){return 4;}
         }
+        if(args.SequenceEqual(new[]{"--lifetime-controller"}))return OracleAcceptance.LifetimeController().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--udp-loss-self-test"}))return OracleAcceptance.VerifyUdpFaultSession();
         if(args.SequenceEqual(new[]{"--tun-presence-diagnostic"})){

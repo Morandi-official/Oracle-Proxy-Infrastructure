@@ -6,7 +6,7 @@ Target: Windows x64, with Windows 11 as the current primary desktop and Windows 
 
 The separate userspace WireGuard/TUN core is built from pinned sing-box v1.14.3 source with `with_gvisor,with_wireguard`. Its child-process interface accepts one configuration frame on anonymous stdin and closes gracefully on EOF. It has no exposed configuration server, shell, user-selected path or client-supplied endpoint. Application payload routing ends at the WireGuard endpoint; identified GameViewer program paths use the direct outbound. Upstream embeds Wintun; CI compares its exact bytes against the official signed x64 0.14.1 release before privileged tests. This is a custom application embedding an open-source core, not an independently invented VPN cryptographic protocol.
 
-The native Windows SDK WFP component owns one provider/sublayer and persistent ALE filters plus boot transport filters. It blocks other application egress, permits loopback, DHCP/NDP, SYSTEM-only service/core identities, and verified UU paths. TUN packet-path permits live in a separate dynamic WFP session; process exit releases them while the persistent base blocks remain. Transactions replace/remove only this provider's filters. A process/GUI crash must leave persistent filters in place. Presence/count inspection is only an invariant, not sufficient proof of every traffic path: actual packet and fault tests are required before release.
+The native Windows SDK WFP component owns one provider/sublayer and persistent ALE filters plus boot transport filters. It blocks other application egress, permits loopback, DHCP/NDP, SYSTEM-only service/core identities, and verified UU paths. TUN packet-path permits live in a separate dynamic WFP session; process exit releases them while the persistent base blocks remain. Transactions replace/remove only this provider's filters. A core/service crash leaves persistent filters in place. Since rc36, confirmed death of the last registered GUI process requests audited Off cleanup; network loss while the GUI remains alive does not. Presence/count inspection is only an invariant, not sufficient proof of every traffic path: actual packet and fault tests are required before release.
 
 Keys/tokens are DPAPI CurrentUser encrypted **under LocalSystem** in protected ProgramData storage; the UI never receives the private key/token. Passwords are forwarded through the authenticated pipe only for login and not persisted. The service generates X25519 locally; the backend receives only its public key. Managed string copies cannot be reliably erased; memory-only configuration and zeroed byte buffers reduce exposure, not defeat a malicious SYSTEM administrator.
 
@@ -44,14 +44,17 @@ blocking both UDP carriers must still select HTTPS and retain crash protection.
 rc9 adds explicit Auto / WireGuard UDP / QUIC HTTP3 preferences, native 51820→443 single-device datagram probing, standard h3 Extended CONNECT-UDP with raw HTTP Datagrams and bounded RFC9298 DATAGRAM Capsules for larger packets, a physical-interface-bound SYSTEM control/carrier path, and tunneled admin-site access. HTTPS is automatic fallback only. Fresh kernel/core verification remains mandatory after process loss; persisted carrier hints never authorize a connection.
 
 
-Normal window close and “断开并退出” use the fixed authenticated Quit operation:
+Since rc36, normal window close and “断开并恢复直连” use cold cleanup:
 stop the core, verify the owned TUN is removed, persist disconnected intent,
-then clear owned protection. The account stays signed in and the SYSTEM service
-remains idle without a core or preparation lease. Disconnect alone retains the
-dormant core for fast reconnect. GUI termination/crash and OS shutdown do not
-manufacture an explicit disconnect. A failed safe-exit acknowledgement keeps
-the window open with recovery guidance. An installation without a registered
-service can close immediately.
+then clear only owned protection and stop the control service after its reply.
+Disconnect retains the main window, without a polling or prewarm background.
+The next deliberate action starts only the fixed service through query/start
+rights for its registered owner, without another UAC prompt. An unremembered
+login resumes only while the same registered GUI PID/creation-time identity lives.
+Confirmed death of the last GUI performs the same cleanup; an uncertain process
+query or network failure is not death. Failed cleanup retains protection and
+recovery guidance. UAC recovery is an emergency tool. See
+[rc36 routing and lifetime](ci/rc36-routing-lifetime.md) for validation boundaries.
 
 rc11 adds bounded native per-port initiation/response/cookie/invalid/obsolete
 counters and numeric socket errors. Failed native evidence survives fallback;

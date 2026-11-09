@@ -17,8 +17,19 @@ try{
   $setup=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
   if($setup.ExitCode -ne 0){throw 'Oracle acceptance setup failed'}
   if($env:ORACLE_ACCEPTANCE_SCOPE -ne "endpoint-migration"){New-CIUuNetworkFixture}
-  & $test --oracle-client
-  if($LASTEXITCODE -ne 0){throw 'Real Oracle acceptance failed; no credential or private-key logs are exported'}
+  # Reproduce the user's physical default with interface/route metrics zero.
+  # This is a disposable runner only; restore exact values even after failure.
+  $physical=@(Get-NetIPInterface -AddressFamily IPv4 | Where-Object { $_.ConnectionState -eq 'Connected' -and $_.InterfaceAlias -notmatch 'Loopback|OracleProxy' })
+  $defaults=@(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | Where-Object { $_.InterfaceIndex -in $physical.InterfaceIndex })
+  try {
+    foreach($nic in $physical){Set-NetIPInterface -InterfaceIndex $nic.InterfaceIndex -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric 0}
+    foreach($route in $defaults){Set-NetRoute -InputObject $route -RouteMetric 0}
+    & $test --oracle-client
+    if($LASTEXITCODE -ne 0){throw 'Real Oracle acceptance failed; no credential or private-key logs are exported'}
+  } finally {
+    foreach($route in $defaults){Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $route.InterfaceIndex | Where-Object NextHop -eq $route.NextHop | Set-NetRoute -RouteMetric $route.RouteMetric}
+    foreach($nic in $physical){Set-NetIPInterface -InterfaceIndex $nic.InterfaceIndex -AddressFamily IPv4 -InterfaceMetric $nic.InterfaceMetric -AutomaticMetric $nic.AutomaticMetric}
+  }
   if($env:ORACLE_ACCEPTANCE_SCOPE -ne "endpoint-migration"){Remove-CIUuNetworkFixture}
   $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
   if($remove.ExitCode -ne 0){throw 'Post-acceptance uninstall failed'}

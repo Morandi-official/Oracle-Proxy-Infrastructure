@@ -72,7 +72,7 @@ function Exit-FailureWitness {
 }
 function Print-ControlTimings([int]$Cycle){
  $toggle=Find-Control 'diagnostics-toggle'
- if($toggle.Current.Name.StartsWith('展开')){$toggle.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()}
+ if($Cycle -eq 1){$toggle.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()}
  $button=Find-Control 'connection-diagnostics'
  if(!$button){throw 'LIVE_DIAGNOSTICS_BUTTON_UNAVAILABLE'}
  if(![ProxyGuiCloseButton]::PostMessage([IntPtr]$button.Current.NativeWindowHandle,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero)){throw 'LIVE_DIAGNOSTICS_OPEN_FAILED'}

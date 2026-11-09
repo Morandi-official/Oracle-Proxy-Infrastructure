@@ -412,7 +412,7 @@ internal sealed partial class MainForm : Form
         finally{
             _recovering=false;
             if(!IsDisposed){
-                _emergencyRecovery.Enabled=true;
+                _emergencyRecovery.Enabled=true;_backendIdle=false;_timer.Start();
                 await Act("Status");
                 if(!IsDisposed){_loginFeedback.Text=_detail.Text=result+" "+_detail.Text;RefreshActions();}
             }

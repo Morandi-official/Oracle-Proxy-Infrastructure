@@ -1,0 +1,19 @@
+name: Verify administrator DNS cutover (read only)
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['ops/network/verify_admin_dns.py', '.github/workflows/admin-dns-verification.yml']
+  push:
+    branches: [main]
+    paths: ['ops/network/verify_admin_dns.py', '.github/workflows/admin-dns-verification.yml']
+permissions:
+  contents: read
+jobs:
+  public-dns-and-tls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Require current active A record and validate both origins with hostname TLS
+        run: python3 ops/network/verify_admin_dns.py

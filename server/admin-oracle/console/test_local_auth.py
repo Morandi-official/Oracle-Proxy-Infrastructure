@@ -105,3 +105,37 @@ class LocalAdminTests(TestCase):
         SocialAccount.objects.create(user=self.owner,provider='github',uid='204281968')
         with override_settings(ADMIN_LOCAL_PASSWORD_HASH=make_password(self.password)):call_command('provision_local_admin',verbosity=0)
         self.assertEqual(self.client.post('/login/',{'username':'owner-local','password':self.password},secure=True).status_code,302)
+
+    def test_console_password_change_keeps_current_browser_and_rejects_old_cookie_and_password(self):
+        other=Client()
+        for browser in (self.client,other):
+            browser.post('/login/',{'username':'owner-local','password':self.password},secure=True)
+        changed='new-synthetic-long-password'
+        response=self.client.post('/api/admin/password',{'current_password':self.password,'new_password':changed,'confirm_password':changed},content_type='application/json',secure=True)
+        self.assertEqual(response.status_code,200)
+        self.assertNotIn(changed,response.content.decode())
+        self.assertEqual(self.client.get('/api/status',secure=True).status_code,200)
+        self.assertEqual(other.get('/api/status',secure=True).status_code,401)
+        self.assertEqual(Client().post('/login/',{'username':'owner-local','password':self.password},secure=True).status_code,401)
+        self.assertEqual(Client().post('/login/',{'username':'owner-local','password':changed},secure=True).status_code,302)
+        with override_settings(ADMIN_LOCAL_PASSWORD_HASH=make_password(self.password)):
+            call_command('provision_local_admin',verbosity=0)
+        self.owner.refresh_from_db();self.assertTrue(self.owner.check_password(changed))
+        self.assertTrue(Audit.objects.filter(action='admin.password.changed').exists())
+        self.assertFalse(Audit.objects.filter(resource__contains=changed).exists())
+
+    def test_console_password_change_requires_current_password_confirmation_authentication_and_csrf(self):
+        body={'current_password':self.password,'new_password':'new-synthetic-long-password','confirm_password':'new-synthetic-long-password'}
+        self.assertEqual(self.client.post('/api/admin/password',body,content_type='application/json',secure=True).status_code,401)
+        self.client.post('/login/',{'username':'owner-local','password':self.password},secure=True)
+        self.assertEqual(self.client.post('/api/admin/password',{**body,'current_password':'incorrect'},content_type='application/json',secure=True).json()['error'],'CURRENT_PASSWORD_INCORRECT')
+        self.assertEqual(self.client.post('/api/admin/password',{**body,'confirm_password':'different'},content_type='application/json',secure=True).json()['error'],'PASSWORD_CONFIRMATION_MISMATCH')
+        protected=Client(enforce_csrf_checks=True);protected.cookies=self.client.cookies
+        self.assertEqual(protected.post('/api/admin/password',body,content_type='application/json',secure=True).status_code,403)
+        self.owner.refresh_from_db();self.assertTrue(self.owner.check_password(self.password))
+
+    def test_explicit_bootstrap_reset_is_available_without_overwriting_changed_password_on_deploy(self):
+        self.owner.set_password('changed-synthetic-long-password');self.owner.save()
+        with override_settings(ADMIN_LOCAL_PASSWORD_HASH=make_password(self.password)):
+            call_command('provision_local_admin',reset_password=True,verbosity=0)
+        self.owner.refresh_from_db();self.assertTrue(self.owner.check_password(self.password))

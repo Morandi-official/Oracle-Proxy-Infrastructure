@@ -95,7 +95,7 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
     active=[p for p in owned if not p.get('revoked')]
     devices=[{'id':fingerprint(p['public_key']),'name':p['name'],'current':p['public_key']==key,'revoked':p['revoked'],'confirmed_at':(p.get('enrollment') or {}).get('confirmed_at')} for p in active]
     data={'schema':1,'udp_diagnostics_available':True,'observed_at':snapshot['observed_at'],'period':snapshot['period'],
-        'account':{'username':account.username,'status':status,'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
+        'account':{'username':account.username,'status':status,'cycle':user.get('cycle'),'rate':user.get('rate'),'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
         'registration':{'status':'registered' if is_confirmed else 'legacy' if peer else 'pending','device_id':fingerprint(key),'device_name':peer['name'] if peer else proposed_name,'confirmed_at':receipt['confirmed_at'] if is_confirmed else None,'requires_confirmation':not is_confirmed,'requires_slot':not bool(peer)},
         'devices':devices,'devices_history_truncated':False,
         'device':{'public_key':key,'registered':registered,'handshake_at':peer['handshake'] if peer else 0,'usage':peer['usage'] if peer else {'rx':0,'tx':0}},'tunnel':None}
@@ -259,6 +259,27 @@ def annotate_devices(snapshot):
     snapshot['pending_devices']=[{'id':fingerprint(row.public_key),'public_key':row.public_key,'name':row.proposed_name,'user_id':str(row.account.user_id),'created_at':int(row.created_at.timestamp()),'last_seen_at':int(row.last_seen_at.timestamp()) if row.last_seen_at else None} for row in sessions.values() if row.enrollment_flow and row.public_key not in peers and row.public_key not in snapshot.get('deleted_public_keys',[]) and str(row.account.user_id) in users]
     from .flclash import observe_usage
     observe_usage(snapshot)
+    # A live process or a warm/prepared handshake alone is not a connected VPN.
+    # WireGuard-only profiles have no heartbeat, so use recent kernel handshake.
+    stamp=now.timestamp();observed=snapshot.get('observed_at');enforced=snapshot.get('enforced_at')
+    fresh=all(isinstance(at,(int,float)) and not isinstance(at,bool) and 0<=stamp-at<=snapshot.get('lease_seconds',20) for at in (observed,enforced)) and not snapshot.get('error')
+    user_states={u['id']:u.get('status') for u in snapshot.get('users',[])}
+    connected=[]
+    for peer in snapshot.get('peers',[]):
+        row=sessions.get(peer['public_key'])
+        if row is not None and str(row.account.user_id)!=peer.get('user_id'):row=None
+        heartbeat=bool(row and row.last_seen_at and 0<=(now-row.last_seen_at).total_seconds()<=30)
+        handshake=peer.get('handshake') or 0
+        recent=isinstance(handshake,(int,float)) and not isinstance(handshake,bool) and 0<handshake<=stamp and stamp-handshake<=180
+        permitted=not peer.get('revoked') and not peer.get('user_deleted') and (peer.get('user_id') is None or user_states.get(peer['user_id'])=='active') and not snapshot.get('budget',{}).get('guard_blocked')
+        mode_ok=(not row or row.reported_mode=='unknown' or heartbeat and row.reported_mode=='connected')
+        active=bool(fresh and permitted and peer.get('present') and recent and mode_ok)
+        peer['connection']={'connected':active if fresh else None,'basis':'client_and_handshake' if row else 'kernel_handshake','handshake_at':handshake or None}
+        if active:connected.append(peer)
+    snapshot['connections']={'available':fresh,'observed_at':observed,'connected_users':len({p['user_id'] for p in connected if p.get('user_id')}) if fresh else None,
+        'connected_devices':len(connected) if fresh else None,'unassigned_connected_devices':sum(p.get('user_id') is None for p in connected) if fresh else None,
+        'registered_devices':sum(bool(p.get('managed') and not p.get('revoked') and not p.get('user_deleted')) for p in snapshot.get('peers',[])),
+        'handshake_window_seconds':180}
     return snapshot
 
 
@@ -289,7 +310,13 @@ def management_lock():
 
 def save_account(request, value):
     fields = {'id','name','username','password','device_limit','quota_bytes','expires_at','enabled'}
-    if set(value) != fields: raise ValueError('INVALID_FIELDS')
+    if not fields<=set(value) or set(value)-fields-{'download_bps','upload_bps'}:raise ValueError('INVALID_FIELDS')
+    rates={}
+    for key in ('download_bps','upload_bps'):
+        if key in value:
+            rate=value[key]
+            if rate is not None and (type(rate)is not int or not 100_000<=rate<=10_000_000_000):raise ValueError('INVALID_RATE')
+            rates[key]=rate
     username, password = value['username'], value['password']
     if not isinstance(username,str) or not re.fullmatch(r'[a-z0-9][a-z0-9_.-]{2,63}',username): raise ValueError('INVALID_USERNAME')
     if not isinstance(password,str) or (password and not 12 <= len(password) <= 128): raise ValueError('PASSWORD_LENGTH_12_TO_128_REQUIRED')
@@ -301,6 +328,7 @@ def save_account(request, value):
         if ClientAccount.objects.filter(username=username).exclude(user_id=user_id).exists(): raise ValueError('USERNAME_ALREADY_EXISTS')
         encoded = make_password(password) if password else account.password
         policy = {k:value[k] for k in ('id','name','device_limit','quota_bytes','expires_at','enabled')}
+        policy.update(rates)
         # Across the separate root and web databases, stage access disabled first.
         # A partial write leaves the account blocked, never with mismatched access.
         staged = control.call('user.save',actor(request),{**policy,'enabled':False})
@@ -310,6 +338,7 @@ def save_account(request, value):
             if password or (account and account.username != username):
                 ClientSession.objects.filter(account=current).delete()
             Audit.objects.create(actor=actor(request),action='account.saved',resource=user_id)
+        control.call('user.anchor',actor(request),{'user_id':user_id,'assigned_at':int(current.assigned_at.timestamp()),'basis':current.assignment_basis})
         return control.call('user.save',actor(request),policy)
 
 

@@ -3,7 +3,7 @@ const el = id => document.getElementById(id);
 const time = v => v ? new Date(v * 1000).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',hour12:false})+'（UTC+8）' : '—';
 const size = v => {if (v === null || v === undefined) return '未知'; let n=Number(v), i=0; const u=['B','KB','MB','GB','TB']; while(n>=1000 && i<4){n/=1000;i++;} return `${n.toFixed(i ? 2 : 0)} ${u[i]}`;};
 const states={active:'可用',disabled:'已禁用',expired:'已到期',quota:'配额耗尽'};
-const errors={PROFILE_CREATE_REJECTED:"配置创建未完成，请检查用户和设备名额；如有待核查项，先撤销它。",PROFILE_UNAVAILABLE:"该配置已停用、超额、过期或服务未就绪。",DEVICE_LIMIT_REACHED:'设备数量已达上限，请先撤销旧设备或调整上限。',DEVICE_REVOKED:'该设备已撤销，请在客户端重新生成设备身份。',REVOKE_DEVICES_BEFORE_LOWERING_LIMIT:'请先撤销多余设备，再降低上限。',USERNAME_ALREADY_EXISTS:'登录账号已被使用。',INVALID_USERNAME:'账号须为 3 至 64 位小写字母、数字、点、下划线或连字符。',PASSWORD_LENGTH_12_TO_128_REQUIRED:'密码长度须为 12 至 128 字符。',CONTROL_SERVICE_UNAVAILABLE:'控制服务不可用，当前数据不能作为实时状态。',BASELINE_CONFIRMATION_REQUIRED:'请核对账期用量并勾选确认。',HOST_ADDRESS_REQUIRED:'该 Peer 包含网段路由，暂不能纳管；只支持独立 /32 或 /128 设备地址。',NO_FREE_IPV4_TUNNEL_ADDRESS:'当前接口没有可分配的私有 IPv4 地址。',INVALID_PUBLIC_KEY:'请输入本机生成的 WireGuard 公钥，不是私钥。',PEER_ALREADY_EXISTS:'此 Peer 已存在，请使用“绑定 / 调整已有 Peer”。',PEER_NOT_FOUND:'未找到该 Peer，请刷新后选择已有设备。',INVALID_BUDGET:'额度必须大于零，安全余量必须小于额度。',OFFICIAL_USAGE_NOT_READY:'官方报表未就绪或已过期，请等定时查询完成；无法凭空校准。',CONTROL_UNAVAILABLE:'控制服务暂时不可用；已纳管流量仍受内核规则保护。'};
+const errors={INVALID_RATE:'限速须为0.1到10000 Mbps，空白表示不限。',ACCOUNT_CYCLE_ANCHOR_IMMUTABLE:'账号原始周期起点不能修改。',BANDWIDTH_APPLY_FAILED:'内核限速应用失败，受管流量已阻断，请检查控制服务。',CURRENT_PASSWORD_INCORRECT:"当前密码不正确。",PASSWORD_CONFIRMATION_MISMATCH:"两次新密码不一致。",PASSWORD_TOO_WEAK:"新密码强度不足，请换一个密码。",RATE_LIMITED:"操作过于频繁，请稍后再试。",PROFILE_CREATE_REJECTED:"配置创建未完成，请检查用户和设备名额；如有待核查项，先撤销它。",PROFILE_UNAVAILABLE:"该配置已停用、超额、过期或服务未就绪。",DEVICE_LIMIT_REACHED:'设备数量已达上限，请先撤销旧设备或调整上限。',DEVICE_REVOKED:'该设备已撤销，请在客户端重新生成设备身份。',REVOKE_DEVICES_BEFORE_LOWERING_LIMIT:'请先撤销多余设备，再降低上限。',USERNAME_ALREADY_EXISTS:'登录账号已被使用。',INVALID_USERNAME:'账号须为 3 至 64 位小写字母、数字、点、下划线或连字符。',PASSWORD_LENGTH_12_TO_128_REQUIRED:'密码长度须为 12 至 128 字符。',CONTROL_SERVICE_UNAVAILABLE:'控制服务不可用，当前数据不能作为实时状态。',BASELINE_CONFIRMATION_REQUIRED:'请核对账期用量并勾选确认。',HOST_ADDRESS_REQUIRED:'该 Peer 包含网段路由，暂不能纳管；只支持独立 /32 或 /128 设备地址。',NO_FREE_IPV4_TUNNEL_ADDRESS:'当前接口没有可分配的私有 IPv4 地址。',INVALID_PUBLIC_KEY:'请输入本机生成的 WireGuard 公钥，不是私钥。',PEER_ALREADY_EXISTS:'此 Peer 已存在，请使用“绑定 / 调整已有 Peer”。',PEER_NOT_FOUND:'未找到该 Peer，请刷新后选择已有设备。',INVALID_BUDGET:'额度必须大于零，安全余量必须小于额度。',OFFICIAL_USAGE_NOT_READY:'官方报表未就绪或已过期，请等定时查询完成；无法凭空校准。',CONTROL_UNAVAILABLE:'控制服务暂时不可用；已纳管流量仍受内核规则保护。'};
 let current=null, busy=false, budgetInitialized=false, lastBasic=0, baseAudit=[], activity=[];
 let feedbackTimer;
 function feedback(text, error=false){clearTimeout(feedbackTimer);el('feedback').hidden=false;el('feedback').textContent=text;el('feedback').classList.toggle('error',error);if(!error)feedbackTimer=setTimeout(()=>{el('feedback').hidden=true;},5500);}
@@ -25,7 +25,7 @@ function replaceRows(id,rows){
  if(focused)for(const item of body.querySelectorAll('button[data-focus-key]'))if(item.dataset.focusKey===focused){item.focus({preventScroll:true});break;}
 }
 function render(data){
- current=data;const b=data.budget;const age=data.observed_at ? Date.now()/1000-data.observed_at : null;
+ current=data;renderConnections(data);const b=data.budget;const age=data.observed_at ? Date.now()/1000-data.observed_at : null;
  el('remaining').textContent=size(b.remaining_bytes);el('outbound').textContent=size(b.measured_outbound_bytes);
  el('balance-basis').textContent=b.history_complete ? '手工核对基线 + 本机增量估算' : '历史未核对 / 采集有缺口';
  el('egress-interface').textContent=`VNIC ${data.nics.join(', ') || '未知'} · 仅出站 TX`;
@@ -101,7 +101,7 @@ function renderDeviceGroups(data,users,peerRow){
 }
 function emptyRow(id,cols,text){const r=document.createElement('tr');const c=cell(r,text);c.colSpan=cols;el(id).append(r);}
 function resetUser(){const f=el('user-form');f.reset();f.elements.id.value='';f.elements.password.required=true;el('user-delete').hidden=true;el('user-editor').open=false;el('user-editor-title').textContent='新建用户';}
-function editUser(u){if(!u)return;el('user-editor').open=true;el('user-editor-title').textContent='编辑 '+(u.username || u.name);const f=el('user-form');f.elements.id.value=u.id;f.elements.name.value=u.name;f.elements.username.value=u.username || '';f.elements.device_limit.value=u.device_limit || 3;f.elements.password.value='';f.elements.password.required=!u.username;el('user-delete').hidden=false;f.elements.quota.value=u.quota===null?'':u.quota/1e9;f.elements.enabled.checked=u.enabled;if(u.expires){const d=new Date(u.expires*1000);f.elements.expires.value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}else f.elements.expires.value='';f.scrollIntoView({behavior:'smooth'});}
+function editUser(u){if(!u)return;el('user-editor').open=true;el('user-editor-title').textContent='编辑 '+(u.username || u.name);const f=el('user-form');f.elements.id.value=u.id;f.elements.name.value=u.name;f.elements.username.value=u.username || '';f.elements.device_limit.value=u.device_limit || 3;f.elements.password.value='';f.elements.password.required=!u.username;el('user-delete').hidden=false;f.elements.quota.value=u.quota===null?'':u.quota/1e9;f.elements.enabled.checked=u.enabled;for(const direction of ['download','upload'])f.elements[direction+'_mbps'].value=u.rate?.[direction+'_bps']?u.rate[direction+'_bps']/1e6:'';if(u.expires){const d=new Date(u.expires*1000);f.elements.expires.value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}else f.elements.expires.value='';f.scrollIntoView({behavior:'smooth'});}
 async function deleteUser(id){if(!id || !window.confirm('删除此用户并停用其全部设备、注销客户端登录？用量和审计历史会保留，旧设备公钥不能再次使用。'))return;if(await mutate('account.delete',{user_id:id})){if(el('user-form').elements.id.value===id)resetUser();feedback('用户已删除，全部设备已停用，用量与审计记录保留。');}}
 function manageDevice(p,data){const f=el('peer-form');el('device-editor').open=true;f.elements.public_key.value=p.public_key;f.elements.public_key.readOnly=true;f.elements.name.value=p.name || p.fingerprint;f.elements.user_id.value=p.user_id || '';el('device-editor-title').textContent=`管理设备：${p.name || p.fingerprint}${p.revoked?'（已撤销，不能重新启用）':''}`;el('device-profile').hidden=false;el('device-profile').textContent=`设备识别码：${p.fingerprint}\n隧道地址：${p.allowed_ips.join(', ')}\n服务器：152.67.156.100:${data.listen_port}\n服务器公钥：${data.server_public_key || '未读取'}\nDNS、出口及 IPv6 策略：由客户端接入策略下发，请以客户端连接诊断为准\n接入说明：Windows 客户端使用账号登录及本机密钥自动获取接入信息，无需复制或导入此处配置。此处不会展示私钥。`;el('device-editor').scrollIntoView({behavior:'smooth',block:'center'});feedback('设备详情已打开。');}
 function deleteDeviceButton(parent,p){if(!p.public_key || p.managed===false)return;const b=button(parent,'删除',()=>deleteDevice(p));b.className='danger-quiet';b.dataset.focusKey=(p.fingerprint || p.id)+':delete';b.setAttribute('aria-label','删除设备');}
@@ -112,7 +112,7 @@ async function deleteDevice(p){
 function renderActivity(){const max=Math.max(1,...activity.map(a=>a.count));const rows=activity.map(a=>{const row=document.createElement('div');row.className='activity-row';const name=document.createElement('span');name.textContent='◉ '+a.username;const meter=document.createElement('meter');meter.min=0;meter.max=max;meter.value=a.count;meter.setAttribute('aria-label',a.username+'近24小时操作次数');const count=document.createElement('span');count.textContent=a.count+' 次';row.append(name,meter,count);return row;});el('activity-chart').replaceChildren(...rows);if(!rows.length)el('activity-chart').textContent='近24小时暂无用户操作。';}
 async function refresh(){if(busy)return;busy=true;el('refresh').disabled=true;try{if(Date.now()-lastBasic>30000){const [status,audit]=await Promise.all([api('/api/status'),api('/api/audit')]);lastBasic=Date.now();baseAudit=audit.entries;activity=audit.activity || [];el('identity').textContent=status.actor;el('identity').title=status.actor;const labels={ACTIVE:'运行中',INACTIVE:'未运行',PRESENT:'存在',ABSENT:'缺失',LISTENING:'监听中',NOT_LISTENING:'未监听'};for(const [id,k] of [['service','wg_service'],['interface','wg_interface'],['listener','udp_listener']])el(id).textContent=labels[status.snapshot?.[k]] || '未知';el('observed').textContent=status.snapshot?time(status.snapshot.observed_at):'尚无诊断';}render(await api('/api/control'));await refreshFlClash();await refreshHost();}catch(error){el('notice').classList.add('error');el('notice').textContent=`${error.message} 上次显示数据可能已过期。`;el('freshness').textContent='读取失败';}finally{busy=false;el('refresh').disabled=false;}}
 async function mutate(operation,data){try{render(await api('/api/control',{operation,data}));feedback('策略已保存并执行。');return true;}catch(error){feedback(error.message,true);return false;}}
-el('user-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;const submit=f.querySelector('[type=submit]');submit.disabled=true;try{const ok=await mutate('account.save',{id:f.elements.id.value || null,name:f.elements.name.value,username:f.elements.username.value,password:f.elements.password.value,device_limit:Number(f.elements.device_limit.value),quota_bytes:f.elements.quota.value===''?null:Math.round(Number(f.elements.quota.value)*1e9),expires_at:f.elements.expires.value?Math.floor(new Date(f.elements.expires.value).getTime()/1000):null,enabled:f.elements.enabled.checked});if(ok)resetUser();}finally{submit.disabled=false;}});
+el('user-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;const submit=f.querySelector('[type=submit]');submit.disabled=true;try{const ok=await mutate('account.save',{id:f.elements.id.value || null,name:f.elements.name.value,username:f.elements.username.value,password:f.elements.password.value,device_limit:Number(f.elements.device_limit.value),quota_bytes:f.elements.quota.value===''?null:Math.round(Number(f.elements.quota.value)*1e9),download_bps:f.elements.download_mbps.value===''?null:Math.round(Number(f.elements.download_mbps.value)*1e6),upload_bps:f.elements.upload_mbps.value===''?null:Math.round(Number(f.elements.upload_mbps.value)*1e6),expires_at:f.elements.expires.value?Math.floor(new Date(f.elements.expires.value).getTime()/1000):null,enabled:f.elements.enabled.checked});if(ok)resetUser();}finally{submit.disabled=false;}});
 el('user-reset').addEventListener('click',resetUser);
 el('user-delete').addEventListener('click',()=>deleteUser(el('user-form').elements.id.value));
 el('peer-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;if(!f.reportValidity())return;const key=f.elements.public_key.value.trim();const exists=current.peers.some(p=>p.public_key===key);const ok=await mutate(exists?'peer.assign':'peer.create',{public_key:key,name:f.elements.name.value,user_id:f.elements.user_id.value});if(ok)feedback(exists?'设备归属和名称已保存。':'设备已保存；客户端仍须确认归属。');});
@@ -214,3 +214,29 @@ el('udp-diag-refresh').addEventListener('click',refreshUdpDiagnostics);
 el('udp-diag-close').addEventListener('click',()=>el('udp-diag-dialog').close());
 el('udp-diag-copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(el('udp-diag-report').value);feedback('诊断报告已复制。');}catch{feedback('未能复制，请选择报告文字后复制。',true);}});
 setInterval(()=>{if(!document.hidden && el('udp-diag-details').open)refreshUdpDiagnostics();},10000);
+
+const passwordForm=el('admin-password-form');
+if(passwordForm)passwordForm.addEventListener('submit',async event=>{
+ event.preventDefault();const f=event.currentTarget;if(!f.reportValidity())return;
+ if(f.elements.new_password.value!==f.elements.confirm_password.value){feedback('两次新密码不一致。',true);return;}
+ const submit=f.querySelector('[type=submit]');submit.disabled=true;
+ try{await api('/api/admin/password',{current_password:f.elements.current_password.value,new_password:f.elements.new_password.value,confirm_password:f.elements.confirm_password.value});feedback('管理员密码已修改。其他浏览器需用新密码重新登录。');}
+ catch(error){feedback(error.message,true);}finally{f.reset();submit.disabled=false;}
+});
+
+function renderConnections(data){
+ const state=data.connections || {},users=new Map(data.users.map(u=>[u.id,u]));
+ el('connected-users').textContent=state.available?state.connected_users:'未知';
+ el('connected-devices').textContent=state.available?state.connected_devices:'未知';
+ el('registered-devices').textContent=state.registered_devices ?? '未知';
+ el('connections-freshness').textContent=state.available?'采样 '+time(state.observed_at):'当前连接状态未确认';
+ const rows=[];
+ if(state.available)for(const peer of data.peers.filter(p=>p.connection?.connected)){
+  const user=users.get(peer.user_id),row=document.createElement('tr');
+  cell(row,user?.username || user?.name || '未分配用户');cell(row,peer.name || peer.fingerprint);
+  cell(row,({'wireguard-udp':'WireGuard UDP','wireguard-quic':'HTTP/3','wireguard-https':'HTTPS'})[peer.client_status?.transport] || 'WireGuard');
+  cell(row,time(peer.handshake));rows.push(row);
+ }
+ if(!rows.length){const row=document.createElement('tr'),message=cell(row,state.available?'当前没有已确认的代理连接。':'等待读取新的连接状态。');message.colSpan=4;rows.push(row);}
+ replaceRows('connection-rows',rows);
+}

@@ -9,6 +9,9 @@ from allauth.socialaccount.models import SocialAccount
 class Command(BaseCommand):
     help='Provision only the single host-configured local administrator, never from HTTP.'
 
+    def add_arguments(self,parser):
+        parser.add_argument('--reset-password',action='store_true',help='Explicitly reset from the host bootstrap secret.')
+
     def handle(self,**options):
         if settings.ADMIN_AUTH_MODE != 'local':
             self.stdout.write('LOCAL_ADMIN=NOT_SELECTED'); return
@@ -19,6 +22,11 @@ class Command(BaseCommand):
             user,created=get_user_model().objects.get_or_create(username=settings.ADMIN_LOCAL_USERNAME)
             if SocialAccount.objects.filter(user=user).exclude(provider='github',uid__in=settings.ADMIN_GITHUB_IDS).exists():
                 raise CommandError('ADMIN_USERNAME_LINKED_TO_EXTERNAL_IDENTITY')
-            user.password=encoded;user.is_active=True;user.is_staff=True;user.is_superuser=False
-            user.save(update_fields=['password','is_active','is_staff','is_superuser'])
+            # Deployment must not overwrite a password changed in the console.
+            # The host secret bootstraps a missing password; resets are explicit.
+            fields=['is_active','is_staff','is_superuser']
+            if created or not user.has_usable_password() or options['reset_password']:
+                user.password=encoded;fields.append('password')
+            user.is_active=True;user.is_staff=True;user.is_superuser=False
+            user.save(update_fields=fields)
         self.stdout.write('LOCAL_ADMIN=PROVISIONED')

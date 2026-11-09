@@ -12,6 +12,7 @@ from django.http import FileResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.debug import sensitive_variables, sensitive_post_parameters
 import json
 from . import control, client_api, local_auth
 
@@ -89,6 +90,44 @@ def login_page(request):
 def logout_page(request):
     auth_logout(request)
     return redirect('login')
+
+
+@require_http_methods(['POST'])
+@sensitive_variables('value')
+@sensitive_post_parameters('current_password','new_password','confirm_password')
+def admin_password(request):
+    rejected=deny(request)
+    if rejected is not None:return rejected
+    if not local_auth.enabled():return JsonResponse({'error':'LOCAL_ADMIN_REQUIRED'},status=403)
+    if request.content_type!='application/json' or len(request.body)>4096:
+        return JsonResponse({'error':'INVALID_REQUEST'},status=400)
+    try:
+        value=json.loads(request.body)
+        if not isinstance(value,dict) or set(value)!={'current_password','new_password','confirm_password'} or not all(isinstance(v,str) and len(v)<=256 for v in value.values()):raise ValueError()
+    except (ValueError,TypeError):return JsonResponse({'error':'INVALID_REQUEST'},status=400)
+    if not local_auth.throttle('password-change:'+request.user.username):
+        return JsonResponse({'error':'RATE_LIMITED'},status=429)
+    if value['new_password']!=value['confirm_password']:
+        return JsonResponse({'error':'PASSWORD_CONFIRMATION_MISMATCH'},status=400)
+    if not 12<=len(value['new_password'])<=128:
+        return JsonResponse({'error':'PASSWORD_LENGTH_12_TO_128_REQUIRED'},status=400)
+    from django.contrib.auth import get_user_model,update_session_auth_hash
+    from django.contrib.auth.password_validation import validate_password
+    from django.core.exceptions import ValidationError
+    from django.db import transaction
+    with transaction.atomic():
+        user=get_user_model().objects.select_for_update().get(pk=request.user.pk)
+        if not user.check_password(value['current_password']):
+            Audit.objects.create(actor=audit_actor(request),action='admin.password.change_failed')
+            return JsonResponse({'error':'CURRENT_PASSWORD_INCORRECT'},status=400)
+        try:validate_password(value['new_password'],user=user)
+        except ValidationError:return JsonResponse({'error':'PASSWORD_TOO_WEAK'},status=400)
+        user.set_password(value['new_password']);user.save(update_fields=['password'])
+        Audit.objects.create(actor=audit_actor(request),action='admin.password.changed')
+    update_session_auth_hash(request,user)
+    request.session['admin_password_at']=time()
+    request.session.set_expiry(timezone.now()+timedelta(seconds=settings.ADMIN_REMEMBER_SECONDS))
+    return JsonResponse({'changed':True})
 
 
 @require_GET

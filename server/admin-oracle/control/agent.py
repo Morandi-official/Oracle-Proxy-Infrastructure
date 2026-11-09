@@ -24,6 +24,7 @@ TICK = 5
 LEASE = 20
 MAX_BYTES = 10**16
 SYSTEM_OPERATIONS = {
+    'system:account-sync': frozenset(('user.anchor',)),
     'system:health': frozenset(('state',)),
     'system:client-api': frozenset(('state', 'peer.enroll', 'peer.delete-owned', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
 }
@@ -31,6 +32,9 @@ _ipv6_spec = importlib.util.spec_from_file_location('oracle_ipv6_addresses', Pat
 ipv6_addresses = importlib.util.module_from_spec(_ipv6_spec)
 _ipv6_spec.loader.exec_module(ipv6_addresses)
 
+
+_billing_spec=importlib.util.spec_from_file_location('account_billing',Path(__file__).with_name('billing.py'))
+billing=importlib.util.module_from_spec(_billing_spec);_billing_spec.loader.exec_module(billing)
 
 def integer(value, maximum=MAX_BYTES):
     if type(value) is not int or not 0 <= value <= maximum: raise ValueError('INVALID_INTEGER')
@@ -67,6 +71,13 @@ def host_ips(values):
 
 
 class Driver:
+    def bandwidth(self,plan):
+        if not hasattr(self,'qos'):
+            spec=importlib.util.spec_from_file_location('account_qos',Path(__file__).with_name('qos.py'))
+            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+            self.qos=module.Controller(self.command,STATE,self.revoke)
+        self.qos.apply(plan)
+
     def revoke(self):
         # Best effort across all families even if one set is unavailable. Never renew on errors.
         for name in ('OPXOK4','OPXOK6','OPXALL4','OPXALL6'):
@@ -177,6 +188,7 @@ class Engine:
             expires INTEGER, enabled INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS devices (key TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
             addresses TEXT NOT NULL, owned INTEGER NOT NULL DEFAULT 0);
+          CREATE TABLE IF NOT EXISTS user_rates(user_id TEXT PRIMARY KEY,slot INTEGER UNIQUE NOT NULL,download_bps INTEGER,upload_bps INTEGER);
           CREATE TABLE IF NOT EXISTS device_limits (user_id TEXT PRIMARY KEY, maximum INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS device_enrollments (key TEXT PRIMARY KEY, user_id TEXT NOT NULL,
             machine_name TEXT NOT NULL, client_version TEXT NOT NULL, confirmed_at INTEGER NOT NULL);
@@ -192,6 +204,7 @@ class Engine:
           CREATE TABLE IF NOT EXISTS usage_history_gaps (start_at INTEGER NOT NULL, end_at INTEGER NOT NULL,
             PRIMARY KEY(start_at,end_at));
         ''')
+        self.billing=billing.Ledger(self.db,now)
         self.driver = driver; self.now = now; self.observation = None; self.error = None
         self.last_sample = None; self.last_enforced = None
         self.set_default('started_at', int(now())); self.set_default('nic_total', 0)
@@ -215,10 +228,12 @@ class Engine:
         if self.db.execute('SELECT 1 FROM kv WHERE key=?', (key,)).fetchone() is None: self.set(key, value)
 
     def add_usage(self, kind, key, rx, tx):
+        if kind=='user':self.billing.add(key,rx,tx)
         self.db.execute('INSERT INTO usage VALUES (?,?,?,?,?) ON CONFLICT(month,kind,key) DO UPDATE SET rx=rx+excluded.rx,tx=tx+excluded.tx',
                         (period(self.now()), kind, key, rx, tx))
 
     def used(self, kind, key):
+        if kind=='user':return self.billing.used(key)
         row = self.db.execute('SELECT rx,tx FROM usage WHERE month=? AND kind=? AND key=?', (period(self.now()), kind, key)).fetchone()
         return {'rx': row['rx'], 'tx': row['tx']} if row else {'rx': 0, 'tx': 0}
 
@@ -229,12 +244,14 @@ class Engine:
         user=self.db.execute('SELECT * FROM users WHERE id=?',(user_id,)).fetchone()
         if not user or self.deleted(user_id):raise ValueError('USER_NOT_FOUND')
         now=int(self.now());today=now//86400*86400
-        start=today if window=='day' else today-6*86400 if window=='week' else int(
-            dt.datetime.fromtimestamp(now,dt.timezone.utc).replace(day=1,hour=0,minute=0,second=0,microsecond=0).timestamp())
+        cycle=self.billing.window(user_id)
+        start=today if window=='day' else today-6*86400 if window=='week' else cycle['start_at']//86400*86400
         step=3600 if window=='day' else 86400
         end=today+86400;tracked=self.get('usage_hourly_started_at')
         hours=list(self.db.execute('SELECT hour,rx,tx FROM usage_hourly WHERE user_id=? AND hour>=? AND hour<? ORDER BY hour',
                                   (user_id,start,end)))
+        if window=='month':
+            hours=list(self.db.execute('SELECT day AS hour,rx,tx FROM cycle_daily WHERE user_id=? AND start_at=? ORDER BY day',(user_id,cycle['start_at'])))
         gaps=list(self.db.execute('SELECT start_at,end_at FROM usage_history_gaps WHERE start_at<? AND end_at>?',(end,start)))
         buckets=[]
         for at in range(start,end,step):
@@ -248,8 +265,12 @@ class Engine:
         used=self.used('user',user_id)
         return {'user_id':user_id,'window':window,'timezone':'UTC','recorded_from':tracked,'observed_at':self.last_sample,
             'buckets':buckets,'recorded_bytes':sum(b['rx_bytes']+b['tx_bytes'] for b in buckets),
-            'history_complete':all(b['coverage']=='complete' for b in buckets if b['coverage']!='future'),
-            'month_used_bytes':used['rx']+used['tx'],'quota_bytes':user['quota']}
+            'history_complete':not (window=='month' and cycle['usage_estimated']) and all(b['coverage']=='complete' for b in buckets if b['coverage']!='future'),
+            'cycle':cycle,'month_used_bytes':used['rx']+used['tx'],'quota_bytes':user['quota']}
+
+    def rate(self,user_id):
+        row=self.db.execute('SELECT download_bps,upload_bps FROM user_rates WHERE user_id=?',(user_id,)).fetchone()
+        return dict(row) if row else {'download_bps':None,'upload_bps':None}
 
     def device_limit(self, user_id):
         row = self.db.execute('SELECT maximum FROM device_limits WHERE user_id=?', (user_id,)).fetchone()
@@ -394,6 +415,16 @@ class Engine:
                 if self.reason(user) == 'active' and not self.revoked(device['key']):
                     timeout = LEASE if user['expires'] is None else min(LEASE,max(1,int(user['expires']-self.now())))
                     allowed.update({address:timeout for address in addresses})
+        plan=[]
+        for rate in self.db.execute('SELECT * FROM user_rates WHERE user_id NOT IN (SELECT user_id FROM deleted_users)'):
+            if not rate['download_bps'] and not rate['upload_bps']:continue
+            addresses={address for device in self.db.execute('SELECT addresses FROM devices WHERE user_id=?',(rate['user_id'],)) for address in host_ips(json.loads(device['addresses']))}
+            if addresses:plan.append({**dict(rate),'addresses':sorted(addresses)})
+        try:
+            if hasattr(self.driver,'bandwidth'):self.driver.bandwidth(plan)
+            elif plan:raise ValueError('BANDWIDTH_DRIVER_UNAVAILABLE')
+        except Exception:
+            self.error='BANDWIDTH_APPLY_FAILED';self.driver.revoke();raise
         try: self.driver.leases(managed, allowed, not self.budget_state()['guard_blocked'])
         except Exception:
             self.error='ENFORCEMENT_FAILED';self.driver.revoke();raise
@@ -415,7 +446,7 @@ class Engine:
             usage = self.used('user', user['id'])
             users.append({**dict(user), 'enabled': bool(user['enabled']), 'usage': usage,
                           'remaining_bytes': max(0, user['quota']-usage['rx']-usage['tx']) if user['quota'] is not None else None,
-                          'status': self.reason(user), 'device_limit':self.device_limit(user['id']), 'device_count':self.device_count(user['id'])})
+                          'rate':self.rate(user['id']),'cycle':self.billing.window(user['id']), 'status': self.reason(user), 'device_limit':self.device_limit(user['id']), 'device_count':self.device_count(user['id'])})
         bindings = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM devices')}
         confirmations = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM device_enrollments')}
         deleted_keys={row['key'] for row in self.db.execute('SELECT key FROM deleted_devices')}
@@ -492,7 +523,7 @@ class Engine:
     def dispatch(self, request):
         if not isinstance(request, dict) or set(request) != {'operation','actor','data'}: raise ValueError('INVALID_REQUEST')
         operation, actor, data = request['operation'], request['actor'], request['data']
-        if not isinstance(actor, str) or not re.fullmatch(r'(?:(?:github|local):[0-9]{1,20}|system:(?:client-api|health))', actor): raise ValueError('INVALID_ACTOR')
+        if not isinstance(actor, str) or not re.fullmatch(r'(?:(?:github|local):[0-9]{1,20}|system:(?:client-api|health|account-sync))', actor): raise ValueError('INVALID_ACTOR')
         if not isinstance(data, dict): raise ValueError('INVALID_DATA')
         if not isinstance(operation, str): raise ValueError('INVALID_OPERATION')
         # The web tier supplies these fixed native/health roles. Do not let
@@ -518,6 +549,13 @@ class Engine:
         if operation == 'usage.history':
             if actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')
             return self.usage_history(data)
+        if operation=='user.anchor':
+            if set(data)!={'user_id','assigned_at','basis'} or data['basis'] not in ('allocation','audit','legacy_inferred'):raise ValueError('INVALID_FIELDS')
+            user_id=identifier(data['user_id']);assigned=integer(data['assigned_at'],4102444800)
+            if assigned>int(self.now())+5:raise ValueError('INVALID_ASSIGNMENT_TIME')
+            if not self.db.execute('SELECT 1 FROM users WHERE id=?',(user_id,)).fetchone():raise ValueError('USER_NOT_FOUND')
+            self.billing.anchor(user_id,assigned,data['basis'])
+            return {'synced':True}
         owned_delete=operation=='peer.delete-owned'
         if owned_delete:
             if set(data)!={'public_key','user_id'}:raise ValueError('INVALID_FIELDS')
@@ -527,12 +565,16 @@ class Engine:
             operation='peer.delete';data={'public_key':key}
         if operation == 'peer.delete' and actor.startswith('system:') and not owned_delete:raise ValueError('ADMINISTRATOR_REQUIRED')
         # Account all current counters under the old ownership before any binding/config mutation.
-        self.tick()
+        try:self.tick()
+        except Exception:
+            if operation not in ('user.put','user.save') or self.error!='BANDWIDTH_APPLY_FAILED':raise
         saved_user_id = None
         if operation in ('user.put','user.save'):
             expected = {'id','name','quota_bytes','expires_at','enabled'}
             if operation == 'user.save': expected.add('device_limit')
-            if set(data) != expected: raise ValueError('INVALID_FIELDS')
+            if not expected<=set(data) or set(data)-expected-{'download_bps','upload_bps'}:raise ValueError('INVALID_FIELDS')
+            rates={k:(integer(data[k],10_000_000_000) if data[k] is not None else None) for k in ('download_bps','upload_bps') if k in data}
+            if any(v is not None and v<100_000 for v in rates.values()):raise ValueError('INVALID_RATE')
             user_id = identifier(data['id']) if data['id'] else str(uuid.uuid4())
             if data['id'] and not self.db.execute('SELECT 1 FROM users WHERE id=?',(user_id,)).fetchone(): raise ValueError('USER_NOT_FOUND')
             if self.deleted(user_id): raise ValueError('USER_DELETED')
@@ -548,6 +590,13 @@ class Engine:
             try:
                 self.db.execute('INSERT OR REPLACE INTO users VALUES (?,?,?,?,?)', (user_id,data['name'].strip(),quota,expires,data['enabled']))
                 self.db.execute('INSERT OR REPLACE INTO device_limits VALUES (?,?)', (user_id,maximum))
+                if rates:
+                    old=self.db.execute('SELECT * FROM user_rates WHERE user_id=?',(user_id,)).fetchone()
+                    used={r[0] for r in self.db.execute('SELECT slot FROM user_rates')}
+                    slot=old['slot'] if old else next((n for n in range(1,257) if n not in used),None)
+                    if slot is None:raise ValueError('USER_LIMIT')
+                    values={**self.rate(user_id),**rates}
+                    self.db.execute('INSERT OR REPLACE INTO user_rates VALUES (?,?,?,?)',(user_id,slot,values['download_bps'],values['upload_bps']))
                 self.db.execute('COMMIT')
             except Exception:
                 self.db.execute('ROLLBACK'); raise

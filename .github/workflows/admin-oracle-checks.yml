@@ -112,7 +112,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install dependencies on disposable runner only
-        run: sudo apt-get update && sudo apt-get install -y caddy python3-venv openssh-server wireguard-tools ipset iproute2 iptables
+        run: sudo apt-get update && sudo apt-get install -y caddy python3-venv openssh-server wireguard-tools ipset iproute2 iptables iperf3
       - name: Validate HTTPS reverse proxy configuration
         run: caddy validate --config server/admin-oracle/deploy/Caddyfile --adapter caddyfile
       - name: Pin and validate actual FlClash-compatible Mihomo UDP-only configuration
@@ -131,6 +131,8 @@ jobs:
         run: sudo unshare -n python3 ops/oracle-project/ci_udp_diagnostic_headers.py
       - name: Real isolated IPv6 NAT policy ordering and rollback
         run: sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 ops/oracle-project/ci_ipv6_tunnel.py
+      - name: Real shared account upload/download limits across IPv4 and IPv6
+        run: sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 ops/oracle-project/ci_account_bandwidth.py
       - name: Real isolated physical queue apply and rollback
         run: sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 ops/oracle-project/ci_network_queue.py
       - name: Real namespace UDP443 demux and admin through tunnel routing

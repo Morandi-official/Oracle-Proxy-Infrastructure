@@ -29,6 +29,25 @@ class ClientApiTests(TestCase):
         self.account=ClientAccount.objects.create(user_id=self.user['id'],username='client01',password=make_password('test-only-password-012345'))
         self.client=Client(enforce_csrf_checks=True,HTTP_HOST=HOST)
 
+    def test_online_summary_counts_shared_user_and_wireguard_without_counting_warm_native_device(self):
+        from django.utils import timezone
+        from .client_api import annotate_devices
+        first=self.login(3).json();second=self.login(5).json()
+        keys=[first['device']['public_key'],second['device']['public_key']]
+        manual=base64.b64encode(bytes([6])*32).decode()
+        self.engine.dispatch({'operation':'peer.create','actor':'github:204281968','data':{'public_key':manual,'user_id':self.user['id'],'name':'WireGuard profile'}})
+        now=int(timezone.now().timestamp())
+        for key in keys+[manual]:self.driver.value['peers'][key]['handshake']=now
+        self.engine.tick()
+        ClientSession.objects.filter(public_key=keys[0]).update(last_seen_at=timezone.now(),reported_mode='connected',reported_transport='wireguard-udp')
+        ClientSession.objects.filter(public_key=keys[1]).update(last_seen_at=timezone.now(),reported_mode='disconnected')
+        result=annotate_devices(self.engine.snapshot())
+        self.assertEqual(result['connections']['connected_users'],1)
+        self.assertEqual(result['connections']['connected_devices'],2)
+        self.assertFalse(next(p for p in result['peers'] if p['public_key']==keys[1])['connection']['connected'])
+        self.engine.error='OBSERVATION_UNAVAILABLE'
+        self.assertIsNone(annotate_devices(self.engine.snapshot())['connections']['connected_devices'])
+
     def login(self,index=3,confirm=True,**extra):
         value={'username':'client01','password':'test-only-password-012345','public_key':base64.b64encode(bytes([index])*32).decode(),'device_name':'Synthetic Win11','client_version':'0.3.0-rc18'}
         value.update(extra)

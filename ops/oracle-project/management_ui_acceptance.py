@@ -44,6 +44,7 @@ def main():
         value=route.request.post_data_json
         if value['operation']=='account.save':
          account=value['data']; policy={k:account[k] for k in ('id','name','quota_bytes','expires_at','enabled','device_limit')}
+         policy.update({k:account[k] for k in ('download_bps','upload_bps') if k in account})
          data=engine.dispatch({'actor':'github:204281968','operation':'user.save','data':policy})
          accounts[data['saved_user_id']]=account['username']
         elif value['operation']=='account.delete':
@@ -121,7 +122,7 @@ def main():
      expect(chart.locator('svg rect')).to_have_count(24)
      expect(chart.locator('.history-note')).to_contain_text('未采集')
      select.select_option('week');expect(chart.locator('svg rect')).to_have_count(7)
-     select.select_option('month');expect(chart.locator('svg rect')).to_have_count(__import__('datetime').datetime.now(__import__('datetime').timezone.utc).day)
+     select.select_option('month');expect(chart.locator('svg rect')).to_have_count(1)
      control=select.element_handle()
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
      assert control.evaluate('(node)=>node.isConnected'), 'Polling replaced the expanded chart controls'

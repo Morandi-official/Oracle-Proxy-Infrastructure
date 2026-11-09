@@ -22,11 +22,29 @@ internal static class Installer
         VerifyService();
         if(Registered()){
             using var service=new ServiceController(Platform.Service);
-            if(service.Status!=ServiceControllerStatus.Stopped){if(service.Status!=ServiceControllerStatus.StopPending)service.Stop();service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));}
+            if(service.Status!=ServiceControllerStatus.Stopped){
+                if(service.Status!=ServiceControllerStatus.StopPending){
+                    try{service.Stop();}
+                    catch(Exception error)when(error is InvalidOperationException or System.ComponentModel.Win32Exception){
+                        service.Refresh();
+                        // A verified Off reply can start graceful self-stop
+                        // between our status read and SCM control request.
+                        if(service.Status is not (ServiceControllerStatus.Stopped or ServiceControllerStatus.StopPending))throw;
+                    }
+                }
+                service.WaitForStatus(ServiceControllerStatus.Stopped,TimeSpan.FromSeconds(25));
+            }
         }
         string installedExe=File.Exists(Platform.Exe)?Platform.Exe:Path.Combine(Platform.Root,LegacyFiles[0]);
         if(!File.Exists(installedExe))return;
-        // SCM status can become Stopped just before Windows unloads DLLs.
+        // SCM Stopped precedes final process teardown. Wait for only our
+        // exact SYSTEM service image before deleting its extraction cache.
+        foreach(var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(installedExe)))using(process){
+            try{
+                if(process.HasExited || process.SessionId!=0)continue;
+                if(string.Equals(process.MainModule?.FileName,installedExe,StringComparison.OrdinalIgnoreCase) && !process.WaitForExit(10000))throw new IOException("SERVICE_PROCESS_STILL_RUNNING");
+            }catch(InvalidOperationException)when(process.HasExited){}
+        }
         for(int i=0;i<150;i++){try{using var f=File.Open(installedExe,FileMode.Open,FileAccess.ReadWrite,FileShare.None);return;}catch(IOException){Thread.Sleep(100);}}
         throw new IOException("SERVICE_IMAGE_STILL_IN_USE");
     }

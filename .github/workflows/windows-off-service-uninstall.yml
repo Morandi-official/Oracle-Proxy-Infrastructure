@@ -1,0 +1,39 @@
+name: Windows off-service uninstall regression
+on:
+  pull_request:
+    paths: ['clients/windows/product/**', '.github/workflows/windows-off-service-uninstall.yml']
+  push:
+    branches: [main]
+    paths: ['clients/windows/product/**', '.github/workflows/windows-off-service-uninstall.yml']
+permissions:
+  contents: read
+jobs:
+  off-service-uninstall:
+    runs-on: windows-2022
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-dotnet@v4
+        with: {global-json-file: clients/windows/product/global.json}
+      - uses: ilammy/msvc-dev-cmd@v1
+        with: {arch: x64}
+      - name: Build actual native boundary and off-only service fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $out='./dist/off-service-fixture'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # No Go/core download, tunnel, account or network test. This dummy is
+          # hash-pinned solely for Install/Off/Remove and is NEVER executed/shipped.
+          [IO.File]::WriteAllText((Join-Path $PWD "$out/Proxy.Core.exe"),'OFF_ONLY_NON_EXECUTABLE_FIXTURE')
+          cl.exe /nologo /LD /O2 /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\off-service-fixture\Proxy.Guard.dll
+          if($LASTEXITCODE -ne 0){throw 'Native boundary compile failed'}
+          $pins='./clients/windows/product/BuildPins.cs'
+          $body=(Get-Content -Raw $pins).Replace('BUILD_MUST_PIN_CORE',(Get-FileHash "$out/Proxy.Core.exe").Hash.ToLowerInvariant()).Replace('BUILD_MUST_PIN_GUARD',(Get-FileHash "$out/Proxy.Guard.dll").Hash.ToLowerInvariant())
+          [IO.File]::WriteAllText((Resolve-Path $pins),$body)
+          dotnet publish ./clients/windows/product/OracleProxy.Product.csproj -c Release -p:DebugType=None -o $out
+          if($LASTEXITCODE -ne 0){throw 'Off-only service compile failed'}
+      - name: Repeat real self-stop and uninstall without account or tunnel
+        shell: pwsh
+        run: ./clients/windows/product/ci/off-service-uninstall.ps1

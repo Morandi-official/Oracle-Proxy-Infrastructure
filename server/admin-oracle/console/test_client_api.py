@@ -29,6 +29,47 @@ class ClientApiTests(TestCase):
         self.account=ClientAccount.objects.create(user_id=self.user['id'],username='client01',password=make_password('test-only-password-012345'))
         self.client=Client(enforce_csrf_checks=True,HTTP_HOST=HOST)
 
+    def test_online_summary_counts_shared_user_and_wireguard_without_counting_warm_native_device(self):
+        from django.utils import timezone
+        from .client_api import annotate_devices
+        first=self.login(3).json();second=self.login(5).json()
+        keys=[first['device']['public_key'],second['device']['public_key']]
+        manual=base64.b64encode(bytes([6])*32).decode()
+        self.engine.dispatch({'operation':'peer.create','actor':'github:204281968','data':{'public_key':manual,'user_id':self.user['id'],'name':'WireGuard profile'}})
+        now=int(timezone.now().timestamp())
+        for key in keys+[manual]:self.driver.value['peers'][key]['handshake']=now
+        self.engine.tick()
+        ClientSession.objects.filter(public_key=keys[0]).update(last_seen_at=timezone.now(),reported_mode='connected',reported_transport='wireguard-udp')
+        ClientSession.objects.filter(public_key=keys[1]).update(last_seen_at=timezone.now(),reported_mode='disconnected')
+        result=annotate_devices(self.engine.snapshot())
+        self.assertEqual(result['connections']['connected_users'],1)
+        self.assertEqual(result['connections']['connected_devices'],2)
+        self.assertFalse(next(p for p in result['peers'] if p['public_key']==keys[1])['connection']['connected'])
+        self.engine.error='OBSERVATION_UNAVAILABLE'
+        self.assertIsNone(annotate_devices(self.engine.snapshot())['connections']['connected_devices'])
+
+    def test_account_edit_and_password_reset_preserve_original_30_day_anchor_and_shared_rate(self):
+        from . import client_api
+        from django.test import RequestFactory
+        from django.core.management import call_command
+        call_command('sync_account_cycles',verbosity=0)
+        before=self.engine.billing.window(self.user['id'])['assigned_at']
+        request=RequestFactory().post('/api/control');request.user=type('User',(),{'pk':1,'is_authenticated':True})()
+        value={'id':self.user['id'],'name':'Renamed','username':self.account.username,'password':'replacement-password-12345','device_limit':3,'quota_bytes':100000,'expires_at':None,'enabled':True,'download_bps':12_500_000,'upload_bps':3_000_000}
+        with override_settings(ADMIN_AUTH_MODE='local'):
+            result=client_api.save_account(request,value)
+        self.account.refresh_from_db()
+        self.assertEqual(result['users'][0]['cycle']['assigned_at'],before)
+        self.assertEqual(result['users'][0]['rate'],{'download_bps':12500000,'upload_bps':3000000})
+        self.assertEqual(int(self.account.assigned_at.timestamp()),before)
+
+    def test_native_account_keeps_rate_metadata_without_changing_client_frontend(self):
+        self.engine.dispatch({'actor':'github:204281968','operation':'user.put','data':{'id':self.user['id'],'name':'Only me','enabled':True,'quota_bytes':100000,'expires_at':None,'download_bps':1_000_000,'upload_bps':2_000_000}})
+        data=self.login().json()
+        self.assertEqual(data['account']['rate'],{'download_bps':1_000_000,'upload_bps':2_000_000})
+        self.assertNotIn('rate_limited',data['account'])
+        self.assertIn('used_bytes',data['account'])
+
     def login(self,index=3,confirm=True,**extra):
         value={'username':'client01','password':'test-only-password-012345','public_key':base64.b64encode(bytes([index])*32).decode(),'device_name':'Synthetic Win11','client_version':'0.3.0-rc18'}
         value.update(extra)

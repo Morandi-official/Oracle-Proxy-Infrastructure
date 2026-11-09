@@ -30,6 +30,8 @@ class ClientAccount(models.Model):
     user_id = models.UUIDField(primary_key=True)
     username = models.CharField(max_length=64, unique=True)
     password = models.CharField(max_length=256)
+    assigned_at = models.DateTimeField(default=timezone.now, editable=False)
+    assignment_basis = models.CharField(max_length=24, default="allocation", editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
 

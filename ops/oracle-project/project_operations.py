@@ -320,6 +320,9 @@ def verify_control():
             with urllib.request.urlopen(request,timeout=4) as response:
                 summary=json.load(response)['control']
             if summary['ready']:
+                current=host.ROOT/'current'
+                if (current/'console/management/commands/sync_account_cycles.py').is_file():
+                    host.as_user(host.APP_USER,[current/'.venv/bin/python','manage.py','sync_account_cycles'],cwd=current,env=host.read_environment())
                 print('PROJECT_POLICY_CONTROL_HEALTH='+json.dumps(summary,sort_keys=True));return
         except (OSError,ValueError,KeyError):pass
         time.sleep(1)
@@ -360,9 +363,9 @@ def install_control():
     lock.touch(exist_ok=True)
     previous = target.read_bytes() if target.exists() else None
     previous_unit = unit.read_bytes() if unit.exists() else None
-    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in ('udp_capture.py','udp_diagnostics.py')}
+    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py')}
     atomic(target.with_name('ipv6_addresses.py'), (SERVER/'control/ipv6_addresses.py').read_bytes(), 0o644)
-    for name in ('udp_capture.py','udp_diagnostics.py'):
+    for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py'):
         atomic(target.with_name(name),(SERVER/'control'/name).read_bytes(),0o644)
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
     atomic(unit,(SERVER/'deploy/oracle-proxy-control.service').read_bytes(),0o644)

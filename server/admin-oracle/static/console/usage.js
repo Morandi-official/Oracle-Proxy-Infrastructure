@@ -16,7 +16,7 @@ function renderUsers(data){
    const content=cell(detail,'');content.colSpan=5;
    const head=document.createElement('div');head.className='history-heading';
    const select=document.createElement('select');select.setAttribute('aria-label','流量统计范围');
-   for(const [key,label] of [['day','今日'],['week','近7天'],['month','本月']]){const option=document.createElement('option');option.value=key;option.textContent=label;select.append(option);}select.value='month';
+   for(const [key,label] of [['day','今日'],['week','近7天'],['month','本月周期']]){const option=document.createElement('option');option.value=key;option.textContent=label;select.append(option);}select.value='month';
    const summary=document.createElement('span');summary.className='muted';head.append(select,summary);
    const progress=document.createElement('progress');progress.className='quota-progress';progress.setAttribute('aria-label','共享月配额已用');
    const status=document.createElement('p');status.className='muted history-status';
@@ -29,7 +29,7 @@ function renderUsers(data){
   }
   view.toggle.textContent=(view.open?'▾ ':'▸ ')+u.name;view.toggle.setAttribute('aria-expanded',String(view.open));
   view.meta.textContent=`${u.username || '未分配账号'} · ${states[u.status]} · ${u.device_count}/${u.device_limit} 台`;
-  view.row.dataset.status=u.status;view.used.className='numeric';view.remaining.className='numeric';view.used.textContent=size(u.usage.rx+u.usage.tx);view.remaining.textContent=u.quota===null?'不限':size(u.remaining_bytes);view.expires.textContent=u.expires===null?'长期':time(u.expires);
+  view.row.dataset.status=u.status;view.used.className='numeric';view.remaining.className='numeric';view.used.textContent=size(u.usage.rx+u.usage.tx);view.remaining.textContent=u.quota===null?'不限':size(u.remaining_bytes);view.expires.textContent=u.cycle?`周期 ${time(u.cycle.start_at)} 至 ${time(u.cycle.end_at)}（结束时刻不含）\n最终到期：${u.expires===null?'长期':time(u.expires)}\n账号分配：${time(u.cycle.assigned_at)}${u.cycle.assignment_basis.includes('inferred')?'（旧记录推定）':''}${u.cycle.usage_estimated?' · 初始周期用量为保守估计':''}`:(u.expires===null?'长期':time(u.expires));view.expires.style.whiteSpace='pre-line';view.meta.textContent+=` · 下载 ${u.rate?.download_bps?u.rate.download_bps/1e6+' Mbps':'不限'} / 上传 ${u.rate?.upload_bps?u.rate.upload_bps/1e6+' Mbps':'不限'}`;
   nodes.push(view.row,view.detail);
   if(view.open){renderUserUsage(u.id);loadUserUsage(u.id);}
  }
@@ -50,14 +50,14 @@ async function loadUserUsage(id,force=false){
 function renderUserUsage(id){
  const view=userViews.get(id),u=userById(id);if(!view?.open || !u)return;
  const used=u.usage.rx+u.usage.tx;
- view.summary.textContent=u.quota===null?`本月已用 ${size(used)} · 不限额`:`本月已用 ${size(used)} / ${size(u.quota)} · 剩余 ${size(u.remaining_bytes)}`;
+ view.summary.textContent=u.quota===null?`本月周期已用 ${size(used)} · 不限额`:`本月周期已用 ${size(used)} / ${size(u.quota)} · 剩余 ${size(u.remaining_bytes)}`;
  view.progress.hidden=u.quota===null;view.progress.max=u.quota || 1;view.progress.value=Math.min(used,u.quota || 1);
  const entry=usageCache.get(id+':'+view.select.value);if(!entry || entry===view.entry)return;
  const data=entry.data;view.entry=entry;
  view.status.textContent=`此视图已记录 ${size(data.recorded_bytes)} · 上传 + 下载 · UTC`;
  const stale=!data.observed_at || Date.now()/1000-data.observed_at>20;
  view.note.textContent=stale?'采样已过期，当前图表不能作为实时状态。':data.history_complete?`采样 ${time(data.observed_at)}`:`细分采集始于 ${time(data.recorded_from)}；未采集部分未补零。`;
- const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 720 190');svg.setAttribute('role','img');svg.setAttribute('aria-label','用户'+({day:'今日小时',week:'近7天每日',month:'本月每日'})[data.window]+'流量柱状图，UTC统计');
+ const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 720 190');svg.setAttribute('role','img');svg.setAttribute('aria-label','用户'+({day:'今日小时',week:'近7天每日',month:'本月周期每日'})[data.window]+'流量柱状图，UTC统计');
  const make=(tag,attrs,text)=>{const node=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))node.setAttribute(k,String(v));if(text!==undefined)node.textContent=text;return node;};
  const buckets=data.buckets,peak=Math.max(0,...buckets.map(b=>b.rx_bytes+b.tx_bytes)),max=Math.max(3,peak),width=640/buckets.length;
  for(let i=0;i<=(peak?3:0);i++){const y=150-i*40;svg.append(make('line',{x1:58,x2:704,y1:y,y2:y,class:'usage-grid'}),make('text',{x:52,y:y+4,'text-anchor':'end'},size(max*i/3)));}

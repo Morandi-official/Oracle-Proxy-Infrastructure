@@ -29,7 +29,8 @@ def main():
      path=urlsplit(route.request.url).path
      if path=='/':
       body=(SERVER/'templates/dashboard.html').read_text().replace('{% csrf_token %}','<input type="hidden" name="csrfmiddlewaretoken" value="synthetic-browser-only-token">')
-      body=re.sub(r'{% if local_auth %}(.*?){% else %}.*?{% endif %}',r'\1',body,flags=re.S)
+      body=re.sub(r'{% if local_auth %}((?:(?!{% (?:if|endif)).)*?){% else %}.*?{% endif %}',r'\1',body,flags=re.S)
+      body=body.replace('{% if local_auth %}','').replace('{% endif %}','')
       route.fulfill(status=200,content_type='text/html',body=body)
      elif path=='/login/':
       body=(SERVER/'templates/local_login.html').read_text().replace("{% static 'console/style.css' %}",'/style.css').replace('{% csrf_token %}','<input type="hidden" name="csrfmiddlewaretoken" value="synthetic-browser-only-token">')
@@ -44,6 +45,7 @@ def main():
         value=route.request.post_data_json
         if value['operation']=='account.save':
          account=value['data']; policy={k:account[k] for k in ('id','name','quota_bytes','expires_at','enabled','device_limit')}
+         policy.update({k:account[k] for k in ('download_bps','upload_bps') if k in account})
          data=engine.dispatch({'actor':'github:204281968','operation':'user.save','data':policy})
          accounts[data['saved_user_id']]=account['username']
         elif value['operation']=='account.delete':
@@ -110,10 +112,13 @@ def main():
      label='CI browser user <b>literal</b>'
      page.locator('#user-form [name=username]').fill('ci-user01');page.locator('#user-form [name=password]').fill('synthetic-password-only-123')
      page.locator('#user-form [name=name]').fill(label);page.locator('#user-form [name=quota]').fill('1')
+     page.locator('#user-form [name=download_mbps]').fill('12.5');page.locator('#user-form [name=upload_mbps]').fill('3')
      page.get_by_role('button',name='保存用户',exact=True).click()
      row=page.locator('#user-rows tr').filter(has_text=label);expect(row).to_contain_text('可用')
      assert page.locator('#user-rows b').count()==0
      user=engine.snapshot()['users'][0]
+     assert user['rate']=={'download_bps':12500000,'upload_bps':3000000}
+     expect(row).to_contain_text('最终到期：长期');expect(row).to_contain_text('12.5 Mbps')
      row.locator('.user-toggle').click()
      chart=page.locator('#usage-'+user['id']);expect(chart).to_be_visible()
      expect(chart.locator('progress')).to_be_visible()
@@ -121,7 +126,7 @@ def main():
      expect(chart.locator('svg rect')).to_have_count(24)
      expect(chart.locator('.history-note')).to_contain_text('未采集')
      select.select_option('week');expect(chart.locator('svg rect')).to_have_count(7)
-     select.select_option('month');expect(chart.locator('svg rect')).to_have_count(__import__('datetime').datetime.now(__import__('datetime').timezone.utc).day)
+     select.select_option('month');expect(chart.locator('svg rect')).to_have_count(1)
      control=select.element_handle()
      page.get_by_role('button',name='↻ 刷新',exact=True).click()
      assert control.evaluate('(node)=>node.isConnected'), 'Polling replaced the expanded chart controls'

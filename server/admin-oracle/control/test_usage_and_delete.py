@@ -26,11 +26,11 @@ class HistoryAndDeleteTests(unittest.TestCase):
     def test_real_deltas_roll_up_to_day_week_month_without_reconstructing_old_month_usage(self):
         self.engine.add_usage('user',self.user['id'],500,600)
         self.traffic(40,60)
-        for window,count in [('day',24),('week',7),('month',25)]:
+        for window,count in [('day',24),('week',7),('month',1)]:
             data=self.history(window);self.assertEqual(len(data['buckets']),count)
-            self.assertEqual(data['recorded_bytes'],100);self.assertEqual(data['month_used_bytes'],1200)
+            self.assertEqual(data['recorded_bytes'],1200 if window=='month' else 100);self.assertEqual(data['month_used_bytes'],1200)
             self.assertFalse(data['history_complete'])
-            self.assertTrue(any(b['coverage']=='unknown' for b in data['buckets']))
+            self.assertTrue(any(b['coverage'] in ('unknown','partial') for b in data['buckets']))
         self.assertEqual(self.engine.used('user',self.user['id']),{'rx':540,'tx':660})
         self.assertFalse(any(b['coverage']=='complete' and b['start_at']<self.engine.get('usage_hourly_started_at') for b in self.history()['buckets']))
     def test_gaps_and_counter_resets_keep_month_accounting_but_do_not_invent_hourly_timing(self):

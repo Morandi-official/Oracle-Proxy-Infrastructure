@@ -19,6 +19,7 @@ urlpatterns = [
     path('api/udp-diagnostics', udp_diagnostics.administrator),
     path('api/client/quic-certificate', transports.public_certificate),
     path('api/client/logout', client_api.logout),
+    path('api/admin/password',views.admin_password),
     path('api/status', views.status),
     path('api/host-status', views.host_status),
     path('api/audit', views.audit),

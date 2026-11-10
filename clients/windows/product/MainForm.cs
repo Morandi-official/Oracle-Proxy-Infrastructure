@@ -528,8 +528,14 @@ internal sealed partial class MainForm : Form
         if(!passive){
             _busy=true;
             if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";
-            if(toggle){_mode.Text=command=="Connect"?"正在连接…":"正在断开…";_detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";}
-            if(command=="Connect" && _realService && IsHandleCreated)BeginInvoke((Action)(()=>{if(!IsDisposed && !_closing)RefreshActions();}));
+            bool deferFeedback=command=="Connect" && _realService && IsHandleCreated;
+            if(toggle && !deferFeedback){_mode.Text=command=="Connect"?"正在连接…":"正在断开…";_detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";}
+            // Start the service transaction before AutoSize/layout work. Only
+            // pending feedback is deferred; verified Connected still comes from
+            // the real command response and is never displayed optimistically.
+            if(deferFeedback)BeginInvoke((Action)(()=>{if(!IsDisposed && !_closing && _busy && _lastUiCommand=="Connect"){
+                _mode.Text="正在连接…";_detail.Text="正在启用加密连接并核验出口。";RefreshActions();
+            }}));
             else RefreshActions();
         }
         try{
@@ -614,7 +620,7 @@ internal sealed partial class MainForm : Form
     {
         if(state is null)return "尚未读取系统服务。";
         var report=new System.Text.StringBuilder("连接诊断（不含账号密码、令牌或密钥）\r\n");
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
+            foreach(string key in new[]{"product_version","egress_probe_protocol","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
             if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})report.Append($"attempt.{transport}.{key}: {attempt[key]}\r\n");
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})report.Append($"native_udp.{key}: {native[key]}\r\n");
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})report.Append($"native_udp.{port}.{key}: {counters[key]}\r\n");

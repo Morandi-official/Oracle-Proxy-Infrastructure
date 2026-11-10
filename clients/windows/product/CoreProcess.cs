@@ -14,6 +14,9 @@ internal sealed class CoreProcess : IDisposable
     private HashSet<string> _expectedIPv4=new(){"152.67.156.100"};
     internal string? VerifiedIPv4 {get;private set;}
     private HttpClient? _probeClient;
+    private TaskCompletionSource<VerifiedExit?>? _initialH3,_h3Lifetime;
+    private long _proofStarted;
+    internal string ProbeProtocol {get;private set;}="";
     internal bool StandbyCapable{get;private set;}
     internal bool TunActive{get;private set;}
     private string _carrierStage="NOT_STARTED";
@@ -32,11 +35,14 @@ internal sealed class CoreProcess : IDisposable
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
         if(_process is not null)await Stop();
+        _initialH3=null;ProbeProtocol="";_proofStarted=Stopwatch.GetTimestamp();
         _expectedIPv4=EndpointCatalog.Egress(state).ToHashSet();VerifiedIPv4=null;_dualStack=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
         _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
         if(probeReady is not null && !standby)throw new IOException("PROBE_REQUIRES_PRIVATE_STANDBY");
         if(standby)info.ArgumentList.Add(probeReady is null?"--standby":"--standby-probe");
+        if(probeReady is not null && _dualStack)_initialH3=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var h3Proof=_initialH3;_h3Lifetime=h3Proof;
         StandbyCapable=standby;TunActive=!standby;
         // A suspended native launch + job assignment would narrow the creation
         // race further. Persistent WFP already blocks direct user traffic.
@@ -44,10 +50,14 @@ internal sealed class CoreProcess : IDisposable
         _job=CreateJobObject(IntPtr.Zero,null);if(_job==IntPtr.Zero)throw new IOException("JOB_CREATE_FAILED");
         var limits=new JobLimits();limits.Basic.LimitFlags=0x2000; // KILL_ON_JOB_CLOSE
         if(!SetInformationJobObject(_job,9,ref limits,(uint)Marshal.SizeOf<JobLimits>()) || !AssignProcessToJobObject(_job,_process.Handle))throw new IOException("JOB_ASSIGN_FAILED");
-        Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){try{NativeGuard.SuspendTun();}catch{}}};
+        Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){h3Proof?.TrySetResult(null);try{NativeGuard.SuspendTun();}catch{}}};
         _process.ErrorDataReceived+=(_,line)=>{
             if(!ReferenceEquals(_process,owned))return;
             if(_nativeEvidence.Record(line.Data))return;
+            if(line.Data=="EGRESS_H3_UNAVAILABLE"){h3Proof?.TrySetResult(null);return;}
+            if(line.Data?.StartsWith("EGRESS_H3_VERIFIED ",StringComparison.Ordinal)==true){
+                h3Proof?.TrySetResult(InitialProbeRace.Parse(line.Data,_expectedIPv4,(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds));return;
+            }
             if(line.Data is "CARRIER_H3_TLS" or "CARRIER_H3_SETTINGS" or "CARRIER_H3_AUTH" or "CARRIER_H3_READY" or "CARRIER_H3_TLS_TIMEOUT" or "CARRIER_H3_TLS_CERTIFICATE" or "CARRIER_H3_TLS_FAILED" or "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443" or "CARRIER_NATIVE_8443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data=="WIREGUARD_REPLY_RECEIVED")Volatile.Write(ref _wireGuardReply,1);
             else if(line.Data is "CARRIER_NATIVE_TRY_51820" or "CARRIER_NATIVE_TRY_443" or "CARRIER_NATIVE_TRY_8443")Volatile.Write(ref _carrierStage,line.Data);
@@ -95,12 +105,21 @@ internal sealed class CoreProcess : IDisposable
             _probeClient=new HttpClient(new SocketsHttpHandler{Proxy=proxy,UseProxy=true,UseCookies=false,AllowAutoRedirect=false}){Timeout=Timeout.InfiniteTimeSpan};
         }
         var client=_probeClient;
+        var initial=Interlocked.Exchange(ref _initialH3,null);
+        async Task<VerifiedExit> Tcp(CancellationToken token){
+            string address="";
+            var timer=Stopwatch.StartNew();
+            var ipv4=EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,token,_dualStack?"https://1.1.1.1/cdn-cgi/trace":"https://www.cloudflare.com/cdn-cgi/trace",allowed:_expectedIPv4,observed:ip=>address=ip);
+            if(!_dualStack)await ipv4;
+            else{
+                var ipv6=EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,token,"https://[2606:4700:4700::1111]/cdn-cgi/trace","2603:c020:c015:8100::10");
+                await Task.WhenAll(ipv4,ipv6);
+            }
+            return new VerifiedExit(address,timer.ElapsedMilliseconds,"https");
+        }
         try{
-            var ipv4=EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,_stop.Token,_dualStack?"https://1.1.1.1/cdn-cgi/trace":"https://www.cloudflare.com/cdn-cgi/trace",allowed:_expectedIPv4,observed:ip=>VerifiedIPv4=ip);
-            if(!_dualStack)return await ipv4;
-            var ipv6=EgressProbe.Verify(client,timeoutSeconds,()=>HandshakeReplyReceived,_stop.Token,"https://[2606:4700:4700::1111]/cdn-cgi/trace","2603:c020:c015:8100::10");
-            var verified=await Task.WhenAll(ipv4,ipv6);
-            return verified.Max();
+            var proof=await InitialProbeRace.Verify(initial?.Task,Tcp,_stop.Token);
+            VerifiedIPv4=proof.Address;ProbeProtocol=proof.Protocol;return proof.ElapsedMs;
         }
         catch(IOException error)when(error.Message=="ORACLE_PROBE_TIMEOUT"){
             if(ReferenceEquals(Interlocked.CompareExchange(ref _probeClient,null,client),client))client.Dispose();
@@ -110,6 +129,7 @@ internal sealed class CoreProcess : IDisposable
     internal async Task Stop()
     {
         if(_process is null)return;
+        _h3Lifetime?.TrySetResult(null);_h3Lifetime=null;_initialH3=null;
         NativeGuard.SuspendTun();
         // Cancel in-flight and idle probe sockets before asking the core to
         // close its router, so its shutdown never waits on our HTTP reader.

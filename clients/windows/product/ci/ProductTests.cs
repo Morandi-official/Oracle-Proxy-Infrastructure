@@ -59,6 +59,7 @@ internal static class ProductTests
             return 1;
         }
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return UiOnMessageLoop();
+        if(args.SequenceEqual(new[]{"--service-worker-self-test"}))return ServiceWorkerBudget().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--native-denial"})){
             IntPtr module=NativeLibrary.Load(Platform.Guard);return Marshal.GetDelegateForFunctionPointer<Clear>(NativeLibrary.GetExport(module,"OpGuardClear"))()==5?0:1;
@@ -95,6 +96,27 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
         if(args.SequenceEqual(new[]{"--recovery-service"})){ServiceBase.Run(new Fixture(true));return 0;}
         return 2;
+    }
+    private static async Task<int> ServiceWorkerBudget()
+    {
+        ThreadPool.GetMinThreads(out int before,out int beforeIo);ThreadPool.GetMaxThreads(out int max,out int maxIo);
+        ServiceThreads.Prepare();
+        ThreadPool.GetMinThreads(out int after,out int afterIo);ThreadPool.GetMaxThreads(out int afterMax,out int afterMaxIo);
+        if(after<Math.Max(before,8) || afterIo!=beforeIo || max!=afterMax || maxIo!=afterMaxIo)return 1;
+        using var release=new ManualResetEventSlim();using var entered=new CountdownEvent(3);
+        var readers=Enumerable.Range(0,3).Select(_=>Task.Run(()=>{entered.Signal();release.Wait();})).ToArray();
+        try{
+            // Model two redirected synchronous pipe reads plus one blocking WFP
+            // call. A fourth ordinary continuation must not wait for starvation
+            // hill-climbing to notice an occupied low-core worker pool.
+            if(!entered.Wait(TimeSpan.FromSeconds(3)))return 1;
+            var watch=Stopwatch.StartNew();
+            await Task.Run(()=>{}).WaitAsync(TimeSpan.FromSeconds(1));
+            if(watch.ElapsedMilliseconds>=1000)return 1;
+            Console.WriteLine("LOW_CORE_BLOCKING_READERS_AND_GUARD_RETAIN_PROMPT_CONTROL_CONTINUATIONS=PASS");
+            Console.WriteLine("LOW_CORE_QUEUED_CONTINUATION_MS="+watch.ElapsedMilliseconds);
+            return 0;
+        }finally{release.Set();await Task.WhenAll(readers);}
     }
     private sealed class SlowTrace(bool correct) : HttpMessageHandler
     {

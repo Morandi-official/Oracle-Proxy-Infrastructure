@@ -62,6 +62,27 @@ func generateGUIDByDeviceName(name string) {}
         self.assertNotIn(b'luid.FlushDNS(',vendor.RECOVERY.encode())
         self.assertIn(b'winipcfg.SetInterfaceDnsSettings',vendor.RECOVERY.encode())
 
+    def test_fresh_dns_skip_requires_exact_complete_empty_native_snapshot(self):
+        start=vendor.CACHE.index('func oraclePreparedDNSAbsent(')
+        end=vendor.CACHE.index('func (t *NativeTun) prepareOracleAdapter()',start)
+        helper=vendor.CACHE[start:end].replace('winipcfg.LUID','uint64').replace(
+            'winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)','getAdapters()')
+        source='package check\nimport "errors"\ntype entry struct { LUID uint64; FirstDNSServerAddress,FirstDNSSuffix *int; domain string }\nfunc (e *entry) DNSSuffix() string { return e.domain }\nvar rows []*entry\nvar failure error\nfunc getAdapters()([]*entry,error){return rows,failure}\n'+helper
+        tests='package check\nimport "testing"\nfunc TestExactEmptyDNSSnapshot(t *testing.T){\n tests:=[]struct{name string;rows []*entry;err bool;want bool}{\n  {"one clean owned adapter",[]*entry{{LUID:7}},false,true},\n  {"unrelated dirty adapter ignored",[]*entry{{LUID:8,FirstDNSServerAddress:new(int)},{LUID:7}},false,true},\n  {"no owned snapshot",[]*entry{{LUID:8}},false,false},\n  {"duplicate owned snapshots",[]*entry{{LUID:7},{LUID:7}},false,false},\n  {"nil snapshot is ambiguous",[]*entry{nil,{LUID:7}},false,false},\n  {"query failure",nil,true,false},\n  {"DNS server present",[]*entry{{LUID:7,FirstDNSServerAddress:new(int)}},false,false},\n  {"DNS suffix list present",[]*entry{{LUID:7,FirstDNSSuffix:new(int)}},false,false},\n  {"DNS domain present",[]*entry{{LUID:7,domain:"example.invalid"}},false,false},\n }\n for _,test:=range tests {t.Run(test.name,func(t *testing.T){rows=test.rows;failure=nil;if test.err {failure=errors.New("native query")};if got:=oraclePreparedDNSAbsent(7);got!=test.want {t.Fatal("unsafe DNS empty conclusion")}})}\n}\n'
+        # A separate source file supplies errors for the generated native shim.
+        source=source.replace('import "errors"','')
+        tests=tests.replace('import "testing"','import("testing";"errors")')
+        go=shutil.which('go')
+        self.assertIsNotNone(go,'Go is required for the native snapshot boundary test')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'go.mod').write_text('module check\n\ngo 1.24\n')
+            (root/'dns.go').write_text(source)
+            (root/'dns_test.go').write_text(tests)
+            env=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local')
+            result=subprocess.run([go,'test','./...'],cwd=root,env=env,text=True,capture_output=True,timeout=60)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_dormant_recovery_is_read_only_until_own_fresh_creation(self):
         source=vendor.DORMANT_RECOVERY
         self.assertEqual(source.count('wintun.CreateAdapter('),1)

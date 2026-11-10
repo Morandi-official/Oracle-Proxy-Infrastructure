@@ -16,6 +16,9 @@ internal sealed class CoreProcess : IDisposable
     private HttpClient? _probeClient;
     private TaskCompletionSource<VerifiedExit?>? _initialH3,_h3Lifetime;
     private long _proofStarted;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string,long> _startTimings=new();
+    internal JsonObject StartTimings=>new(_startTimings.Select(x=>new KeyValuePair<string,JsonNode?>(x.Key,JsonValue.Create(x.Value))));
+    private void MarkStart(string key)=>_startTimings[key]=(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds;
     internal string ProbeProtocol {get;private set;}="";
     internal bool StandbyCapable{get;private set;}
     internal bool TunActive{get;private set;}
@@ -35,9 +38,9 @@ internal sealed class CoreProcess : IDisposable
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
         if(_process is not null)await Stop();
-        _initialH3=null;ProbeProtocol="";_proofStarted=Stopwatch.GetTimestamp();
+        _initialH3=null;ProbeProtocol="";_startTimings.Clear();_proofStarted=Stopwatch.GetTimestamp();
         _expectedIPv4=EndpointCatalog.Egress(state).ToHashSet();VerifiedIPv4=null;_dualStack=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
-        _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);MarkStart("bundle_ms");_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
         if(probeReady is not null && !standby)throw new IOException("PROBE_REQUIRES_PRIVATE_STANDBY");
         if(standby)info.ArgumentList.Add(probeReady is null?"--standby":"--standby-probe");
@@ -46,7 +49,7 @@ internal sealed class CoreProcess : IDisposable
         StandbyCapable=standby;TunActive=!standby;
         // A suspended native launch + job assignment would narrow the creation
         // race further. Persistent WFP already blocks direct user traffic.
-        _process=Process.Start(info) ?? throw new IOException("CORE_START_FAILED");
+        _process=Process.Start(info) ?? throw new IOException("CORE_START_FAILED");MarkStart("process_ms");
         _job=CreateJobObject(IntPtr.Zero,null);if(_job==IntPtr.Zero)throw new IOException("JOB_CREATE_FAILED");
         var limits=new JobLimits();limits.Basic.LimitFlags=0x2000; // KILL_ON_JOB_CLOSE
         if(!SetInformationJobObject(_job,9,ref limits,(uint)Marshal.SizeOf<JobLimits>()) || !AssignProcessToJobObject(_job,_process.Handle))throw new IOException("JOB_ASSIGN_FAILED");
@@ -54,6 +57,13 @@ internal sealed class CoreProcess : IDisposable
         _process.ErrorDataReceived+=(_,line)=>{
             if(!ReferenceEquals(_process,owned))return;
             if(_nativeEvidence.Record(line.Data))return;
+            if(line.Data=="ADAPTER_EMPTY_AUDITED"){_startTimings["empty_audited"]=1;return;}
+            if(line.Data is string timing && timing.Length<64){
+                var pair=timing.Split(' ');
+                if(pair.Length==2 && (pair[0] is "ADAPTER_CREATE_MS" or "ADAPTER_AUDIT_MS") && long.TryParse(pair[1],out long ms) && ms is >=0 and <=60000){
+                    _startTimings[pair[0]=="ADAPTER_CREATE_MS"?"adapter_create_ms":"adapter_audit_ms"]=ms;return;
+                }
+            }
             if(line.Data=="EGRESS_H3_UNAVAILABLE"){h3Proof?.TrySetResult(null);return;}
             if(line.Data?.StartsWith("EGRESS_H3_VERIFIED ",StringComparison.Ordinal)==true){
                 h3Proof?.TrySetResult(InitialProbeRace.Parse(line.Data,_expectedIPv4,(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds));return;
@@ -73,7 +83,7 @@ internal sealed class CoreProcess : IDisposable
             if(probeReady is not null && line=="PROBE_READY"){
                 // Start only this generation's private authenticated SOCKS
                 // probes while the core creates its unconfigured adapter.
-                probeReady();
+                MarkStart("private_probe_ready_ms");probeReady();
                 return await _process.StandardOutput.ReadLineAsync();
             }
             return line;
@@ -86,7 +96,9 @@ internal sealed class CoreProcess : IDisposable
         }
         // Only the cold standby preparation guarantees fresh CreateAdapter;
         // never manufacture ownership from a by-name OpenAdapter fallback.
+        MarkStart("adapter_ready_ms");
         if(standby)TunReceipt.Record(owned);
+        MarkStart("receipt_ms");
         Volatile.Write(ref _safeStage,"READY");
     }
     private async Task CoreCommand(string command,string expected)

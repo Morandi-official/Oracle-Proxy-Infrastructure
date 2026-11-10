@@ -48,7 +48,9 @@ func PrepareOracleAdapter() error {
 	prepared := oraclePreparedAdapter != nil
 	oracleAdapterMutex.Unlock()
 	if prepared { return nil }
+	started := time.Now()
 	adapter, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
+	fmt.Fprintln(os.Stderr, "ADAPTER_CREATE_MS", time.Since(started).Milliseconds())
 	if err != nil { return err }
 	owned := &NativeTun{adapter: adapter, options: Options{Name: "OracleProxy"}}
 	if err = owned.prepareOracleAdapter(); err != nil {
@@ -58,26 +60,52 @@ func PrepareOracleAdapter() error {
 	return nil
 }
 
+// Called only after fresh CreateAdapter, or this process's own session End.
+// The read-only empty audit never grants ownership and never opens by name.
+func oraclePreparedDNSAbsent(luid winipcfg.LUID) bool {
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)
+	if err != nil { return false }
+	matches := 0
+	for _, entry := range adapters {
+		if entry == nil { return false }
+		if entry.LUID != luid { continue }
+		matches++
+		if entry.FirstDNSServerAddress != nil || entry.FirstDNSSuffix != nil || entry.DNSSuffix() != "" { return false }
+	}
+	return matches == 1
+}
+
 func (t *NativeTun) prepareOracleAdapter() error {
 	luid := winipcfg.LUID(t.adapter.LUID())
-	// Scope is closed while the parent's persistent fail-close guard is still
-	// active. Remove addresses, routes and DNS before acknowledging standby.
-	if err := luid.FlushIPAddresses(windows.AF_UNSPEC); err != nil {
-		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_IP_FAILED")
-		return err
+	started := time.Now()
+	// Reuse the already audited native empty-state boundary. Only a verified
+	// inactive local-only adapter with NO DNS metadata avoids redundant writes.
+	// Any query error, ambiguity, manual address/route, or DNS metadata takes
+	// exactly the existing full cleanup path, with the same failure handling.
+	empty := verifyOracleDormantEmpty(luid) == nil && oraclePreparedDNSAbsent(luid)
+	if !empty {
+		// Scope is closed while the parent's persistent fail-close guard is still
+		// active. Remove addresses, routes and DNS before acknowledging standby.
+		if err := luid.FlushIPAddresses(windows.AF_UNSPEC); err != nil {
+			fmt.Fprintln(os.Stderr, "TUN_CLEANUP_IP_FAILED")
+			return err
+		}
+		if err := luid.FlushRoutes(windows.AF_UNSPEC); err != nil {
+			fmt.Fprintln(os.Stderr, "TUN_CLEANUP_ROUTE_FAILED")
+			return err
+		}
+		if err := luid.FlushDNS(windows.AF_INET); err != nil {
+			fmt.Fprintln(os.Stderr, "TUN_CLEANUP_DNS4_FAILED")
+			return err
+		}
+		if err := luid.FlushDNS(windows.AF_INET6); err != nil {
+			fmt.Fprintln(os.Stderr, "TUN_CLEANUP_DNS6_FAILED")
+			return err
+		}
 	}
-	if err := luid.FlushRoutes(windows.AF_UNSPEC); err != nil {
-		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_ROUTE_FAILED")
-		return err
-	}
-	if err := luid.FlushDNS(windows.AF_INET); err != nil {
-		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_DNS4_FAILED")
-		return err
-	}
-	if err := luid.FlushDNS(windows.AF_INET6); err != nil {
-		fmt.Fprintln(os.Stderr, "TUN_CLEANUP_DNS6_FAILED")
-		return err
-	}
+	fmt.Fprintln(os.Stderr, "ADAPTER_AUDIT_MS", time.Since(started).Milliseconds())
+	if empty { fmt.Fprintln(os.Stderr, "ADAPTER_EMPTY_AUDITED") }
+
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
 	if oraclePreparedAdapter != nil {

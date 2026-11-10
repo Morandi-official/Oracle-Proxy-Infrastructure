@@ -363,6 +363,8 @@ internal static class OracleAcceptance
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
         var state=RequireSuccess("Status",await ControlPipe.Send("Status"));
         Console.WriteLine("ACTUAL_SERVICE_EGRESS_PROBE_PROTOCOL="+state["egress_probe_protocol"]);
+        if(state["core_start_timings"] is JsonObject coreTimings)foreach(string key in new[]{"bundle_ms","process_ms","private_probe_ready_ms","adapter_ready_ms","receipt_ms","adapter_create_ms","adapter_audit_ms","empty_audited"})
+            if(coreTimings[key] is JsonValue timing && timing.TryGetValue<long>(out long elapsed))Console.WriteLine("ACTUAL_SERVICE_CORE_"+key.ToUpperInvariant()+"="+elapsed);
         Console.WriteLine("ACTUAL_SERVICE_RECENT_ACCOUNT_PROOF_RESTORED="+(state["recent_account_proof_restored"]?.GetValue<bool>()==true));
         foreach(string key in new[]{"click_to_ready_ms","connect_switch_ms"})if(state[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
         if(state["switch_timings"] is JsonObject phases)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","core_process_ms","protection_joined_ms","core_active_and_authorized_ms","initial_probe_ms","complete_ms"})

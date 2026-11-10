@@ -157,6 +157,11 @@ jobs:
           dotnet publish ./ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ../../../dist/bad-upgrade
           if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
           Copy-Item ../../../dist/product/Proxy.Core.exe,../../../dist/product/Proxy.Guard.dll ../../../dist/bad-upgrade
+      - name: Fresh dual-stack proof racing and bounded deadline regression
+        shell: pwsh
+        run: |
+          & ./dist/product-tests/OracleProxy.Product.Tests.exe --probe-self-test
+          if($LASTEXITCODE -ne 0){throw 'Fresh proof racing/deadline regression failed'}
       - name: Real NET8 to NET10 service and DPAPI identity upgrade acceptance
         if: env.ORACLE_ACCEPTANCE_SCOPE != 'endpoint-migration' && github.event.repository.private == false && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
         shell: pwsh

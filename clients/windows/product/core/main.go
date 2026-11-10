@@ -98,6 +98,14 @@ func run() error {
 		}
 		options.Inbounds = inbounds
 	}
+	// A freshly owned, sessionless adapter and private endpoint startup are
+	// independent. Join creation before READY and before any deferred close.
+	// No route, address, packet session or user traffic is activated here.
+	var adapterReady func() error
+	if standby && !check {
+		adapterReady = beginAdapterPreparation(oracleTun.PrepareOracleAdapter)
+		defer func() { _ = adapterReady() }()
+	}
 	instance, err := box.New(box.Options{Context: ctx, Options: options})
 	if err != nil {
 		return fmt.Errorf("create")
@@ -120,7 +128,8 @@ func run() error {
 		fmt.Println("PROBE_READY")
 	}
 	if standby {
-		if err = oracleTun.PrepareOracleAdapter(); err != nil {
+		err = adapterReady()
+		if err != nil {
 			instance.Close()
 			return fmt.Errorf("create")
 		}

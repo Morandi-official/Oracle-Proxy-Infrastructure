@@ -95,7 +95,7 @@ internal sealed partial class MainForm : Form
             return new Size(width,preferred.Height);
         }
     }
-    private string _connectionReport="尚未读取系统服务。";
+    private JsonObject? _diagnosticSnapshot;
     private DateTimeOffset _snapshotAt;
     private string _uuReport="请先在断开状态点击“重新识别 UU”。";
     private readonly Label _protocol=MetricValue(),_exitIp=MetricValue(),_download=MetricValue(),_upload=MetricValue(),_latency=MetricValue(),_uu=MetricValue();
@@ -610,8 +610,22 @@ internal sealed partial class MainForm : Form
         "UU_SIGNATURE_UNREADABLE"=>"没有可读取的数字签名",
         "UU_DIRECTORY_UNREADABLE"=>"安装目录不可读取或超出扫描限制",
         _=>"尚未通过检查"};
+    private static string BuildConnectionReport(JsonObject? state)
+    {
+        if(state is null)return "尚未读取系统服务。";
+        var report=new System.Text.StringBuilder("连接诊断（不含账号密码、令牌或密钥）\r\n");
+            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
+            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})report.Append($"attempt.{transport}.{key}: {attempt[key]}\r\n");
+            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})report.Append($"native_udp.{key}: {native[key]}\r\n");
+            if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})report.Append($"native_udp.{port}.{key}: {counters[key]}\r\n");
+            if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","protection_joined_ms","tun_active_ms","initial_probe_ms","complete_ms"})report.Append($"switch.{key}: {timings[key]}\r\n");
+            if(state["control_timings"] is JsonObject controlTimings)foreach(string key in new[]{"service_ready_ms","attested_pipe_ms","response_ms"})report.Append($"control.{key}: {controlTimings[key]}\r\n");
+            if(state["disconnect_timings"] is JsonObject offTimings)foreach(string key in new[]{"core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"})report.Append($"disconnect.{key}: {offTimings[key]}\r\n");
+            if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})report.Append($"failure.{key}: {failure[key]}\r\n");
+        return report.ToString().Replace("ORACLE_EGRESS_","EGRESS_",StringComparison.Ordinal).Replace("ORACLE_","EGRESS_",StringComparison.Ordinal).Replace("oracle_egress_","egress_",StringComparison.Ordinal).Replace("oracle_","egress_",StringComparison.Ordinal);
+    }
     internal string UuReport=>_uuReport;
-    internal string ConnectionReport=>_connectionReport+"\r\nui_snapshot_age_seconds: "+(_snapshotAt==default?"unavailable":Math.Max(0,(long)(DateTimeOffset.UtcNow-_snapshotAt).TotalSeconds).ToString())+"\r\n"+CompatibilityDiagnostics.Read()+$"\r\nui_last_command: {_lastUiCommand}\r\nui_queue_ms: {_lastUiQueueMs}\r\nui_attach_ms: {_lastUiAttachMs}\r\nui_response_ms: {_lastUiResponseMs}\r\nui_complete_ms: {_lastUiCompleteMs}";
+    internal string ConnectionReport=>BuildConnectionReport(_diagnosticSnapshot)+"\r\nui_snapshot_age_seconds: "+(_snapshotAt==default?"unavailable":Math.Max(0,(long)(DateTimeOffset.UtcNow-_snapshotAt).TotalSeconds).ToString())+"\r\n"+CompatibilityDiagnostics.Read()+$"\r\nui_last_command: {_lastUiCommand}\r\nui_queue_ms: {_lastUiQueueMs}\r\nui_attach_ms: {_lastUiAttachMs}\r\nui_response_ms: {_lastUiResponseMs}\r\nui_complete_ms: {_lastUiCompleteMs}";
     internal int UsageProgress=>_progress.Value;
     internal bool UsageFresh=>_progress.Enabled;
     internal int PollInterval=>_timer.Interval;
@@ -623,9 +637,7 @@ internal sealed partial class MainForm : Form
     }
     private void DisplaySnapshot(JsonObject state)
     {
-            _snapshotAt=DateTimeOffset.UtcNow;_connectionReport="连接诊断（不含账号密码、令牌或密钥）\r\n";
-            foreach(string key in new[]{"product_version","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})_connectionReport+=$"{key}: {state[key]}\r\n";
-            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})_connectionReport+=$"attempt.{transport}.{key}: {attempt[key]}\r\n";
+            _snapshotAt=DateTimeOffset.UtcNow;_diagnosticSnapshot=(JsonObject)state.DeepClone();
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;
             _native8443Available=state["native_udp_8443_available"]?.GetValue<bool>()==true;
             _native8443Test.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && _native8443Available;
@@ -640,12 +652,6 @@ internal sealed partial class MainForm : Form
             }finally{_renderingPort=false;}
             _udpPortChoice.Enabled=!_connectionIntent && !_busy && !_udpDiagnosing && _transportChoice.SelectedIndex==0;
             _transportChoice.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
-            if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})_connectionReport+=$"native_udp.{key}: {native[key]}\r\n";
-            if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})_connectionReport+=$"native_udp.{port}.{key}: {counters[key]}\r\n";
-            if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","protection_joined_ms","tun_active_ms","initial_probe_ms","complete_ms"})_connectionReport+=$"switch.{key}: {timings[key]}\r\n";
-            if(state["control_timings"] is JsonObject controlTimings)foreach(string key in new[]{"service_ready_ms","attested_pipe_ms","response_ms"})_connectionReport+=$"control.{key}: {controlTimings[key]}\r\n";
-            if(state["disconnect_timings"] is JsonObject offTimings)foreach(string key in new[]{"core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"})_connectionReport+=$"disconnect.{key}: {offTimings[key]}\r\n";
-            if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})_connectionReport+=$"failure.{key}: {failure[key]}\r\n";
             string entry=state["transport_address"]?.GetValue<string>()??"";
             string local=state["transport_private_address"]?.GetValue<string>()??"";
             int? ingressPort=state["transport_port"]?.GetValue<int>();
@@ -654,7 +660,6 @@ internal sealed partial class MainForm : Form
             string productVersion=state["product_version"]?.GetValue<string>() ?? DeviceRegistration.Version;
             _version.Text="v"+productVersion.Split('+')[0];
             if(_help.GetToolTip(_version)!=productVersion)_help.SetToolTip(_version,productVersion);
-            _connectionReport=_connectionReport.Replace("ORACLE_EGRESS_","EGRESS_",StringComparison.Ordinal).Replace("ORACLE_","EGRESS_",StringComparison.Ordinal).Replace("oracle_egress_","egress_",StringComparison.Ordinal).Replace("oracle_","egress_",StringComparison.Ordinal);
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){

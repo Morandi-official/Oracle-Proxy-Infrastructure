@@ -7,7 +7,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"github.com/sagernet/sing-box/adapter"
 	oracleTun "github.com/sagernet/sing-tun"
@@ -18,8 +17,6 @@ import (
 	"strings"
 
 	box "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/adapter/outbound"
-	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json"
 	"golang.org/x/sys/windows"
@@ -74,11 +71,7 @@ func run() error {
 	if err != nil || len(line) > 65536 {
 		return fmt.Errorf("frame")
 	}
-	registry := include.OutboundRegistry()
-	outbound.Register[relayOptions](registry, relayType, newRelayOutbound)
-	outbound.Register[quicOptions](registry, quicType, newQUICOutbound)
-	outbound.Register[nativeOptions](registry, nativeType, newNativeOutbound)
-	ctx := box.Context(context.Background(), include.InboundRegistry(), registry, include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	ctx := productContext()
 	ctx = pause.WithDefaultManager(service.ContextWithDefaultRegistry(ctx))
 	options, err := json.UnmarshalExtendedContext[option.Options](ctx, line)
 	for i := range line {
@@ -144,7 +137,7 @@ func run() error {
 					continue
 				}
 				logger := instance.LogFactory().NewLogger("standby-tun")
-				entry, createErr := include.InboundRegistry().Create(ctx, instance.Router(), logger, tun.Tag, tun.Type, tun.Options)
+				entry, createErr := productInbounds().Create(ctx, instance.Router(), logger, tun.Tag, tun.Type, tun.Options)
 				if createErr != nil {
 					instance.Close()
 					return fmt.Errorf("start")

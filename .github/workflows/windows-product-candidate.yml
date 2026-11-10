@@ -157,6 +157,13 @@ jobs:
           dotnet publish ./ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ../../../dist/bad-upgrade
           if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
           Copy-Item ../../../dist/product/Proxy.Core.exe,../../../dist/product/Proxy.Guard.dll ../../../dist/bad-upgrade
+      - name: Two-core service reader and control scheduling regression
+        shell: pwsh
+        env:
+          DOTNET_PROCESSOR_COUNT: '2'
+        run: |
+          & ./dist/product-tests/OracleProxy.Product.Tests.exe --service-worker-self-test
+          if($LASTEXITCODE -ne 0){throw 'Low-core worker scheduling regression failed'}
       - name: Fresh dual-stack proof racing and bounded deadline regression
         shell: pwsh
         run: |

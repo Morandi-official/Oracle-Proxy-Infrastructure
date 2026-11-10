@@ -14,7 +14,7 @@ internal sealed class CoreProcess : IDisposable
     private HashSet<string> _expectedIPv4=new(){"152.67.156.100"};
     internal string? VerifiedIPv4 {get;private set;}
     private HttpClient? _probeClient;
-    private TaskCompletionSource<VerifiedExit?>? _initialH3;
+    private TaskCompletionSource<VerifiedExit?>? _initialH3,_h3Lifetime;
     private long _proofStarted;
     internal string ProbeProtocol {get;private set;}="";
     internal bool StandbyCapable{get;private set;}
@@ -42,7 +42,7 @@ internal sealed class CoreProcess : IDisposable
         if(probeReady is not null && !standby)throw new IOException("PROBE_REQUIRES_PRIVATE_STANDBY");
         if(standby)info.ArgumentList.Add(probeReady is null?"--standby":"--standby-probe");
         if(probeReady is not null && _dualStack)_initialH3=new(TaskCreationOptions.RunContinuationsAsynchronously);
-        var h3Proof=_initialH3;
+        var h3Proof=_initialH3;_h3Lifetime=h3Proof;
         StandbyCapable=standby;TunActive=!standby;
         // A suspended native launch + job assignment would narrow the creation
         // race further. Persistent WFP already blocks direct user traffic.
@@ -129,7 +129,7 @@ internal sealed class CoreProcess : IDisposable
     internal async Task Stop()
     {
         if(_process is null)return;
-        _initialH3?.TrySetResult(null);_initialH3=null;
+        _h3Lifetime?.TrySetResult(null);_h3Lifetime=null;_initialH3=null;
         NativeGuard.SuspendTun();
         // Cancel in-flight and idle probe sockets before asking the core to
         // close its router, so its shutdown never waits on our HTTP reader.

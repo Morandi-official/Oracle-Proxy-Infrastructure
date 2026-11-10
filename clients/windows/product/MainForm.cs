@@ -528,8 +528,14 @@ internal sealed partial class MainForm : Form
         if(!passive){
             _busy=true;
             if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";
-            if(toggle){_mode.Text=command=="Connect"?"正在连接…":"正在断开…";_detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";}
-            if(command=="Connect" && _realService && IsHandleCreated)BeginInvoke((Action)(()=>{if(!IsDisposed && !_closing)RefreshActions();}));
+            bool deferFeedback=command=="Connect" && _realService && IsHandleCreated;
+            if(toggle && !deferFeedback){_mode.Text=command=="Connect"?"正在连接…":"正在断开…";_detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";}
+            // Start the service transaction before AutoSize/layout work. Only
+            // pending feedback is deferred; verified Connected still comes from
+            // the real command response and is never displayed optimistically.
+            if(deferFeedback)BeginInvoke((Action)(()=>{if(!IsDisposed && !_closing && _busy && _lastUiCommand=="Connect"){
+                _mode.Text="正在连接…";_detail.Text="正在启用加密连接并核验出口。";RefreshActions();
+            }}));
             else RefreshActions();
         }
         try{

@@ -55,7 +55,9 @@ internal sealed class CoreProcess : IDisposable
             if(!ReferenceEquals(_process,owned))return;
             if(_nativeEvidence.Record(line.Data))return;
             if(line.Data=="EGRESS_H3_UNAVAILABLE"){h3Proof?.TrySetResult(null);return;}
-            if(InitialProbeRace.Parse(line.Data,_expectedIPv4,(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds) is VerifiedExit proof){h3Proof?.TrySetResult(proof);return;}
+            if(line.Data?.StartsWith("EGRESS_H3_VERIFIED ",StringComparison.Ordinal)==true){
+                h3Proof?.TrySetResult(InitialProbeRace.Parse(line.Data,_expectedIPv4,(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds));return;
+            }
             if(line.Data is "CARRIER_H3_TLS" or "CARRIER_H3_SETTINGS" or "CARRIER_H3_AUTH" or "CARRIER_H3_READY" or "CARRIER_H3_TLS_TIMEOUT" or "CARRIER_H3_TLS_CERTIFICATE" or "CARRIER_H3_TLS_FAILED" or "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443" or "CARRIER_NATIVE_8443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data=="WIREGUARD_REPLY_RECEIVED")Volatile.Write(ref _wireGuardReply,1);
             else if(line.Data is "CARRIER_NATIVE_TRY_51820" or "CARRIER_NATIVE_TRY_443" or "CARRIER_NATIVE_TRY_8443")Volatile.Write(ref _carrierStage,line.Data);

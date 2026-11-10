@@ -111,7 +111,12 @@ func run() error {
 	}
 	// Only the attested parent uses this private startup mode. SOCKS is
 	// credential protected; ordinary TUN routing remains inactive.
+	stopProof := func() {}
 	if eagerProbe {
+		if endpoint, ok := instance.Endpoint().Get("oracle-wireguard"); ok {
+			stopProof = startInitialHTTP3(ctx, endpoint)
+			defer stopProof()
+		}
 		fmt.Println("PROBE_READY")
 	}
 	if standby {
@@ -179,6 +184,7 @@ func run() error {
 	} else {
 		_, _ = io.Copy(io.Discard, io.LimitReader(input, 1))
 	}
+	stopProof()
 	if err = instance.Close(); err != nil {
 		return fmt.Errorf("close")
 	}

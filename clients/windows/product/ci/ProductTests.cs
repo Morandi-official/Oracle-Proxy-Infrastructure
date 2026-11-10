@@ -113,6 +113,7 @@ internal static class ProductTests
     private static async Task<int> ProbeDeadlines()
     {
         await LoginAdmissionTests.Run();
+        await InitialProbeRaceTests.Run();
         if(!ColdHandshakeRetryPolicy())return 1;
         if(!await OrphanLogDrain(false) || !await OrphanLogDrain(true))return 1;
         Console.WriteLine("ORPHAN_STDERR_DRAINS_LARGE_UNKNOWN_OR_INVALID_LOGS_WITHOUT_PREFIX_MATCH_OR_EARLY_EXIT=PASS");

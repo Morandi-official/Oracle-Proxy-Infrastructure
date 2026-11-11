@@ -24,6 +24,8 @@ def main():
                 response = page.goto(BASE + '/login/', wait_until='networkidle')
                 assert response.status == 200
                 assert response.headers['referrer-policy'] == 'same-origin'
+                assert page.locator('body').evaluate('(element) => getComputedStyle(element).backgroundColor') == 'rgb(232, 239, 245)'
+                print(f'BROWSER_{name.upper()}_LIVE_CLIENT_GRAY_BLUE_PALETTE=PASS',flush=True)
                 assert any(cookie['name'] == '__Host-oracle_csrf' and cookie['secure']
                            for cookie in context.cookies())
                 if page.locator('input[name="password"]').count():
@@ -68,6 +70,14 @@ def main():
                         assert telemetry.status==200
                         health=telemetry.json();assert health['sample'] and not health['stale'] and '_raw' not in health['sample']
                         assert page.locator('#host-health').count()==1
+                        expect(page.locator('#overview #connections')).to_be_visible()
+                        expect(page.locator('nav a[href="#connections"]')).to_have_count(0)
+                        connection_details=page.locator('#connection-details')
+                        assert not connection_details.evaluate('(element) => element.open')
+                        connection_details.locator('summary').click()
+                        assert connection_details.evaluate('(element) => element.open')
+                        connection_details.locator('summary').click()
+                        print(f'BROWSER_{name.upper()}_LIVE_OVERVIEW_CONNECTION_DISCLOSURE=PASS',flush=True)
                         assert page.locator('#available').count()==0
                         for window in ('hour','day','week','month'):
                             historical=context.request.get(BASE+'/api/host-status?window='+window)

@@ -253,6 +253,28 @@ def main():
      expect(page.locator('#help-users')).to_be_visible()
      bounds=page.locator('#help-users').bounding_box();assert bounds['x']>=0 and bounds['x']+bounds['width']<=390
      print(f'SYNTHETIC_{name.upper()}_HOVER_FOCUS_CLICK_ESCAPE_MOBILE_HELP_AND_PERSISTENT_DAY_WEEK_MONTH_CHART=PASS',flush=True)
+     # Overview keeps counts visible while connection rows are progressively disclosed.
+     page.locator('nav a[href="#overview"]').click()
+     expect(page.locator('#overview #connections')).to_be_visible()
+     expect(page.locator('nav a[href="#connections"]')).to_have_count(0)
+     expect(page.locator('#connection-details')).not_to_have_attribute('open','')
+     expect(page.locator('#connection-rows')).not_to_be_visible()
+     for metric in ('connected-users','connected-devices','registered-devices'):
+      expect(page.locator('#'+metric)).to_be_visible()
+     disclosure=page.locator('#connection-details>summary')
+     disclosure.focus();page.keyboard.press('Enter')
+     expect(page.locator('#connection-rows')).to_be_visible()
+     page.locator('#refresh').click()
+     expect(page.locator('#connection-details')).to_have_attribute('open','')
+     disclosure.focus();page.keyboard.press('Enter')
+     expect(page.locator('#connection-rows')).not_to_be_visible()
+     links=page.locator('nav a')
+     assert all(not re.match(r'^[◈◉▤◇⇄⌁⚙≡]',text.strip()) for text in links.all_text_contents())
+     assert page.evaluate("getComputedStyle(document.body).backgroundColor")=='rgb(232, 239, 245)'
+     assert page.evaluate("getComputedStyle(document.documentElement).colorScheme")=='light'
+     for link in links.all():
+      assert link.evaluate("e=>getComputedStyle(e,'::before').backgroundColor")!='rgba(0, 0, 0, 0)'
+     print(f'SYNTHETIC_{name.upper()}_OVERVIEW_COUNTS_COLLAPSED_CONNECTIONS_KEYBOARD_REFRESH_AND_CLIENT_PALETTE=PASS',flush=True)
      # Review artifacts use synthetic identities/ledger only, never production data.
      screenshots=ROOT/'dist/admin-ui-review';screenshots.mkdir(parents=True,exist_ok=True)
      official_fixture[0]['free_tier_status']='VERIFIED_USAGE_AND_PRICE_TIER'
@@ -262,6 +284,11 @@ def main():
       page.evaluate('scrollTo(0,0)');page.wait_for_timeout(150)
       assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Dashboard page overflow at {width}px'
       page.screenshot(path=str(screenshots/f'{name}-{width}-overview.png'))
+      page.locator('#connection-details>summary').click()
+      expect(page.locator('#connection-rows')).to_be_visible()
+      assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Expanded overview overflow at {width}px'
+      page.locator('#connections').screenshot(path=str(screenshots/f'{name}-{width}-connections-expanded.png'))
+      page.locator('#connection-details>summary').click()
       page.locator('#devices').evaluate('(node)=>scrollTo(0,node.getBoundingClientRect().top+scrollY-24)');page.wait_for_timeout(100)
       page.screenshot(path=str(screenshots/f'{name}-{width}-devices.png'))
      page.goto('https://management-fixture.invalid/login/',wait_until='networkidle')

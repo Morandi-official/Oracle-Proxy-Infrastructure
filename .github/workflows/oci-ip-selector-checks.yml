@@ -1,0 +1,21 @@
+name: Bounded OCI IP selector source checks
+on:
+  pull_request:
+    paths: ['ops/oci-ip-selector/**', '.github/workflows/oci-ip-selector-checks.yml']
+  push:
+    branches: [main]
+    paths: ['ops/oci-ip-selector/**', '.github/workflows/oci-ip-selector-checks.yml']
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s ops/oci-ip-selector -p 'test_*.py' -v

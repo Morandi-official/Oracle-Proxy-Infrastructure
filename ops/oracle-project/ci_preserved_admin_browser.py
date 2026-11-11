@@ -10,13 +10,14 @@ acceptance=importlib.util.module_from_spec(spec);spec.loader.exec_module(accepta
 
 def main():
     requests=[]
+    stylesheet=(Path(__file__).resolve().parents[2]/'server/admin-oracle/static/console/style.css').read_text()
     with sync_playwright() as actual:
         def serve(route):
             requests.append(route.request.method)
             assert route.request.method=='GET','Obsolete credentials were submitted'
             route.fulfill(status=200,content_type='text/html',headers={'referrer-policy':'same-origin',
                 'set-cookie':'__Host-oracle_csrf=synthetic-only; Path=/; Secure; SameSite=Lax'},
-                body='<form><input name="username"><input name="password" type="password"><button>登录</button></form>')
+                body='<style>'+stylesheet+'</style><form><input name="username"><input name="password" type="password"><button>登录</button></form>')
         class Browser:
             def __init__(self,browser):self.browser=browser
             def new_context(self,**options):

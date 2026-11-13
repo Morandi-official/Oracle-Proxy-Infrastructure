@@ -270,11 +270,11 @@ def main():
      expect(page.locator('#connection-rows')).not_to_be_visible()
      links=page.locator('nav a')
      assert all(not re.match(r'^[◈◉▤◇⇄⌁⚙≡]',text.strip()) for text in links.all_text_contents())
-     assert page.evaluate("getComputedStyle(document.body).backgroundColor")=='rgb(232, 239, 245)'
+     assert page.evaluate("getComputedStyle(document.body).backgroundColor")=='rgb(238, 237, 232)'
      assert page.evaluate("getComputedStyle(document.documentElement).colorScheme")=='light'
      for link in links.all():
-      assert link.evaluate("e=>getComputedStyle(e,'::before').backgroundColor")!='rgba(0, 0, 0, 0)'
-     print(f'SYNTHETIC_{name.upper()}_OVERVIEW_COUNTS_COLLAPSED_CONNECTIONS_KEYBOARD_REFRESH_AND_CLIENT_PALETTE=PASS',flush=True)
+      assert link.evaluate("e=>getComputedStyle(e,'::before').content") in ('none','normal')
+     print(f'SYNTHETIC_{name.upper()}_OVERVIEW_COUNTS_COLLAPSED_CONNECTIONS_KEYBOARD_REFRESH_AND_MORANDI_CONTRAST=PASS',flush=True)
      # Review artifacts use synthetic identities/ledger only, never production data.
      screenshots=ROOT/'dist/admin-ui-review';screenshots.mkdir(parents=True,exist_ok=True)
      official_fixture[0]['free_tier_status']='VERIFIED_USAGE_AND_PRICE_TIER'

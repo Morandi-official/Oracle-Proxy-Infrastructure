@@ -50,13 +50,13 @@ input,select{font:inherit;color:var(--text);min-height:42px}input:focus-visible,
 
 /* Match the Windows client canvas, card, ink and accent palette. */
 body{accent-color:var(--accent)}
-nav a{display:flex;align-items:center;gap:12px;line-height:1.5;--nav-mark:#7290ac}
-nav a::before{content:"";width:10px;height:18px;flex:none;border-radius:3px;background:var(--nav-mark)}
-nav a[href="#overview"]{--nav-mark:#567491}nav a[href="#users"]{--nav-mark:#7d91b2}
-nav a[href="#devices"]{--nav-mark:#668f9b}nav a[href="#unconfirmed"]{--nav-mark:#ac916b}
-nav a[href="#flclash"]{--nav-mark:#7392b7}nav a[href="#udp-diagnostics"]{--nav-mark:#8995b1}
-nav a[href="#budget"]{--nav-mark:#648d87}nav a[href="#admin-account"]{--nav-mark:#8b8d9e}
-nav a[href="#audit"]{--nav-mark:#9a859c}
+nav a{display:flex;align-items:center;gap:12px;line-height:1.5}
+
+
+
+
+
+
 nav a.active{color:#334f6a;box-shadow:inset 0 0 0 1px #b2c6d8;font-weight:600}
 .logo{background:var(--accent);color:#fff}a{color:#42627f}
 .panel{box-shadow:0 4px 20px #26374905}
@@ -70,7 +70,7 @@ nav a.active{color:#334f6a;box-shadow:inset 0 0 0 1px #b2c6d8;font-weight:600}
 .connection-details[open]>summary{margin-bottom:14px}
 #connections table{min-width:540px}
 select,textarea{background:#fff;color:var(--text);border:1px solid var(--line);border-radius:6px}
-@media(max-width:700px){nav a{gap:8px;flex:none}nav a::before{width:8px;height:14px}.connections-panel .metrics article{padding:12px 10px}.connections-panel .metrics span{font-size:11px}.connections-panel .metrics strong{font-size:23px}.connection-details>summary small{display:block;margin:4px 0 0 16px}}
+@media(max-width:700px){nav a{gap:8px;flex:none}.connections-panel .metrics article{padding:12px 10px}.connections-panel .metrics span{font-size:11px}.connections-panel .metrics strong{font-size:23px}.connection-details>summary small{display:block;margin:4px 0 0 16px}}
 
 /* Quiet surface hierarchy and consistent navigation targets. */
 nav a{transition:background-color .14s ease,box-shadow .14s ease}
@@ -103,3 +103,36 @@ button:disabled{color:#4b6074}
 .activity-row meter::-webkit-meter-optimum-value{background:#147568}
 .activity-row meter::-moz-meter-bar{background:#147568}
 @media(max-width:700px){.metrics small,.cell-meta,.user-meta,.host-trends small{font-size:11px}}
+
+/* Warm Morandi surfaces with charcoal ink and deep sage accents. */
+:root{--bg:#eeede8;--panel:#fffefb;--panel-soft:#e9e7e0;--line:#aca99d;--text:#202820;--text-soft:#30382e;--muted:#41483d;--accent:#425442;--accent-hover:#303e30;--green:var(--accent);--focus:#425442;--amber:#735024}
+body{font-size:15px}
+aside{background:#e2e1d8}
+nav a{display:block;color:#30382e;font-size:14px;font-weight:550}
+nav a:hover,nav a.active{background:#c9cec0;color:#202820}
+nav a.active{box-shadow:inset 0 0 0 1px #8c9985;font-weight:700}
+a,summary{color:#354e3a}
+button:hover{background:var(--accent-hover)}
+.panel,.metrics article{background:var(--panel)}
+.metrics article:first-child{border-color:var(--line)}
+.metrics article:first-child strong,.connections-panel .metrics strong{color:var(--text)}
+.metrics span,.form-grid label,th{color:var(--text-soft);font-size:13px}
+.metrics small,.cell-meta,.user-meta,.history-note,.history-status,.host-trends small,.muted{color:var(--muted);font-size:13px}
+table{font-size:13px}th{background:#e6e6dc}
+.device-group th{background:#dedfd3;color:#30382e;border-color:#aca99d}
+tbody>tr:not(.device-group):not(.user-history):hover,.user-history>td,details,.path>div,.profile{background:#f0efe8}
+.notice{background:#e7ebe0;color:#303e2d;border-color:#a8b49d}
+.notice.error{background:#fae9e3;color:#762f24;border-color:#bb9182}
+.tag,.status-neutral{color:#384333;background:#eeeee5;border-color:#a5ab9b;font-size:12px}
+.host-trends figcaption{color:var(--text);font-size:14px}
+.host-trends svg text,.usage-chart text{fill:#30382e;font-size:12px;font-weight:500}
+.chart-grid,.usage-grid{stroke:#b4b4a7;stroke-width:1}
+.host-trends svg polyline{stroke-width:3}
+.host-trends figure{background:#fffefb}
+.connection-details>summary:hover{background:#dddfd2}
+.help-text{background:#fffefb;border-color:#8f9b86}
+.help-icon:hover{background:#e0e4d8;color:#303e2d}
+input::placeholder{color:#4d5547}
+input,select,textarea{border-color:#8e9685}
+.activity-row{font-size:13px}
+@media(max-width:700px){nav a{font-size:13px}.metrics small,.cell-meta,.user-meta,.host-trends small{font-size:12px}}

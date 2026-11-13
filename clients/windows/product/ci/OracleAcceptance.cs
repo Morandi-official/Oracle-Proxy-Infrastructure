@@ -69,8 +69,9 @@ internal static class OracleAcceptance
         Check(start.Elapsed<TimeSpan.FromSeconds(8),"DIAGNOSTIC_START_DOES_NOT_HOLD_RUNTIME_GATE_FOR_PROBES");
         var result=await AwaitDiagnostic();var report=result["udp_diagnostic"]!.AsObject();
         Check(report["phase"]?.GetValue<string>()=="complete" && report["server_capture_closed"]?.GetValue<bool>()==true,"REAL_DIAGNOSTIC_COMPLETES_AND_CLOSES_SERVER_CAPTURE");
+        int expected=(before["account"]?["ingress"]?["access"]?.GetValue<string>() is "primary" or "backup")?3:6;
         var rows=report["trials"]!.AsArray();
-        Check(rows.Count==6 && rows.All(r=>r?["verdict"]?.GetValue<string>()=="PASSED" && r?["server"]?["capture"]?["rx_initiations"]?.GetValue<long>()>0 && r?["server"]?["capture"]?["tx_responses"]?.GetValue<long>()>0),"REAL_SIX_UDP_EGRESS_AND_PAIRED_SERVER_HEADERS");
+        Check(rows.Count==expected && rows.All(r=>r?["verdict"]?.GetValue<string>()=="PASSED" && r?["server"]?["capture"]?["rx_initiations"]?.GetValue<long>()>0 && r?["server"]?["capture"]?["tx_responses"]?.GetValue<long>()>0),"REAL_AUTHORIZED_UDP_EGRESS_AND_PAIRED_SERVER_HEADERS");
         foreach(string field in new[]{"transport_preference","native_udp_adaptive","native_udp_port_preference"})Check(JsonNode.DeepEquals(before[field],result[field]),"DIAGNOSTIC_PRESERVES_"+field.ToUpperInvariant());
         Check(result["account"]?["device_count"]?.GetValue<int>()==devices,"DIAGNOSTIC_USES_EXISTING_DEVICE_SLOT");
         Directory.CreateDirectory("dist/review");File.WriteAllText("dist/review/udp-six-acceptance.json",report.ToJsonString());
@@ -80,7 +81,7 @@ internal static class OracleAcceptance
             Check(fixture_udp_diagnostic_primary_replies_begin(out fault)==0,"DIAGNOSTIC_DISPOSABLE_PRIMARY_RETURN_FAULT_CREATED");
             await Send("StartUdpDiagnostics");result=await AwaitDiagnostic();report=result["udp_diagnostic"]!.AsObject();
             rows=report["trials"]!.AsArray();
-            Check(report["phase"]?.GetValue<string>()=="complete" && rows.Count==6 && rows.Take(3).All(r=>r?["verdict"]?.GetValue<string>()=="RETURN_OR_LOCAL_RECEIVE_PATH") && rows.Skip(3).All(r=>r?["verdict"]?.GetValue<string>()=="PASSED"),"REAL_DIAGNOSTIC_IDENTIFIES_REPLY_LOSS_WITHOUT_BLAMING_SERVER_OR_OTHER_ENTRANCES");
+            Check(report["phase"]?.GetValue<string>()=="complete" && rows.Count==expected && rows.Take(3).All(r=>r?["verdict"]?.GetValue<string>()=="RETURN_OR_LOCAL_RECEIVE_PATH") && rows.Skip(3).All(r=>r?["verdict"]?.GetValue<string>()=="PASSED"),"REAL_DIAGNOSTIC_IDENTIFIES_REPLY_LOSS_WITHOUT_BLAMING_SERVER_OR_OTHER_ENTRANCES");
             File.WriteAllText("dist/review/udp-six-return-fault.json",report.ToJsonString());
         }finally{if(fault!=IntPtr.Zero)Check(fixture_udp_loss_end(fault)==0,"DIAGNOSTIC_DISPOSABLE_RETURN_FAULT_REMOVED");}
         await Send("StartUdpDiagnostics");await Task.Delay(1000);await Send("CancelUdpDiagnostics");
@@ -405,7 +406,7 @@ internal static class OracleAcceptance
             Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
             Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+login["registration"]!["device_id"]!.GetValue<string>());
             string primary=login["network_endpoints"]!["primary"]!.GetValue<string>();
-            Check(primary=="152.67.154.225" && login["network_endpoints"]!["backup"]!.GetValue<string>()=="150.230.113.158","MIGRATION_AUTHENTICATED_PRIMARY_BACKUP_CATALOG");
+            Check(primary=="152.67.154.225" && (login["account"]?["ingress"]?["access"]?.GetValue<string>()=="primary" ? login["network_endpoints"]!["backup"] is null : login["network_endpoints"]!["backup"]!.GetValue<string>()=="150.230.113.158"),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
             var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();

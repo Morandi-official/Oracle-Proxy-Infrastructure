@@ -3,7 +3,7 @@ const el = id => document.getElementById(id);
 const time = v => v ? new Date(v * 1000).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',hour12:false})+'（UTC+8）' : '—';
 const size = v => {if (v === null || v === undefined) return '未知'; let n=Number(v), i=0; const u=['B','KB','MB','GB','TB']; while(n>=1000 && i<4){n/=1000;i++;} return `${n.toFixed(i ? 2 : 0)} ${u[i]}`;};
 const states={active:'可用',disabled:'已禁用',expired:'已到期',quota:'配额耗尽'};
-const errors={INVALID_RATE:'限速须为0.1到10000 Mbps，空白表示不限。',ACCOUNT_CYCLE_ANCHOR_IMMUTABLE:'账号原始周期起点不能修改。',BANDWIDTH_APPLY_FAILED:'内核限速应用失败，受管流量已阻断，请检查控制服务。',CURRENT_PASSWORD_INCORRECT:"当前密码不正确。",PASSWORD_CONFIRMATION_MISMATCH:"两次新密码不一致。",PASSWORD_TOO_WEAK:"新密码强度不足，请换一个密码。",RATE_LIMITED:"操作过于频繁，请稍后再试。",PROFILE_CREATE_REJECTED:"配置创建未完成，请检查用户和设备名额；如有待核查项，先撤销它。",PROFILE_UNAVAILABLE:"该配置已停用、超额、过期或服务未就绪。",DEVICE_LIMIT_REACHED:'设备数量已达上限，请先撤销旧设备或调整上限。',DEVICE_REVOKED:'该设备已撤销，请在客户端重新生成设备身份。',REVOKE_DEVICES_BEFORE_LOWERING_LIMIT:'请先撤销多余设备，再降低上限。',USERNAME_ALREADY_EXISTS:'登录账号已被使用。',INVALID_USERNAME:'账号须为 3 至 64 位小写字母、数字、点、下划线或连字符。',PASSWORD_LENGTH_12_TO_128_REQUIRED:'密码长度须为 12 至 128 字符。',CONTROL_SERVICE_UNAVAILABLE:'控制服务不可用，当前数据不能作为实时状态。',BASELINE_CONFIRMATION_REQUIRED:'请核对账期用量并勾选确认。',HOST_ADDRESS_REQUIRED:'该 Peer 包含网段路由，暂不能纳管；只支持独立 /32 或 /128 设备地址。',NO_FREE_IPV4_TUNNEL_ADDRESS:'当前接口没有可分配的私有 IPv4 地址。',INVALID_PUBLIC_KEY:'请输入本机生成的 WireGuard 公钥，不是私钥。',PEER_ALREADY_EXISTS:'此 Peer 已存在，请使用“绑定 / 调整已有 Peer”。',PEER_NOT_FOUND:'未找到该 Peer，请刷新后选择已有设备。',INVALID_BUDGET:'额度必须大于零，安全余量必须小于额度。',OFFICIAL_USAGE_NOT_READY:'官方报表未就绪或已过期，请等定时查询完成；无法凭空校准。',CONTROL_UNAVAILABLE:'控制服务暂时不可用；已纳管流量仍受内核规则保护。'};
+const errors={INVALID_INGRESS_POLICY:'默认入口必须在该用户获准的 IP 范围内。',INGRESS_ISOLATION_NOT_READY:'入口隔离服务尚未就绪，请稍后刷新后再授权备用 IP。',INVALID_RATE:'限速须为0.1到10000 Mbps，空白表示不限。',ACCOUNT_CYCLE_ANCHOR_IMMUTABLE:'账号原始周期起点不能修改。',BANDWIDTH_APPLY_FAILED:'内核限速应用失败，受管流量已阻断，请检查控制服务。',CURRENT_PASSWORD_INCORRECT:"当前密码不正确。",PASSWORD_CONFIRMATION_MISMATCH:"两次新密码不一致。",PASSWORD_TOO_WEAK:"新密码强度不足，请换一个密码。",RATE_LIMITED:"操作过于频繁，请稍后再试。",PROFILE_CREATE_REJECTED:"配置创建未完成，请检查用户和设备名额；如有待核查项，先撤销它。",PROFILE_UNAVAILABLE:"该配置已停用、超额、过期或服务未就绪。",DEVICE_LIMIT_REACHED:'设备数量已达上限，请先撤销旧设备或调整上限。',DEVICE_REVOKED:'该设备已撤销，请在客户端重新生成设备身份。',REVOKE_DEVICES_BEFORE_LOWERING_LIMIT:'请先撤销多余设备，再降低上限。',USERNAME_ALREADY_EXISTS:'登录账号已被使用。',INVALID_USERNAME:'账号须为 3 至 64 位小写字母、数字、点、下划线或连字符。',PASSWORD_LENGTH_12_TO_128_REQUIRED:'密码长度须为 12 至 128 字符。',CONTROL_SERVICE_UNAVAILABLE:'控制服务不可用，当前数据不能作为实时状态。',BASELINE_CONFIRMATION_REQUIRED:'请核对账期用量并勾选确认。',HOST_ADDRESS_REQUIRED:'该 Peer 包含网段路由，暂不能纳管；只支持独立 /32 或 /128 设备地址。',NO_FREE_IPV4_TUNNEL_ADDRESS:'当前接口没有可分配的私有 IPv4 地址。',INVALID_PUBLIC_KEY:'请输入本机生成的 WireGuard 公钥，不是私钥。',PEER_ALREADY_EXISTS:'此 Peer 已存在，请使用“绑定 / 调整已有 Peer”。',PEER_NOT_FOUND:'未找到该 Peer，请刷新后选择已有设备。',INVALID_BUDGET:'额度必须大于零，安全余量必须小于额度。',OFFICIAL_USAGE_NOT_READY:'官方报表未就绪或已过期，请等定时查询完成；无法凭空校准。',CONTROL_UNAVAILABLE:'控制服务暂时不可用；已纳管流量仍受内核规则保护。'};
 let current=null, busy=false, budgetInitialized=false, lastBasic=0, baseAudit=[], activity=[];
 let feedbackTimer;
 function feedback(text, error=false){clearTimeout(feedbackTimer);el('feedback').hidden=false;el('feedback').textContent=text;el('feedback').classList.toggle('error',error);if(!error)feedbackTimer=setTimeout(()=>{el('feedback').hidden=true;},5500);}
@@ -25,6 +25,7 @@ function replaceRows(id,rows){
  if(focused)for(const item of body.querySelectorAll('button[data-focus-key]'))if(item.dataset.focusKey===focused){item.focus({preventScroll:true});break;}
 }
 function render(data){
+ const endpoints=data.ingress_endpoints || {};for(const name of ['ingress_access','ingress_preferred'])for(const option of el('user-form').elements[name].options){if(option.value==='primary')option.textContent='主 IP'+(endpoints.primary?' · '+endpoints.primary:'');if(option.value==='backup')option.textContent='备用 IP'+(endpoints.backup?' · '+endpoints.backup:'');}
  current=data;renderConnections(data);const b=data.budget;const age=data.observed_at ? Date.now()/1000-data.observed_at : null;
  el('remaining').textContent=size(b.remaining_bytes);el('outbound').textContent=size(b.measured_outbound_bytes);
  el('balance-basis').textContent=b.history_complete ? '手工核对基线 + 本机增量估算' : '历史未核对 / 采集有缺口';
@@ -199,7 +200,7 @@ async function refreshUdpDiagnostics(){
    cell(row,time(record.started_at));cell(row,record.username+' / '+record.device_id);
    cell(row,({running:'诊断中',complete:'已完成',cancelled:'已取消',interrupted:'已中断',unavailable:'服务器观察不可用'})[record.phase] || '待核对');
    const trials=Array.isArray(record.report.trials)?record.report.trials:[];
-   cell(row,trials.filter(t=>t.client?.egress_verified===true).length+' / 6 通过');
+   cell(row,trials.filter(t=>t.client?.egress_verified===true).length+' / '+trials.length+' 通过');
    const actions=cell(row,'');actions.className='row-actions';
    button(actions,'查看报告',()=>{
     el('udp-diag-report').value=JSON.stringify({diagnostic_id:record.id,started_at:record.started_at,device_id:record.device_id,phase:record.phase,report:record.report},null,2);

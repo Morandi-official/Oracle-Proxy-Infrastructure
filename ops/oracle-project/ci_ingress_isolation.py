@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[2]
-NAMES=('opx-access-client','opx-access-server')
+NAMES=('opx-access-client','opx-access-server','opx-access-internet')
 
 
 def guard():
@@ -23,7 +23,7 @@ def run(*args,input=None,accepted=(0,)):
     result=subprocess.run(list(map(str,args)),input=input,capture_output=True,text=True,timeout=25)
     if result.returncode not in accepted:
         print('INGRESS_SYNTHETIC_FAILURE='+str(args[0])+':'+result.stderr[-1200:],flush=True)
-        raise RuntimeError('INGRESS_SYNTHETIC_OPERATION_FAILED')
+        raise RuntimeError('INGRESS_SYNTHETIC_OPERATION_FAILED:'+result.stderr[-600:])
     return result
 
 
@@ -33,6 +33,10 @@ def child(directory,qos=False):
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     module.CATALOG=directory/'catalog.json';module.READY=directory/'ready'
     def command(args,*,input=None,accepted=(0,)):return run(*args,input=input,accepted=accepted)
+    spec=importlib.util.spec_from_file_location('policy_agent',ROOT/'server/admin-oracle/control/agent.py')
+    policy=importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
+    driver=policy.Driver();driver.initialize(False)
+    allowed={'10.77.0.2':120,'fd42:6f70:78:77::2':120};driver.leases(set(allowed),allowed,True)
     controller=module.Controller(command,directory)
     controller.ensure('10.0.0.246')
     Path('/proc/sys/net/ipv4/conf/wgopbackup/rp_filter').write_text('2\n')
@@ -46,7 +50,7 @@ def child(directory,qos=False):
 
 
 def main():
-    guard();echo=None
+    guard();echo=None;internet=None
     if any(Path('/run/netns',n).exists() for n in NAMES):raise SystemExit('PREEXISTING_NAMESPACE_REFUSED')
     with tempfile.TemporaryDirectory(prefix='opx-isolated-ingress-') as directory:
         directory=Path(directory)
@@ -58,6 +62,10 @@ def main():
                 run('ip','-n',name,'address','add',address,'dev',interface)
                 run('ip','-n',name,'link','set',interface,'up');run('ip','-n',name,'link','set','lo','up')
             run('ip','-n',NAMES[1],'address','add','10.0.0.246/32','dev','opx-as')
+            run('ip','link','add','opx-out','type','veth','peer','name','opx-internet')
+            for n,dev,address,v6 in ((NAMES[1],'opx-out','10.99.0.1/24','2603:c020:c015:8100::10/64'),(NAMES[2],'opx-internet','10.99.0.2/24','2603:c020:c015:8100::20/64')):
+                run('ip','link','set',dev,'netns',n);run('ip','-n',n,'address','add',address,'dev',dev);run('ip','-n',n,'-6','address','add',v6,'dev',dev,'nodad');run('ip','-n',n,'link','set',dev,'up');run('ip','-n',n,'link','set','lo','up')
+            run('ip','netns','exec',NAMES[1],'sysctl','-qw','net.ipv4.ip_forward=1','net.ipv6.conf.all.forwarding=1')
             server_private=run('wg','genkey').stdout;client_private=run('wg','genkey').stdout
             server_public=run('wg','pubkey',input=server_private).stdout.strip();client_public=run('wg','pubkey',input=client_private).stdout.strip()
             for label,value in (('server.key',server_private),('client.key',client_private)):
@@ -72,7 +80,9 @@ def main():
             run('ip','-n',NAMES[0],'address','add','10.77.0.2/24','dev','wgc')
             run('ip','-n',NAMES[0],'-6','address','add','fd42:6f70:78:77::2/64','dev','wgc','nodad')
             run('ip','-n',NAMES[0],'link','set','wgc','up')
-            (directory/'catalog.json').write_text(json.dumps({'primary':{'private_ipv4':'10.0.0.6'},'backup':{'private_ipv4':'10.0.0.246'}}));(directory/'catalog.json').chmod(0o600)
+            run('ip','-n',NAMES[0],'route','add','10.99.0.0/24','dev','wgc')
+            run('ip','-n',NAMES[0],'-6','route','add','2603:c020:c015:8100::/64','dev','wgc')
+            (directory/'catalog.json').write_text(json.dumps({'interface':'opx-out','primary':{'private_ipv4':'10.0.0.6'},'backup':{'private_ipv4':'10.0.0.246'}}));(directory/'catalog.json').chmod(0o600)
             plan=[{'public_key':client_public,'addresses':['10.77.0.2/32','fd42:6f70:78:77::2/128'],'roles':['primary'],'active':True}]
             def sync(roles):
                 plan[0]['roles']=roles;(directory/'plan.json').write_text(json.dumps(plan))
@@ -93,14 +103,23 @@ for family,address in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:
 print('READY',flush=True)
 while True:time.sleep(1)
 '''
+            for tool,prefix in (('iptables','10.77.0.0/24'),('ip6tables','fd42:6f70:78:77::/64')):
+                run('ip','netns','exec',NAMES[1],tool,'-P','FORWARD','DROP')
+                run('ip','netns','exec',NAMES[1],tool,'-A','FORWARD','-i','wg0','-o','opx-out','-s',prefix,'-j','ACCEPT')
+                run('ip','netns','exec',NAMES[1],tool,'-A','FORWARD','-i','opx-out','-o','wg0','-d',prefix,'-m','conntrack','--ctstate','ESTABLISHED,RELATED','-j','ACCEPT')
+                nat=['-j','MASQUERADE'] if tool=='iptables' else ['-j','SNAT','--to-source','2603:c020:c015:8100::10']
+                run('ip','netns','exec',NAMES[1],tool,'-t','nat','-A','POSTROUTING','-s',prefix,'-o','opx-out',*nat)
+            outside_server=server.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20')
+            internet=subprocess.Popen(['ip','netns','exec',NAMES[2],sys.executable,'-u','-c',outside_server],stdout=subprocess.PIPE,text=True)
+            assert internet.stdout.readline().strip()=='READY'
             echo=subprocess.Popen(['ip','netns','exec',NAMES[1],sys.executable,'-u','-c',server],stdout=subprocess.PIPE,text=True)
             assert echo.stdout.readline().strip()=='READY'
             previous=[None]
-            def probe(role,port,expected,server_key=None):
+            def probe(role,port,expected,server_key=None,forward=False):
                 key=server_key or (server_public if role=='primary' else backup_public)
                 if previous[0]:run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',previous[0],'remove')
                 previous[0]=key;address='10.0.0.6' if role=='primary' else '10.0.0.246'
-                run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',key,'allowed-ips','10.77.0.0/24,fd42:6f70:78:77::/64','endpoint',address+':'+str(port))
+                run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',key,'allowed-ips','10.77.0.0/24,fd42:6f70:78:77::/64,10.99.0.0/24,2603:c020:c015:8100::/64','endpoint',address+':'+str(port))
                 code='''import socket,sys
 for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:77::1')):
  s=socket.socket(family);s.settimeout(4 if sys.argv[1]=='True' else 1)
@@ -109,11 +128,14 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
  finally:s.close()
  assert ok==(sys.argv[1]=='True'), 'unexpected ingress authorization result'
 '''
+                if forward:code=code.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20')
                 run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,str(expected))
             for port in (443,8443,51820):probe('primary',port,True);probe('backup',port,False);probe('backup',port,False,server_public)
             print('REAL_PRIMARY_ONLY_DENIES_BACKUP_ALL_NATIVE_PORTS_AND_MANUAL_SERVER_KEY=PASS',flush=True)
             sync(['primary','backup'])
             for port in (443,8443,51820):probe('backup',port,True)
+            probe('backup',443,True,forward=True)
+            print('REAL_BACKUP_INTERNET_FORWARD_SNAT_AND_DUALSTACK_RETURN_UNDER_DEFAULT_DROP=PASS',flush=True)
             run('ip','netns','exec',NAMES[1],sys.executable,__file__,'--qos',directory)
             def counters():
                 value=json.loads(run('ip','netns','exec',NAMES[1],'tc','-j','-s','actions','list','action','police').stdout)
@@ -133,6 +155,7 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
             print('REAL_PERMISSION_SWITCH_REVOKES_WRONG_INGRESS_WITH_SAME_CLIENT_KEY=PASS',flush=True)
         finally:
             if echo:echo.terminate();echo.wait(timeout=5)
+            if internet:internet.terminate();internet.wait(timeout=5)
             for n in reversed(NAMES):run('ip','netns','delete',n,accepted=(0,1))
 
 

@@ -94,7 +94,7 @@ def main():
      expect(page.locator('#remaining')).to_have_text('未知')
      expect(page.locator('#udp-diag-details')).not_to_have_attribute('open','')
      page.locator('#udp-diag-details > summary').click()
-     expect(page.locator('#udp-diag-rows')).to_contain_text('1 / 6 通过')
+     expect(page.locator('#udp-diag-rows')).to_contain_text('1 / 1 通过')
      assert page.locator('#udp-diag-rows b').count()==0
      page.locator('#udp-diag-rows').get_by_role('button',name='查看报告',exact=True).click()
      expect(page.locator('#udp-diag-dialog')).to_be_visible()

@@ -84,7 +84,7 @@ class SharedIngressController:
             receipt=json.loads(self.path.read_text())
             if receipt.get('schema')!=2:raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
         previous=receipt.get('actions',[]) if receipt else []
-        if any(type(i)is not int or not 741001<=i<=742256 for i in previous):raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
+        if any(type(i)is not int or not (741001<=i<=741256 or 742001<=i<=742256) for i in previous):raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
         actions=[base+p['slot'] for p in plan for direction,base in (('upload_bps',741000),('download_bps',742000)) if p[direction]]
         listing=self.command(['tc','-j','actions','list','action','police']).stdout
         listing=json.loads(listing);listing=listing.get('actions',[]) if isinstance(listing,dict) else listing
@@ -103,6 +103,7 @@ class SharedIngressController:
         for index in previous:self.command(['tc','actions','del','action','police','index',str(index)],accepted=(0,2,255))
         if not plan:self.path.unlink();self.cached=[];return
         lines=['qdisc add dev '+i+' clsact' for i in ('wg0','wgopbackup')]
+        pref=100
         for p in plan:
             for direction,base,hook,column in (('upload_bps',741000,'ingress','src_ip'),('download_bps',742000,'egress','dst_ip')):
                 rate=p[direction]
@@ -114,6 +115,7 @@ class SharedIngressController:
                     if not ip.is_private or ip.is_unspecified or ip.is_multicast:raise ValueError('BANDWIDTH_INVALID_ADDRESS')
                     protocol='ip' if ip.version==4 else 'ipv6';host=str(ip)+('/32' if ip.version==4 else '/128')
                     for interface in ('wg0','wgopbackup'):
-                        lines.append(f'filter add dev {interface} {hook} protocol {protocol} pref {100+p["slot"]} flower {column} {host} action police index {index}')
+                        lines.append(f'filter add dev {interface} {hook} protocol {protocol} pref {pref} flower {column} {host} action police index {index}')
+                    pref+=1
         self.command(['tc','-batch','-'],input='\n'.join(lines)+'\n')
         temporary.write_text(json.dumps({'schema':2,'actions':actions}));temporary.chmod(0o600);os.replace(temporary,self.path);self.cached=plan

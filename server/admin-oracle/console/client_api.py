@@ -258,6 +258,9 @@ def logout(request):
 
 def annotate_devices(snapshot):
     """Administrator-only view. Presence is advisory, never policy authority."""
+    from .endpoint_config import read
+    catalog=read()
+    if catalog:snapshot['ingress_endpoints']={r:catalog[r]['public_ipv4'] for r in ('primary','backup')}
     now=timezone.now();peers={p['public_key']:p for p in snapshot.get('peers',[])}
     sessions={row.public_key:row for row in ClientSession.objects.select_related('account').filter(expires_at__gt=now)}
     for peer in snapshot.get('peers',[]):

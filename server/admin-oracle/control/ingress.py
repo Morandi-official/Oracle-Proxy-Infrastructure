@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import stat
 import shlex
+import re
 
 INTERFACE='wgopbackup'
 PORT=51821
@@ -38,6 +39,9 @@ class Controller:
         except FileNotFoundError:return None
         if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise ValueError('INGRESS_CATALOG_UNTRUSTED')
         value=json.loads(CATALOG.read_text())
+        device=value.get('interface')
+        if not isinstance(device,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,32}',device) or device in ('lo','wg0',INTERFACE):raise ValueError('INGRESS_EGRESS_INTERFACE_INVALID')
+        self.egress_interface=device
         addresses=[str(ipaddress.IPv4Address(value[role]['private_ipv4'])) for role in ('primary','backup')]
         if addresses[0]==addresses[1] or not all(ipaddress.ip_address(a).is_private for a in addresses):raise ValueError('INGRESS_CATALOG_INVALID')
         return addresses
@@ -47,7 +51,9 @@ class Controller:
         if result.returncode==1:self.call([tool,'-w','5','-t',table,'-I',chain,'1',*rule])
 
     def ensure(self,backup):
-        if self.ready and self.backup==backup:return
+        addresses=json.loads(self.call(['ip','-j','address','show','dev','wg0']).stdout)
+        signature=sorted((a.get('family'),a.get('local'),a.get('prefixlen'),a.get('scope')) for item in addresses for a in item.get('addr_info',[]) if a.get('scope')!='link')
+        if self.ready and self.backup==backup and self.address_signature==signature:return
         if not self.key.exists():
             key=self.call(['wg','genkey']).stdout.strip()
             fd=os.open(self.key,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -67,7 +73,6 @@ class Controller:
         if exists.returncode!=0:self.call(['ip','link','add',INTERFACE,'type','wireguard'])
         self.call(['wg','set',INTERFACE,'private-key',str(self.key),'listen-port',str(PORT)])
         self.call(['ip','link','set','dev',INTERFACE,'up'])
-        addresses=json.loads(self.call(['ip','-j','address','show','dev','wg0']).stdout)
         for item in addresses:
             for addr in item.get('addr_info',[]):
                 if addr.get('family') not in ('inet','inet6') or addr.get('scope')=='link':continue
@@ -82,6 +87,37 @@ class Controller:
                 routes=self.call(['ip','-j',family,'route','show','table',TABLE],accepted=(0,2))
                 if routes.returncode==0 and any(r.get('dev')!=INTERFACE for r in json.loads(routes.stdout)):raise ValueError('INGRESS_FOREIGN_ROUTE_TABLE')
                 self.call(['ip',family,'route','replace',str(host.network),'dev',INTERFACE,'table',TABLE])
+                device=getattr(self,'egress_interface',None)
+                if device:
+                    flag='/proc/sys/net/ipv4/ip_forward' if host.version==4 else '/proc/sys/net/ipv6/conf/all/forwarding'
+                    if Path(flag).read_text().strip()!='1':raise ValueError('INGRESS_FORWARDING_NOT_READY')
+                    chain='OPX_INGRESS_FORWARD'
+                    result=self.call([tool,'-w','5','-S',chain],accepted=(0,1))
+                    if result.returncode==1:self.call([tool,'-w','5','-N',chain])
+                    elif any(COMMENT not in line for line in result.stdout.splitlines() if line.startswith('-A')):raise ValueError('INGRESS_FOREIGN_FIREWALL_CHAIN')
+                    body=['*filter','-F '+chain,f'-A {chain} -m comment --comment {COMMENT} -j OPX_FWD',
+                          f'-A {chain} -i {INTERFACE} -o {device} -s {host.network} -m comment --comment {COMMENT} -j ACCEPT',
+                          f'-A {chain} -i {device} -o {INTERFACE} -d {host.network} -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment {COMMENT} -j ACCEPT',
+                          f'-A {chain} -m comment --comment {COMMENT} -j DROP','COMMIT','']
+                    self.call([tool+'-restore','-w','5','--noflush'],input='\n'.join(body))
+                    for direction in ('-i','-o'):
+                        self.ensure_rule(tool,'filter','FORWARD',[direction,INTERFACE,'-m','comment','--comment',COMMENT,'-j',chain])
+                    rule=['-s',str(host.network),'-o',device,'-m','connmark','--mark',MARK,'-m','comment','--comment',COMMENT]
+                    if host.version==4:rule+=['-j','MASQUERADE']
+                    else:
+                        external=json.loads(self.call(['ip','-j','-6','address','show','dev',device]).stdout)
+                        exits=[a['local'] for item in external for a in item.get('addr_info',[]) if a.get('family')=='inet6' and ipaddress.ip_address(a['local']).is_global]
+                        metadata=Path('/etc/oracle-proxy-quic/ipv6.json')
+                        selected=None
+                        if metadata.exists():
+                            info=metadata.lstat()
+                            if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise ValueError('INGRESS_IPV6_METADATA_UNTRUSTED')
+                            selected=json.loads(metadata.read_text()).get('egress')
+                            if selected not in exits:raise ValueError('INGRESS_IPV6_EGRESS_NOT_LOCAL')
+                        if selected is None and len(exits)==1:selected=exits[0]
+                        if selected is None:raise ValueError('INGRESS_IPV6_EGRESS_AMBIGUOUS')
+                        rule+=['-j','SNAT','--to-source',selected]
+                    self.ensure_rule(tool,'nat','POSTROUTING',rule)
                 # Preserve only our bit; foreign marks and default route remain intact.
                 self.ensure_rule(tool,'mangle','PREROUTING',['-i',INTERFACE,'-m','comment','--comment',COMMENT,'-j','CONNMARK','--set-xmark',MARK])
                 for chain in ('PREROUTING','OUTPUT'):
@@ -111,7 +147,7 @@ class Controller:
         body.extend([f'-A {chain} -m comment --comment {COMMENT} -j DROP','COMMIT',''])
         self.call(['iptables-restore','-w','5','--noflush'],input='\n'.join(body))
         self.ensure_rule('iptables','filter','INPUT',['-p','udp','--dport',str(PORT),'-m','comment','--comment',COMMENT,'-j',chain])
-        self.public_key=public;self.backup=backup;self.ready=True
+        self.public_key=public;self.backup=backup;self.address_signature=signature;self.ready=True
 
     def peers(self,interface):
         return {line.split('\t',1)[0]:line.split('\t',1)[1].replace(' ',',').split(',') for line in self.call(['wg','show',interface,'allowed-ips']).stdout.splitlines()}

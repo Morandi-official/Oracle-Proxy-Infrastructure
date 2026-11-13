@@ -270,11 +270,11 @@ def main():
      expect(page.locator('#connection-rows')).not_to_be_visible()
      links=page.locator('nav a')
      assert all(not re.match(r'^[◈◉▤◇⇄⌁⚙≡]',text.strip()) for text in links.all_text_contents())
-     assert page.evaluate("getComputedStyle(document.body).backgroundColor")=='rgb(232, 239, 245)'
+     assert page.evaluate("getComputedStyle(document.body).backgroundColor")=='rgb(245, 246, 248)'
      assert page.evaluate("getComputedStyle(document.documentElement).colorScheme")=='light'
      for link in links.all():
       assert link.evaluate("e=>getComputedStyle(e,'::before').content") in ('none','normal')
-     print(f'SYNTHETIC_{name.upper()}_OVERVIEW_COUNTS_COLLAPSED_CONNECTIONS_KEYBOARD_REFRESH_AND_GRAY_BLUE_HIGH_CONTRAST=PASS',flush=True)
+     print(f'SYNTHETIC_{name.upper()}_OVERVIEW_COUNTS_COLLAPSED_CONNECTIONS_KEYBOARD_REFRESH_AND_NEUTRAL_WORKSPACE=PASS',flush=True)
      # Review artifacts use synthetic identities/ledger only, never production data.
      screenshots=ROOT/'dist/admin-ui-review';screenshots.mkdir(parents=True,exist_ok=True)
      official_fixture[0]['free_tier_status']='VERIFIED_USAGE_AND_PRICE_TIER'

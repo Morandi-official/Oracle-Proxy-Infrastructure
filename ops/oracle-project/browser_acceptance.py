@@ -24,8 +24,8 @@ def main():
                 response = page.goto(BASE + '/login/', wait_until='networkidle')
                 assert response.status == 200
                 assert response.headers['referrer-policy'] == 'same-origin'
-                assert page.locator('body').evaluate('(element) => getComputedStyle(element).backgroundColor') == 'rgb(232, 239, 245)'
-                print(f'BROWSER_{name.upper()}_LIVE_GRAY_BLUE_HIGH_CONTRAST_PALETTE=PASS',flush=True)
+                assert page.locator('body').evaluate('(element) => getComputedStyle(element).backgroundColor') == 'rgb(245, 246, 248)'
+                print(f'BROWSER_{name.upper()}_LIVE_NEUTRAL_WORKSPACE_PALETTE=PASS',flush=True)
                 assert any(cookie['name'] == '__Host-oracle_csrf' and cookie['secure']
                            for cookie in context.cookies())
                 if page.locator('input[name="password"]').count():

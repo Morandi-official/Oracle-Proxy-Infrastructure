@@ -284,6 +284,13 @@ def main():
       page.evaluate('scrollTo(0,0)');page.wait_for_timeout(150)
       assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Dashboard page overflow at {width}px'
       page.screenshot(path=str(screenshots/f'{name}-{width}-overview.png'))
+      if width==1440:
+       figures=page.locator('#host-trends figure')
+       expect(figures).to_have_count(6)
+       boxes=[node.bounding_box() for node in figures.all()]
+       assert len({round(box['y']) for box in boxes})==2, 'Six host charts must use two rows'
+       assert len({round(box['x']) for box in boxes})==3, 'Six host charts must use three columns'
+       page.locator('#host-trends').screenshot(path=str(screenshots/f'{name}-{width}-host-charts.png'))
       page.locator('#connection-details>summary').click()
       expect(page.locator('#connection-rows')).to_be_visible()
       assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Expanded overview overflow at {width}px'

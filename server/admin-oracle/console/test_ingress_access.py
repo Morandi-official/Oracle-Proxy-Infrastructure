@@ -6,7 +6,7 @@ from . import endpoint_config,flclash
 
 PRIMARY='152.67.154.225';BACKUP='150.230.113.158'
 KEY1=base64.b64encode(bytes([1])*32).decode();KEY2=base64.b64encode(bytes([2])*32).decode()
-CATALOG={'primary':{'public_ipv4':PRIMARY,'private_ipv4':'10.0.0.6'},'backup':{'public_ipv4':BACKUP,'private_ipv4':'10.0.0.246'},'revision':3,'egress_ipv4':[PRIMARY]}
+CATALOG={'primary':{'public_ipv4':PRIMARY,'private_ipv4':'10.0.0.6'},'backup':{'public_ipv4':BACKUP,'private_ipv4':'10.0.0.246'},'revision':4,'egress_ipv4':[PRIMARY,BACKUP]}
 
 
 class IngressAccessTests(SimpleTestCase):
@@ -16,7 +16,7 @@ class IngressAccessTests(SimpleTestCase):
    self.assertEqual(endpoint_config.user_catalog({},state)['addresses'],[PRIMARY])
    for access,preferred,expected in [('both','backup',[BACKUP,PRIMARY]),('backup','backup',[BACKUP])]:
     value=endpoint_config.user_catalog({'ingress':{'access':access,'preferred':preferred}},state)
-    self.assertEqual(value['addresses'],expected);self.assertEqual(set(value['server_public_keys']),set(expected))
+    self.assertEqual(value['addresses'],expected);self.assertEqual(set(value['server_public_keys']),set(expected));self.assertEqual(value['egress_ipv4'],expected)
    with self.assertRaisesRegex(ValueError,'INGRESS_ISOLATION_NOT_READY'):
     endpoint_config.user_catalog({'ingress':{'access':'both','preferred':'primary'}},{'server_public_key':KEY1})
  def test_flclash_permission_change_keeps_same_key_and_two_stable_nodes(self):

@@ -288,7 +288,7 @@ def deploy(revision):
         if current.is_symlink() and current.resolve().name==revision:
             if not host.healthy():raise ValueError('APPLICATION_UNHEALTHY')
         else:run([runtime_python(),'-I',str(SERVER/'deploy/host.py'),'install','--revision',revision])
-        verify_control()
+        verify_control();verify_ingress_egress()
         if request.get('request_id') in ('admin-capacity-health-20261104','admin-history-cleanup-20261105'):
             install_usage_probe()
             run(['systemctl','restart','oracle-proxy-admin-collect.timer'])
@@ -301,14 +301,20 @@ def deploy(revision):
         run(['systemctl', 'restart', host.UNIT_NAMES[0]])
         if not host.healthy(): raise ValueError('APPLICATION_UNHEALTHY')
         install_control()
-        verify_control()
+        verify_control();verify_ingress_egress()
         install_usage_probe()
         print('PROJECT_DEPLOYMENT=ALREADY_CURRENT_HEALTHY'); return
     python = runtime_python()
     run([python, '-I', str(SERVER / 'deploy/host.py'), 'install', '--revision', revision])
     install_control()
-    verify_control()
+    verify_control();verify_ingress_egress()
     install_usage_probe()
+
+
+def verify_ingress_egress():
+    spec=importlib.util.spec_from_file_location('verify_ingress_egress',Path(__file__).with_name('verify_ingress_egress.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    print('PROJECT_PAIRED_INGRESS_EGRESS='+json.dumps(module.verify(),sort_keys=True),flush=True)
 
 
 def verify_control():

@@ -57,6 +57,8 @@ def user_catalog(user, snapshot):
     import base64
     for role in roles:
         if len(base64.b64decode(keys[role],validate=True))!=32:raise ValueError('INVALID_INGRESS_PUBLIC_KEY')
+    paired=set(config['egress_ipv4'])=={config[r]['public_ipv4'] for r in ('primary','backup')}
+    exits=[config[r]['public_ipv4'] for r in roles] if paired else config['egress_ipv4']
     return {'roles':roles,'addresses':[config[r]['public_ipv4'] for r in roles],
             'revision':config['revision'],'private_ipv4':{config[r]['public_ipv4']:config[r]['private_ipv4'] for r in roles},
-            'server_public_keys':{config[r]['public_ipv4']:keys[r] for r in roles},'egress_ipv4':config['egress_ipv4']}
+            'server_public_keys':{config[r]['public_ipv4']:keys[r] for r in roles},'egress_ipv4':exits}

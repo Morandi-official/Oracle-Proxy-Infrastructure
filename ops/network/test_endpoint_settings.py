@@ -14,6 +14,14 @@ class EndpointSettingsTests(unittest.TestCase):
   self.current={'schema':1,'revision':1,'api_host':'vpn-admin.morandi.dpdns.org','interface':'enp0s6','subnet':'10.0.0.0/24','active':'primary','primary':{'public_ipv4':'152.67.154.225','private_ipv4':'10.0.0.220'},'backup':{'public_ipv4':'150.230.113.158','private_ipv4':'10.0.0.246'},'legacy':[{'public_ipv4':'152.67.156.100','private_ipv4':'10.0.0.6'},{'public_ipv4':'141.147.78.44','private_ipv4':'10.0.0.10'}],'egress_ipv4':['152.67.156.100','152.67.154.225']}
   self.variables={'PROXY_PRIMARY_IPV4':'152.67.154.225','PROXY_PRIMARY_PRIVATE_IPV4':'10.0.0.220','PROXY_BACKUP_IPV4':'150.230.113.158','PROXY_BACKUP_PRIVATE_IPV4':'10.0.0.246'}
  def test_unchanged_does_not_propose_or_increment(self):self.assertIsNone(propose(self.current,self.variables,'prepare',True))
+ def test_paired_ingress_egress_survives_future_endpoint_changes(self):
+  self.current['legacy']=[];self.current['primary']['private_ipv4']='10.0.0.6';self.variables['PROXY_PRIMARY_PRIVATE_IPV4']='10.0.0.6'
+  self.current['egress_ipv4']=[self.current[r]['public_ipv4'] for r in ('primary','backup')]
+  self.assertIsNone(propose(self.current,self.variables,'prepare',True))
+  self.variables['PROXY_PRIMARY_IPV4']='143.47.230.196'
+  self.variables['PROXY_PRIMARY_PRIVATE_IPV4']='10.0.0.221'
+  value=propose(self.current,self.variables,'prepare',True)
+  self.assertEqual(value['egress_ipv4'],['143.47.230.196','150.230.113.158'])
  def test_cutover_is_exact_swap_and_narrows_exit(self):
   self.variables['PROXY_PRIMARY_PRIVATE_IPV4']='10.0.0.6'
   value=propose(self.current,self.variables,'cutover',True)

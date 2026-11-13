@@ -65,3 +65,5 @@ Do not change unrelated users to dual-entry access for testing.
 ## IPv4 exit follows ingress
 
 Each new primary flow is SNATed to the primary private IPv4; each backup flow is SNATed to the backup private IPv4. OCI maps those source addresses to their respective reserved public IPv4 addresses. The private addresses must exist on the configured VNIC before rules are applied. Only the application-owned tunnel-source NAT chain is replaced; host default routes, account identities, shared quota/rate enforcement and the common IPv6 exit remain unchanged. Primary packets clear only the reserved backup mark bit. Existing NAT connections may retain their original mapping until reconnected; deployment does not flush unrelated conntrack entries.
+
+Backup IPv4 inner flows and traffic to/from the backup VNIC address use conntrack zone 196. This keeps identical inner five-tuples on primary and backup from sharing NAT state; encrypted backup UDP/QUIC and HTTPS replies use the same zone as their incoming packets. IPv6 keeps the existing common egress policy.

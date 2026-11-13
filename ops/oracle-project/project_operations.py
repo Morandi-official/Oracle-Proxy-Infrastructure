@@ -362,7 +362,7 @@ def install_control():
     unit = Path('/etc/systemd/system/oracle-proxy-control.service')
     if unit.is_symlink() or (unit.exists() and 'Description=Oracle Proxy restricted policy' not in unit.read_text()):
         raise ValueError('FOREIGN_CONTROL_UNIT')
-    for module in ('ip_set_hash_ip','ip_set_hash_net','xt_set'):
+    for module in ('ip_set_hash_ip','ip_set_hash_net','xt_set','xt_CT'):
         run(['modprobe',module])
     lock = Path('/run/xtables.lock')
     if lock.is_symlink(): raise ValueError('UNTRUSTED_FIREWALL_LOCK')

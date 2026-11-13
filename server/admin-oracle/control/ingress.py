@@ -19,6 +19,7 @@ PRIORITY='19600'
 CATALOG=Path('/etc/oracle-proxy-quic/endpoints.json')
 READY=Path('/run/oracle-proxy-control/ingress-ready')
 COMMENT='proxy-user-ingress-v1'
+ZONE='196'
 
 
 def protected(path):
@@ -60,6 +61,17 @@ class Controller:
         result=self.call(['iptables','-w','5','-t','nat','-S',chain],accepted=(0,1))
         if result.returncode==1:self.call(['iptables','-w','5','-t','nat','-N',chain])
         elif any(COMMENT not in line for line in result.stdout.splitlines() if line.startswith('-A')):raise ValueError('INGRESS_FOREIGN_FIREWALL_CHAIN')
+        # The same client inner five-tuple can exist on both identities. A
+        # separate IPv4 conntrack zone prevents reusing the other entry's NAT.
+        for hook,column in (('PREROUTING','-d'),('OUTPUT','-s')):
+            for line in self.call(['iptables','-w','5','-t','raw','-S',hook]).stdout.splitlines():
+                row=shlex.split(line)
+                if COMMENT not in row:continue
+                if row[-4:]!=['-j','CT','--zone',ZONE]:raise ValueError('INGRESS_FOREIGN_ZONE_RULE')
+                if column in row and str(ipaddress.ip_network(row[row.index(column)+1]).network_address)!=backup:
+                    self.call(['iptables','-w','5','-t','raw','-D',hook,*row[2:]])
+            self.ensure_rule('iptables','raw',hook,[column,backup+'/32','-m','comment','--comment',COMMENT,'-j','CT','--zone',ZONE])
+        self.ensure_rule('iptables','raw','PREROUTING',['-i',INTERFACE,'-m','comment','--comment',COMMENT,'-j','CT','--zone',ZONE])
         body=['*nat','-F '+chain,
               f'-A {chain} -m connmark --mark {MARK} -m comment --comment {COMMENT} -j SNAT --to-source {backup}',
               f'-A {chain} -m comment --comment {COMMENT} -j SNAT --to-source {primary}','COMMIT','']

@@ -119,6 +119,12 @@ while True:time.sleep(1)
                 nat=['-j','MASQUERADE'] if tool=='iptables' else ['-j','SNAT','--to-source','2603:c020:c015:8100::10']
                 run('ip','netns','exec',NAMES[1],tool,'-t','nat','-A','POSTROUTING','-s',prefix,'-o','opx-out',*nat)
             outside_server=server.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20').replace('c,_=s.accept()','c,peer=s.accept()').replace("c.sendall(b'OK')","c.sendall(peer[0].encode())")
+            outside_server=outside_server.replace("print('READY',flush=True)","""u=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);u.bind(('10.99.0.2',18081))
+def udp():
+ while True:
+  _,peer=u.recvfrom(64);u.sendto(peer[0].encode(),peer)
+threading.Thread(target=udp,daemon=True).start()
+print('READY',flush=True)""")
             internet=subprocess.Popen(['ip','netns','exec',NAMES[2],sys.executable,'-u','-c',outside_server],stdout=subprocess.PIPE,text=True)
             assert internet.stdout.readline().strip()=='READY'
             echo=subprocess.Popen(['ip','netns','exec',NAMES[1],sys.executable,'-u','-c',server],stdout=subprocess.PIPE,text=True)
@@ -153,6 +159,11 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
                 for role in ('primary','backup'):probe(role,port,True,forward=True)
             print('REAL_BACKUP_INTERNET_FORWARD_SNAT_AND_DUALSTACK_RETURN_UNDER_DEFAULT_DROP=PASS',flush=True)
             print('REAL_EACH_INGRESS_USES_ITS_OWN_IPV4_SOURCE_ALL_PORTS_WITH_SHARED_IPV6_EXIT=PASS',flush=True)
+            for role,source in (('primary','10.0.0.6'),('backup','10.0.0.246'),('primary','10.0.0.6')):
+                probe(role,443,True)
+                code="import socket,sys;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind(('10.77.0.2',42001));s.settimeout(4);s.sendto(b'probe',('10.99.0.2',18081));assert s.recv(128).decode()==sys.argv[1];s.close()"
+                run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,source)
+            print('REAL_IDENTICAL_INNER_UDP_FIVE_TUPLE_CANNOT_REUSE_OTHER_INGRESS_NAT=PASS',flush=True)
             run('ip','netns','exec',NAMES[1],sys.executable,__file__,'--qos',directory)
             def counters():
                 value=json.loads(run('ip','netns','exec',NAMES[1],'tc','-j','-s','actions','list','action','police').stdout)

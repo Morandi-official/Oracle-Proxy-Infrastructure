@@ -31,6 +31,8 @@ def verify():
     expected=[f'-A {chain} -m connmark --mark 0x20000000/0x20000000 {marker} -j SNAT --to-source {backup}',
               f'-A {chain} {marker} -j SNAT --to-source {primary}']
     if [line for line in rules if line.startswith('-A')]!=expected:raise ValueError('INGRESS_EGRESS_RULES_MISMATCH')
+    for hook,selector in (('PREROUTING',['-i','wgopbackup']),('PREROUTING',['-d',backup+'/32']),('OUTPUT',['-s',backup+'/32'])):
+        run(['iptables','-w','5','-t','raw','-C',hook,*selector,'-m','comment','--comment','proxy-user-ingress-v1','-j','CT','--zone','196'])
     addresses=json.loads(run(['ip','-j','-4','address','show','dev','wg0']))
     for item in addresses:
         for address in item.get('addr_info',[]):

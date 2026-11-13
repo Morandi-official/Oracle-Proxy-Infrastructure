@@ -54,7 +54,8 @@ class Controller:
     def ensure(self,backup):
         addresses=json.loads(self.call(['ip','-j','address','show','dev','wg0']).stdout)
         signature=sorted((a.get('family'),a.get('local'),a.get('prefixlen'),a.get('scope')) for item in addresses for a in item.get('addr_info',[]) if a.get('scope')!='link')
-        if self.ready and self.backup==backup and self.address_signature==signature:return
+        selector=(getattr(self,'primary_address',None),getattr(self,'egress_interface',None))
+        if self.ready and self.backup==backup and self.address_signature==signature and self.selector==selector:return
         if not self.key.exists():
             key=self.call(['wg','genkey']).stdout.strip()
             fd=os.open(self.key,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -171,7 +172,7 @@ class Controller:
             body=['*filter','-F '+chain,f'-A {chain} -i lo -m comment --comment {COMMENT} -j ACCEPT',f'-A {chain} -m comment --comment {COMMENT} -j DROP','COMMIT','']
             self.call(['ip6tables-restore','-w','5','--noflush'],input='\n'.join(body))
             self.ensure_rule('ip6tables','filter','INPUT',['-p','udp','-m','multiport','--dports','51820,51821','-m','comment','--comment',COMMENT,'-j',chain])
-        self.public_key=public;self.backup=backup;self.address_signature=signature;self.ready=True
+        self.public_key=public;self.backup=backup;self.address_signature=signature;self.selector=selector;self.ready=True
 
     def peers(self,interface):
         return {line.split('\t',1)[0]:line.split('\t',1)[1].replace(' ',',').split(',') for line in self.call(['wg','show',interface,'allowed-ips']).stdout.splitlines()}

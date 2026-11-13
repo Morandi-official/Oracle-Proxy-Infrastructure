@@ -151,7 +151,8 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
                     if isinstance(node,dict):return sum(v if k=='bytes' and isinstance(v,int) else count(v) for k,v in node.items())
                     if isinstance(node,list):return sum(count(v) for v in node)
                     return 0
-                return {row['index']:count(row.get('stats',row)) for row in rows}
+                # iproute2 includes a header object ("total acts") in this list.
+                return {row['index']:count(row.get('stats',row)) for row in rows if isinstance(row,dict) and 'index' in row}
             before=counters();probe('primary',443,True);primary_counts=counters();probe('backup',443,True);backup_counts=counters()
             for index in (741001,742001):assert primary_counts[index]>before[index] and backup_counts[index]>primary_counts[index], 'Both entrance interfaces must increment the same account policer'
             print('REAL_SHARED_UPLOAD_DOWNLOAD_POLICERS_COUNT_BOTH_INGRESSES_AND_IP_FAMILIES=PASS',flush=True)

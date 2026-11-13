@@ -118,6 +118,21 @@ def main():
      assert page.locator('#user-rows b').count()==0
      user=engine.snapshot()['users'][0]
      assert user['rate']=={'download_bps':12500000,'upload_bps':3000000}
+     assert user['ingress']=={'access':'primary','preferred':'primary'}
+     row.get_by_role('button',name='编辑',exact=True).click()
+     page.locator('#user-form [name=ingress_access]').select_option('both')
+     page.locator('#user-form [name=ingress_preferred]').select_option('backup')
+     page.get_by_role('button',name='保存用户',exact=True).click()
+     expect(row).to_contain_text('备用')
+     assert engine.ingress_policy(user['id'])=={'access':'both','preferred':'backup'}
+     row.get_by_role('button',name='编辑',exact=True).click()
+     expect(page.locator('#user-form [name=ingress_preferred]')).to_have_value('backup')
+     page.locator('#user-form [name=ingress_access]').select_option('primary')
+     expect(page.locator('#user-form [name=ingress_preferred]')).to_have_value('primary')
+     assert page.locator('#user-form [name=ingress_preferred] option[value=backup]').evaluate('(option)=>option.disabled')
+     page.get_by_role('button',name='保存用户',exact=True).click()
+     assert engine.ingress_policy(user['id'])=={'access':'primary','preferred':'primary'}
+     print(f'SYNTHETIC_{name.upper()}_INGRESS_POLICY_DEFAULT_EDIT_PREFERENCE_AND_REVOKE_ROUNDTRIP=PASS',flush=True)
      expect(row).to_contain_text('最终到期：长期');expect(row).to_contain_text('12.5 Mbps')
      row.locator('.user-toggle').click()
      chart=page.locator('#usage-'+user['id']);expect(chart).to_be_visible()

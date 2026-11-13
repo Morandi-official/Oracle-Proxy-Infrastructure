@@ -107,8 +107,8 @@ def configuration(row,state,peer,private_key):
         group={'name':'Proxy UDP','type':'fallback','proxies':[n['name'] for n in nodes],
                'url':'https://1.1.1.1/cdn-cgi/trace','interval':30,'lazy':False,'timeout':5000}
     else:nodes=[node];group=None
-    # JSON is a strict YAML subset accepted by Mihomo and FlClash. A single
-    # outbound and MATCH policy: no DIRECT, selectors, providers or fallback.
+    # JSON is a strict YAML subset accepted by Mihomo and FlClash. All business
+    # traffic uses the UDP node/group; no DIRECT or alternate carrier fallback.
     # Resolver packets use the same WireGuard outbound; numeric endpoint avoids
     # a bootstrap DNS lookup. FlClash owns enabling its OS TUN / kill switch.
     return {'mixed-port':7890,'allow-lan':False,'bind-address':'127.0.0.1',

@@ -5,6 +5,13 @@ import os
 
 ROOT='7a10:'
 
+def action_rows(value):
+    """iproute2 emits either actions directly or inside total-acts wrappers."""
+    if isinstance(value,list):return [row for item in value for row in action_rows(item)]
+    if not isinstance(value,dict):return []
+    if type(value.get('index')) is int:return [value]
+    return [row for item in value.values() if isinstance(item,(dict,list)) for row in action_rows(item)]
+
 class Controller:
     def __init__(self,command,state,revoke):
         self.command=command;self.path=state/'bandwidth-owned.json';self.revoke=revoke;self.cached=None
@@ -33,7 +40,7 @@ class Controller:
         if any(type(i)is not int or not 731001<=i<=731256 for i in previous):raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
         actions=[731000+p['slot'] for p in plan if p['upload_bps']]
         existing=json.loads(self.command(['tc','-j','actions','list','action','police']).stdout)
-        indices={a.get('index') for a in existing.get('actions',[])} if isinstance(existing,dict) else {a.get('index') for a in existing}
+        indices={a['index'] for a in action_rows(existing)}
         if any(i in indices and i not in previous for i in actions):raise ValueError('BANDWIDTH_FOREIGN_ACTION')
         self.path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
         temp=self.path.with_suffix('.new')
@@ -87,7 +94,7 @@ class SharedIngressController:
         if any(type(i)is not int or not (741001<=i<=741256 or 742001<=i<=742256) for i in previous):raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
         actions=[base+p['slot'] for p in plan for direction,base in (('upload_bps',741000),('download_bps',742000)) if p[direction]]
         listing=self.command(['tc','-j','actions','list','action','police']).stdout
-        listing=json.loads(listing);listing=listing.get('actions',[]) if isinstance(listing,dict) else listing
+        listing=action_rows(json.loads(listing))
         if any(a.get('index') in actions and a.get('index') not in previous for a in listing):raise ValueError('BANDWIDTH_FOREIGN_ACTION')
         if not plan and not receipt:return
         for interface in ('wg0','wgopbackup'):

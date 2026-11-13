@@ -50,6 +50,18 @@ class AccountPolicyTests(f.unittest.TestCase):
    self.engine.dispatch({'actor':'system:account-sync','operation':'user.put','data':{}})
 
 class QosTests(f.unittest.TestCase):
+ def test_nested_iproute2_action_headers_cannot_hide_foreign_police_actions(self):
+  spec=importlib.util.spec_from_file_location('qos_json',Path(__file__).with_name('qos.py'));qos=importlib.util.module_from_spec(spec);spec.loader.exec_module(qos)
+  action={'kind':'police','index':741001,'stats':{'bytes':128}}
+  for listing in ([action],{'actions':[action]},[{'total acts':1,'actions':[action]}]):
+   self.assertEqual(qos.action_rows(listing),[action])
+   def command(args,**kw):
+    self.assertNotIn('-batch',args)
+    return type('Result',(),{'stdout':json.dumps(listing),'returncode':0})()
+   with f.tempfile.TemporaryDirectory() as tmp:
+    with self.assertRaisesRegex(ValueError,'BANDWIDTH_FOREIGN_ACTION'):
+     qos.SharedIngressController(command,Path(tmp),lambda:None).apply([{'slot':1,'download_bps':None,'upload_bps':1000000,'addresses':['10.250.0.2']}])
+
  def test_shared_police_action_is_referenced_by_all_addresses_and_foreign_qdisc_retained(self):
   spec=importlib.util.spec_from_file_location('qos',Path(__file__).with_name('qos.py'));qos=importlib.util.module_from_spec(spec);spec.loader.exec_module(qos)
   commands=[]

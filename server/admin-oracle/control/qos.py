@@ -79,6 +79,10 @@ class SharedIngressController:
 
     def apply(self,plan):
         plan=sorted(plan,key=lambda p:p['slot'])
+        if not plan and not (self.path.exists() or self.path.is_symlink() or (self.state/'bandwidth-owned.json').exists()):
+            # No configured cap and no owned qdisc to remove: never interrupt
+            # active leases merely because the periodic policy tick ran.
+            self.cached=[];return
         if self.cached==plan:
             valid=not plan or all(any(q.get('kind')=='clsact' for q in json.loads(self.command(['tc','-j','qdisc','show','dev',i]).stdout)) for i in ('wg0','wgopbackup'))
             if valid:return

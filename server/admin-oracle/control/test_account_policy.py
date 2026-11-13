@@ -50,6 +50,13 @@ class AccountPolicyTests(f.unittest.TestCase):
    self.engine.dispatch({'actor':'system:account-sync','operation':'user.put','data':{}})
 
 class QosTests(f.unittest.TestCase):
+ def test_unlimited_shared_ingress_does_not_revoke_live_leases_on_poll(self):
+  spec=importlib.util.spec_from_file_location('qos_unlimited',Path(__file__).with_name('qos.py'));qos=importlib.util.module_from_spec(spec);spec.loader.exec_module(qos)
+  def unexpected(*args,**kwargs):self.fail('Unlimited polling must leave kernel leases and traffic control untouched')
+  with f.tempfile.TemporaryDirectory() as tmp:
+   controller=qos.SharedIngressController(unexpected,Path(tmp),unexpected)
+   controller.apply([]);controller.apply([])
+
  def test_nested_iproute2_action_headers_cannot_hide_foreign_police_actions(self):
   spec=importlib.util.spec_from_file_location('qos_json',Path(__file__).with_name('qos.py'));qos=importlib.util.module_from_spec(spec);spec.loader.exec_module(qos)
   action={'kind':'police','index':741001,'stats':{'bytes':128}}

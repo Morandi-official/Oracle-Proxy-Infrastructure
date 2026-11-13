@@ -376,7 +376,7 @@ def install_control():
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
     ingress_unit=Path('/etc/systemd/system/proxy-ingress-routing.service')
     if ingress_unit.exists() and 'Description=Proxy fixed backup ingress routing' not in ingress_unit.read_text():raise ValueError('INGRESS_FOREIGN_ROUTING_UNIT')
-    atomic(ingress_unit,b'[Unit]\nDescription=Proxy fixed backup ingress routing\nAfter=oracle-proxy-control.service wg-quick@wg0.service oracle-proxy-ipv6-tunnel.service\nPartOf=oracle-proxy-control.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/ingress.py\nRemainAfterExit=yes\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n',0o644)
+    atomic(ingress_unit,b'[Unit]\nDescription=Proxy fixed backup ingress routing\nAfter=oracle-proxy-control.service wg-quick@wg0.service oracle-proxy-ipv6-tunnel.service proxy-endpoint-addresses.service\nWants=proxy-endpoint-addresses.service\nPartOf=oracle-proxy-control.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/ingress.py\nRemainAfterExit=yes\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n',0o644)
 
     atomic(unit,(SERVER/'deploy/oracle-proxy-control.service').read_bytes(),0o644)
     dropin = Path('/etc/systemd/system/wg-quick@wg0.service.d')

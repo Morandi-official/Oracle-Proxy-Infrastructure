@@ -38,6 +38,7 @@ def child(directory,qos=False):
     driver=policy.Driver();driver.initialize(False)
     allowed={'10.77.0.2':120,'fd42:6f70:78:77::2':120};driver.leases(set(allowed),allowed,True)
     controller=module.Controller(command,directory)
+    controller.config()
     controller.ensure('10.0.0.246')
     Path('/proc/sys/net/ipv4/conf/wgopbackup/rp_filter').write_text('2\n')
     module.READY.write_text(controller.public_key+'\n');module.READY.chmod(0o600)
@@ -62,6 +63,9 @@ def main():
                 run('ip','-n',name,'address','add',address,'dev',interface)
                 run('ip','-n',name,'link','set',interface,'up');run('ip','-n',name,'link','set','lo','up')
             run('ip','-n',NAMES[1],'address','add','10.0.0.246/32','dev','opx-as')
+            run('ip','-n',NAMES[1],'address','add','10.0.0.247/32','dev','opx-as')
+            run('ip','-n',NAMES[1],'-6','address','add','fd55:77::1/64','dev','opx-as','nodad')
+            run('ip','-n',NAMES[0],'-6','address','add','fd55:77::2/64','dev','opx-ac','nodad')
             run('ip','link','add','opx-out','type','veth','peer','name','opx-internet')
             for n,dev,address,v6 in ((NAMES[1],'opx-out','10.99.0.1/24','2603:c020:c015:8100::10/64'),(NAMES[2],'opx-internet','10.99.0.2/24','2603:c020:c015:8100::20/64')):
                 run('ip','link','set',dev,'netns',n);run('ip','-n',n,'address','add',address,'dev',dev);run('ip','-n',n,'-6','address','add',v6,'dev',dev,'nodad');run('ip','-n',n,'link','set',dev,'up');run('ip','-n',n,'link','set','lo','up')
@@ -118,7 +122,7 @@ while True:time.sleep(1)
             def probe(role,port,expected,server_key=None,forward=False):
                 key=server_key or (server_public if role=='primary' else backup_public)
                 if previous[0]:run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',previous[0],'remove')
-                previous[0]=key;address='10.0.0.6' if role=='primary' else '10.0.0.246'
+                previous[0]=key;address={'primary':'10.0.0.6','backup':'10.0.0.246','legacy':'10.0.0.247','ipv6':'[fd55:77::1]'}[role]
                 run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',key,'allowed-ips','10.77.0.0/24,fd42:6f70:78:77::/64,10.99.0.0/24,2603:c020:c015:8100::/64','endpoint',address+':'+str(port))
                 code='''import socket,sys
 for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:77::1')):
@@ -131,7 +135,10 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
                 if forward:code=code.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20')
                 run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,str(expected))
             for port in (443,8443,51820):probe('primary',port,True);probe('backup',port,False);probe('backup',port,False,server_public)
+            for port in (443,8443,51820):probe('legacy',port,False,server_public)
+            probe('ipv6',51820,False,server_public)
             print('REAL_PRIMARY_ONLY_DENIES_BACKUP_ALL_NATIVE_PORTS_AND_MANUAL_SERVER_KEY=PASS',flush=True)
+            print('REAL_OLD_ALIAS_AND_RAW_IPV6_CANNOT_BYPASS_IPV4_INGRESS_PERMISSIONS=PASS',flush=True)
             sync(['primary','backup'])
             for port in (443,8443,51820):probe('backup',port,True)
             probe('backup',443,True,forward=True)

@@ -10,6 +10,7 @@ import time
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
+INGRESS_ISOLATION_SCHEMA = 1
 HOST = 'vpn-admin.morandi.dpdns.org'
 PATH = '/api/client/relay'
 MAX_PACKET = 4096
@@ -85,9 +86,10 @@ def application(auth=authenticate, udp_target=('127.0.0.1', 51820), refresh=5):
             raise web.HTTPForbidden()
         target=udp_target
         local=request.headers.get('X-Proxy-Ingress')
-        if local:
-            from console.endpoint_config import read
-            catalog=read()
+        from console.endpoint_config import read
+        catalog=read()
+        if catalog:
+            if not local:raise web.HTTPForbidden()
             if catalog and local==catalog['backup']['private_ipv4']:target=('127.0.0.1',51821)
             elif catalog and local!=catalog['primary']['private_ipv4']:raise web.HTTPForbidden()
         header = request.headers.get('Authorization', '')

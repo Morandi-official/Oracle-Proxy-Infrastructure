@@ -44,6 +44,7 @@ class Controller:
         self.egress_interface=device
         addresses=[str(ipaddress.IPv4Address(value[role]['private_ipv4'])) for role in ('primary','backup')]
         if addresses[0]==addresses[1] or not all(ipaddress.ip_address(a).is_private for a in addresses):raise ValueError('INGRESS_CATALOG_INVALID')
+        self.primary_address=addresses[0]
         return addresses
 
     def ensure_rule(self,tool,table,chain,rule):
@@ -82,7 +83,7 @@ class Controller:
                 self.call(['ip',family,'address','replace',str(host.ip)+('/32' if host.version==4 else '/128'),'dev',INTERFACE,'noprefixroute'])
                 current=json.loads(self.call(['ip','-j',family,'rule','show']).stdout)
                 matching=[r for r in current if r.get('priority')==int(PRIORITY)]
-                if matching and any(str(r.get('table'))!=TABLE or r.get('fwmark') not in ('0x20000000',536870912) for r in matching):raise ValueError('INGRESS_FOREIGN_POLICY_RULE')
+                if matching and any(str(r.get('table'))!=TABLE or r.get('fwmark') not in ('0x20000000',536870912) or r.get('fwmask') not in ('0x20000000',536870912) for r in matching):raise ValueError('INGRESS_FOREIGN_POLICY_RULE')
                 if not matching:self.call(['ip',family,'rule','add','priority',PRIORITY,'fwmark',MARK,'lookup',TABLE])
                 routes=self.call(['ip','-j',family,'route','show','table',TABLE],accepted=(0,2))
                 if routes.returncode==0 and any(r.get('dev')!=INTERFACE for r in json.loads(routes.stdout)):raise ValueError('INGRESS_FOREIGN_ROUTE_TABLE')
@@ -147,6 +148,29 @@ class Controller:
         body.extend([f'-A {chain} -m comment --comment {COMMENT} -j DROP','COMMIT',''])
         self.call(['iptables-restore','-w','5','--noflush'],input='\n'.join(body))
         self.ensure_rule('iptables','filter','INPUT',['-p','udp','--dport',str(PORT),'-m','comment','--comment',COMMENT,'-j',chain])
+        primary=getattr(self,'primary_address',None)
+        if primary:
+            if self.call(['wg','show','wg0','listen-port']).stdout.strip()!='51820':raise ValueError('INGRESS_PRIMARY_PORT_REQUIRED')
+            chain='OPX_PRIMARY_PORT'
+            result=self.call(['iptables','-w','5','-S',chain],accepted=(0,1))
+            if result.returncode==1:self.call(['iptables','-w','5','-N',chain])
+            elif any(COMMENT not in line for line in result.stdout.splitlines() if line.startswith('-A')):raise ValueError('INGRESS_FOREIGN_FIREWALL_CHAIN')
+            body=['*filter','-F '+chain,f'-A {chain} -i lo -m comment --comment {COMMENT} -j ACCEPT']
+            for port in ('443','8443','51820'):
+                body.append(f'-A {chain} -p udp -m conntrack --ctorigdst {primary} --ctorigdstport {port} -m comment --comment {COMMENT} -j ACCEPT')
+            body.extend([f'-A {chain} -m comment --comment {COMMENT} -j DROP','COMMIT',''])
+            self.call(['iptables-restore','-w','5','--noflush'],input='\n'.join(body))
+            self.ensure_rule('iptables','filter','INPUT',['-p','udp','--dport','51820','-m','comment','--comment',COMMENT,'-j',chain])
+            # Public permissions currently cover the two numeric IPv4 entrances.
+            # IPv6 payload remains tunneled, but raw IPv6 must not bypass these
+            # entrance selectors by addressing a wildcard WireGuard listener.
+            chain='OPX_INGRESS_V6PORT'
+            result=self.call(['ip6tables','-w','5','-S',chain],accepted=(0,1))
+            if result.returncode==1:self.call(['ip6tables','-w','5','-N',chain])
+            elif any(COMMENT not in line for line in result.stdout.splitlines() if line.startswith('-A')):raise ValueError('INGRESS_FOREIGN_FIREWALL_CHAIN')
+            body=['*filter','-F '+chain,f'-A {chain} -i lo -m comment --comment {COMMENT} -j ACCEPT',f'-A {chain} -m comment --comment {COMMENT} -j DROP','COMMIT','']
+            self.call(['ip6tables-restore','-w','5','--noflush'],input='\n'.join(body))
+            self.ensure_rule('ip6tables','filter','INPUT',['-p','udp','-m','multiport','--dports','51820,51821','-m','comment','--comment',COMMENT,'-j',chain])
         self.public_key=public;self.backup=backup;self.address_signature=signature;self.ready=True
 
     def peers(self,interface):

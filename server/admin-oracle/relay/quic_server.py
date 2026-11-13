@@ -16,6 +16,7 @@ from .server import PacketQueue, Rate, authenticate, wireguard_packet
 from aioquic.h3.connection import H3Connection, Setting
 from aioquic.h3.events import HeadersReceived, DataReceived, DatagramReceived
 
+INGRESS_ISOLATION_SCHEMA = 1
 ALPN = 'oracle-wireguard-quic-v1'  # rc6–rc8 compatibility
 H3_ALPN = 'h3'
 CONNECT_PATH = '/.well-known/masque/udp/127.0.0.1/51820/'

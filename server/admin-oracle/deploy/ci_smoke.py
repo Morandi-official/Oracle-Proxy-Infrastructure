@@ -92,7 +92,16 @@ def main():
         assert result.returncode != 0
         assert (host.ROOT / 'current').resolve().name == first
         assert host.healthy(), 'Previous version was not restored after startup failure'
-    run([sys.executable, source / 'deploy/host.py', 'install', '--revision', second])
+    # Upgrades after ingress activation must validate the actually packaged
+    # contract, not an artificial test tree with extra files added by the test.
+    ingress_marker=host.INGRESS_RECEIPT
+    if ingress_marker.exists() or ingress_marker.is_symlink():raise SystemExit('Preexisting ingress receipt refused')
+    ingress_marker.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    ingress_marker.write_text('{"synthetic_disposable_ci":true}\n');ingress_marker.chmod(0o600)
+    try:
+        run([sys.executable, source / 'deploy/host.py', 'install', '--revision', second])
+        print('REAL_SEALED_RELEASE_UPGRADE_WITH_ACTIVE_INGRESS_CONTRACT=PASS')
+    finally:ingress_marker.unlink()
     assert (host.ROOT / 'current').resolve().name == second
     run([sys.executable, source / 'deploy/host.py', 'rollback'])
     # Simulate the actual legacy rollback target, which has no relay module.

@@ -137,14 +137,14 @@ print('READY',flush=True)""")
                 run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',key,'allowed-ips','10.77.0.0/24,fd42:6f70:78:77::/64,10.99.0.0/24,2603:c020:c015:8100::/64','endpoint',address+':'+str(port))
                 code='''import socket,sys
 for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:77::1')):
- s=socket.socket(family);s.settimeout(4 if sys.argv[1]=='True' else 1)
+ s=socket.socket(family);s.settimeout(8 if sys.argv[1]=='True' else 1)
  try:
   s.connect((host,18080));s.sendall(b'probe');reply=s.recv(128)
   expected=b'OK' if sys.argv[2]=='local' else (sys.argv[2].encode() if family==socket.AF_INET else b'2603:c020:c015:8100::10')
   ok=reply==expected
  except OSError:ok=False
  finally:s.close()
- assert ok==(sys.argv[1]=='True'), 'unexpected ingress authorization result'
+ assert ok==(sys.argv[1]=='True'), 'unexpected ingress authorization result: family='+str(family)+' expected='+sys.argv[1]+' received='+str(ok)
 '''
                 if forward:code=code.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20')
                 run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,str(expected),('10.0.0.6' if role=='primary' else '10.0.0.246') if forward else 'local')

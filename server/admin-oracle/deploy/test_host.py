@@ -10,6 +10,18 @@ spec.loader.exec_module(host)
 
 
 class HostBoundaries(unittest.TestCase):
+    def test_real_packaging_retains_ingress_contract_without_privileged_scripts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source=Path(temporary)/'source';release=Path(temporary)/'release';source.mkdir();release.mkdir()
+            self.candidate(source)
+            for relative,body in (('relay/server.py','INGRESS_ISOLATION_SCHEMA = 1'),('relay/quic_server.py','INGRESS_ISOLATION_SCHEMA = 1'),('deploy/Caddyfile','header_up X-Proxy-Ingress {http.request.local.host}'),('deploy/host.py','privileged-synthetic-only')):
+                path=source/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(body)
+            for path,relative in host.source_files(source):
+                output=release/relative;output.parent.mkdir(parents=True,exist_ok=True);output.write_bytes(path.read_bytes())
+            self.assertFalse((release/'deploy/host.py').exists())
+            marker=Path(temporary)/'ingress.json';marker.write_text('{}')
+            with patch.object(host,'INGRESS_RECEIPT',marker):host.require_ingress_release(release)
+
     def test_ingress_active_refuses_unaware_relay_rollback(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);marker=root/'ingress.json';release=root/'release';release.mkdir()

@@ -19,6 +19,7 @@ PRIORITY='19600'
 CATALOG=Path('/etc/oracle-proxy-quic/endpoints.json')
 READY=Path('/run/oracle-proxy-control/ingress-ready')
 COMMENT='proxy-user-ingress-v1'
+ZONE='196'
 
 
 def protected(path):
@@ -50,6 +51,37 @@ class Controller:
     def ensure_rule(self,tool,table,chain,rule):
         result=self.call([tool,'-w','5','-t',table,'-C',chain,*rule],accepted=(0,1))
         if result.returncode==1:self.call([tool,'-w','5','-t',table,'-I',chain,'1',*rule])
+
+    def ipv4_egress(self,network,device,backup):
+        primary=self.primary_address
+        local=json.loads(self.call(['ip','-j','-4','address','show','dev',device]).stdout)
+        local={a['local'] for item in local for a in item.get('addr_info',[]) if a.get('family')=='inet'}
+        if not {primary,backup}<=local:raise ValueError('INGRESS_EGRESS_PRIVATE_ADDRESS_NOT_LOCAL')
+        chain='OPX_INGRESS_EGRESS'
+        result=self.call(['iptables','-w','5','-t','nat','-S',chain],accepted=(0,1))
+        if result.returncode==1:self.call(['iptables','-w','5','-t','nat','-N',chain])
+        elif any(COMMENT not in line for line in result.stdout.splitlines() if line.startswith('-A')):raise ValueError('INGRESS_FOREIGN_FIREWALL_CHAIN')
+        # Separate original tuples on the two identities. Replies still use
+        # zone zero: the two translated destination IPs distinguish them. Local
+        # gateway services keep ordinary socket/conntrack reply handling.
+        for hook in ('PREROUTING','OUTPUT'):
+            for line in self.call(['iptables','-w','5','-t','raw','-S',hook]).stdout.splitlines():
+                row=shlex.split(line)
+                if COMMENT not in row:continue
+                if row[-4:]==['-j','CT','--zone',ZONE]:
+                    self.call(['iptables','-w','5','-t','raw','-D',hook,*row[2:]])
+                elif hook!='PREROUTING' or row[-4:]!=['-j','CT','--zone-orig',ZONE]:raise ValueError('INGRESS_FOREIGN_ZONE_RULE')
+        self.ensure_rule('iptables','raw','PREROUTING',['-i',INTERFACE,'-m','addrtype','!','--dst-type','LOCAL','-m','comment','--comment',COMMENT,'-j','CT','--zone-orig',ZONE])
+        body=['*nat','-F '+chain,
+              f'-A {chain} -m connmark --mark {MARK} -m comment --comment {COMMENT} -j SNAT --to-source {backup}',
+              f'-A {chain} -m comment --comment {COMMENT} -j SNAT --to-source {primary}','COMMIT','']
+        self.call(['iptables-restore','-w','5','--noflush'],input='\n'.join(body))
+        self.ensure_rule('iptables','nat','POSTROUTING',['-s',str(network),'-o',device,'-m','comment','--comment',COMMENT,'-j',chain])
+        # Remove only our previous backup MASQUERADE after its replacement is
+        # active. Ordinary host traffic and other applications' NAT stay intact.
+        old=['-s',str(network),'-o',device,'-m','connmark','--mark',MARK,'-m','comment','--comment',COMMENT,'-j','MASQUERADE']
+        if self.call(['iptables','-w','5','-t','nat','-C','POSTROUTING',*old],accepted=(0,1)).returncode==0:
+            self.call(['iptables','-w','5','-t','nat','-D','POSTROUTING',*old])
 
     def ensure(self,backup):
         addresses=json.loads(self.call(['ip','-j','address','show','dev','wg0']).stdout)
@@ -105,7 +137,7 @@ class Controller:
                     for direction in ('-i','-o'):
                         self.ensure_rule(tool,'filter','FORWARD',[direction,INTERFACE,'-m','comment','--comment',COMMENT,'-j',chain])
                     rule=['-s',str(host.network),'-o',device,'-m','connmark','--mark',MARK,'-m','comment','--comment',COMMENT]
-                    if host.version==4:rule+=['-j','MASQUERADE']
+                    if host.version==4:self.ipv4_egress(host.network,device,backup)
                     else:
                         external=json.loads(self.call(['ip','-j','-6','address','show','dev',device]).stdout)
                         exits=[a['local'] for item in external for a in item.get('addr_info',[]) if a.get('family')=='inet6' and ipaddress.ip_address(a['local']).is_global]
@@ -119,23 +151,32 @@ class Controller:
                         if selected is None and len(exits)==1:selected=exits[0]
                         if selected is None:raise ValueError('INGRESS_IPV6_EGRESS_AMBIGUOUS')
                         rule+=['-j','SNAT','--to-source',selected]
-                    self.ensure_rule(tool,'nat','POSTROUTING',rule)
+                    if host.version==6:self.ensure_rule(tool,'nat','POSTROUTING',rule)
                 # Preserve only our bit; foreign marks and default route remain intact.
                 self.ensure_rule(tool,'mangle','PREROUTING',['-i',INTERFACE,'-m','comment','--comment',COMMENT,'-j','CONNMARK','--set-xmark',MARK])
                 for chain in ('PREROUTING','OUTPUT'):
                     self.ensure_rule(tool,'mangle',chain,['-m','connmark','--mark',MARK,'-m','comment','--comment',COMMENT,'-j','CONNMARK','--restore-mark','--nfmask','0x20000000','--ctmask','0x20000000'])
+                # An incoming primary packet must not retain a previous backup
+                # classification. Change only our reserved mark bit.
+                for target in ('MARK','CONNMARK'):
+                    self.ensure_rule(tool,'mangle','PREROUTING',['-i','wg0','-m','comment','--comment',COMMENT,'-j',target,'--set-xmark','0x0/0x20000000'])
         # Encrypted backup traffic is sent to its separate identity before legacy
         # generic native-port redirects. Genuine QUIC remains on its own listener.
         existing=self.call(['iptables','-w','5','-t','nat','-S','PREROUTING']).stdout
         for line in existing.splitlines():
             rule=shlex.split(line)
             if COMMENT not in rule:continue
-            if rule[:3]!=['-A','PREROUTING','-d'] or rule[-4:]!=['-j','REDIRECT','--to-ports',str(PORT)]:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
+            if rule[:3]!=['-A','PREROUTING','-d']:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
             old=ipaddress.ip_network(rule[3],strict=True)
             if old.version!=4 or old.prefixlen!=32 or not old.network_address.is_private:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
-            if str(old.network_address)!=backup:self.call(['iptables','-w','5','-t','nat','-D','PREROUTING',*rule[2:]])
+            legacy=rule[-4:]==['-j','REDIRECT','--to-ports',str(PORT)]
+            direct=rule[-4:]==['-j','DNAT','--to-destination',str(old.network_address)+':'+str(PORT)]
+            if not (legacy or direct):raise ValueError('INGRESS_FOREIGN_NAT_RULE')
+            if legacy or str(old.network_address)!=backup:self.call(['iptables','-w','5','-t','nat','-D','PREROUTING',*rule[2:]])
         for port in ('443','8443','51820'):
-            self.ensure_rule('iptables','nat','PREROUTING',['-d',backup+'/32','-p','udp','--dport',port,'-m','u32','--u32','0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000','-m','comment','--comment',COMMENT,'-j','REDIRECT','--to-ports',str(PORT)])
+            # Keep the backup destination address: REDIRECT would substitute
+            # the NIC's primary address, so replies would enter the wrong zone.
+            self.ensure_rule('iptables','nat','PREROUTING',['-d',backup+'/32','-p','udp','--dport',port,'-m','u32','--u32','0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000','-m','comment','--comment',COMMENT,'-j','DNAT','--to-destination',backup+':'+str(PORT)])
         # Port 51821 is internal implementation, never an alternate public entrance.
         # Each permitted public port has an exact conntrack original destination.
         chain='OPX_INGRESS_PORT'

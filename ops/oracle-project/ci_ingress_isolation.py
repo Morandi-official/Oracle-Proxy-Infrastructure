@@ -70,6 +70,11 @@ def main():
             for n,dev,address,v6 in ((NAMES[1],'opx-out','10.99.0.1/24','2603:c020:c015:8100::10/64'),(NAMES[2],'opx-internet','10.99.0.2/24','2603:c020:c015:8100::20/64')):
                 run('ip','link','set',dev,'netns',n);run('ip','-n',n,'address','add',address,'dev',dev);run('ip','-n',n,'-6','address','add',v6,'dev',dev,'nodad');run('ip','-n',n,'link','set',dev,'up');run('ip','-n',n,'link','set','lo','up')
             run('ip','netns','exec',NAMES[1],'sysctl','-qw','net.ipv4.ip_forward=1','net.ipv6.conf.all.forwarding=1')
+            # The test splits entry and Internet onto two veth links. Also make
+            # the two OCI source addresses local to the synthetic egress VNIC.
+            for address in ('10.0.0.6','10.0.0.246'):
+                run('ip','-n',NAMES[1],'address','add',address+'/32','dev','opx-out','noprefixroute')
+            run('ip','-n',NAMES[2],'route','add','10.0.0.0/24','via','10.99.0.1')
             server_private=run('wg','genkey').stdout;client_private=run('wg','genkey').stdout
             server_public=run('wg','pubkey',input=server_private).stdout.strip();client_public=run('wg','pubkey',input=client_private).stdout.strip()
             for label,value in (('server.key',server_private),('client.key',client_private)):
@@ -113,7 +118,13 @@ while True:time.sleep(1)
                 run('ip','netns','exec',NAMES[1],tool,'-A','FORWARD','-i','opx-out','-o','wg0','-d',prefix,'-m','conntrack','--ctstate','ESTABLISHED,RELATED','-j','ACCEPT')
                 nat=['-j','MASQUERADE'] if tool=='iptables' else ['-j','SNAT','--to-source','2603:c020:c015:8100::10']
                 run('ip','netns','exec',NAMES[1],tool,'-t','nat','-A','POSTROUTING','-s',prefix,'-o','opx-out',*nat)
-            outside_server=server.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20')
+            outside_server=server.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20').replace('c,_=s.accept()','c,peer=s.accept()').replace("c.sendall(b'OK')","c.sendall(peer[0].encode())")
+            outside_server=outside_server.replace("print('READY',flush=True)","""u=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);u.bind(('10.99.0.2',18081))
+def udp():
+ while True:
+  _,peer=u.recvfrom(64);u.sendto(peer[0].encode(),peer)
+threading.Thread(target=udp,daemon=True).start()
+print('READY',flush=True)""")
             internet=subprocess.Popen(['ip','netns','exec',NAMES[2],sys.executable,'-u','-c',outside_server],stdout=subprocess.PIPE,text=True)
             assert internet.stdout.readline().strip()=='READY'
             echo=subprocess.Popen(['ip','netns','exec',NAMES[1],sys.executable,'-u','-c',server],stdout=subprocess.PIPE,text=True)
@@ -127,13 +138,16 @@ while True:time.sleep(1)
                 code='''import socket,sys
 for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:77::1')):
  s=socket.socket(family);s.settimeout(4 if sys.argv[1]=='True' else 1)
- try:s.connect((host,18080));s.sendall(b'probe');ok=s.recv(2)==b'OK'
+ try:
+  s.connect((host,18080));s.sendall(b'probe');reply=s.recv(128)
+  expected=b'OK' if sys.argv[2]=='local' else (sys.argv[2].encode() if family==socket.AF_INET else b'2603:c020:c015:8100::10')
+  ok=reply==expected
  except OSError:ok=False
  finally:s.close()
  assert ok==(sys.argv[1]=='True'), 'unexpected ingress authorization result'
 '''
                 if forward:code=code.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20')
-                run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,str(expected))
+                run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,str(expected),('10.0.0.6' if role=='primary' else '10.0.0.246') if forward else 'local')
             for port in (443,8443,51820):probe('primary',port,True);probe('backup',port,False);probe('backup',port,False,server_public)
             for port in (443,8443,51820):probe('legacy',port,False,server_public)
             probe('ipv6',51820,False,server_public)
@@ -141,8 +155,15 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
             print('REAL_OLD_ALIAS_AND_RAW_IPV6_CANNOT_BYPASS_IPV4_INGRESS_PERMISSIONS=PASS',flush=True)
             sync(['primary','backup'])
             for port in (443,8443,51820):probe('backup',port,True)
-            probe('backup',443,True,forward=True)
+            for port in (443,8443,51820):
+                for role in ('primary','backup'):probe(role,port,True,forward=True)
             print('REAL_BACKUP_INTERNET_FORWARD_SNAT_AND_DUALSTACK_RETURN_UNDER_DEFAULT_DROP=PASS',flush=True)
+            print('REAL_EACH_INGRESS_USES_ITS_OWN_IPV4_SOURCE_ALL_PORTS_WITH_SHARED_IPV6_EXIT=PASS',flush=True)
+            for role,source in (('primary','10.0.0.6'),('backup','10.0.0.246'),('primary','10.0.0.6')):
+                probe(role,443,True)
+                code="import socket,sys;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind(('10.77.0.2',42001));s.settimeout(4);s.sendto(b'probe',('10.99.0.2',18081));assert s.recv(128).decode()==sys.argv[1];s.close()"
+                run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,source)
+            print('REAL_IDENTICAL_INNER_UDP_FIVE_TUPLE_CANNOT_REUSE_OTHER_INGRESS_NAT=PASS',flush=True)
             run('ip','netns','exec',NAMES[1],sys.executable,__file__,'--qos',directory)
             def counters():
                 value=json.loads(run('ip','netns','exec',NAMES[1],'tc','-j','-s','actions','list','action','police').stdout)

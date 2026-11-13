@@ -48,7 +48,9 @@ def propose(current,variables,mode,confirmed):
     rows=[value['primary'],value['backup']]+value['legacy']
     default=[r['public_ipv4'] for r in rows if r['private_ipv4']=='10.0.0.6']
     if len(default)!=1:raise ValueError('ONE_DEFAULT_PRIVATE_BINDING_REQUIRED')
-    value['egress_ipv4']=list(dict.fromkeys(default+([value['primary']['public_ipv4']] if mode=='prepare' else [])))
+    paired=set(current['egress_ipv4'])=={current[r]['public_ipv4'] for r in VARIABLES}
+    value['egress_ipv4']=([value[r]['public_ipv4'] for r in VARIABLES] if paired else
+                          list(dict.fromkeys(default+([value['primary']['public_ipv4']] if mode=='prepare' else []))))
     schema.validate(value)
     if value==current:return None
     value['revision']=current['revision']+1

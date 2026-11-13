@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "revision": 3,
+  "revision": 4,
   "api_host": "vpn-admin.morandi.dpdns.org",
   "interface": "enp0s6",
   "subnet": "10.0.0.0/24",
@@ -14,7 +14,8 @@
   },
   "active": "primary",
   "egress_ipv4": [
-    "152.67.154.225"
+    "152.67.154.225",
+    "150.230.113.158"
   ],
   "legacy": []
 }

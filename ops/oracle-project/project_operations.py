@@ -288,7 +288,7 @@ def deploy(revision):
         if current.is_symlink() and current.resolve().name==revision:
             if not host.healthy():raise ValueError('APPLICATION_UNHEALTHY')
         else:run([runtime_python(),'-I',str(SERVER/'deploy/host.py'),'install','--revision',revision])
-        verify_control()
+        verify_control();verify_ingress_egress()
         if request.get('request_id') in ('admin-capacity-health-20261104','admin-history-cleanup-20261105'):
             install_usage_probe()
             run(['systemctl','restart','oracle-proxy-admin-collect.timer'])
@@ -301,14 +301,20 @@ def deploy(revision):
         run(['systemctl', 'restart', host.UNIT_NAMES[0]])
         if not host.healthy(): raise ValueError('APPLICATION_UNHEALTHY')
         install_control()
-        verify_control()
+        verify_control();verify_ingress_egress()
         install_usage_probe()
         print('PROJECT_DEPLOYMENT=ALREADY_CURRENT_HEALTHY'); return
     python = runtime_python()
     run([python, '-I', str(SERVER / 'deploy/host.py'), 'install', '--revision', revision])
     install_control()
-    verify_control()
+    verify_control();verify_ingress_egress()
     install_usage_probe()
+
+
+def verify_ingress_egress():
+    spec=importlib.util.spec_from_file_location('verify_ingress_egress',Path(__file__).with_name('verify_ingress_egress.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    print('PROJECT_PAIRED_INGRESS_EGRESS='+json.dumps(module.verify(),sort_keys=True),flush=True)
 
 
 def verify_control():
@@ -356,7 +362,7 @@ def install_control():
     unit = Path('/etc/systemd/system/oracle-proxy-control.service')
     if unit.is_symlink() or (unit.exists() and 'Description=Oracle Proxy restricted policy' not in unit.read_text()):
         raise ValueError('FOREIGN_CONTROL_UNIT')
-    for module in ('ip_set_hash_ip','ip_set_hash_net','xt_set'):
+    for module in ('ip_set_hash_ip','ip_set_hash_net','xt_set','xt_CT'):
         run(['modprobe',module])
     lock = Path('/run/xtables.lock')
     if lock.is_symlink(): raise ValueError('UNTRUSTED_FIREWALL_LOCK')
@@ -370,7 +376,7 @@ def install_control():
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
     ingress_unit=Path('/etc/systemd/system/proxy-ingress-routing.service')
     if ingress_unit.exists() and 'Description=Proxy fixed backup ingress routing' not in ingress_unit.read_text():raise ValueError('INGRESS_FOREIGN_ROUTING_UNIT')
-    atomic(ingress_unit,b'[Unit]\nDescription=Proxy fixed backup ingress routing\nAfter=oracle-proxy-control.service wg-quick@wg0.service oracle-proxy-ipv6-tunnel.service\nPartOf=oracle-proxy-control.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/ingress.py\nRemainAfterExit=yes\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n',0o644)
+    atomic(ingress_unit,b'[Unit]\nDescription=Proxy fixed backup ingress routing\nAfter=oracle-proxy-control.service wg-quick@wg0.service oracle-proxy-ipv6-tunnel.service proxy-endpoint-addresses.service\nWants=proxy-endpoint-addresses.service\nPartOf=oracle-proxy-control.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/ingress.py\nRemainAfterExit=yes\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n',0o644)
 
     atomic(unit,(SERVER/'deploy/oracle-proxy-control.service').read_bytes(),0o644)
     dropin = Path('/etc/systemd/system/wg-quick@wg0.service.d')

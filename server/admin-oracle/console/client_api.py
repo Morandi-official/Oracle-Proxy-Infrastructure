@@ -95,7 +95,7 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
     active=[p for p in owned if not p.get('revoked')]
     devices=[{'id':fingerprint(p['public_key']),'name':p['name'],'current':p['public_key']==key,'revoked':p['revoked'],'confirmed_at':(p.get('enrollment') or {}).get('confirmed_at')} for p in active]
     data={'schema':1,'udp_diagnostics_available':True,'observed_at':snapshot['observed_at'],'period':snapshot['period'],
-        'account':{'username':account.username,'status':status,'cycle':user.get('cycle'),'rate':user.get('rate'),'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
+        'account':{'username':account.username,'status':status,'cycle':user.get('cycle'),'ingress':user.get('ingress',{'access':'primary','preferred':'primary'}),'rate':user.get('rate'),'used_bytes':used,'limit_bytes':user['quota'],'remaining_bytes':user['remaining_bytes'],'expires_at':user['expires'],'device_limit':user['device_limit'],'device_count':user['device_count']},
         'registration':{'status':'registered' if is_confirmed else 'legacy' if peer else 'pending','device_id':fingerprint(key),'device_name':peer['name'] if peer else proposed_name,'confirmed_at':receipt['confirmed_at'] if is_confirmed else None,'requires_confirmation':not is_confirmed,'requires_slot':not bool(peer)},
         'devices':devices,'devices_history_truncated':False,
         'device':{'public_key':key,'registered':registered,'handshake_at':peer['handshake'] if peer else 0,'usage':peer['usage'] if peer else {'rx':0,'tx':0}},'tunnel':None}
@@ -104,9 +104,19 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
         dual = bool(ipv6 and any(ipaddress.ip_interface(a).version == 6 and ipaddress.ip_interface(a).ip in ipaddress.ip_network(ipv6['prefix']) for a in peer['allowed_ips']))
         addresses = [a for a in peer['allowed_ips'] if dual or ipaddress.ip_interface(a).version == 4]
         data['tunnel']={'transport_address':legacy_transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':addresses,'allowed_ips':['0.0.0.0/0','::/0'] if dual else ['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'tunnel' if dual else 'block','ipv6_egress':ipv6['egress'] if dual else None,'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
-    from .endpoint_config import advertised
-    catalog=advertised()
-    if catalog:data['network_endpoints']=catalog
+    from .endpoint_config import user_catalog
+    catalog=user_catalog(user,snapshot)
+    if catalog and data['tunnel'] is not None:
+        tunnel=data['tunnel'];addresses=catalog['addresses'];default=addresses[0]
+        tunnel.update(transport_address=default,server_public_key=catalog['server_public_keys'][default],
+                      server_public_keys=catalog['server_public_keys'],private_ipv4=catalog['private_ipv4'],egress_ipv4_candidates=catalog['egress_ipv4'])
+        if len(addresses)==2:
+            tunnel['backup_address']=addresses[1]
+            data['network_endpoints']={'schema':1,'revision':catalog['revision'],'primary':default,'backup':addresses[1],
+                                       'private_ipv4':catalog['private_ipv4'],'egress_ipv4':catalog['egress_ipv4']}
+        # A single authorized endpoint intentionally has no backup_address or
+        # two-address catalog; existing clients continue using the fixed tunnel.
+
     return data
 
 
@@ -248,6 +258,9 @@ def logout(request):
 
 def annotate_devices(snapshot):
     """Administrator-only view. Presence is advisory, never policy authority."""
+    from .endpoint_config import read
+    catalog=read()
+    if catalog:snapshot['ingress_endpoints']={r:catalog[r]['public_ipv4'] for r in ('primary','backup')}
     now=timezone.now();peers={p['public_key']:p for p in snapshot.get('peers',[])}
     sessions={row.public_key:row for row in ClientSession.objects.select_related('account').filter(expires_at__gt=now)}
     for peer in snapshot.get('peers',[]):
@@ -310,13 +323,20 @@ def management_lock():
 
 def save_account(request, value):
     fields = {'id','name','username','password','device_limit','quota_bytes','expires_at','enabled'}
-    if not fields<=set(value) or set(value)-fields-{'download_bps','upload_bps'}:raise ValueError('INVALID_FIELDS')
+    if not fields<=set(value) or set(value)-fields-{'download_bps','upload_bps','ingress_access','ingress_preferred'}:raise ValueError('INVALID_FIELDS')
     rates={}
     for key in ('download_bps','upload_bps'):
         if key in value:
             rate=value[key]
             if rate is not None and (type(rate)is not int or not 100_000<=rate<=10_000_000_000):raise ValueError('INVALID_RATE')
             rates[key]=rate
+    ingress={k:value[k] for k in ('ingress_access','ingress_preferred') if k in value}
+    if ingress:
+        access=ingress.get('ingress_access');preferred=ingress.get('ingress_preferred')
+        if access not in ('primary','backup','both') or preferred not in ('primary','backup') or access!='both' and preferred!=access:raise ValueError('INVALID_INGRESS_POLICY')
+        if access!='primary':
+            state=control.call('state',actor(request),{})
+            if not state.get('endpoint_public_keys',{}).get('backup'):raise ValueError('INGRESS_ISOLATION_NOT_READY')
     username, password = value['username'], value['password']
     if not isinstance(username,str) or not re.fullmatch(r'[a-z0-9][a-z0-9_.-]{2,63}',username): raise ValueError('INVALID_USERNAME')
     if not isinstance(password,str) or (password and not 12 <= len(password) <= 128): raise ValueError('PASSWORD_LENGTH_12_TO_128_REQUIRED')
@@ -328,7 +348,7 @@ def save_account(request, value):
         if ClientAccount.objects.filter(username=username).exclude(user_id=user_id).exists(): raise ValueError('USERNAME_ALREADY_EXISTS')
         encoded = make_password(password) if password else account.password
         policy = {k:value[k] for k in ('id','name','device_limit','quota_bytes','expires_at','enabled')}
-        policy.update(rates)
+        policy.update(rates);policy.update(ingress)
         # Across the separate root and web databases, stage access disabled first.
         # A partial write leaves the account blocked, never with mismatched access.
         staged = control.call('user.save',actor(request),{**policy,'enabled':False})

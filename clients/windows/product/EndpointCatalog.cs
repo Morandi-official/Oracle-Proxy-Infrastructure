@@ -34,14 +34,26 @@ internal static class EndpointCatalog
     }
     internal static string PrivateAddress(JsonObject? state,string address)
     {
-        string? value=state?["network_endpoints"]?["private_ipv4"]?[address]?.GetValue<string>();
+        string? value=(state?["network_endpoints"]?["private_ipv4"]?[address] ?? state?["tunnel"]?["private_ipv4"]?[address])?.GetValue<string>();
         return IPAddress.TryParse(value,out var ip) && ip.AddressFamily==AddressFamily.InterNetwork?ip.ToString():"";
     }
     internal static string[] Egress(JsonObject state)=>state["tunnel"]?["egress_ipv4_candidates"] is JsonArray values && values.Count is >0 and <=2?values.Select(v=>Public(v!.GetValue<string>())).Distinct().ToArray():["152.67.156.100"];
+    internal static JsonNode? Display(JsonObject? state)
+    {
+        if(state?["network_endpoints"] is JsonObject network)return network.DeepClone();
+        if(state?["tunnel"] is not JsonObject tunnel || tunnel["server_public_keys"] is not JsonObject)return null;
+        return new JsonObject{["schema"]=2,["primary"]=TransportPolicy.IngressAddress(state),["backup"]=tunnel["backup_address"]?.DeepClone(),
+            ["private_ipv4"]=tunnel["private_ipv4"]?.DeepClone(),["egress_ipv4"]=tunnel["egress_ipv4_candidates"]?.DeepClone()};
+    }
     internal static JsonObject ForIngress(JsonObject state,bool backup)
     {
         var value=(JsonObject)state.DeepClone();
         if(backup && value["tunnel"]?["backup_address"] is JsonValue address)value["tunnel"]!["transport_address"]=Public(address.GetValue<string>());
+        if(value["tunnel"] is JsonObject tunnel && tunnel["server_public_keys"] is JsonObject keys){
+            string selected=TransportPolicy.IngressAddress(value);
+            if(keys[selected] is not JsonValue key || !key.TryGetValue<string>(out var encoded) || Convert.FromBase64String(encoded).Length!=32)throw new IOException("UNAUTHORIZED_INGRESS_IDENTITY");
+            tunnel["server_public_key"]=encoded;
+        }
         return value;
     }
 }

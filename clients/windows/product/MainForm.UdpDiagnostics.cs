@@ -4,7 +4,7 @@ namespace OracleProxy.Product;
 
 internal sealed partial class MainForm
 {
-    private readonly Button _udpStart=new(){Name="udp-six-start",Text="一键诊断六个 UDP 入口",Height=40,Margin=new Padding(0,0,10,8)};
+    private readonly Button _udpStart=new(){Name="udp-six-start",Text="诊断获准的 UDP 入口",Height=40,Margin=new Padding(0,0,10,8)};
     private readonly Button _udpCancel=new(){Name="udp-six-cancel",Text="取消 UDP 诊断",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
     private readonly Button _udpCopy=new(){Name="udp-six-copy",Text="复制 UDP 诊断报告",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
     private readonly Label _udpHeading=new(){Name="udp-six-heading",AutoSize=true,Visible=false,Margin=new Padding(0,8,0,6),ForeColor=Muted};
@@ -26,7 +26,7 @@ internal sealed partial class MainForm
         _udpStart.Click+=async(_,_)=>await Act("StartUdpDiagnostics");
         _udpCancel.Click+=async(_,_)=>await Act("CancelUdpDiagnostics");
         _udpCopy.Click+=(_,_)=>{try{Clipboard.SetText(_udpReport);_detail.Text="UDP 诊断报告已复制，不含密码、令牌或密钥。";}catch{ShowReport("UDP 诊断报告",_udpReport);}};
-        _help.SetToolTip(_udpStart,"保持已断开，逐个验证六个 UDP 入口并关联服务器记录。约 1—3 分钟，可取消。不会切换为其他传输协议。");
+        _help.SetToolTip(_udpStart,"保持已断开，逐个验证已授权的 UDP 入口并关联服务器记录。约 1—3 分钟，可取消。不会切换为其他传输协议。");
         foreach(var (name,title,weight) in new[]{("address","入口",180f),("port","端口",65f),("client","本机握手 发 / 收",130f),("server","服务端握手 收 / 发",145f),("result","结果",235f)})
             _udpGrid.Columns.Add(new DataGridViewTextBoxColumn{Name=name,HeaderText=title,FillWeight=weight,SortMode=DataGridViewColumnSortMode.NotSortable});
         _udpGrid.RowTemplate.Height=28;
@@ -51,7 +51,7 @@ internal sealed partial class MainForm
         string phase=UdpText(report["phase"]);
         string title=phase switch{"starting"=>"准备诊断","running"=>"逐个验证 UDP 入口","stopping"=>"正在停止诊断并整理记录","complete"=>"UDP 诊断完成，当前仍保持断开","cancelled"=>"UDP 诊断已取消","failed"=>"UDP 诊断未完成",_=>"UDP 诊断记录"};
         _udpHeading.Text=title;_udpHeading.Visible=_udpGrid.Visible=true;
-        var text=new StringBuilder("UDP 六入口诊断（不含账号密码、令牌或密钥）\r\n");
+        var text=new StringBuilder("UDP 入口诊断（不含账号密码、令牌或密钥）\r\n");
         text.AppendLine(title);
         string reason=UdpText(report["error"]) switch{"DIAGNOSTIC_BUSY"=>"服务器已有诊断任务，请稍后重试。","DIAGNOSTIC_RATE_LIMITED"=>"诊断请求过于频繁，请稍后重试。","DIAGNOSTIC_EXPIRED_OR_RESTARTED"=>"服务器采集已到期或服务已重启，本轮观察不完整。","DIAGNOSTIC_ACCOUNT_NOT_ACTIVE"=>"账号状态当前不允许诊断。","LOGIN_REQUIRED"=>"登录已过期，请重新登录。","CONTROL_SERVICE_UNAVAILABLE"=>"服务器配对服务暂不可用。",_=>""};
         if(reason.Length>0)text.AppendLine(reason);
@@ -78,7 +78,7 @@ internal sealed partial class MainForm
             text.AppendLine($"  服务器观察完整：{UdpFlag(captured?["complete_observation"])}；内核握手更新：{UdpFlag(trial?["server"]?["kernel_handshake_advanced"])}");
             text.AppendLine();
         }
-        if(phase is "failed")text.AppendLine("诊断流程未完成，请保留本报告；这不等同于六个端口全部不可用。");
+        if(phase is "failed")text.AppendLine("诊断流程未完成，请保留本报告；这不等同于所有获准端口不可用。");
         if(!_udpDiagnosing && !UdpFlag(report["server_capture_closed"]))text.AppendLine("服务器结束确认不可用，采集任务有自动到期限制。");
         _udpReport=text.ToString();_udpCopy.Enabled=true;
         _udpStart.Enabled=_udpAvailable && _lastMode=="disconnected" && !_udpDiagnosing && !_connectionIntent && _authenticated && _deviceRegistered && !_busy && !_closing;

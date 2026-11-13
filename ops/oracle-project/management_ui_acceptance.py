@@ -45,7 +45,7 @@ def main():
         value=route.request.post_data_json
         if value['operation']=='account.save':
          account=value['data']; policy={k:account[k] for k in ('id','name','quota_bytes','expires_at','enabled','device_limit')}
-         policy.update({k:account[k] for k in ('download_bps','upload_bps') if k in account})
+         policy.update({k:account[k] for k in ('download_bps','upload_bps','ingress_access','ingress_preferred') if k in account})
          data=engine.dispatch({'actor':'github:204281968','operation':'user.save','data':policy})
          accounts[data['saved_user_id']]=account['username']
         elif value['operation']=='account.delete':
@@ -94,7 +94,7 @@ def main():
      expect(page.locator('#remaining')).to_have_text('未知')
      expect(page.locator('#udp-diag-details')).not_to_have_attribute('open','')
      page.locator('#udp-diag-details > summary').click()
-     expect(page.locator('#udp-diag-rows')).to_contain_text('1 / 6 通过')
+     expect(page.locator('#udp-diag-rows')).to_contain_text('1 / 1 通过')
      assert page.locator('#udp-diag-rows b').count()==0
      page.locator('#udp-diag-rows').get_by_role('button',name='查看报告',exact=True).click()
      expect(page.locator('#udp-diag-dialog')).to_be_visible()
@@ -118,6 +118,21 @@ def main():
      assert page.locator('#user-rows b').count()==0
      user=engine.snapshot()['users'][0]
      assert user['rate']=={'download_bps':12500000,'upload_bps':3000000}
+     assert user['ingress']=={'access':'primary','preferred':'primary'}
+     row.get_by_role('button',name='编辑',exact=True).click()
+     page.locator('#user-form [name=ingress_access]').select_option('both')
+     page.locator('#user-form [name=ingress_preferred]').select_option('backup')
+     page.get_by_role('button',name='保存用户',exact=True).click()
+     expect(row).to_contain_text('备用')
+     assert engine.ingress_policy(user['id'])=={'access':'both','preferred':'backup'}
+     row.get_by_role('button',name='编辑',exact=True).click()
+     expect(page.locator('#user-form [name=ingress_preferred]')).to_have_value('backup')
+     page.locator('#user-form [name=ingress_access]').select_option('primary')
+     expect(page.locator('#user-form [name=ingress_preferred]')).to_have_value('primary')
+     assert page.locator('#user-form [name=ingress_preferred] option[value=backup]').evaluate('(option)=>option.disabled')
+     page.get_by_role('button',name='保存用户',exact=True).click()
+     assert engine.ingress_policy(user['id'])=={'access':'primary','preferred':'primary'}
+     print(f'SYNTHETIC_{name.upper()}_INGRESS_POLICY_DEFAULT_EDIT_PREFERENCE_AND_REVOKE_ROUNDTRIP=PASS',flush=True)
      expect(row).to_contain_text('最终到期：长期');expect(row).to_contain_text('12.5 Mbps')
      row.locator('.user-toggle').click()
      chart=page.locator('#usage-'+user['id']);expect(chart).to_be_visible()

@@ -10,6 +10,17 @@ spec.loader.exec_module(host)
 
 
 class HostBoundaries(unittest.TestCase):
+    def test_ingress_active_refuses_unaware_relay_rollback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);marker=root/'ingress.json';release=root/'release';release.mkdir()
+            with patch.object(host,'INGRESS_RECEIPT',marker):
+                host.require_ingress_release(release)
+                marker.write_text('{}')
+                with self.assertRaisesRegex(ValueError,'INGRESS_AWARE_RELEASE_REQUIRED'):host.require_ingress_release(release)
+                for relative,body in (('relay/server.py','INGRESS_ISOLATION_SCHEMA = 1'),('relay/quic_server.py','INGRESS_ISOLATION_SCHEMA = 1'),('deploy/Caddyfile','header_up X-Proxy-Ingress {http.request.local.host}')):
+                    path=release/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(body)
+                host.require_ingress_release(release)
+
     def test_legacy_rollback_disables_relay_and_forward_recovery_enables_it(self):
         with patch.object(host,'relay_expected',return_value=False),patch.object(host,'command') as command:
             host.restart_application()

@@ -17,7 +17,7 @@ internal static class CoreConfig
         var addresses=tunnel["addresses"]!.AsArray();if(addresses.Count is <1 or >2)throw new IOException("INVALID_TUNNEL_ADDRESS");
         foreach(var node in addresses){var parts=node!.GetValue<string>().Split('/');
             if(parts.Length!=2 || !IPAddress.TryParse(parts[0],out var ip) || (ip.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork?parts[1]!="32":parts[1]!="128"))throw new IOException("INVALID_TUNNEL_ADDRESS");}
-        string serverKey=tunnel["server_public_key"]!.GetValue<string>();if(Convert.FromBase64String(serverKey).Length!=32)throw new IOException("INVALID_SERVER_KEY");
+        string serverKey=(diagnosticTarget is not null && tunnel["server_public_keys"] is JsonObject keys ? keys[diagnosticTarget.Address] : tunnel["server_public_key"])?.GetValue<string>() ?? throw new IOException("UNAUTHORIZED_INGRESS_IDENTITY");if(Convert.FromBase64String(serverKey).Length!=32)throw new IOException("INVALID_SERVER_KEY");
         if(transport==TunnelTransport.WireGuardHttps && (port!=51820 || tunnel["https_relay"]?.GetValue<bool>()!=true || !System.Text.RegularExpressions.Regex.IsMatch(secret.Token,@"\A[A-Za-z0-9_-]{43}\z")))throw new IOException("HTTPS_RELAY_NOT_AVAILABLE");
         if(transport==TunnelTransport.WireGuardQuic && (port!=51820 || !TransportPolicy.QuicAvailable(state) || !System.Text.RegularExpressions.Regex.IsMatch(secret.Token,@"\A[A-Za-z0-9_-]{43}\z")))throw new IOException("QUIC_RELAY_NOT_AVAILABLE");
         var rules=new JsonArray();

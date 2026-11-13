@@ -40,7 +40,11 @@ def write(path,body,mode=0o600):
 
 def addresses(device):return json.loads(run(['ip','-j','-4','address','show','dev',device]))[0]['addr_info']
 
-def routes():return [json.loads(run(['ip','-j',family,'route','show','default'])) for family in ('-4','-6')]+[json.loads(run(['ip','-j','-4','rule','show']))]
+def routes():
+    # IPv6 RA lifetime counts down without any routing configuration change.
+    # Preserve gateway, device, metrics, preference and policy rules exactly.
+    defaults=[[{k:v for k,v in row.items() if k!='expires'} for row in json.loads(run(['ip','-j',family,'route','show','default']))] for family in ('-4','-6')]
+    return defaults+[json.loads(run(['ip','-j','-4','rule','show']))]
 
 def stop_timer(unit):
     stopped=subprocess.run(['systemctl','stop',unit+'.timer',unit+'.service'],capture_output=True,text=True,timeout=15)

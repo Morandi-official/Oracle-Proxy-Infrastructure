@@ -71,11 +71,20 @@ def host_ips(values):
 
 
 class Driver:
+    def ingress_peers(self,plan):
+        if not hasattr(self,'ingress'):
+            spec=importlib.util.spec_from_file_location('account_ingress',Path(__file__).with_name('ingress.py'))
+            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+            self.ingress=module.Controller(self.command,STATE)
+        return self.ingress.sync(plan)
+
     def bandwidth(self,plan):
-        if not hasattr(self,'qos'):
+        shared=getattr(getattr(self,'ingress',None),'ready',False)
+        if not hasattr(self,'qos') or getattr(self,'qos_shared',False)!=shared:
             spec=importlib.util.spec_from_file_location('account_qos',Path(__file__).with_name('qos.py'))
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-            self.qos=module.Controller(self.command,STATE,self.revoke)
+            self.qos_shared=shared
+            self.qos=module.SharedIngressController(self.command,STATE,self.revoke) if getattr(getattr(self,'ingress',None),'ready',False) else module.Controller(self.command,STATE,self.revoke)
         self.qos.apply(plan)
 
     def revoke(self):
@@ -104,6 +113,26 @@ class Driver:
                 if field == 'transfer':
                     peers[key]['rx'], peers[key]['tx'] = integer(int(parts[1]), 2**63-1), integer(int(parts[2]), 2**63-1)
                 else: peers[key]['handshake'] = integer(int(parts[1]), 2**63-1)
+        samples={"wg0:"+key:{**peer,'public_key':key} for key,peer in peers.items()}
+        endpoint_keys={'primary':self.command(['wg','show','wg0','public-key']).stdout.strip()}
+        if getattr(getattr(self,'ingress',None),'ready',False):
+            endpoint_keys['backup']=self.ingress.public_key
+            backup={}
+            for line in self.command(['wg','show','wgopbackup','allowed-ips']).stdout.splitlines():
+                key,addresses=line.split('\t',1);public_key(key)
+                backup[key]={'allowed_ips':[a for a in addresses.replace(',',' ').split() if a!='(none)'],'rx':0,'tx':0,'handshake':0}
+            for field,command in (('transfer','transfer'),('handshake','latest-handshakes')):
+                for line in self.command(['wg','show','wgopbackup',command]).stdout.splitlines():
+                    parts=line.split();key=public_key(parts[0])
+                    if key not in backup:continue
+                    if field=='transfer':backup[key]['rx'],backup[key]['tx']=integer(int(parts[1]),2**63-1),integer(int(parts[2]),2**63-1)
+                    else:backup[key]['handshake']=integer(int(parts[1]),2**63-1)
+            for key,peer in backup.items():
+                samples['wgopbackup:'+key]={**peer,'public_key':key}
+                if key in peers:
+                    if set(peer['allowed_ips'])!=set(peers[key]['allowed_ips']):raise ValueError('INGRESS_PEER_ADDRESS_MISMATCH')
+                    peers[key]={**peer,'rx':peer['rx']+peers[key]['rx'],'tx':peer['tx']+peers[key]['tx'],'handshake':max(peer['handshake'],peers[key]['handshake'])}
+                else:peers[key]=peer
         interfaces = set()
         for version, target in (('-4', '1.1.1.1'), ('-6', '2606:4700:4700::1111')):
             result = self.command(['ip', '-j', version, 'route', 'get', target], accepted=(0, 2))
@@ -124,15 +153,17 @@ class Driver:
         return {'peers': peers, 'nics': nics, 'boot': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
                 'server_public_key': self.command(['wg', 'show', 'wg0', 'public-key']).stdout.strip(),
                 'listen_port': int(self.command(['wg', 'show', 'wg0', 'listen-port']).stdout.strip()),
-                'networks': networks}
+                'networks': networks,'peer_samples':samples,'endpoint_public_keys':endpoint_keys}
 
     def add_peer(self, key, addresses):
         public_key(key); host_ips(addresses)
+        if getattr(getattr(self,'ingress',None),'ready',False):return
         self.command(['wg', 'set', 'wg0', 'peer', key, 'allowed-ips', ','.join(addresses)])
 
     def remove_peer(self, key):
         public_key(key)
         self.command(['wg', 'set', 'wg0', 'peer', key, 'remove'])
+        if getattr(getattr(self,'ingress',None),'ready',False):self.command(['wg','set','wgopbackup','peer',key,'remove'])
 
     def initialize(self, guarded):
         for family in (4, 6):
@@ -147,15 +178,15 @@ class Driver:
                     raise ValueError('FOREIGN_FIREWALL_CHAIN')
                 if old.returncode == 1: self.command([tool, '-w', '5', '-N', chain])
             lines = ['*filter', '-F OPX_IN', '-F OPX_FWD']
-            for chain, direction, column in (('OPX_IN', '-i', 'src'), ('OPX_FWD', '-i', 'src'), ('OPX_FWD', '-o', 'dst')):
-                prefix = f'-A {chain} {direction} wg0 '
+            for chain, direction, column,interface in ((c,d,col,i) for c,d,col in (('OPX_IN','-i','src'),('OPX_FWD','-i','src'),('OPX_FWD','-o','dst')) for i in ('wg0','wgopbackup')):
+                prefix = f'-A {chain} {direction} {interface} '
                 comment = '-m comment --comment oracle-proxy-control -j DROP'
                 if guarded:
                     lines.append(prefix + f'-m set ! --match-set OPXALL{suffix} {column} ' + comment)
                 lines.append(prefix + f'-m set --match-set OPXMAN{suffix} {column} -m set ! --match-set OPXOK{suffix} {column} ' + comment)
             self.command([tool + '-restore', '-w', '5', '--noflush'], input='\n'.join([*lines, 'COMMIT', '']))
-            for parent, direction, chain in (('INPUT', '-i', 'OPX_IN'), ('FORWARD', '-i', 'OPX_FWD'), ('FORWARD', '-o', 'OPX_FWD')):
-                rule = [direction, 'wg0', '-m', 'comment', '--comment', 'oracle-proxy-control', '-j', chain]
+            for parent,direction,chain,interface in ((p,d,c,i) for p,d,c in (('INPUT','-i','OPX_IN'),('FORWARD','-i','OPX_FWD'),('FORWARD','-o','OPX_FWD')) for i in ('wg0','wgopbackup')):
+                rule = [direction, interface, '-m', 'comment', '--comment', 'oracle-proxy-control', '-j', chain]
                 check = self.command([tool, '-w', '5', '-C', parent, *rule], accepted=(0, 1))
                 if check.returncode == 1: self.command([tool, '-w', '5', '-I', parent, '1', *rule])
 
@@ -189,6 +220,7 @@ class Engine:
           CREATE TABLE IF NOT EXISTS devices (key TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,
             addresses TEXT NOT NULL, owned INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE IF NOT EXISTS user_rates(user_id TEXT PRIMARY KEY,slot INTEGER UNIQUE NOT NULL,download_bps INTEGER,upload_bps INTEGER);
+          CREATE TABLE IF NOT EXISTS ingress_policies(user_id TEXT PRIMARY KEY, access TEXT NOT NULL, preferred TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS device_limits (user_id TEXT PRIMARY KEY, maximum INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS device_enrollments (key TEXT PRIMARY KEY, user_id TEXT NOT NULL,
             machine_name TEXT NOT NULL, client_version TEXT NOT NULL, confirmed_at INTEGER NOT NULL);
@@ -272,6 +304,21 @@ class Engine:
         row=self.db.execute('SELECT download_bps,upload_bps FROM user_rates WHERE user_id=?',(user_id,)).fetchone()
         return dict(row) if row else {'download_bps':None,'upload_bps':None}
 
+    def ingress_policy(self,user_id):
+        row=self.db.execute('SELECT access,preferred FROM ingress_policies WHERE user_id=?',(user_id,)).fetchone()
+        return dict(row) if row else {'access':'primary','preferred':'primary'}
+
+    def sync_ingress(self):
+        if not hasattr(self.driver,'ingress_peers'):return
+        plan=[]
+        for device in self.db.execute('SELECT * FROM devices'):
+            user=self.db.execute('SELECT * FROM users WHERE id=?',(device['user_id'],)).fetchone()
+            policy=self.ingress_policy(device['user_id'])
+            roles=['primary','backup'] if policy['access']=='both' else [policy['access']]
+            plan.append({'public_key':device['key'],'addresses':json.loads(device['addresses']),'roles':roles,
+                         'active':bool(user and not self.deleted(user['id']) and self.reason(user)=='active' and not self.revoked(device['key']))})
+        self.driver.ingress_peers(plan)
+
     def device_limit(self, user_id):
         row = self.db.execute('SELECT maximum FROM device_limits WHERE user_id=?', (user_id,)).fetchone()
         return row[0] if row else 3
@@ -321,6 +368,7 @@ class Engine:
 
     def tick(self):
         try:
+            self.sync_ingress()
             observation = self.driver.observe()
             removed=False
             for row in self.db.execute('SELECT key FROM deleted_devices'):
@@ -344,6 +392,7 @@ class Engine:
                     self.driver.add_peer(device['key'], addresses)
                     changed = True
             if changed:
+                self.sync_ingress()
                 observation = self.driver.observe()
             now = int(self.now()); month = period(now)
             self.db.execute('BEGIN IMMEDIATE')
@@ -361,9 +410,12 @@ class Engine:
                         budget.update(period=month, prior_usage_bytes=0, anchor_total=self.get('nic_total'), baseline_at=start,
                                       baseline_gaps=self.get('accounting_gaps'))
                         self.set('budget', budget)
-                for kind, entries in (('peer', observation['peers']), ('nic', observation['nics'])):
+                for kind, entries in (('peer', observation.get('peer_samples',observation['peers'])), ('nic', observation['nics'])):
                     for key, counter in entries.items():
                         old = self.db.execute('SELECT * FROM counters WHERE key=?', (kind+':'+key,)).fetchone()
+                        if old is None and kind=='peer' and key.startswith('wg0:'):
+                            old=self.db.execute('SELECT * FROM counters WHERE key=?',('peer:'+counter['public_key'],)).fetchone()
+                            if old:self.db.execute('DELETE FROM counters WHERE key=?',(old['key'],))
                         delta = {}
                         for field in ('rx', 'tx'):
                             delta[field] = (counter[field] - old[field] if old and old['boot'] == observation['boot'] and
@@ -377,8 +429,9 @@ class Engine:
                             self.set('nic_total', self.get('nic_total') + delta['tx'])
                             self.add_usage('server', 'all', delta['rx'], delta['tx'])
                         else:
-                            self.add_usage('peer', key, delta['rx'], delta['tx'])
-                            device = self.db.execute('SELECT user_id FROM devices WHERE key=?', (key,)).fetchone()
+                            peer_key=counter.get('public_key',key)
+                            self.add_usage('peer', peer_key, delta['rx'], delta['tx'])
+                            device = self.db.execute('SELECT user_id FROM devices WHERE key=?', (peer_key,)).fetchone()
                             if device:
                                 self.add_usage('user', device['user_id'], delta['rx'], delta['tx'])
                                 if (interval_known and old and old['boot']==observation['boot'] and
@@ -446,7 +499,7 @@ class Engine:
             usage = self.used('user', user['id'])
             users.append({**dict(user), 'enabled': bool(user['enabled']), 'usage': usage,
                           'remaining_bytes': max(0, user['quota']-usage['rx']-usage['tx']) if user['quota'] is not None else None,
-                          'rate':self.rate(user['id']),'cycle':self.billing.window(user['id']), 'status': self.reason(user), 'device_limit':self.device_limit(user['id']), 'device_count':self.device_count(user['id'])})
+                          'ingress':self.ingress_policy(user['id']),'rate':self.rate(user['id']),'cycle':self.billing.window(user['id']), 'status': self.reason(user), 'device_limit':self.device_limit(user['id']), 'device_count':self.device_count(user['id'])})
         bindings = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM devices')}
         confirmations = {row['key']:dict(row) for row in self.db.execute('SELECT * FROM device_enrollments')}
         deleted_keys={row['key'] for row in self.db.execute('SELECT key FROM deleted_devices')}
@@ -466,7 +519,7 @@ class Engine:
             'period': period(self.now()), 'sample_interval_seconds':TICK, 'lease_seconds':LEASE,
             'users':users, 'peers':peers, 'deleted_public_keys':sorted(deleted_keys),
             'budget':self.budget_state(), 'official_usage':self.official_usage(), 'nics':sorted(observation['nics']),
-            'server_public_key':observation['server_public_key'], 'listen_port':observation['listen_port'],
+            'endpoint_public_keys':observation.get('endpoint_public_keys',{}),'server_public_key':observation['server_public_key'], 'listen_port':observation['listen_port'],
             'audit':[dict(row) for row in self.db.execute('SELECT at,actor,action,resource FROM audit ORDER BY id DESC LIMIT 10')]}
 
     def official_usage(self):
@@ -572,7 +625,10 @@ class Engine:
         if operation in ('user.put','user.save'):
             expected = {'id','name','quota_bytes','expires_at','enabled'}
             if operation == 'user.save': expected.add('device_limit')
-            if not expected<=set(data) or set(data)-expected-{'download_bps','upload_bps'}:raise ValueError('INVALID_FIELDS')
+            if not expected<=set(data) or set(data)-expected-{'download_bps','upload_bps','ingress_access','ingress_preferred'}:raise ValueError('INVALID_FIELDS')
+            old_policy=self.ingress_policy(data.get('id'))
+            access=data.get('ingress_access',old_policy['access']);preferred=data.get('ingress_preferred',old_policy['preferred'])
+            if access not in ('primary','backup','both') or preferred not in ('primary','backup') or (access!='both' and access!=preferred):raise ValueError('INVALID_INGRESS_POLICY')
             rates={k:(integer(data[k],10_000_000_000) if data[k] is not None else None) for k in ('download_bps','upload_bps') if k in data}
             if any(v is not None and v<100_000 for v in rates.values()):raise ValueError('INVALID_RATE')
             user_id = identifier(data['id']) if data['id'] else str(uuid.uuid4())
@@ -590,6 +646,7 @@ class Engine:
             try:
                 self.db.execute('INSERT OR REPLACE INTO users VALUES (?,?,?,?,?)', (user_id,data['name'].strip(),quota,expires,data['enabled']))
                 self.db.execute('INSERT OR REPLACE INTO device_limits VALUES (?,?)', (user_id,maximum))
+                self.db.execute('INSERT OR REPLACE INTO ingress_policies VALUES (?,?,?)',(user_id,access,preferred))
                 if rates:
                     old=self.db.execute('SELECT * FROM user_rates WHERE user_id=?',(user_id,)).fetchone()
                     used={r[0] for r in self.db.execute('SELECT slot FROM user_rates')}
@@ -704,6 +761,8 @@ class Engine:
                 self.set('budget',old); self.driver.initialize(old['guard_enabled']); raise
             self.audit(actor,'budget.updated',period(self.now()))
         else: raise ValueError('UNKNOWN_OPERATION')
+        self.sync_ingress()
+        if getattr(getattr(self.driver,'ingress',None),'ready',False):self.observation=self.driver.observe()
         self.enforce()
         result = self.snapshot()
         if saved_user_id: result['saved_user_id'] = saved_user_id

@@ -41,3 +41,22 @@ def advertised():
     active=config[config['active']]['public_ipv4']
     standby=config['backup' if config['active']=='primary' else 'primary']['public_ipv4']
     return {'schema':1,'revision':config['revision'],'primary':active,'backup':standby,'egress_ipv4':config['egress_ipv4'],'private_ipv4':{row['public_ipv4']:row['private_ipv4'] for row in [config['primary'],config['backup']]+config['legacy']}}
+
+
+def user_catalog(user, snapshot):
+    """Public endpoint identities scoped to a root-ledger user policy."""
+    config=read()
+    if config is None:return None
+    policy=user.get('ingress',{'access':'primary','preferred':'primary'})
+    access=policy['access'];preferred=policy['preferred']
+    roles=['primary','backup'] if access=='both' else [access]
+    if preferred not in roles:raise ValueError('INVALID_INGRESS_POLICY')
+    roles=[preferred]+[r for r in roles if r!=preferred]
+    keys={'primary':snapshot['server_public_key'],**snapshot.get('endpoint_public_keys',{})}
+    if any(not keys.get(role) for role in roles):raise ValueError('INGRESS_ISOLATION_NOT_READY')
+    import base64
+    for role in roles:
+        if len(base64.b64decode(keys[role],validate=True))!=32:raise ValueError('INVALID_INGRESS_PUBLIC_KEY')
+    return {'roles':roles,'addresses':[config[r]['public_ipv4'] for r in roles],
+            'revision':config['revision'],'private_ipv4':{config[r]['public_ipv4']:config[r]['private_ipv4'] for r in roles},
+            'server_public_keys':{config[r]['public_ipv4']:keys[r] for r in roles},'egress_ipv4':config['egress_ipv4']}

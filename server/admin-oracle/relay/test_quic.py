@@ -4,6 +4,7 @@ import os
 import ssl
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from aioquic.asyncio import QuicConnectionProtocol, connect, serve
@@ -22,6 +23,12 @@ PACKET = b'\x04\0\0\0' + bytes(range(256))*5
 
 
 class Framing(unittest.TestCase):
+    def test_only_configured_ingresses_listen_not_retired_aliases(self):
+        from relay.quic_server import listener_hosts
+        catalog={'primary':{'private_ipv4':'10.0.0.6'},'backup':{'private_ipv4':'10.0.0.246'},'legacy':[{'private_ipv4':'10.0.0.220'}]}
+        with patch('console.endpoint_config.read',return_value=catalog):
+            self.assertEqual(listener_hosts(),['10.0.0.6','10.0.0.246'])
+
     def test_out_of_order_round_trip_and_bounded_invalid_input(self):
         for size in (1, 92, 148, CHUNK, CHUNK+1, 1380, 4096):
             data = os.urandom(size); receiver = Reassembly(); result = None

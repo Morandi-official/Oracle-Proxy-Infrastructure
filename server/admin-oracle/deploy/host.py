@@ -156,6 +156,18 @@ def seal_tree(path):
     finally: os.close(descriptor)
 
 
+INGRESS_RECEIPT = Path('/var/lib/oracle-proxy-control/backup-ingress.json')
+
+
+def require_ingress_release(release):
+    # Once kernel entrance isolation exists, an old relay could route a backup
+    # public connection to the primary listener. Fail closed on that downgrade.
+    if not (INGRESS_RECEIPT.exists() or INGRESS_RECEIPT.is_symlink()):return
+    for relative,marker in (('relay/server.py','INGRESS_ISOLATION_SCHEMA = 1'),('relay/quic_server.py','INGRESS_ISOLATION_SCHEMA = 1'),('deploy/Caddyfile','header_up X-Proxy-Ingress')):
+        path=release/relative
+        if path.is_symlink() or not path.is_file() or marker not in path.read_text():raise ValueError('INGRESS_AWARE_RELEASE_REQUIRED')
+
+
 def switch(release):
     temporary = ROOT / '.next'
     if temporary.exists() or temporary.is_symlink():
@@ -283,6 +295,7 @@ def install(revision):
             raise ValueError(f'Foreign systemd unit exists: {name}')
         shutil.copyfile(SOURCE / 'deploy' / name, target)
         target.chmod(0o644)
+    require_ingress_release(release)
     switch(release)
     command(['systemctl', 'daemon-reload'])
     try:
@@ -291,6 +304,7 @@ def install(revision):
             raise ValueError('Application failed local health verification')
     except (ValueError, subprocess.CalledProcessError):
         if previous is not None:
+            require_ingress_release(previous)
             switch(previous)
             restart_application()
         else:
@@ -314,6 +328,7 @@ def rollback():
     if target.parent != (ROOT / 'releases').resolve() or not (target / 'manage.py').is_file():
         raise ValueError('Invalid previous release')
     current = (ROOT / 'current').resolve()
+    require_ingress_release(target)
     switch(target)
     restart_application()
     if not healthy():

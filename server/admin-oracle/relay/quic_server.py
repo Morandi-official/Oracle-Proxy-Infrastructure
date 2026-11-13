@@ -215,7 +215,8 @@ def listener_hosts():
     from console.endpoint_config import read
     value=read()
     if value is None:return ['0.0.0.0']
-    return list(dict.fromkeys(row['private_ipv4'] for row in [value['primary'],value['backup']]+value['legacy']))
+    # Retired aliases must not act as a third entrance to the primary identity.
+    return list(dict.fromkeys(value[role]['private_ipv4'] for role in ('primary','backup')))
 
 
 async def start_listeners(config,state,hosts=None,port=8443):

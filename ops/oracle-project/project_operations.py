@@ -390,6 +390,11 @@ def install_control():
             time.sleep(1)
         raise ValueError('CONTROL_STARTUP_FAILED')
     except Exception:
+        # Once the independent interface owns peers, an older controller cannot
+        # safely enforce their leases or revoke them. Keep the aware controller
+        # (which fails closed) rather than silently restoring shared-only code.
+        if Path('/var/lib/oracle-proxy-control/backup-ingress.json').exists() and (previous is None or b'def ingress_peers(' not in previous):
+            raise ValueError('INGRESS_CONTROL_ROLLBACK_REQUIRES_AWARE_VERSION') from None
         if previous is not None:
             atomic(target,previous,0o644)
             for name,body in diagnostic_previous.items():

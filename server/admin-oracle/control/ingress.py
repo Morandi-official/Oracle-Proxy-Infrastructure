@@ -166,12 +166,17 @@ class Controller:
         for line in existing.splitlines():
             rule=shlex.split(line)
             if COMMENT not in rule:continue
-            if rule[:3]!=['-A','PREROUTING','-d'] or rule[-4:]!=['-j','REDIRECT','--to-ports',str(PORT)]:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
+            if rule[:3]!=['-A','PREROUTING','-d']:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
             old=ipaddress.ip_network(rule[3],strict=True)
             if old.version!=4 or old.prefixlen!=32 or not old.network_address.is_private:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
-            if str(old.network_address)!=backup:self.call(['iptables','-w','5','-t','nat','-D','PREROUTING',*rule[2:]])
+            legacy=rule[-4:]==['-j','REDIRECT','--to-ports',str(PORT)]
+            direct=rule[-4:]==['-j','DNAT','--to-destination',str(old.network_address)+':'+str(PORT)]
+            if not (legacy or direct):raise ValueError('INGRESS_FOREIGN_NAT_RULE')
+            if legacy or str(old.network_address)!=backup:self.call(['iptables','-w','5','-t','nat','-D','PREROUTING',*rule[2:]])
         for port in ('443','8443','51820'):
-            self.ensure_rule('iptables','nat','PREROUTING',['-d',backup+'/32','-p','udp','--dport',port,'-m','u32','--u32','0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000','-m','comment','--comment',COMMENT,'-j','REDIRECT','--to-ports',str(PORT)])
+            # Keep the backup destination address: REDIRECT would substitute
+            # the NIC's primary address, so replies would enter the wrong zone.
+            self.ensure_rule('iptables','nat','PREROUTING',['-d',backup+'/32','-p','udp','--dport',port,'-m','u32','--u32','0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000','-m','comment','--comment',COMMENT,'-j','DNAT','--to-destination',backup+':'+str(PORT)])
         # Port 51821 is internal implementation, never an alternate public entrance.
         # Each permitted public port has an exact conntrack original destination.
         chain='OPX_INGRESS_PORT'

@@ -107,6 +107,10 @@ def source_files(source):
             continue
         if path.is_symlink():
             raise ValueError('Source symlinks are not accepted')
+        if path.is_file() and relative==Path('deploy/Caddyfile'):
+            # Keep the exact ingress-header contract in the sealed release.
+            # Privileged deployment scripts remain excluded below.
+            result.append((path,relative));continue
         if path.is_file() and (path.suffix in ('.py', '.html', '.css', '.js') or path.name == 'requirements.txt'):
             if relative.parts[0] == 'deploy' or path.name in ('tests.py', 'test_settings.py'):
                 continue

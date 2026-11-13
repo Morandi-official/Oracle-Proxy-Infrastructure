@@ -145,6 +145,10 @@ jobs:
         run: |
           sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
             ORACLE_ADMIN_DISPOSABLE_CI=1 python3 ops/oracle-project/ci_secondary_endpoint.py
+      - name: Real per-user ingress isolation and dual-stack permission switching
+        run: |
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted \
+            ORACLE_ADMIN_DISPOSABLE_CI=1 python3 ops/oracle-project/ci_ingress_isolation.py
       - name: Real non-root systemd lifecycle, failed startup recovery, and rollback
         env:
           ORACLE_ADMIN_DISPOSABLE_CI: '1'

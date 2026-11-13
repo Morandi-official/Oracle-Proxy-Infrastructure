@@ -13,7 +13,7 @@ internal sealed record UdpDiagnosticTarget
     internal static UdpDiagnosticTarget[] All=>[new("152.67.154.225",443),new("152.67.154.225",8443),new("152.67.154.225",51820),new("150.230.113.158",443),new("150.230.113.158",8443),new("150.230.113.158",51820)];
     internal static UdpDiagnosticTarget[] ForState(JsonObject state)
     {
-        var addresses=EndpointCatalog.Addresses(state);
+        var addresses=state["tunnel"]?["server_public_keys"] is JsonObject keys?keys.Select(p=>EndpointCatalog.Public(p.Key)).ToArray():EndpointCatalog.Addresses(state);
         return addresses.Length==0?All:addresses.SelectMany(a=>new[]{443,8443,51820}.Select(p=>new UdpDiagnosticTarget(a,p))).ToArray();
     }
     internal void Apply(JsonObject config,TunnelTransport transport)

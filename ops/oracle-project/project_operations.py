@@ -363,11 +363,15 @@ def install_control():
     lock.touch(exist_ok=True)
     previous = target.read_bytes() if target.exists() else None
     previous_unit = unit.read_bytes() if unit.exists() else None
-    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py')}
+    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py')}
     atomic(target.with_name('ipv6_addresses.py'), (SERVER/'control/ipv6_addresses.py').read_bytes(), 0o644)
-    for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py'):
+    for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py'):
         atomic(target.with_name(name),(SERVER/'control'/name).read_bytes(),0o644)
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
+    ingress_unit=Path('/etc/systemd/system/proxy-ingress-routing.service')
+    if ingress_unit.exists() and 'Description=Proxy fixed backup ingress routing' not in ingress_unit.read_text():raise ValueError('INGRESS_FOREIGN_ROUTING_UNIT')
+    atomic(ingress_unit,b'[Unit]\nDescription=Proxy fixed backup ingress routing\nAfter=oracle-proxy-control.service wg-quick@wg0.service\nPartOf=oracle-proxy-control.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/ingress.py\nRemainAfterExit=yes\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n',0o644)
+
     atomic(unit,(SERVER/'deploy/oracle-proxy-control.service').read_bytes(),0o644)
     dropin = Path('/etc/systemd/system/wg-quick@wg0.service.d')
     if dropin.is_symlink(): raise ValueError('UNTRUSTED_WIREGUARD_UNIT_DIRECTORY')
@@ -380,6 +384,7 @@ def install_control():
         import time
         for _ in range(20):
             if subprocess.run(['systemctl','is-active','--quiet','oracle-proxy-control.service'],check=False).returncode==0 and Path('/run/oracle-proxy-control/control.sock').exists():
+                run(['systemctl','enable','--now','proxy-ingress-routing.service'])
                 print('PROJECT_POLICY_CONTROL=ACTIVE; no existing Peer enrolled or quota enabled automatically')
                 return
             time.sleep(1)

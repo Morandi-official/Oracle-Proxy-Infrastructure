@@ -81,6 +81,21 @@ internal static class ProductSelfTests
         state["tunnel"]!["ipv6_policy"]="block";
         state["tunnel"]!["endpoint"]="evil.invalid:443";
         try{CoreConfig.Build(state,secret,"synthetic-only");return false;}catch(IOException){}
+        if(!IngressIdentities())return false;
         CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);return true;
     }
+    private static bool IngressIdentities()
+    {
+        string first=Convert.ToBase64String(Enumerable.Repeat((byte)1,32).ToArray()),second=Convert.ToBase64String(Enumerable.Repeat((byte)2,32).ToArray());
+        var state=new JsonObject{["tunnel"]=new JsonObject{["transport_address"]="152.67.154.225",["backup_address"]="150.230.113.158",["server_public_key"]=first,
+            ["server_public_keys"]=new JsonObject{["152.67.154.225"]=first,["150.230.113.158"]=second},
+            ["private_ipv4"]=new JsonObject{["152.67.154.225"]="10.0.0.6",["150.230.113.158"]="10.0.0.246"}}};
+        var backup=EndpointCatalog.ForIngress(state,true);
+        if(TransportPolicy.IngressAddress(backup)!="150.230.113.158" || backup["tunnel"]!["server_public_key"]!.GetValue<string>()!=second)return false;
+        if(state["tunnel"]!["server_public_key"]!.GetValue<string>()!=first || EndpointCatalog.PrivateAddress(backup,"150.230.113.158")!="10.0.0.246")return false;
+        state["tunnel"]!["server_public_keys"]!.AsObject().Remove("150.230.113.158");
+        try{EndpointCatalog.ForIngress(state,true);return false;}catch(IOException){}
+        return UdpDiagnosticTarget.ForState(state).Length==3;
+    }
+
 }

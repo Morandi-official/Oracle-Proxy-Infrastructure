@@ -63,3 +63,57 @@ class Controller:
         except Exception:raise ValueError('BANDWIDTH_APPLY_FAILED') from None
         temp.write_text(json.dumps({'schema':1,'actions':actions}));temp.chmod(0o600);os.replace(temp,self.path)
         self.cached=plan
+
+
+class SharedIngressController:
+    """Shared kernel policers across both WireGuard interfaces and IP families."""
+    def __init__(self,command,state,revoke):
+        self.command=command;self.state=state;self.revoke=revoke;self.path=state/'bandwidth-shared.json';self.cached=None
+
+    def apply(self,plan):
+        plan=sorted(plan,key=lambda p:p['slot'])
+        if self.cached==plan:
+            valid=not plan or all(any(q.get('kind')=='clsact' for q in json.loads(self.command(['tc','-j','qdisc','show','dev',i]).stdout)) for i in ('wg0','wgopbackup'))
+            if valid:return
+        self.revoke()
+        # Only migrate the original, explicitly owned root/ingress qdiscs.
+        if (self.state/'bandwidth-owned.json').exists():Controller(self.command,self.state,self.revoke).apply([])
+        receipt=None
+        if self.path.is_symlink():raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
+        if self.path.exists():
+            receipt=json.loads(self.path.read_text())
+            if receipt.get('schema')!=2:raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
+        previous=receipt.get('actions',[]) if receipt else []
+        if any(type(i)is not int or not 741001<=i<=742256 for i in previous):raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
+        actions=[base+p['slot'] for p in plan for direction,base in (('upload_bps',741000),('download_bps',742000)) if p[direction]]
+        listing=self.command(['tc','-j','actions','list','action','police']).stdout
+        listing=json.loads(listing);listing=listing.get('actions',[]) if isinstance(listing,dict) else listing
+        if any(a.get('index') in actions and a.get('index') not in previous for a in listing):raise ValueError('BANDWIDTH_FOREIGN_ACTION')
+        if not plan and not receipt:return
+        for interface in ('wg0','wgopbackup'):
+            rows=json.loads(self.command(['tc','-j','qdisc','show','dev',interface]).stdout)
+            if any(q.get('kind') not in ('noqueue','clsact') for q in rows):raise ValueError('BANDWIDTH_FOREIGN_QDISC')
+            if any(q.get('kind')=='clsact' for q in rows) and not receipt:raise ValueError('BANDWIDTH_FOREIGN_INGRESS')
+        pending={'schema':2,'actions':sorted(set(previous+actions))}
+        temporary=self.path.with_suffix('.new')
+        if temporary.is_symlink():raise ValueError('BANDWIDTH_UNTRUSTED_RECEIPT')
+        temporary.write_text(json.dumps(pending));temporary.chmod(0o600);os.replace(temporary,self.path)
+        for interface in ('wg0','wgopbackup'):
+            self.command(['tc','qdisc','del','dev',interface,'clsact'],accepted=(0,2))
+        for index in previous:self.command(['tc','actions','del','action','police','index',str(index)],accepted=(0,2,255))
+        if not plan:self.path.unlink();self.cached=[];return
+        lines=['qdisc add dev '+i+' clsact' for i in ('wg0','wgopbackup')]
+        for p in plan:
+            for direction,base,hook,column in (('upload_bps',741000,'ingress','src_ip'),('download_bps',742000,'egress','dst_ip')):
+                rate=p[direction]
+                if not rate:continue
+                index=base+p['slot']
+                lines.append(f'actions add action police index {index} rate {rate}bit burst {max(65536,rate//80)} conform-exceed drop/ok')
+                for address in sorted(p['addresses']):
+                    ip=ipaddress.ip_address(address)
+                    if not ip.is_private or ip.is_unspecified or ip.is_multicast:raise ValueError('BANDWIDTH_INVALID_ADDRESS')
+                    protocol='ip' if ip.version==4 else 'ipv6';host=str(ip)+('/32' if ip.version==4 else '/128')
+                    for interface in ('wg0','wgopbackup'):
+                        lines.append(f'filter add dev {interface} {hook} protocol {protocol} pref {100+p["slot"]} flower {column} {host} action police index {index}')
+        self.command(['tc','-batch','-'],input='\n'.join(lines)+'\n')
+        temporary.write_text(json.dumps({'schema':2,'actions':actions}));temporary.chmod(0o600);os.replace(temporary,self.path);self.cached=plan

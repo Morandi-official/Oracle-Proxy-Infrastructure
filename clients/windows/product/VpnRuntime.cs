@@ -170,10 +170,11 @@ internal sealed partial class VpnRuntime : IDisposable
                             if(_probeFailures>=2 && CarrierFallbackPolicy.ShouldFallback(_transport,_verifiedGeneration==_generation,
                                 _core.HandshakeReplyReceived,_transport==TunnelTransport.WireGuardUdp?_core.NativeEvidence:null,
                                 _probeFailures,(long)System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted).TotalMilliseconds,_probePending is not null)
-                                && TransportPolicy.Next(_transport,_state!) is TunnelTransport next){
+                                ){
                                 if(!_usingBackup && _state?["tunnel"]?["backup_address"] is JsonValue backup && EndpointCatalog.Public(backup.GetValue<string>())!=TransportPolicy.IngressAddress(_state)){
                                     _usingBackup=true;_probeFailures=0;_stage="BACKUP_INGRESS";await StopCore();continue;
                                 }
+                                if(TransportPolicy.Next(_transport,_state!) is not TunnelTransport next){_error="UDP_ALLOWED_INGRESS_UNREACHABLE";_stage="WAITING_FOR_ALLOWED_INGRESS";await StopCore();_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();_probeFailures=0;continue;}
                                 if(_transport==TunnelTransport.WireGuardUdp && _nativeUdpAttempt is not null)_nativeUdpAttempt["ports"]=_core.NativeEvidence;
                                 _carrierFailures[TransportPolicy.Name(_transport)]=new JsonObject{["error"]=_error,["transport_address"]=_runningAddress,["started_at"]=_coreStartedAt,["carrier_stage"]=_core.CarrierStage,["probe_failures"]=_probeFailures,["core_uptime_ms"]=(long)System.Diagnostics.Stopwatch.GetElapsedTime(_carrierStarted).TotalMilliseconds,["failed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["core_pid"]=_core.Pid};
                                 _carriers.Failed(_transport);

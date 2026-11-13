@@ -83,6 +83,13 @@ def application(auth=authenticate, udp_target=('127.0.0.1', 51820), refresh=5):
     async def relay(request):
         if request.query_string or request.headers.get('Origin') or request.headers.get('Cookie'):
             raise web.HTTPForbidden()
+        target=udp_target
+        local=request.headers.get('X-Proxy-Ingress')
+        if local:
+            from console.endpoint_config import read
+            catalog=read()
+            if catalog and local==catalog['backup']['private_ipv4']:target=('127.0.0.1',51821)
+            elif catalog and local!=catalog['primary']['private_ipv4']:raise web.HTTPForbidden()
         header = request.headers.get('Authorization', '')
         if not re.fullmatch(r'Bearer [A-Za-z0-9_-]{43}', header): raise web.HTTPUnauthorized()
         token = header[7:]
@@ -105,7 +112,7 @@ def application(auth=authenticate, udp_target=('127.0.0.1', 51820), refresh=5):
             await ws.prepare(request)
             protocol = PacketQueue()
             transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
-                lambda: protocol, remote_addr=udp_target)
+                lambda: protocol, remote_addr=target)
 
             async def inbound():
                 async for message in ws:

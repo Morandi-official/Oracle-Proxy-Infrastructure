@@ -91,6 +91,23 @@ def configuration(row,state,peer,private_key):
           'udp':True,'mtu':1280,'persistent-keepalive':25,'remote-dns-resolve':True,
           'dns':['https://1.1.1.1/dns-query'],'allowed-ips':['0.0.0.0/0']+(['::/0'] if v6 else [])}
     if v6:node['ipv6']=v6
+    from .endpoint_config import read
+    catalog=read();keys=state.get('endpoint_public_keys',{})
+    if catalog and keys.get('backup'):
+        user=next(u for u in state['users'] if u['id']==str(row.account_id))
+        preferred=user.get('ingress',{}).get('preferred','primary')
+        roles=[preferred,'backup' if preferred=='primary' else 'primary']
+        nodes=[]
+        for role in roles:
+            item=dict(node);item['name']='主 IP UDP' if role=='primary' else '备用 IP UDP'
+            item['server']=catalog[role]['public_ipv4'];item['public-key']=keys[role] if role in keys else state['server_public_key']
+            nodes.append(item)
+        # Both stable nodes are provisioned once. Kernel peer allowlists decide
+        # access, so permission changes need no regenerated key, URL or file.
+        # Fallback is UDP-only: all probes and requests use WireGuard nodes.
+        group={'name':'Proxy UDP','type':'fallback','proxies':[n['name'] for n in nodes],
+               'url':'https://1.1.1.1/cdn-cgi/trace','interval':30,'lazy':False,'timeout':5000}
+    else:nodes=[node];group=None
     # JSON is a strict YAML subset accepted by Mihomo and FlClash. A single
     # outbound and MATCH policy: no DIRECT, selectors, providers or fallback.
     # Resolver packets use the same WireGuard outbound; numeric endpoint avoids
@@ -101,7 +118,7 @@ def configuration(row,state,peer,private_key):
             'dns':{'enable':True,'ipv6':bool(v6),'enhanced-mode':'fake-ip',
                    'respect-rules':True,'nameserver':['https://1.1.1.1/dns-query'],
                    'proxy-server-nameserver':['https://1.1.1.1/dns-query']},
-            'proxies':[node],'proxy-groups':[], 'rules':['MATCH,Proxy UDP']}
+            'proxies':nodes,'proxy-groups':[group] if group else [], 'rules':['MATCH,Proxy UDP']}
 
 
 @require_GET
@@ -204,6 +221,6 @@ def download(request,profile_id,token):
         data=configuration(row,state,peer,material(row)['private_key'])
         result=HttpResponse(json.dumps(data,ensure_ascii=False,indent=2)+'\n',content_type='application/yaml; charset=utf-8')
         result['Content-Disposition']='attachment; filename="Proxy-UDP.yaml"'
-        result['Cache-Control']='no-store, private';result['Referrer-Policy']='no-referrer'
+        result['profile-update-interval']='1';result['Cache-Control']='no-store, private';result['Referrer-Policy']='no-referrer'
         return result
     except (ValueError,KeyError,StopIteration,TypeError,OSError,TimeoutError,DatabaseError):return HttpResponse(status=503)

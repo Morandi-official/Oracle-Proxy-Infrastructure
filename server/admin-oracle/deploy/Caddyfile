@@ -22,7 +22,9 @@ vpn-admin.morandi.dpdns.org {
         respond 404
     }
     handle /api/client/relay {
-        reverse_proxy 127.0.0.1:8788
+        reverse_proxy 127.0.0.1:8788 {
+            header_up X-Proxy-Ingress {http.request.local.host}
+        }
     }
     handle {
         reverse_proxy 127.0.0.1:8787 {

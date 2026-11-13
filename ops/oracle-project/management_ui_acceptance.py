@@ -45,7 +45,7 @@ def main():
         value=route.request.post_data_json
         if value['operation']=='account.save':
          account=value['data']; policy={k:account[k] for k in ('id','name','quota_bytes','expires_at','enabled','device_limit')}
-         policy.update({k:account[k] for k in ('download_bps','upload_bps') if k in account})
+         policy.update({k:account[k] for k in ('download_bps','upload_bps','ingress_access','ingress_preferred') if k in account})
          data=engine.dispatch({'actor':'github:204281968','operation':'user.save','data':policy})
          accounts[data['saved_user_id']]=account['username']
         elif value['operation']=='account.delete':

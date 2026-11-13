@@ -2,6 +2,7 @@
 Description=Oracle Proxy restricted policy and accounting controller
 After=network-pre.target netfilter-persistent.service
 Before=wg-quick@wg0.service
+Wants=proxy-ingress-routing.service
 
 [Service]
 Type=notify

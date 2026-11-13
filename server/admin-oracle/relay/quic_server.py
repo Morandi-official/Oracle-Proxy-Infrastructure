@@ -38,9 +38,10 @@ class RelayState:
 
 
 class RelayProtocol(QuicConnectionProtocol):
-    def __init__(self, *args, state, **kwargs):
+    def __init__(self, *args, state, target=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.state = state
+        self.target = target or state.target
         self.header = bytearray()
         self.started = False
         self.http = None
@@ -157,7 +158,7 @@ class RelayProtocol(QuicConnectionProtocol):
             self.identity = identity
             self.state.active[identity]=self
             queue = PacketQueue()
-            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(lambda: queue, remote_addr=self.state.target)
+            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(lambda: queue, remote_addr=self.target)
             # A timeout or peer close can occur during the awaited socket creation.
             if self.identity is None: transport.close(); return
             self.udp = transport
@@ -221,9 +222,12 @@ async def start_listeners(config,state,hosts=None,port=8443):
     # translates them back to the matching public IP rather than the default.
     servers=[]
     try:
+        from console.endpoint_config import read
+        catalog=read()
         for host in listener_hosts() if hosts is None else hosts:
+            target=('127.0.0.1',51821) if catalog and host==catalog['backup']['private_ipv4'] else state.target
             server=await serve(host,port,configuration=config,retry=True,
-                create_protocol=lambda *args,**kwargs:RelayProtocol(*args,state=state,**kwargs))
+                create_protocol=lambda *args,_target=target,**kwargs:RelayProtocol(*args,state=state,target=_target,**kwargs))
             servers.append(server)
             if port==0:port=server._transport.get_extra_info('sockname')[1]
         return servers

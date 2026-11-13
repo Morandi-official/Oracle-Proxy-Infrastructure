@@ -61,17 +61,17 @@ class Controller:
         result=self.call(['iptables','-w','5','-t','nat','-S',chain],accepted=(0,1))
         if result.returncode==1:self.call(['iptables','-w','5','-t','nat','-N',chain])
         elif any(COMMENT not in line for line in result.stdout.splitlines() if line.startswith('-A')):raise ValueError('INGRESS_FOREIGN_FIREWALL_CHAIN')
-        # The same client inner five-tuple can exist on both identities. A
-        # separate IPv4 conntrack zone prevents reusing the other entry's NAT.
-        for hook,column in (('PREROUTING','-d'),('OUTPUT','-s')):
+        # Separate original tuples on the two identities. Replies still use
+        # zone zero: the two translated destination IPs distinguish them. Local
+        # gateway services keep ordinary socket/conntrack reply handling.
+        for hook in ('PREROUTING','OUTPUT'):
             for line in self.call(['iptables','-w','5','-t','raw','-S',hook]).stdout.splitlines():
                 row=shlex.split(line)
                 if COMMENT not in row:continue
-                if row[-4:]!=['-j','CT','--zone',ZONE]:raise ValueError('INGRESS_FOREIGN_ZONE_RULE')
-                if column in row and str(ipaddress.ip_network(row[row.index(column)+1]).network_address)!=backup:
+                if row[-4:]==['-j','CT','--zone',ZONE]:
                     self.call(['iptables','-w','5','-t','raw','-D',hook,*row[2:]])
-            self.ensure_rule('iptables','raw',hook,[column,backup+'/32','-m','comment','--comment',COMMENT,'-j','CT','--zone',ZONE])
-        self.ensure_rule('iptables','raw','PREROUTING',['-i',INTERFACE,'-m','comment','--comment',COMMENT,'-j','CT','--zone',ZONE])
+                elif hook!='PREROUTING' or row[-4:]!=['-j','CT','--zone-orig',ZONE]:raise ValueError('INGRESS_FOREIGN_ZONE_RULE')
+        self.ensure_rule('iptables','raw','PREROUTING',['-i',INTERFACE,'-m','addrtype','!','--dst-type','LOCAL','-m','comment','--comment',COMMENT,'-j','CT','--zone-orig',ZONE])
         body=['*nat','-F '+chain,
               f'-A {chain} -m connmark --mark {MARK} -m comment --comment {COMMENT} -j SNAT --to-source {backup}',
               f'-A {chain} -m comment --comment {COMMENT} -j SNAT --to-source {primary}','COMMIT','']

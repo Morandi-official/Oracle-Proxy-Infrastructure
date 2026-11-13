@@ -28,6 +28,10 @@ class VerifyPairTests(unittest.TestCase):
   def wrong(args):return 'ip=152.67.154.225\n' if args[0]=='curl' else self.command(args)
   with patch.object(m,'read_catalog',return_value=self.catalog),patch.object(m,'run',side_effect=wrong):
    with self.assertRaisesRegex(ValueError,'EXIT_MISMATCH_BACKUP'):m.verify()
+ def test_kernel_quoted_comment_output_has_identical_rule_semantics(self):
+  def quoted(args):return self.command(args).replace('--comment proxy-user-ingress-v1','--comment "proxy-user-ingress-v1"')
+  with patch.object(m,'read_catalog',return_value=self.catalog),patch.object(m,'run',side_effect=quoted):
+   self.assertEqual(m.verify()['primary']['verified_exit_ipv4'],'152.67.154.225')
  def test_unexpected_nat_configuration_fails_before_network_probe(self):
   with patch.object(m,'read_catalog',return_value=self.catalog),patch.object(m,'run',return_value='-A OPX_INGRESS_EGRESS -j MASQUERADE\n'):
    with self.assertRaisesRegex(ValueError,'RULES_MISMATCH'):m.verify()

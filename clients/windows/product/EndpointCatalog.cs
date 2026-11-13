@@ -38,6 +38,13 @@ internal static class EndpointCatalog
         return IPAddress.TryParse(value,out var ip) && ip.AddressFamily==AddressFamily.InterNetwork?ip.ToString():"";
     }
     internal static string[] Egress(JsonObject state)=>state["tunnel"]?["egress_ipv4_candidates"] is JsonArray values && values.Count is >0 and <=2?values.Select(v=>Public(v!.GetValue<string>())).Distinct().ToArray():["152.67.156.100"];
+    internal static JsonNode? Display(JsonObject? state)
+    {
+        if(state?["network_endpoints"] is JsonObject network)return network.DeepClone();
+        if(state?["tunnel"] is not JsonObject tunnel || tunnel["server_public_keys"] is not JsonObject)return null;
+        return new JsonObject{["schema"]=2,["primary"]=TransportPolicy.IngressAddress(state),["backup"]=tunnel["backup_address"]?.DeepClone(),
+            ["private_ipv4"]=tunnel["private_ipv4"]?.DeepClone(),["egress_ipv4"]=tunnel["egress_ipv4_candidates"]?.DeepClone()};
+    }
     internal static JsonObject ForIngress(JsonObject state,bool backup)
     {
         var value=(JsonObject)state.DeepClone();

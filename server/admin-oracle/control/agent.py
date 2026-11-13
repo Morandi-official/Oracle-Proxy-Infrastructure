@@ -79,9 +79,11 @@ class Driver:
         return self.ingress.sync(plan)
 
     def bandwidth(self,plan):
-        if not hasattr(self,'qos'):
+        shared=getattr(getattr(self,'ingress',None),'ready',False)
+        if not hasattr(self,'qos') or getattr(self,'qos_shared',False)!=shared:
             spec=importlib.util.spec_from_file_location('account_qos',Path(__file__).with_name('qos.py'))
             module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+            self.qos_shared=shared
             self.qos=module.SharedIngressController(self.command,STATE,self.revoke) if getattr(getattr(self,'ingress',None),'ready',False) else module.Controller(self.command,STATE,self.revoke)
         self.qos.apply(plan)
 

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import shlex
 
 INTERFACE='wgopbackup'
 PORT=51821
@@ -46,7 +47,7 @@ class Controller:
         if result.returncode==1:self.call([tool,'-w','5','-t',table,'-I',chain,'1',*rule])
 
     def ensure(self,backup):
-        if self.ready:return
+        if self.ready and self.backup==backup:return
         if not self.key.exists():
             key=self.call(['wg','genkey']).stdout.strip()
             fd=os.open(self.key,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -87,6 +88,14 @@ class Controller:
                     self.ensure_rule(tool,'mangle',chain,['-m','connmark','--mark',MARK,'-m','comment','--comment',COMMENT,'-j','CONNMARK','--restore-mark','--nfmask','0x20000000','--ctmask','0x20000000'])
         # Encrypted backup traffic is sent to its separate identity before legacy
         # generic native-port redirects. Genuine QUIC remains on its own listener.
+        existing=self.call(['iptables','-w','5','-t','nat','-S','PREROUTING']).stdout
+        for line in existing.splitlines():
+            rule=shlex.split(line)
+            if COMMENT not in rule:continue
+            if rule[:3]!=['-A','PREROUTING','-d'] or rule[-4:]!=['-j','REDIRECT','--to-ports',str(PORT)]:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
+            old=ipaddress.ip_network(rule[3],strict=True)
+            if old.version!=4 or old.prefixlen!=32 or not old.network_address.is_private:raise ValueError('INGRESS_FOREIGN_NAT_RULE')
+            if str(old.network_address)!=backup:self.call(['iptables','-w','5','-t','nat','-D','PREROUTING',*rule[2:]])
         for port in ('443','8443','51820'):
             self.ensure_rule('iptables','nat','PREROUTING',['-d',backup+'/32','-p','udp','--dport',port,'-m','u32','--u32','0>>22&0x3C@8=0x01000000,0x02000000,0x03000000,0x04000000','-m','comment','--comment',COMMENT,'-j','REDIRECT','--to-ports',str(PORT)])
         # Port 51821 is internal implementation, never an alternate public entrance.
@@ -102,14 +111,16 @@ class Controller:
         body.extend([f'-A {chain} -m comment --comment {COMMENT} -j DROP','COMMIT',''])
         self.call(['iptables-restore','-w','5','--noflush'],input='\n'.join(body))
         self.ensure_rule('iptables','filter','INPUT',['-p','udp','--dport',str(PORT),'-m','comment','--comment',COMMENT,'-j',chain])
-        self.public_key=public;self.ready=True
+        self.public_key=public;self.backup=backup;self.ready=True
 
     def peers(self,interface):
         return {line.split('\t',1)[0]:line.split('\t',1)[1].replace(' ',',').split(',') for line in self.call(['wg','show',interface,'allowed-ips']).stdout.splitlines()}
 
     def sync(self,plan):
         config=self.config()
-        if config is None:return False
+        if config is None:
+            if self.receipt.exists():raise ValueError('INGRESS_CATALOG_REQUIRED')
+            return False
         marker=READY
         if not marker.exists():raise ValueError('INGRESS_ROUTING_NOT_READY')
         protected(marker)

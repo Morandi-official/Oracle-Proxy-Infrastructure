@@ -13,7 +13,7 @@ from django.db import DatabaseError
 from django.http import HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
-from . import client_api, control
+from . import client_api, control, endpoint_config
 from .models import Audit, ClientAccount, FlClashProfile
 from .transports import transport_address, ipv6_info
 
@@ -91,8 +91,7 @@ def configuration(row,state,peer,private_key):
           'udp':True,'mtu':1280,'persistent-keepalive':25,'remote-dns-resolve':True,
           'dns':['https://1.1.1.1/dns-query'],'allowed-ips':['0.0.0.0/0']+(['::/0'] if v6 else [])}
     if v6:node['ipv6']=v6
-    from .endpoint_config import read
-    catalog=read();keys=state.get('endpoint_public_keys',{})
+    catalog=endpoint_config.read();keys=state.get('endpoint_public_keys',{})
     if catalog and keys.get('backup'):
         user=next(u for u in state['users'] if u['id']==str(row.account_id))
         preferred=user.get('ingress',{}).get('preferred','primary')

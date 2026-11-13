@@ -27,7 +27,7 @@ def run(*args,input=None,accepted=(0,)):
     return result
 
 
-def child(directory):
+def child(directory,qos=False):
     guard();directory=Path(directory)
     spec=importlib.util.spec_from_file_location('ingress',ROOT/'server/admin-oracle/control/ingress.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -38,6 +38,10 @@ def child(directory):
     Path('/proc/sys/net/ipv4/conf/wgopbackup/rp_filter').write_text('2\n')
     module.READY.write_text(controller.public_key+'\n');module.READY.chmod(0o600)
     controller.sync(json.loads((directory/'plan.json').read_text()))
+    if qos:
+        spec=importlib.util.spec_from_file_location('qos',ROOT/'server/admin-oracle/control/qos.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        module.SharedIngressController(command,directory,lambda:None).apply([{'slot':1,'upload_bps':8000000,'download_bps':8000000,'addresses':['10.77.0.2','fd42:6f70:78:77::2']}])
     print(controller.public_key,flush=True)
 
 
@@ -110,6 +114,18 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
             print('REAL_PRIMARY_ONLY_DENIES_BACKUP_ALL_NATIVE_PORTS_AND_MANUAL_SERVER_KEY=PASS',flush=True)
             sync(['primary','backup'])
             for port in (443,8443,51820):probe('backup',port,True)
+            run('ip','netns','exec',NAMES[1],sys.executable,__file__,'--qos',directory)
+            def counters():
+                value=json.loads(run('ip','netns','exec',NAMES[1],'tc','-j','-s','actions','list','action','police').stdout)
+                rows=value.get('actions',[]) if isinstance(value,dict) else value
+                def count(node):
+                    if isinstance(node,dict):return sum(v if k=='bytes' and isinstance(v,int) else count(v) for k,v in node.items())
+                    if isinstance(node,list):return sum(count(v) for v in node)
+                    return 0
+                return {row['index']:count(row.get('stats',row)) for row in rows}
+            before=counters();probe('primary',443,True);primary_counts=counters();probe('backup',443,True);backup_counts=counters()
+            for index in (741001,742001):assert primary_counts[index]>before[index] and backup_counts[index]>primary_counts[index], 'Both entrance interfaces must increment the same account policer'
+            print('REAL_SHARED_UPLOAD_DOWNLOAD_POLICERS_COUNT_BOTH_INGRESSES_AND_IP_FAMILIES=PASS',flush=True)
             probe('primary',51821,False,backup_public)
             print('REAL_BACKUP_ALLOWLIST_DUALSTACK_RETURN_ROUTING_AND_INTERNAL_PORT_BYPASS_DENIED=PASS',flush=True)
             sync(['backup']);probe('primary',443,False);probe('backup',443,True)
@@ -121,5 +137,5 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
 
 
 if __name__=='__main__':
-    if len(sys.argv)==3 and sys.argv[1]=='--child':child(sys.argv[2])
+    if len(sys.argv)==3 and sys.argv[1] in ('--child','--qos'):child(sys.argv[2],qos=sys.argv[1]=='--qos')
     else:main()

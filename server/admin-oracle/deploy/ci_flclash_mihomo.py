@@ -4,6 +4,7 @@ import base64
 import http.client
 import http.server
 import ipaddress
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -45,7 +46,7 @@ def main(binary):
  client_private=run('wg','genkey');client_public=run('wg','pubkey',input=client_private+'\n')
  tree=ast.parse((ROOT/'console/flclash.py').read_text())
  function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='configuration')
- env={'ipaddress':ipaddress,'transport_address':lambda:'127.0.0.1','ipv6_info':lambda:{'prefix':'fd42:6f70:78:77::/64'}}
+ env={'ipaddress':ipaddress,'endpoint_config':type('Catalog',(),{'read':staticmethod(lambda:None)}),'transport_address':lambda:'127.0.0.1','ipv6_info':lambda:{'prefix':'fd42:6f70:78:77::/64'}}
  exec(compile(ast.Module(body=[function],type_ignores=[]),'actual-profile-renderer','exec'),env)
  config=env['configuration'](None,{'server_public_key':public},{'allowed_ips':['10.77.0.2/32','fd42:6f70:78:77::2/128']},client_private)
  assert len(config['proxies'])==1 and config['rules']==['MATCH,Proxy UDP'] and not config['proxy-groups']
@@ -136,6 +137,58 @@ def main(binary):
    except (OSError,TimeoutError,http.client.HTTPException):pass
    assert len(dns_sources)==before_dns
    print('MIHOMO_UDP_FAILURE_HAS_NO_DIRECT_OR_TLS_FALLBACK=PASS',flush=True)
+  finally:
+   process.terminate()
+   try:process.wait(timeout=5)
+   except subprocess.TimeoutExpired:process.kill();process.wait()
+
+  # Upgrade the same device's profile to the actual two-node renderer, then
+  # keep its file and Mihomo process unchanged while server permissions change.
+  spec=importlib.util.spec_from_file_location('ingress_fixture',ROOT/'control/ingress.py')
+  ingress=importlib.util.module_from_spec(spec);spec.loader.exec_module(ingress)
+  state_folder=folder/'ingress';state_folder.mkdir(mode=0o700)
+  ingress.READY=state_folder/'ready'
+  def command(args,*,input=None,accepted=(0,)):
+   result=subprocess.run(args,input=input,capture_output=True,text=True,timeout=10)
+   if result.returncode not in accepted:raise RuntimeError('SYNTHETIC_INGRESS_SETUP_FAILED')
+   return result
+  controller=ingress.Controller(command,state_folder)
+  controller.config=lambda:['127.0.0.1','127.0.0.2']
+  controller.ensure('127.0.0.2')
+  Path('/proc/sys/net/ipv4/conf/wgopbackup/rp_filter').write_text('2\n')
+  ingress.READY.write_text(controller.public_key+'\n');ingress.READY.chmod(0o600)
+  # Loopback-generated encrypted packets use OUTPUT rather than physical
+  # PREROUTING in this empty namespace. Production uses the typed ingress rules.
+  controller.ensure_rule('iptables','nat','OUTPUT',['-d','127.0.0.2/32','-p','udp','--dport','443','-m','comment','--comment','fixture-local-backup','-j','REDIRECT','--to-ports','51821'])
+  plan=[{'public_key':client_public,'addresses':['10.77.0.2/32','fd42:6f70:78:77::2/128'],'roles':['primary'],'active':True}]
+  controller.sync(plan)
+  catalog={'primary':{'public_ipv4':'127.0.0.1'},'backup':{'public_ipv4':'127.0.0.2'}}
+  env['endpoint_config']=type('Catalog',(),{'read':staticmethod(lambda:catalog)})
+  row=type('Profile',(),{'account_id':'fixture'})()
+  snapshot={'server_public_key':public,'endpoint_public_keys':{'primary':public,'backup':controller.public_key},'users':[{'id':'fixture','ingress':{'access':'primary','preferred':'primary'}}]}
+  config=env['configuration'](row,snapshot,{'allowed_ips':['10.77.0.2/32','fd42:6f70:78:77::2/128']},client_private)
+  assert len(config['proxies'])==2 and len(config['proxy-groups'])==1
+  assert all(n['private-key']==client_private for n in config['proxies'])
+  config['tun']['enable']=False;config['dns']['enable']=False
+  config['proxy-groups'][0].update(url='http://10.77.0.1:18080/health',interval=1,timeout=500)
+  for node in config['proxies']:node['dns']=['https://10.77.0.1:18443/dns-query']
+  profile.write_text(json.dumps(config));original_profile=profile.read_bytes()
+  run(binary,'-t','-d',directory,'-f',str(profile))
+  process=subprocess.Popen([binary,'-d',directory,'-f',str(profile)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=child_env)
+  try:
+   for _ in range(100):
+    try:
+     with socket.create_connection(('127.0.0.1',7890),timeout=.1):break
+    except OSError:time.sleep(.05)
+   expect_tunnel(response,'http://10.77.0.1:18080/primary',lambda:process.poll() is None)
+   plan[0]['roles']=['backup'];controller.sync(plan)
+   for host in ('10.77.0.1','[fd42:6f70:78:77::1]'):
+    expect_tunnel(response,'http://'+host+':18080/permission-switch',lambda:process.poll() is None)
+   assert any(int(line.split()[1])>0 for line in run('wg','show','wgopbackup','latest-handshakes').splitlines())
+   plan[0]['roles']=['primary'];controller.sync(plan)
+   expect_tunnel(response,'http://10.77.0.1:18080/revoked-backup',lambda:process.poll() is None)
+   assert profile.read_bytes()==original_profile
+   print('MIHOMO_SAME_PROFILE_SAME_PROCESS_SAME_DEVICE_KEY_SERVER_PERMISSION_SWITCH_WITHOUT_REIMPORT=PASS',flush=True)
   finally:
    process.terminate()
    try:process.wait(timeout=5)

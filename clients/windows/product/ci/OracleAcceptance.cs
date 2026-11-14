@@ -394,19 +394,45 @@ internal static class OracleAcceptance
             if(!process.HasExited){process.Kill(true);await process.WaitForExitAsync();}
         }
     }
+    internal static bool IngressCatalogMatchesPolicy(JsonObject login)
+    {
+        try{
+            string? access=login["account"]?["ingress"]?["access"]?.GetValue<string>(),preferred=login["account"]?["ingress"]?["preferred"]?.GetValue<string>();
+            if(access is not ("primary" or "backup" or "both") || preferred is not ("primary" or "backup") || access!="both" && access!=preferred)return false;
+            string[] roles=access=="both"?[preferred,preferred=="primary"?"backup":"primary"]:[access];
+            string Address(string role)=>role=="primary"?"152.67.154.225":"150.230.113.158";
+            string Private(string role)=>role=="primary"?"10.0.0.6":"10.0.0.246";
+            if(login["network_endpoints"] is not JsonObject catalog || catalog["primary"]?.GetValue<string>()!=Address(roles[0]) ||
+                catalog["schema"]?.GetValue<int>()!=(roles.Length==2?1:2) ||
+                (roles.Length==1?catalog["backup"] is not null:catalog["backup"]?.GetValue<string>()!=Address(roles[1])))return false;
+            if(catalog["private_ipv4"] is not JsonObject addresses || addresses.Count!=roles.Length || roles.Any(role=>addresses[Address(role)]?.GetValue<string>()!=Private(role)))return false;
+            return catalog["egress_ipv4"] is JsonArray exits && exits.Select(value=>value?.GetValue<string>()).SequenceEqual(roles.Select(Address));
+        }catch(Exception error) when(error is InvalidOperationException or FormatException){return false;}
+    }
+
     private static async Task<int> RunEndpointMigration()
     {
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
         string? username=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),password=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
         if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password))return 2;
+        string? ownedCiDevice=null;
         try{
             await CrashController(username,password);
             await Send("AttachClient");
             var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
             Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
-            Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+login["registration"]!["device_id"]!.GetValue<string>());
+            ownedCiDevice=login["registration"]!["device_id"]!.GetValue<string>();
+            Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+ownedCiDevice);
+            // Exact identity observed in failed main run 43574325984. Never
+            // delete by account-wide, name-prefix or age-based heuristics.
+            const string priorFailedCi="82cd151654c7";
+            if(priorFailedCi!=ownedCiDevice && login["devices"] is JsonArray devicesBefore && devicesBefore.Any(d=>d?["id"]?.GetValue<string>()==priorFailedCi && d?["current"]?.GetValue<bool>()==false)){
+                login=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",priorFailedCi));
+                Check(login["devices"] is JsonArray remaining && remaining.All(d=>d?["id"]?.GetValue<string>()!=priorFailedCi),"PRIOR_EXACT_FAILED_CI_DEVICE_RETIRED");
+            }
             string primary=login["network_endpoints"]!["primary"]!.GetValue<string>();
-            Check(primary=="152.67.154.225" && (login["account"]?["ingress"]?["access"]?.GetValue<string>()=="primary" ? login["network_endpoints"]!["backup"] is null : login["network_endpoints"]!["backup"]!.GetValue<string>()=="150.230.113.158"),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
+            Console.WriteLine("MIGRATION_SCOPED_INGRESS_POLICY="+login["account"]?["ingress"]?["access"]?.GetValue<string>()+"/"+login["account"]?["ingress"]?["preferred"]?.GetValue<string>()+";DEFAULT="+primary);
+            Check(IngressCatalogMatchesPolicy(login),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
             var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
@@ -430,8 +456,16 @@ internal static class OracleAcceptance
             await Send("AttachClient");await VerifyDiagnostics(devices,extended:false);
             var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));
             Check(deleted["login_authenticated"]?.GetValue<bool>()==false && deleted["account"] is null && deleted["core_pid"]?.GetValue<uint>()==0 && deleted["intent"]?.GetValue<bool>()==false,"MIGRATION_DEVICE_SELF_DELETE_CLEARS_LOGIN_AND_RETIRES_ONLY_THIS_CI_SLOT");
-            Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
+            ownedCiDevice=null;Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
         }catch(Exception error){Console.WriteLine("MIGRATION_ERROR_TYPE="+error.GetType().Name);Console.WriteLine("MIGRATION_ASSERTION="+_lastAssertion);try{await ControlPipe.Send("Disconnect");}catch{}return 1;}
+        finally{
+            if(ownedCiDevice is not null){
+                try{
+                    await Send("AttachClient");var retired=await ControlPipe.Send("DeleteDevice",ownedCiDevice).WaitAsync(TimeSpan.FromSeconds(15));
+                    Console.WriteLine("FAILED_RUN_OWN_CI_DEVICE_RETIREMENT="+(retired["ok"]?.GetValue<bool>()==true && retired["login_authenticated"]?.GetValue<bool>()==false?"PASS":"UNCONFIRMED"));
+                }catch{Console.WriteLine("FAILED_RUN_OWN_CI_DEVICE_RETIREMENT=UNCONFIRMED");}
+            }
+        }
     }
     internal static async Task<int> Run()
     {

@@ -489,6 +489,7 @@ internal static class ProductTests
     }
     private static int Ui()
     {
+        IngressAcceptanceRegression();
         BundleLeaseRegression();
         BootstrapPolicyRegression();
         LoginAndCleanupPolicyRegression();
@@ -786,6 +787,25 @@ internal static class ProductTests
         }
         Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc31.png");}
         Console.WriteLine("COLD_AND_WARM_REMEMBERED_STARTUP_PENDING_ACCOUNT_NEVER_SHOWS_LOGIN_AND_THREE_CARDS_VISIBLE=PASS");
+    }
+
+    private static void IngressAcceptanceRegression()
+    {
+        foreach(var (access,preferred) in new[]{("primary","primary"),("backup","backup"),("both","primary"),("both","backup")}){
+            string[] roles=access=="both"?[preferred,preferred=="primary"?"backup":"primary"]:[access];
+            string Public(string role)=>role=="primary"?"152.67.154.225":"150.230.113.158";
+            var catalog=new JsonObject{["schema"]=roles.Length==2?1:2,["primary"]=Public(roles[0]),["backup"]=roles.Length==2?Public(roles[1]):null,
+                ["private_ipv4"]=new JsonObject(),["egress_ipv4"]=new JsonArray(roles.Select(role=>(JsonNode?)JsonValue.Create(Public(role))).ToArray())};
+            foreach(string role in roles)catalog["private_ipv4"]![Public(role)]=role=="primary"?"10.0.0.6":"10.0.0.246";
+            var login=new JsonObject{["account"]=new JsonObject{["ingress"]=new JsonObject{["access"]=access,["preferred"]=preferred}},["network_endpoints"]=catalog};
+            UiAssert(OracleAcceptance.IngressCatalogMatchesPolicy(login),"ACCEPTANCE_REJECTS_VALID_ACCOUNT_INGRESS_PREFERENCE");
+            var wrong=(JsonObject)login.DeepClone();wrong["network_endpoints"]!["primary"]="152.67.156.100";UiAssert(!OracleAcceptance.IngressCatalogMatchesPolicy(wrong),"ACCEPTANCE_ALLOWS_OLD_OR_UNAUTHORIZED_ENTRY");
+            wrong=(JsonObject)login.DeepClone();wrong["network_endpoints"]!["egress_ipv4"]=new JsonArray("152.67.156.100");UiAssert(!OracleAcceptance.IngressCatalogMatchesPolicy(wrong),"ACCEPTANCE_ALLOWS_WRONG_PUBLIC_EXIT");
+            wrong=(JsonObject)login.DeepClone();wrong["network_endpoints"]!["private_ipv4"]![Public(roles[0])]="10.0.0.220";UiAssert(!OracleAcceptance.IngressCatalogMatchesPolicy(wrong),"ACCEPTANCE_ALLOWS_WRONG_PRIVATE_BINDING");
+            wrong=(JsonObject)login.DeepClone();wrong["network_endpoints"]!["private_ipv4"]!["79.72.85.11"]="10.0.0.157";UiAssert(!OracleAcceptance.IngressCatalogMatchesPolicy(wrong),"ACCEPTANCE_ALLOWS_EXTRA_UNAUTHORIZED_INGRESS");
+            if(roles.Length==1){wrong=(JsonObject)login.DeepClone();wrong["network_endpoints"]!["backup"]=Public(roles[0]=="primary"?"backup":"primary");UiAssert(!OracleAcceptance.IngressCatalogMatchesPolicy(wrong),"ACCEPTANCE_ALLOWS_UNAUTHORIZED_BACKUP");}
+        }
+        Console.WriteLine("ACCEPTANCE_EXACT_AUTHORIZED_INGRESS_PRIVATE_AND_PAIRED_EXIT_MATCH_ALL_ACCOUNT_PREFERENCES=PASS");
     }
 
     private static void UiSmoothAndScrollRegression(JsonObject source)

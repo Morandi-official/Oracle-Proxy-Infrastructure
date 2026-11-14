@@ -8,7 +8,7 @@ internal sealed class SmoothOutline : IDisposable
 {
     private GraphicsPath? _path;
     private (Size Size,int Dpi,float Inset,float Radius) _key;
-    internal GraphicsPath Get(Size size,int dpi,float inset=0.75f,float radius=10)
+    internal GraphicsPath Get(Size size,int dpi,float inset=0.75f,float radius=12)
     {
         var key=(size,dpi,inset,radius);
         if(_path is not null && _key==key)return _path;
@@ -19,17 +19,17 @@ internal sealed class SmoothOutline : IDisposable
     {
         var path=new GraphicsPath();float r=Math.Min(radius,Math.Min(b.Width,b.Height)/2),x=b.Left,y=b.Top,w=b.Width,h=b.Height;
         path.StartFigure();path.AddLine(x+r,y,x+w-r,y);
-        path.AddBezier(x+w-r,y,x+w-.55f*r,y,x+w-.25f*r,y,x+w-.125f*r,y+.125f*r);
-        path.AddBezier(x+w-.125f*r,y+.125f*r,x+w,y+.25f*r,x+w,y+.55f*r,x+w,y+r);
+        path.AddBezier(x+w-r,y,x+w-.67f*r,y,x+w-.4f*r,y,x+w-.2f*r,y+.2f*r);
+        path.AddBezier(x+w-.2f*r,y+.2f*r,x+w,y+.4f*r,x+w,y+.67f*r,x+w,y+r);
         path.AddLine(x+w,y+r,x+w,y+h-r);
-        path.AddBezier(x+w,y+h-r,x+w,y+h-.55f*r,x+w,y+h-.25f*r,x+w-.125f*r,y+h-.125f*r);
-        path.AddBezier(x+w-.125f*r,y+h-.125f*r,x+w-.25f*r,y+h,x+w-.55f*r,y+h,x+w-r,y+h);
+        path.AddBezier(x+w,y+h-r,x+w,y+h-.67f*r,x+w,y+h-.4f*r,x+w-.2f*r,y+h-.2f*r);
+        path.AddBezier(x+w-.2f*r,y+h-.2f*r,x+w-.4f*r,y+h,x+w-.67f*r,y+h,x+w-r,y+h);
         path.AddLine(x+w-r,y+h,x+r,y+h);
-        path.AddBezier(x+r,y+h,x+.55f*r,y+h,x+.25f*r,y+h,x+.125f*r,y+h-.125f*r);
-        path.AddBezier(x+.125f*r,y+h-.125f*r,x,y+h-.25f*r,x,y+h-.55f*r,x,y+h-r);
+        path.AddBezier(x+r,y+h,x+.67f*r,y+h,x+.4f*r,y+h,x+.2f*r,y+h-.2f*r);
+        path.AddBezier(x+.2f*r,y+h-.2f*r,x,y+h-.4f*r,x,y+h-.67f*r,x,y+h-r);
         path.AddLine(x,y+h-r,x,y+r);
-        path.AddBezier(x,y+r,x,y+.55f*r,x,y+.25f*r,x+.125f*r,y+.125f*r);
-        path.AddBezier(x+.125f*r,y+.125f*r,x+.25f*r,y,x+.55f*r,y,x+r,y);path.CloseFigure();return path;
+        path.AddBezier(x,y+r,x,y+.67f*r,x,y+.4f*r,x+.2f*r,y+.2f*r);
+        path.AddBezier(x+.2f*r,y+.2f*r,x+.4f*r,y,x+.67f*r,y,x+r,y);path.CloseFigure();return path;
     }
     public void Dispose(){_path?.Dispose();_path=null;}
 }
@@ -115,6 +115,11 @@ internal sealed class SmoothProgressBar : Control
         using(var brush=new SolidBrush(Color.FromArgb(221,231,240)))e.Graphics.FillPath(brush,shape);
         float width=(Width-2)*(_value-_minimum)/(float)Math.Max(1,_maximum-_minimum);
         if(width>0){var saved=e.Graphics.Save();e.Graphics.SetClip(shape);using var brush=new SolidBrush(Enabled?Color.FromArgb(86,116,145):Color.FromArgb(151,169,185));e.Graphics.FillRectangle(brush,1,1,width,Height-2);e.Graphics.Restore(saved);}
+    }
+    protected override AccessibleObject CreateAccessibilityInstance()=>new ProgressAccessible(this);
+    private sealed class ProgressAccessible(SmoothProgressBar owner) : ControlAccessibleObject(owner)
+    {
+        public override string? Value {get=>$"{owner.Value} / {owner.Maximum}";set{}}
     }
     protected override void Dispose(bool disposing){if(disposing)_outline.Dispose();base.Dispose(disposing);}
 }

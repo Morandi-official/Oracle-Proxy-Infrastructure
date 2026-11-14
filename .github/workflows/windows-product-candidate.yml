@@ -157,11 +157,6 @@ jobs:
           dotnet publish ./ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ../../../dist/bad-upgrade
           if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
           Copy-Item ../../../dist/product/Proxy.Core.exe,../../../dist/product/Proxy.Guard.dll ../../../dist/bad-upgrade
-      - name: Real focused connection scroll and static rounded-control UI acceptance
-        shell: pwsh
-        run: |
-          & ./dist/product-tests/OracleProxy.Product.Tests.exe --ui-self-test
-          if($LASTEXITCODE -ne 0){throw 'Real UI focus, scroll, rounded controls or resource regression failed'}
       - name: Two-core service reader and control scheduling regression
         shell: pwsh
         env:

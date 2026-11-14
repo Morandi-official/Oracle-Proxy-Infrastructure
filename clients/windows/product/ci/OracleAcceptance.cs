@@ -423,12 +423,14 @@ internal static class OracleAcceptance
             Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
             ownedCiDevice=login["registration"]!["device_id"]!.GetValue<string>();
             Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+ownedCiDevice);
-            // Exact identity observed in failed main run 43574325984. Never
+            // Exact identities observed in failed main runs 43574325984 and
+            // 43575513345. Never
             // delete by account-wide, name-prefix or age-based heuristics.
-            const string priorFailedCi="82cd151654c7";
-            if(priorFailedCi!=ownedCiDevice && login["devices"] is JsonArray devicesBefore && devicesBefore.Any(d=>d?["id"]?.GetValue<string>()==priorFailedCi && d?["current"]?.GetValue<bool>()==false)){
-                login=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",priorFailedCi));
-                Check(login["devices"] is JsonArray remaining && remaining.All(d=>d?["id"]?.GetValue<string>()!=priorFailedCi),"PRIOR_EXACT_FAILED_CI_DEVICE_RETIRED");
+            foreach(string priorFailedCi in new[]{"82cd151654c7","d8a1b9adf004"}){
+                if(priorFailedCi!=ownedCiDevice && login["devices"] is JsonArray devicesBefore && devicesBefore.Any(d=>d?["id"]?.GetValue<string>()==priorFailedCi && d?["current"]?.GetValue<bool>()==false)){
+                    login=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",priorFailedCi));
+                    Check(login["devices"] is JsonArray remaining && remaining.All(d=>d?["id"]?.GetValue<string>()!=priorFailedCi),"PRIOR_EXACT_FAILED_CI_DEVICE_RETIRED");
+                }
             }
             string primary=login["network_endpoints"]!["primary"]!.GetValue<string>();
             Console.WriteLine("MIGRATION_SCOPED_INGRESS_POLICY="+login["account"]?["ingress"]?["access"]?.GetValue<string>()+"/"+login["account"]?["ingress"]?["preferred"]?.GetValue<string>()+";DEFAULT="+primary);
@@ -461,7 +463,10 @@ internal static class OracleAcceptance
         finally{
             if(ownedCiDevice is not null){
                 try{
-                    await Send("AttachClient");var retired=await ControlPipe.Send("DeleteDevice",ownedCiDevice).WaitAsync(TimeSpan.FromSeconds(15));
+                    await Send("AttachClient");
+                    var cleanupLogin=RequireSuccess("Login",await ControlPipe.Send("Login",username,Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD")));
+                    if(cleanupLogin["registration"]?["device_id"]?.GetValue<string>()!=ownedCiDevice)throw new IOException("CI_CLEANUP_DEVICE_IDENTITY_CHANGED");
+                    var retired=await ControlPipe.Send("DeleteDevice",ownedCiDevice).WaitAsync(TimeSpan.FromSeconds(15));
                     Console.WriteLine("FAILED_RUN_OWN_CI_DEVICE_RETIREMENT="+(retired["ok"]?.GetValue<bool>()==true && retired["login_authenticated"]?.GetValue<bool>()==false?"PASS":"UNCONFIRMED"));
                 }catch{Console.WriteLine("FAILED_RUN_OWN_CI_DEVICE_RETIREMENT=UNCONFIRMED");}
             }

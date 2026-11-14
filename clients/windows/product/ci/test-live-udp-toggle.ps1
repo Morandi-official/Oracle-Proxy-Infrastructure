@@ -91,9 +91,22 @@ function Print-ControlTimings([int]$Cycle){
    Write-Host "ACTUAL_GUI_CONTROL_${Cycle}_$($Matches[1])=$($Matches[4])"
   }
  }
- $dialog=[Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($report)
+ # Native text editing may sit inside a rounded frame. Find its owning
+ # dialog Window, never assume that the immediate parent is a top-level HWND.
+ $dialog=$report
+ while($dialog -and $dialog.Current.ControlType -ne [Windows.Automation.ControlType]::Window){
+  $dialog=[Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($dialog)
+ }
+ if(!$dialog -or $dialog.Current.ProcessId -ne $gui.Id -or $dialog.Current.NativeWindowHandle -eq $gui.MainWindowHandle.ToInt64()){throw 'LIVE_DIAGNOSTICS_OWNING_DIALOG_NOT_FOUND'}
  if(![ProxyGuiCloseButton]::PostMessage([IntPtr]$dialog.Current.NativeWindowHandle,0x0112,[IntPtr]0xF060,[IntPtr]::Zero)){throw 'LIVE_DIAGNOSTICS_CLOSE_FAILED'}
- Start-Sleep -Milliseconds 50
+ $watch.Restart()
+ while($watch.Elapsed.TotalSeconds -lt 5){
+  if(![Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Descendants,$condition)){
+   Write-Host 'ACTUAL_DIAGNOSTICS_OWNING_DIALOG_CLOSED=PASS';return
+  }
+  Start-Sleep -Milliseconds 20
+ }
+ throw 'LIVE_DIAGNOSTICS_DIALOG_STILL_OPEN' 
 }
 $script:stage='initial-window' 
 try {

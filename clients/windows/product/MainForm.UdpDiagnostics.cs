@@ -4,9 +4,9 @@ namespace OracleProxy.Product;
 
 internal sealed partial class MainForm
 {
-    private readonly Button _udpStart=new(){Name="udp-six-start",Text="诊断获准的 UDP 入口",Height=40,Margin=new Padding(0,0,10,8)};
-    private readonly Button _udpCancel=new(){Name="udp-six-cancel",Text="取消 UDP 诊断",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
-    private readonly Button _udpCopy=new(){Name="udp-six-copy",Text="复制 UDP 诊断报告",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
+    private readonly SmoothButton _udpStart=new(){Name="udp-six-start",Text="诊断获准的 UDP 入口",Height=40,Margin=new Padding(0,0,10,8)};
+    private readonly SmoothButton _udpCancel=new(){Name="udp-six-cancel",Text="取消 UDP 诊断",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
+    private readonly SmoothButton _udpCopy=new(){Name="udp-six-copy",Text="复制 UDP 诊断报告",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
     private readonly Label _udpHeading=new(){Name="udp-six-heading",AutoSize=true,Visible=false,Margin=new Padding(0,8,0,6),ForeColor=Muted};
     private readonly DataGridView _udpGrid=new(){Name="udp-six-results",Height=206,Visible=false,ReadOnly=true,
         AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,RowHeadersVisible=false,

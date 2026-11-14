@@ -555,6 +555,7 @@ internal static class ProductTests
         UiStartupAndCompactRegression(snapshot);
         UiLoginAndLayoutRegression(snapshot);
         UiLayoutRegression(snapshot);
+        UiSmoothAndScrollRegression(snapshot);
         var toolsViewport=(ScrollableControl)Descendants(form).Single(c=>c.Name=="viewport");
         toolsViewport.ScrollControlIntoView(Descendants(form).Single(c=>c.Name=="toolsSection"));Application.DoEvents();
         using(var toolImage=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(toolImage,new Rectangle(Point.Empty,form.Size));toolImage.Save("dist/review/windows-client-tools-synthetic.png");}
@@ -786,6 +787,54 @@ internal static class ProductTests
         Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc31.png");}
         Console.WriteLine("COLD_AND_WARM_REMEMBERED_STARTUP_PENDING_ACCOUNT_NEVER_SHOWS_LOGIN_AND_THREE_CARDS_VISIBLE=PASS");
     }
+
+    private static void UiSmoothAndScrollRegression(JsonObject source)
+    {
+        var ready=UiReady(source);ready["transport"]="wireguard-udp";
+        foreach(var size in new[]{new Size(900,600),new Size(1220,820)}){
+            TaskCompletionSource<JsonObject>? response=null;bool armed=false;
+            using var form=new MainForm((command,_,_)=>armed && command is "Connect" or "Disconnect"?response!.Task:Task.FromResult((JsonObject)ready.DeepClone()));
+            UiShow(form);form.Size=size;form.PerformLayout();Application.DoEvents();
+            var viewport=(StableViewport)UiDescendants(form).Single(c=>c.Name=="viewport");
+            foreach(string command in new[]{"Connect","Disconnect"}){
+                viewport.AutoScrollPosition=Point.Empty;Application.DoEvents();
+                var button=UiButton(form,command=="Connect"?"connect":"disconnect");button.Focus();Application.DoEvents();
+                var before=viewport.AutoScrollPosition;response=new(TaskCreationOptions.RunContinuationsAsynchronously);armed=true;
+                button.PerformClick();Application.DoEvents();
+                UiAssert(!button.Enabled && viewport.AutoScrollPosition==before,"CONNECT_OR_DISCONNECT_FOCUS_SCROLLED_VIEWPORT");
+                // User wheel/scrollbar movement remains available while pending.
+                viewport.AutoScrollPosition=new Point(0,Math.Abs(before.Y)+45);Application.DoEvents();var userPosition=viewport.AutoScrollPosition;
+                var state=(JsonObject)ready.DeepClone();state["mode"]=command=="Connect"?"connected":"disconnected";state["intent"]=command=="Connect";state["guard"]=command=="Connect";state["tun_permitted"]=command=="Connect";state["core_pid"]=command=="Connect"?123U:0U;
+                response.SetResult(state);UiPumpUntil(()=>UiButton(form,"disconnect").Enabled,"TOGGLE_PENDING_UI_NEVER_COMPLETED");armed=false;
+                UiAssert(viewport.AutoScrollPosition==userPosition,"TOGGLE_COMPLETION_OVERWROTE_USER_SCROLL_POSITION");
+            }
+            viewport.AutoScrollPosition=Point.Empty;Application.DoEvents();
+            var nav=UiDescendants(form).OfType<Button>().Single(b=>b.Text=="诊断与测试");nav.PerformClick();Application.DoEvents();
+            UiAssert(viewport.AutoScrollPosition.Y<0,"EXPLICIT_SECTION_NAVIGATION_NO_LONGER_SCROLLS");
+            viewport.AutoScrollPosition=Point.Empty;
+            UiAssert(UiDescendants(form).OfType<Button>().All(b=>b is SmoothButton),"SQUARE_BUTTON_STILL_PRESENT");
+            UiAssert(UiDescendants(form).OfType<TextBox>().Where(t=>!t.Multiline).All(t=>t.BorderStyle==BorderStyle.None && t.Parent is SmoothInputFrame),"NATIVE_INPUT_LOST_ROUNDED_FRAME");
+            foreach(var choice in UiDescendants(form).OfType<ComboBox>()){
+                UiAssert(choice is SmoothComboBox && choice.DropDownStyle==ComboBoxStyle.DropDownList,"NATIVE_COMBOBOX_BEHAVIOR_LOST");
+                if(choice.Enabled){choice.Focus();choice.DroppedDown=true;Application.DoEvents();choice.DroppedDown=false;}
+            }
+            using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save($"dist/review/proxy-smooth-controls-{size.Width}x{size.Height}.png");}
+        }
+        using(var cache=new SmoothOutline()){
+            var first=cache.Get(new Size(160,44),144);for(int i=0;i<500;i++)UiAssert(ReferenceEquals(first,cache.Get(new Size(160,44),144)),"STATIC_SHAPE_REBUILT_ON_EACH_PAINT");
+            UiAssert(!ReferenceEquals(first,cache.Get(new Size(180,44),144)),"SHAPE_NOT_REBUILT_AFTER_RESIZE");
+        }
+        using(var control=new SmoothButton{Size=new Size(160,44),Text="连接",BackColor=Color.FromArgb(86,116,145),ForeColor=Color.White})
+        using(var image=new Bitmap(160,44)){
+            control.CreateControl();control.DrawToBitmap(image,new Rectangle(0,0,160,44));
+            using var process=Process.GetCurrentProcess();int before=GetGuiResources(process.Handle,0);
+            for(int i=0;i<300;i++)control.DrawToBitmap(image,new Rectangle(0,0,160,44));
+            UiAssert(GetGuiResources(process.Handle,0)-before<8,"STATIC_ROUNDED_PAINT_LEAKS_GDI_HANDLES");
+        }
+        Console.WriteLine("REAL_FOCUSED_ASYNC_CONNECT_DISCONNECT_KEEP_VIEWPORT_USER_SCROLL_AND_EXPLICIT_NAVIGATION=PASS");
+        Console.WriteLine("NATIVE_INPUT_COMBO_KEYBOARD_ROUNDED_CONTROLS_CACHED_GEOMETRY_NO_GDI_GROWTH=PASS");
+    }
+    [DllImport("user32.dll")]private static extern int GetGuiResources(IntPtr process,int flags);
 
     private static void UiLoginAndLayoutRegression(JsonObject source)
     {

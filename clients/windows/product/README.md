@@ -71,3 +71,11 @@ The rc15 TCP policy and GitHub local-intermediary diagnosis are described in [ne
 rc18 separates signing in from device enrollment. Sign in with the administrator-issued account, check the local name and short public-key fingerprint, choose a recognizable name, explicitly tick ownership confirmation, then select “确认并登记此设备”. A pending login consumes no device slot and receives no tunnel configuration; Connect and standby preparation are independently blocked in the SYSTEM service until server-confirmed enrollment. Registration does not itself connect the VPN. The server enforces the account limit (default three) atomically; a recognized key uses its existing slot. Old devices without a confirmation receipt need one confirmation on upgrade, without a second slot. The private device key stays DPAPI-protected on this Windows installation; this fingerprint is not physical hardware attestation.
 
 The account/device section shows the account's own device names, short identifiers and current-device marker. Administrators see pending logins separately from allocated devices, plus confirmation time, recorded computer name, client version and recent client-reported state. Client presence is advisory; server WireGuard handshake and measured usage remain separate evidence. Revocation and account restrictions still deny access. No self-registration of user accounts or arbitrary local administrator command is added.
+
+### 界面滚动与静态圆角
+
+连接、断开事务期间抑制 Windows Forms 因禁用当前焦点按钮而触发的自动滚动；用户主动滚动和顶部模块导航仍正常工作，不强制复位到顶部。
+
+按钮、下拉框、输入框边框、复选框、卡片和用量条使用静态连续曲率圆角。文本输入与下拉选择保留原生控件、密码掩码、IME、键盘与无障碍行为。轮廓按尺寸和 DPI 缓存，控件销毁时释放；没有新增绘制计时器、模糊或阴影动画。
+
+Windows UI 验收覆盖异步连接/断开的焦点与滚动保持、手动导航、下拉展开、不同窗口尺寸、静态轮廓复用和重复绘制的 GDI 句柄增长。

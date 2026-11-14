@@ -13,12 +13,12 @@ internal sealed partial class MainForm : Form
     private readonly Label _usage=new(){Text="用量未知",AutoSize=true};
     private readonly Label _expiry=new(){Text="到期日未知",AutoSize=true};
     private readonly Label _telemetry=new(){Text="延迟 — · UU —",AutoSize=true};
-    private readonly ProgressBar _progress=new(){Minimum=0,Maximum=1000,Value=0,Width=650,Height=18};
+    private readonly SmoothProgressBar _progress=new(){Minimum=0,Maximum=1000,Value=0,Width=650,Height=18};
     private readonly TextBox _username=new(){PlaceholderText="管理员分配的账号",Width=215,MaxLength=64};
     private readonly TextBox _password=new(){PlaceholderText="管理员分配的密码",Width=215,UseSystemPasswordChar=true,MaxLength=128};
-    private readonly Button _login=new(){Name="login",Text="登录",AutoSize=true};
-    private readonly Button _connect=new(){Name="connect",Text="连接",Width=155,Height=48,Enabled=false};
-    private readonly Button _disconnect=new(){Name="disconnect",Text="断开并恢复直连",Width=180,Height=48};
+    private readonly SmoothButton _login=new(){Name="login",Text="登录",AutoSize=true};
+    private readonly SmoothButton _connect=new(){Name="connect",Text="连接",Width=155,Height=48,Enabled=false};
+    private readonly SmoothButton _disconnect=new(){Name="disconnect",Text="断开并恢复直连",Width=180,Height=48};
     private string _lastUiCommand="";
     private long? _lastUiQueueMs,_lastUiAttachMs,_lastUiResponseMs,_lastUiCompleteMs;
     private bool _backendIdle,_sessionAttached,_recoveryProvedDirect;
@@ -31,45 +31,46 @@ internal sealed partial class MainForm : Form
     private readonly TextBox _deviceName=new(){Name="device-name",MaxLength=80,Dock=DockStyle.Fill};
     private readonly Label _deviceIdentityLabel=new(){AutoSize=false,Height=28,AutoEllipsis=true};
     private readonly Label _registrationNote=new(){AutoSize=false,Height=48};
-    private readonly CheckBox _deviceConfirmation=new(){Name="device-confirm",Text="这是我的设备，我确认将它登记到当前账号。",AutoSize=false,Height=44,Dock=DockStyle.Fill};
-    private readonly Button _registerDevice=new(){Name="register-device",Text="确认并登记此设备",Width=190,Height=38,Enabled=false};
+    private readonly SmoothCheckBox _deviceConfirmation=new(){Name="device-confirm",Text="这是我的设备，我确认将它登记到当前账号。",AutoSize=false,Height=44,Dock=DockStyle.Fill};
+    private readonly SmoothButton _registerDevice=new(){Name="register-device",Text="确认并登记此设备",Width=190,Height=38,Enabled=false};
     private sealed record ListedDevice(string Id,string Name,bool Current){public override string ToString()=>(Current?"[本机] ":"")+Name+"  ·  "+Id;}
-    private readonly Button _deleteDevice=new(){Name="delete-device",Text="删除选中设备",Enabled=false,AutoSize=true};
+    private readonly SmoothButton _deleteDevice=new(){Name="delete-device",Text="删除选中设备",Enabled=false,AutoSize=true};
     private string? _deleteDeviceId;
     private string _admissionListSignature="";
     private readonly TableLayoutPanel _admissionDevicesPanel=Stack("admission-devices");
     private readonly ListBox _admissionDevices=new(){Name="admission-device-list",Height=110,Dock=DockStyle.Fill};
-    private readonly Button _admissionDelete=new(){Name="admission-delete-device",Enabled=false,Text="删除选中旧设备并登记本机",Height=42};
+    private readonly SmoothButton _admissionDelete=new(){Name="admission-delete-device",Enabled=false,Text="删除选中旧设备并登记本机",Height=42};
     private readonly ListBox _knownDevices=new(){Name="my-devices",Dock=DockStyle.Fill,Height=90,HorizontalScrollbar=true};
     private readonly TableLayoutPanel _registrationGroup;
     private readonly TableLayoutPanel _deviceDetails;
     private readonly TableLayoutPanel _credentials;
     private readonly TableLayoutPanel _maintenance;
-    private readonly Button _deviceToggle=new(){Name="device-details-toggle",Text="展开设备详情",AutoSize=true};
-    private readonly Button _maintenanceToggle=new(){Name="maintenance-toggle",Text="展开系统维护",AutoSize=true};
-    private readonly Button _emergencyRecovery=new(){Name="emergency-recovery",Text="恢复直连（UAC）",AutoSize=true};
+    private readonly SmoothButton _deviceToggle=new(){Name="device-details-toggle",Text="展开设备详情",AutoSize=true};
+    private readonly SmoothButton _maintenanceToggle=new(){Name="maintenance-toggle",Text="展开系统维护",AutoSize=true};
+    private readonly SmoothButton _emergencyRecovery=new(){Name="emergency-recovery",Text="恢复直连（UAC）",AutoSize=true};
     private readonly ToolTip _help=new(){ShowAlways=true,InitialDelay=350,ReshowDelay=100,AutoPopDelay=18000};
     private bool _deviceExpanded,_hasAccount,_authenticated,_dashboardShown,_toolsExpanded,_provisioning,_serviceReady;
-    private readonly Button _bootstrapRetry=new(){Name="bootstrap-retry",Text="重试初始化",Height=38,Visible=false};
+    private readonly SmoothButton _bootstrapRetry=new(){Name="bootstrap-retry",Text="重试初始化",Height=38,Visible=false};
     private readonly TableLayoutPanel _shell,_toolsContent;
     private readonly Panel _loginGate;
     private readonly Panel _startupGate;
+    private readonly StableViewport _viewport;
     private bool _initialViewResolved;
     private readonly Label _version=new(){Name="app-version",Text="v"+DeviceRegistration.Version.Split('+')[0],ForeColor=Color.Gray,AutoEllipsis=true,Font=new Font("Microsoft YaHei UI",9)};
     private readonly Label _loginFeedback=new(){Name="login-feedback",Text="登录后即可管理连接与设备。"};
-    private readonly CheckBox _rememberLogin=new(){Name="remember-login",Text="记住登录（最多 30 天）",Checked=true,AutoSize=true};
-    private readonly Button _diagnosticsToggle=new(){Name="diagnostics-toggle",Text="展开诊断与测试",Height=38,AutoSize=false};
+    private readonly SmoothCheckBox _rememberLogin=new(){Name="remember-login",Text="记住登录（最多 30 天）",Checked=true,AutoSize=true};
+    private readonly SmoothButton _diagnosticsToggle=new(){Name="diagnostics-toggle",Text="展开诊断与测试",Height=38,AutoSize=false};
     private static readonly Color Canvas=Color.FromArgb(232,239,245);
     private bool _deviceDetailsShown=true,_deviceToggleShown=true;
     private static readonly Color Ink=Color.FromArgb(38,55,73),Muted=Color.FromArgb(79,101,123),Accent=Color.FromArgb(86,116,145),Border=Color.FromArgb(194,209,222);
 
-    private readonly Button _native8443Test;
+    private readonly SmoothButton _native8443Test;
     private bool _busy,_renderingTransport,_connectionIntent,_closing,_allowClose;
-    private readonly ComboBox _udpPortChoice=new(){Name="udp-port-choice",DropDownStyle=ComboBoxStyle.DropDownList,Width=180};
+    private readonly SmoothComboBox _udpPortChoice=new(){Name="udp-port-choice",DropDownStyle=ComboBoxStyle.DropDownList,Width=180};
     private sealed record UdpPortChoice(int Port,string Caption){public override string ToString()=>Caption;}
     private bool _renderingPort;
     private string _portListSignature="";
-    private readonly ComboBox _transportChoice=new(){Name="transport-choice",DropDownStyle=ComboBoxStyle.DropDownList,Width=190};
+    private readonly SmoothComboBox _transportChoice=new(){Name="transport-choice",DropDownStyle=ComboBoxStyle.DropDownList,Width=190};
     private readonly SemaphoreSlim _requests=new(1,1);
     private readonly CancellationTokenSource _lifetime=new();
     private CancellationTokenSource _requestEpoch=new();
@@ -101,12 +102,12 @@ internal sealed partial class MainForm : Form
     private readonly Label _protocol=MetricValue(),_exitIp=MetricValue(),_download=MetricValue(),_upload=MetricValue(),_latency=MetricValue(),_uu=MetricValue();
     private readonly Label _accountName=new(){AutoSize=true,Text="尚未登录"};
     private readonly Label _usageUpdated=new(){AutoSize=true,ForeColor=Color.FromArgb(100,113,134)};
-    private readonly Button _logout=new(){Text="退出登录",AutoSize=true,Visible=false};
+    private readonly SmoothButton _logout=new(){Text="退出登录",AutoSize=true,Visible=false};
     private long? _sampleAt,_sampleRx,_sampleTx;
     private uint _samplePid;
     private static Label MetricValue()=>new(){Text="—",Dock=DockStyle.Fill,AutoEllipsis=true,Height=30,TextAlign=ContentAlignment.MiddleLeft,Font=new Font("Microsoft YaHei UI",13,FontStyle.Bold),Margin=new Padding(0)};
     private static TableLayoutPanel Stack(string name){var panel=new TableLayoutPanel{Name=name,Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,Margin=new Padding(0),Padding=new Padding(0)};panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));return panel;}
-    private static void Row(TableLayoutPanel panel,Control item){int row=panel.RowCount++;panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));item.Dock=DockStyle.Fill;
+    private static void Row(TableLayoutPanel panel,Control item){int row=panel.RowCount++;panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));if(item is TextBox or ListBox)item=new SmoothInputFrame(item);item.Dock=DockStyle.Fill;
         if(item is Label label && !label.AutoSize)label.MinimumSize=new Size(0,Math.Max(label.Height,TextRenderer.MeasureText("中文Ag",label.Font).Height+8));
         panel.Controls.Add(item,0,row);}
     private static Control Metric(string title,Label value){
@@ -128,6 +129,8 @@ internal sealed partial class MainForm : Form
 
     private sealed class SectionCard:GroupBox
     {
+        private readonly SmoothOutline _outline=new();
+        protected override void Dispose(bool disposing){if(disposing)_outline.Dispose();base.Dispose(disposing);}
         internal SectionCard(){DoubleBuffered=true;ResizeRedraw=true;SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);}
         public override Rectangle DisplayRectangle=>new(Padding.Left,Padding.Top,Math.Max(0,ClientSize.Width-Padding.Horizontal),Math.Max(0,ClientSize.Height-Padding.Vertical));
         public override Size GetPreferredSize(Size proposedSize)
@@ -139,9 +142,7 @@ internal sealed partial class MainForm : Form
         }
         protected override void OnPaint(PaintEventArgs e){
             e.Graphics.Clear(Parent?.BackColor ?? BackColor);e.Graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            float radius=12f*DeviceDpi/96f;var area=new RectangleF(0.5f,0.5f,Width-1f,Height-1f);
-            using var path=new System.Drawing.Drawing2D.GraphicsPath();float diameter=radius*2;
-            path.AddArc(area.Left,area.Top,diameter,diameter,180,90);path.AddArc(area.Right-diameter,area.Top,diameter,diameter,270,90);path.AddArc(area.Right-diameter,area.Bottom-diameter,diameter,diameter,0,90);path.AddArc(area.Left,area.Bottom-diameter,diameter,diameter,90,90);path.CloseFigure();
+            var path=_outline.Get(Size,DeviceDpi,0.75f,14);
             using var fill=new SolidBrush(BackColor);e.Graphics.FillPath(fill,path);using var pen=new Pen(Border);e.Graphics.DrawPath(pen,path);
             using var heading=new Font(Font.FontFamily,10,FontStyle.Bold);
             TextRenderer.DrawText(e.Graphics,Text,heading,new Rectangle(Padding.Left,12*DeviceDpi/96,Width-Padding.Horizontal,32*DeviceDpi/96),Muted,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);
@@ -149,6 +150,7 @@ internal sealed partial class MainForm : Form
     }
     private static GroupBox Card(string name,string title,TableLayoutPanel content){var card=new SectionCard{Name=name,Text=title,Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Padding=new Padding(20,46,20,14),Margin=new Padding(0,0,0,12),BackColor=Color.FromArgb(248,250,253)};card.Controls.Add(content);return card;}
     private static void StyleButton(Button button,bool primary=false){
+        if(button is SmoothButton smooth)smooth.Primary=primary;
         button.FlatStyle=FlatStyle.Flat;button.FlatAppearance.BorderColor=primary?Accent:Border;button.FlatAppearance.BorderSize=primary?0:1;
         button.BackColor=primary?Accent:Color.White;button.ForeColor=primary?Color.White:Ink;button.UseVisualStyleBackColor=false;button.Cursor=Cursors.Hand;
         button.FlatAppearance.MouseOverBackColor=primary?Color.FromArgb(68,98,128):Color.FromArgb(221,231,240);button.FlatAppearance.MouseDownBackColor=primary?Color.FromArgb(55,82,110):Color.FromArgb(207,222,235);
@@ -183,7 +185,7 @@ internal sealed partial class MainForm : Form
         _shell=new TableLayoutPanel{Name="dashboard",Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Visible=false,Margin=new Padding(0)};
         _shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));_shell.RowStyles.Add(new RowStyle(SizeType.Absolute,44));_shell.RowStyles.Add(new RowStyle(SizeType.Percent,100));content.Controls.Add(_shell);
         var navigation=Actions();navigation.Name="navigation";navigation.BackColor=Canvas;navigation.Padding=new Padding(22,0,22,0);navigation.Margin=new Padding(0);_shell.Controls.Add(navigation,0,0);
-        var viewport=new Panel{Name="viewport",Dock=DockStyle.Fill,AutoScroll=true,Margin=new Padding(0)};_shell.Controls.Add(viewport,0,1);
+        var viewport=_viewport=new StableViewport{Name="viewport",Dock=DockStyle.Fill,AutoScroll=true,Margin=new Padding(0)};_shell.Controls.Add(viewport,0,1);
         var body=Stack("sections");body.Padding=new Padding(18,4,18,12);viewport.Controls.Add(body);
         var summary=new TableLayoutPanel{Name="summary-grid",AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,Dock=DockStyle.Top,ColumnCount=2,RowCount=1,Margin=Padding.Empty};
         summary.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,56));summary.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,44));summary.RowStyles.Add(new RowStyle(SizeType.AutoSize));Row(body,summary);
@@ -247,7 +249,7 @@ internal sealed partial class MainForm : Form
         var tools=Stack("toolsContainer");_diagnosticsToggle.Dock=DockStyle.Fill;Row(tools,_diagnosticsToggle);_toolsContent=Stack("toolsContent");_toolsContent.Visible=false;Row(tools,_toolsContent);
         _diagnosticsToggle.Click+=(_,_)=>SetToolsExpanded(!_toolsExpanded);
         var diagnostics=ButtonGrid("diagnostic-actions");
-        Button Tool(string title,Action action){var button=new Button{Text=title,AutoSize=false,Height=40,Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
+        SmoothButton Tool(string title,Action action){var button=new SmoothButton{Text=title,AutoSize=false,Height=40,Margin=new Padding(0,0,10,8)};button.Click+=(_,_)=>action();return button;}
         void Add(TableLayoutPanel grid,Button button){int index=grid.Controls.Count;int row=index/3;if(row>=grid.RowCount){grid.RowCount=row+1;grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.Height=grid.RowCount*48;}button.Dock=DockStyle.Fill;grid.Controls.Add(button,index%3,row);}
         var connectionDiagnostics=Tool("连接诊断",()=>ShowReport("连接诊断",ConnectionReport));connectionDiagnostics.Name="connection-diagnostics";Add(diagnostics,connectionDiagnostics);
         Add(diagnostics,Tool("GitHub 连通性",async()=>await ShowGitHubReport()));Add(diagnostics,Tool("UU 检查详情",ShowUuReport));
@@ -265,7 +267,7 @@ internal sealed partial class MainForm : Form
         foreach(bool restore in new[]{false,true}){var button=Tool(restore?"恢复 UU 权限":"修复 UU 权限",async()=>await MaintainUu(restore));_help.SetToolTip(button,"需要管理员授权。修复后自动重新识别；恢复使用原权限备份。");Add(_maintenance,button);}Row(_toolsContent,_maintenance);
         var toolsCard=Card("toolsSection","诊断与测试",tools);Row(body,toolsCard);
         foreach(var (title,target) in new[]{("当前连接",connectionCard),("账号与设备",accountCard),("诊断与测试",toolsCard)}){
-            var button=new Button{Text=title,AutoSize=false,Width=148,Height=36,TextAlign=ContentAlignment.MiddleCenter,FlatStyle=FlatStyle.Flat,BackColor=Canvas,UseVisualStyleBackColor=false,ForeColor=Ink,Margin=new Padding(0,0,10,0)};button.FlatAppearance.BorderSize=0;button.Click+=(_,_)=>{if(target==toolsCard)SetToolsExpanded(true);viewport.ScrollControlIntoView(target);};navigation.Controls.Add(button);
+            var button=new SmoothButton{Text=title,AutoSize=false,Width=148,Height=36,TextAlign=ContentAlignment.MiddleCenter,FlatStyle=FlatStyle.Flat,BackColor=Canvas,UseVisualStyleBackColor=false,ForeColor=Ink,Margin=new Padding(0,0,10,0)};button.FlatAppearance.BorderSize=0;button.Click+=(_,_)=>{if(target==toolsCard)SetToolsExpanded(true);viewport.ScrollControlIntoView(target);};navigation.Controls.Add(button);
         }
         // The login screen is the initial view. Only an authenticated service
         // response with an account can reveal the dashboard.
@@ -286,7 +288,7 @@ internal sealed partial class MainForm : Form
             if(MessageBox.Show(this,$"删除旧设备“{selected.Name}”并登记本机？","释放设备名额",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK)return;
             _deleteDeviceId=selected.Id;try{await Act("DeleteDevice");}finally{_deleteDeviceId=null;}
         };
-        var copyStartup=new Button{Name="copy-startup-diagnostics",Text="复制初始化诊断",Height=36};
+        var copyStartup=new SmoothButton{Name="copy-startup-diagnostics",Text="复制初始化诊断",Height=36};
         Row(loginContent,copyStartup);copyStartup.Click+=(_,_)=>Clipboard.SetText(_startupReport);
         Row(loginContent,_bootstrapRetry);_bootstrapRetry.Click+=async(_,_)=>{if(await ProvisionService())await StartReadyClient();};
         var loginCard=Card("login-card","",loginContent);loginCard.Dock=DockStyle.None;loginCard.AutoSize=true;loginCard.Padding=new Padding(28,24,28,24);_loginGate.Controls.Add(loginCard);
@@ -305,8 +307,8 @@ internal sealed partial class MainForm : Form
         _timer.Tick+=async(_,_)=>{if(!_busy && !_closing)await Act("Status");};
         Shown+=async(_,_)=>{if(_realService){if(await ProvisionService())await StartReadyClient();}else{await Act("Status");await StartReadyClient();}};
         IEnumerable<Control> Descendants(Control parent){foreach(Control child in parent.Controls){yield return child;foreach(var nested in Descendants(child))yield return nested;}}
-        foreach(var button in Descendants(body).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connect || button==_login);StyleButton(_emergencyRecovery);
-        foreach(var input in new[]{_username,_password,_deviceName}){input.BorderStyle=BorderStyle.FixedSingle;input.AccessibleName=input==_username?"登录账号":input==_password?"密码":"设备名称";}
+        foreach(var button in Descendants(_shell).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connect || button==_login);StyleButton(_emergencyRecovery);
+        foreach(var input in new[]{_username,_password,_deviceName}){input.BorderStyle=BorderStyle.None;input.AccessibleName=input==_username?"登录账号":input==_password?"密码":"设备名称";}
         _help.SetToolTip(_telemetry,"速率按本机 VPN 网卡字节增量统计；HTTP 延迟包含隧道及检测站点响应时间，与游戏延迟不同。");
         foreach(var value in new[]{_download,_upload})_help.SetToolTip(value,"本机 VPN 网卡实时速率，统一使用十进制 MB/s、KB/s、B/s。1 MB/s = 8 Mbps。");
         _help.SetToolTip(_emergencyRecovery,"独立的本机恢复入口，需要管理员授权；恢复完成前不会把网络状态当作已断开。");
@@ -524,6 +526,7 @@ internal sealed partial class MainForm : Form
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
         bool acquired=false,sentMutation=false;
         bool toggle=command is "Connect" or "Disconnect";var operationTimer=System.Diagnostics.Stopwatch.StartNew();
+        using var focusScroll=toggle?_viewport.HoldFocusScroll():null;
         if(toggle){_lastUiCommand=command;_lastUiQueueMs=_lastUiAttachMs=_lastUiResponseMs=_lastUiCompleteMs=null;}
         if(!passive){
             _busy=true;
@@ -602,8 +605,8 @@ internal sealed partial class MainForm : Form
     {
         using var dialog=new Form{Text=title,StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(760,400),MinimizeBox=false,MaximizeBox=false};
         var text=new TextBox{Name="diagnostic-report",Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Text=report};
-        var copy=new Button{Text="复制诊断（不含账号密码或密钥）",Dock=DockStyle.Bottom,Height=40};copy.Click+=(_,_)=>Clipboard.SetText(report);
-        dialog.Controls.Add(text);dialog.Controls.Add(copy);dialog.ShowDialog(this);
+        var copy=new SmoothButton{Text="复制诊断（不含账号密码或密钥）",Dock=DockStyle.Bottom,Height=40};copy.Click+=(_,_)=>Clipboard.SetText(report);
+        StyleButton(copy,true);dialog.Padding=new Padding(12);dialog.BackColor=Canvas;dialog.Controls.Add(new SmoothInputFrame(text){Dock=DockStyle.Fill});dialog.Controls.Add(copy);dialog.ShowDialog(this);
     }
     private static string UuReason(string code)=>code switch{
         "UU_EXECUTABLE_OWNER_UNTRUSTED"=>"程序文件由普通用户拥有，可被改变权限",

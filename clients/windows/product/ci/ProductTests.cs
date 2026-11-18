@@ -598,7 +598,7 @@ internal static class ProductTests
         while((!read.IsCompleted || !click.IsCompleted) && deadline.Elapsed<TimeSpan.FromSeconds(5)){Application.DoEvents();Thread.Sleep(5);}
         if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Status","Connect"}))return 1;
         Console.WriteLine("CONNECT_CLICK_DURING_PASSIVE_READ_IS_QUEUED_AND_EXECUTED=PASS");
-        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";preferenceState["native_udp_8443_available"]=true;
+        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";preferenceState["native_udp_8443_available"]=true;preferenceState["native_udp_ports"]=new JsonArray(443,8443,51820);
         var preferenceCalls=new List<string>();
         using var reselect=new MainForm((command,_,_)=>{preferenceCalls.Add(command);return Task.FromResult((JsonObject)preferenceState.DeepClone());});
         reselect.Display(preferenceState);
@@ -606,11 +606,13 @@ internal static class ProductTests
         typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
         if(!preferenceCalls.SequenceEqual(new[]{"PreferUdpAdaptive"}))return 1;
         Console.WriteLine("RESELECTING_NORMAL_UDP_RESTORES_ADAPTIVE_PORT_SELECTION=PASS");
-        typeof(Button).GetMethod("OnClick",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(Descendants(reselect).OfType<Button>().Single(b=>b.Text=="原生 UDP 8443 测试"),[EventArgs.Empty]);
+        var portChoice=Descendants(reselect).OfType<ComboBox>().Single(c=>c.Name=="udp-port-choice");
+        portChoice.SelectedIndex=portChoice.FindStringExact("8443");
+        typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(portChoice,[EventArgs.Empty]);
         if(!preferenceCalls.SequenceEqual(new[]{"PreferUdpAdaptive","PreferUdp8443"}))return 1;
-        Console.WriteLine("NATIVE_UDP8443_DIAGNOSTIC_BUTTON_USES_FIXED_AUTHENTICATED_COMMAND=PASS");
         preferenceState["intent"]=true;reselect.Display(preferenceState);
-        if(Descendants(reselect).OfType<Button>().Single(b=>b.Text=="原生 UDP 8443 测试").Enabled)return 1;
+        if(portChoice.Enabled)return 1;
+        Console.WriteLine("NATIVE_UDP8443_SELECTED_FROM_MAIN_PORT_PICKER=PASS");
         foreach(string preference in new[]{"auto","udp"}){
             var defaults=(JsonObject)snapshot.DeepClone();defaults["intent"]=false;defaults["transport_preference"]=preference;defaults["native_udp_8443_available"]=true;defaults["native_udp_port_preference"]=0;defaults["ok"]=true;
             var selectionCalls=new List<string>();
@@ -895,7 +897,7 @@ internal static class ProductTests
         var actions=UiDescendants(form).Single(c=>c.Name=="diagnostic-actions").Controls.Cast<Control>().ToArray();
         Console.WriteLine("UI_DIAGNOSTIC_COLUMNS="+string.Join(";",actions.Select(c=>c.Text+":"+c.Bounds)));
         using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-diagnostics-rc28.png");}
-        UiAssert(tools.Visible && actions.Length>=6 && actions.Max(c=>c.Width)-actions.Min(c=>c.Width)<=1,"DIAGNOSTIC_BUTTON_COLUMNS_NOT_ALIGNED");
+        UiAssert(tools.Visible && actions.Length==5 && actions.Max(c=>c.Width)-actions.Min(c=>c.Width)<=1,"DIAGNOSTIC_BUTTON_COLUMNS_NOT_ALIGNED");
         var metrics=UiDescendants(form).Single(c=>c.Name=="connectionMetrics");int metricHeight=metrics.Height;
         var card=UiDescendants(form).Single(c=>c.Name=="connectionSection");int cardHeight=card.Height;
         foreach(string mode in Enumerable.Range(0,12).SelectMany(_=>new[]{"connected","protected","recovery","disconnected"})){

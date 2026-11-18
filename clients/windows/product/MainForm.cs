@@ -64,7 +64,6 @@ internal sealed partial class MainForm : Form
     private bool _deviceDetailsShown=true,_deviceToggleShown=true;
     private static readonly Color Ink=Color.FromArgb(38,55,73),Muted=Color.FromArgb(79,101,123),Accent=Color.FromArgb(86,116,145),Border=Color.FromArgb(194,209,222);
 
-    private readonly SmoothButton _native8443Test;
     private bool _busy,_renderingTransport,_connectionIntent,_closing,_allowClose;
     private readonly SmoothComboBox _udpPortChoice=new(){Name="udp-port-choice",DropDownStyle=ComboBoxStyle.DropDownList,Width=180};
     private sealed record UdpPortChoice(int Port,string Caption){public override string ToString()=>Caption;}
@@ -253,10 +252,6 @@ internal sealed partial class MainForm : Form
         void Add(TableLayoutPanel grid,Button button){int index=grid.Controls.Count;int row=index/3;if(row>=grid.RowCount){grid.RowCount=row+1;grid.RowStyles.Add(new RowStyle(SizeType.Absolute,48));grid.Height=grid.RowCount*48;}button.Dock=DockStyle.Fill;grid.Controls.Add(button,index%3,row);}
         var connectionDiagnostics=Tool("连接诊断",()=>ShowReport("连接诊断",ConnectionReport));connectionDiagnostics.Name="connection-diagnostics";Add(diagnostics,connectionDiagnostics);
         Add(diagnostics,Tool("GitHub 连通性",async()=>await ShowGitHubReport()));Add(diagnostics,Tool("UU 检查详情",ShowUuReport));
-        Add(diagnostics,Tool("重新识别 UU",async()=>await Act("RefreshUu")));
-        _native8443Test=Tool("原生 UDP 8443 测试",async()=>await Act("PreferUdp8443"));Add(diagnostics,_native8443Test);
-        void Open(string url){try{System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url){UseShellExecute=true});}catch{_detail.Text="未能打开默认浏览器。";}}
-        Add(diagnostics,Tool("打开出口检查",()=>Open("https://www.cloudflare.com/cdn-cgi/trace")));
         Row(_toolsContent,diagnostics);
         BuildUdpDiagnostics(_toolsContent,diagnostics,Add);
         _maintenance=ButtonGrid("system-maintenance");_maintenance.Visible=false;
@@ -407,8 +402,8 @@ internal sealed partial class MainForm : Form
         _emergencyRecovery.Enabled=!_provisioning && !_recovering;
         bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
         _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
-        _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_udpPortChoice.Enabled=_transportChoice.Enabled && _transportChoice.SelectedIndex==0;_native8443Test.Enabled=available && !_connectionIntent && !_udpDiagnosing && _native8443Available;
-        _udpStart.Enabled=available && _udpAvailable && _lastMode=="disconnected" && !_udpDiagnosing && !_connectionIntent && _authenticated && _deviceRegistered;_udpCancel.Enabled=available && _udpDiagnosing;_maintenance.Enabled=available && !_udpDiagnosing;
+        _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_udpPortChoice.Enabled=_transportChoice.Enabled && _transportChoice.SelectedIndex==0;
+        _udpStart.Enabled=available && (_udpDiagnosing || (_udpAvailable && _lastMode=="disconnected" && !_connectionIntent && _authenticated && _deviceRegistered));_maintenance.Enabled=available && !_udpDiagnosing;
         _deleteDevice.Enabled=available && _hasAccount && !_udpDiagnosing && _knownDevices.SelectedItem is ListedDevice;
         _admissionDelete.Enabled=available && _hasAccount && !_deviceRegistered && _admissionDevices.SelectedItem is ListedDevice;
         UpdateRegistrationActions();
@@ -602,13 +597,25 @@ internal sealed partial class MainForm : Form
         catch{if(!IsDisposed)_detail.Text="UU 权限维护未启动，请检查 UAC 提示。";}
         finally{_uuMaintaining=false;if(!IsDisposed)RefreshActions();}
     }
-    private void ShowUuReport()=>ShowReport("UU 自动识别详情",_uuReport);
-    private void ShowReport(string title,string report)
+    private void ShowUuReport()=>ShowReport("UU 自动识别详情",_uuReport,async()=>{
+        await Act("RefreshUu");
+        if(!IsDisposed && !_closing)ShowUuReport();
+    });
+    private void ShowReport(string title,string report,Func<Task>? refresh=null)
     {
         using var dialog=new Form{Text=title,StartPosition=FormStartPosition.CenterParent,ClientSize=new Size(760,400),MinimizeBox=false,MaximizeBox=false};
         var text=new TextBox{Name="diagnostic-report",Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Both,WordWrap=false,Dock=DockStyle.Fill,Text=report};
         var copy=new SmoothButton{Text="复制诊断（不含账号密码或密钥）",Dock=DockStyle.Bottom,Height=40};copy.Click+=(_,_)=>Clipboard.SetText(report);
-        StyleButton(copy,true);dialog.Padding=new Padding(12);dialog.BackColor=Canvas;dialog.Controls.Add(new SmoothInputFrame(text){Dock=DockStyle.Fill});dialog.Controls.Add(copy);dialog.ShowDialog(this);
+        StyleButton(copy,true);dialog.Padding=new Padding(12);dialog.BackColor=Canvas;dialog.Controls.Add(new SmoothInputFrame(text){Dock=DockStyle.Fill});dialog.Controls.Add(copy);
+        if(refresh is not null){
+            var rescan=new SmoothButton{Text="重新识别 UU",Dock=DockStyle.Bottom,Height=40,
+                Enabled=!_connectionIntent && !_busy && !_needsReconcile && !_udpDiagnosing && _serviceReady};
+            StyleButton(rescan);
+            rescan.Click+=(_,_)=>{dialog.DialogResult=DialogResult.Retry;};
+            dialog.Controls.Add(rescan);
+        }
+        if(dialog.ShowDialog(this)==DialogResult.Retry && refresh is not null)
+            BeginInvoke((Action)(async()=>await refresh()));
     }
     private static string UuReason(string code)=>code switch{
         "UU_EXECUTABLE_OWNER_UNTRUSTED"=>"程序文件由普通用户拥有，可被改变权限",
@@ -652,7 +659,6 @@ internal sealed partial class MainForm : Form
             _snapshotAt=DateTimeOffset.UtcNow;_diagnosticSnapshot=(JsonObject)state.DeepClone();
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;
             _native8443Available=state["native_udp_8443_available"]?.GetValue<bool>()==true;
-            _native8443Test.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && _native8443Available;
             _renderingTransport=true;
             try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>()=="quic"?1:0;}finally{_renderingTransport=false;}
             _renderingPort=true;try{
@@ -688,7 +694,7 @@ internal sealed partial class MainForm : Form
             if(state["error"]?.GetValue<string>()=="UU_TRUST_NOT_VERIFIED"){
                 _maintenance.Visible=true;_maintenanceToggle.Text="收起系统维护";
                 var writable=(state["uu_diagnostics"] as JsonArray)?.FirstOrDefault(item=>item?["code"]?.GetValue<string>() is "UU_DIRECTORY_WRITABLE" or "UU_EXECUTABLE_WRITABLE");
-                detail=writable is not null?"UU 路径允许普通用户修改："+writable["path"]+"。请在“03 诊断与测试”点击“修复 UU 并重新识别（UAC）”。":"UU 信任核验未通过，请查看“UU 检查详情”；目录权限问题可使用“修复 UU 并重新识别（UAC）”。";
+                detail=writable is not null?"UU 路径允许普通用户修改："+writable["path"]+"。请在“诊断与测试 → 系统维护”点击“修复 UU 权限”。":"UU 信任核验未通过，请查看“UU 检查详情”；目录权限问题可使用“修复 UU 权限”。";
             }
             if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)detail="快速连接已就绪（"+(state["transport"]?.GetValue<string>() switch{"wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS 兜底通道",_=>"WireGuard UDP 主通道"})+"）。当前普通应用仍直连；点击连接后启用防泄漏与 VPN。";
             else if(mode=="disconnected" && state["preparing"]?.GetValue<bool>()==true)detail="正在预备加密通道，当前普通应用仍直连。首次连接或网络变化可能需要等待。";
@@ -817,7 +823,7 @@ internal sealed partial class MainForm : Form
 
         "QUIC_NOT_AVAILABLE"=>"服务器暂未提供 QUIC / HTTP/3，请选择 UDP。", "DISCONNECT_BEFORE_TRANSPORT_CHANGE"=>"请先断开，再选择连接方式。",
         "INVALID_CREDENTIALS"=>"账号或密码错误。", "DEVICE_LIMIT_REACHED"=>"设备名额已满，请在下方删除旧设备后登记本机。", "RATE_LIMITED"=>"登录尝试过于频繁，请稍后重试。",
-        "UU_TRUST_NOT_VERIFIED"=>"UU 信任核验未通过，请查看“UU 检查详情”；目录权限问题可使用“修复 UU 并重新识别（UAC）”。",
+        "UU_TRUST_NOT_VERIFIED"=>"UU 信任核验未通过，请查看“UU 检查详情”；目录权限问题可使用“修复 UU 权限”。",
         "SERVICE_OPERATION_FAILED"=>"连接未完成，请点击“连接诊断”查看失败阶段和错误码。",
         "CORE_READY_TIMEOUT"=>"隧道核心启动超时，保护保持启用。请复制“连接诊断”。",
         "ORACLE_PROBE_TIMEOUT"=>"出口验证超时，保护保持启用。请复制“连接诊断”。",

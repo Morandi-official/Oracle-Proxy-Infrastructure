@@ -11,6 +11,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "distribution"))
 
 from flclash_live_probe import NoRedirect, probe
 

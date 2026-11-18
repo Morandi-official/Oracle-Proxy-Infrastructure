@@ -50,4 +50,4 @@ jobs:
           CI_USERNAME_FINGERPRINT: ${{ needs.identify-test-account.outputs.fingerprint }}
           ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
           ADMIN_LOCAL_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
-        run: python3 ops/distribution/flclash_issued_profile_probe.py "$RUNNER_TEMP/mihomo-1.19.33"
+        run: python3 ops/flclash-diagnosis/issued_profile.py "$RUNNER_TEMP/mihomo-1.19.33"

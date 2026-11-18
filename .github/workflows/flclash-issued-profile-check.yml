@@ -1,0 +1,53 @@
+name: Verify a production-issued FlClash profile
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/flclash-issued-profile-check.yml]
+permissions:
+  contents: read
+concurrency:
+  group: flclash-issued-profile-check
+  cancel-in-progress: false
+jobs:
+  identify-test-account:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: windows-client-acceptance
+    outputs:
+      fingerprint: ${{ steps.account.outputs.fingerprint }}
+    steps:
+      - name: Identify only the dedicated acceptance account
+        id: account
+        shell: bash
+        env:
+          CI_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+        run: |
+          set -euo pipefail
+          test -n "$CI_USERNAME"
+          checksum="$(printf '%s' "$CI_USERNAME" | sha256sum)"
+          printf 'fingerprint=%s\n' "${checksum%% *}" >> "$GITHUB_OUTPUT"
+  issued-profile:
+    if: github.ref == 'refs/heads/main'
+    needs: identify-test-account
+    runs-on: ubuntu-24.04
+    environment: oracle-ops
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Mihomo
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/mihomo-1.19.33.gz"
+          curl --fail --location --retry 2 --max-time 90 -o "$candidate" https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-v1-v1.19.33.gz
+          echo "8ec92e7b2fdc6b853ba00156bab7e4e965c8b0d843b8c4ac8ab98795f02ad524  $candidate" | sha256sum --check --status
+          gzip -dc "$candidate" > "$RUNNER_TEMP/mihomo-1.19.33"
+          chmod 700 "$RUNNER_TEMP/mihomo-1.19.33"
+      - name: Issue, download, connect, and retire a dedicated acceptance profile
+        env:
+          CI_USERNAME_FINGERPRINT: ${{ needs.identify-test-account.outputs.fingerprint }}
+          ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
+          ADMIN_LOCAL_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
+        run: python3 ops/distribution/flclash_issued_profile_probe.py "$RUNNER_TEMP/mihomo-1.19.33"

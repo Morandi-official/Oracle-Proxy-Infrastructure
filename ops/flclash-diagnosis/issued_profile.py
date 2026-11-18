@@ -1,4 +1,5 @@
 """Check an issued FlClash profile using an isolated CI account."""
+import copy
 import secrets
 import http.cookiejar
 import json
@@ -92,6 +93,16 @@ def probe_account(admin, account_id, expected_backup):
         proxy_ok = probe(binary, profile, {expected_backup}, "2603:c020:c015:8100::10")
         if os.environ.get("TEST_FLCLASH_WINDOWS_TUN") == "1":
             print("WINDOWS_PROXY_ONLY=" + ("PASS" if proxy_ok else "FAIL"), flush=True)
+            alternate = copy.deepcopy(profile)
+            nodes = [node for node in alternate["proxies"] if node["server"] == expected_backup]
+            if len(nodes) != 1 or nodes[0]["port"] != 443:
+                raise RuntimeError("ISSUED_BACKUP_PORT_NOT_443")
+            nodes[0]["port"] = 8443
+            print("WINDOWS_BACKUP_PORT_8443_TEST", flush=True)
+            alternate_ok = probe(binary, alternate, {expected_backup}, "2603:c020:c015:8100::10")
+            print("WINDOWS_BACKUP_PORT_8443=" + ("PASS" if alternate_ok else "FAIL"), flush=True)
+            if not alternate_ok:
+                raise RuntimeError("ISSUED_PROFILE_ALTERNATE_PORT_FAILED")
             if not probe_tun(binary, profile, expected_backup):
                 raise RuntimeError("ISSUED_PROFILE_WINDOWS_TUN_FAILED")
         elif not proxy_ok:

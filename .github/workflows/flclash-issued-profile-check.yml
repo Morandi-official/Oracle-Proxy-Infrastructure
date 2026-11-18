@@ -59,7 +59,7 @@ jobs:
           if ($exes.Count -ne 1) { throw 'Expected exactly one Mihomo executable' }
           Copy-Item (Join-Path $dir 'driver/wintun/bin/amd64/wintun.dll') $exes[0].DirectoryName -Force
           "FLCLASH_MIHOMO=$($exes[0].FullName)" >> $env:GITHUB_ENV
-      - name: Compare proxy-only and Windows TUN with a temporary backup-only profile
+      - name: Compare Windows UDP 443 and 8443, then verify TUN
         shell: pwsh
         env:
           ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}

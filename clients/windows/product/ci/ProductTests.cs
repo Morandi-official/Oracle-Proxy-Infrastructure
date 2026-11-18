@@ -132,6 +132,15 @@ internal static class ProductTests
             return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("ip=152.67.156.100\n")};
         }
     }
+    private sealed class StalledTrace : HttpMessageHandler
+    {
+        private int _requests;
+        internal int Requests=>Volatile.Read(ref _requests);
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+            if(Interlocked.Increment(ref _requests)==1)await Task.Delay(Timeout.Infinite,token);
+            return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent("ip=152.67.156.100\n")};
+        }
+    }
     private static async Task<int> ProbeDeadlines()
     {
         await LoginAdmissionTests.Run();
@@ -160,6 +169,11 @@ internal static class ProductTests
         using var stopping=new CancellationTokenSource(100);bound.Restart();
         try{await EgressProbe.Verify(ignoring,3,()=>true,stopping.Token);return 1;}catch(OperationCanceledException)when(stopping.IsCancellationRequested){}
         if(bound.Elapsed>TimeSpan.FromSeconds(1))return 1;
+        using var stalled=new StalledTrace();
+        using var recovery=new HttpClient(stalled){Timeout=Timeout.InfiniteTimeSpan};
+        long recovered=await EgressProbe.Verify(recovery,3,()=>true,CancellationToken.None);
+        if(stalled.Requests!=2 || recovered<6000 || recovered>=12000)return 1;
+        Console.WriteLine("WG_REPLY_ALLOWS_ONE_STALLED_HTTPS_PROBE_RETRY_WITHIN_TOTAL_DEADLINE=PASS");
         Console.WriteLine("PROBE_IGNORING_HTTP_CANCELLATION_CANNOT_EXCEED_DEADLINE_OR_DELAY_STOP=PASS");
         Console.WriteLine("REAL_ASYNC_SLOW_EXIT_PROBE_RETAINED_ONLY_AFTER_WG_REPLY_AND_REJECTS_WRONG_EXIT=PASS");return 0;
     }

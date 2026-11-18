@@ -694,6 +694,13 @@ internal static class ProductTests
     {
         const string version="0.3.0-rc31+synthetic-exact-revision";
         JsonObject current=new(){["schema"]=1,["ok"]=true,["product_version"]=version,["login_authenticated"]=false};
+        var rejectedConnect=(JsonObject)current.DeepClone();
+        rejectedConnect["ok"]=false;
+        rejectedConnect["error"]="UU_TRUST_NOT_VERIFIED";
+        UiAssert(ServiceBootstrap.MatchesService(rejectedConnect,version) &&
+            !ServiceBootstrap.Current(rejectedConnect,version) &&
+            !ServiceBootstrap.MatchesService(rejectedConnect,version+"-other"),
+            "CONNECT_FAILURE_IS_A_VALID_CURRENT_SERVICE_REPLY_WITHOUT_SATISFYING_BOOTSTRAP");
         int reads=0,installs=0;
         Task<JsonObject> Read(CancellationToken cancel){cancel.ThrowIfCancellationRequested();reads++;return Task.FromResult((JsonObject)current.DeepClone());}
         Task<int> Install(CancellationToken cancel){cancel.ThrowIfCancellationRequested();installs++;current["product_version"]=version;return Task.FromResult(0);}

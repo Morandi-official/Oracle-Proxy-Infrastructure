@@ -431,7 +431,9 @@ internal sealed partial class MainForm : Form
                         // window, starts the tunnel and returns its verified state.
                         _lastUiAttachMs=0;
                         var connected=await Task.Run(()=>ControlPipe.Send("AttachConnect",null,null,cancel),cancel);
-                        if(!ServiceBootstrap.Current(connected,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
+                        // The pipe has attested the service. A failed connection
+                        // can still return a valid snapshot from that service.
+                        if(!ServiceBootstrap.MatchesService(connected,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
                         _sessionAttached=true;_recoveryProvedDirect=false;_backendIdle=false;
                         if(!_closing)_timer.Start();
                         return connected;
@@ -623,7 +625,7 @@ internal sealed partial class MainForm : Form
     {
         if(state is null)return "尚未读取系统服务。";
         var report=new System.Text.StringBuilder("连接诊断（不含账号密码、令牌或密钥）\r\n");
-            foreach(string key in new[]{"product_version","egress_probe_protocol","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
+            foreach(string key in new[]{"product_version","egress_probe_protocol","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","uu_discovery_verified","uu_candidates","uu_rejected","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
             if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})report.Append($"attempt.{transport}.{key}: {attempt[key]}\r\n");
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})report.Append($"native_udp.{key}: {native[key]}\r\n");
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})report.Append($"native_udp.{port}.{key}: {counters[key]}\r\n");
@@ -671,7 +673,7 @@ internal sealed partial class MainForm : Form
             _version.Text="v"+productVersion.Split('+')[0];
             if(_help.GetToolTip(_version)!=productVersion)_help.SetToolTip(_version,productVersion);
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
-                $"\r\n候选：{state["uu_candidates"]} · 通过：{state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
+                $"\r\n候选：{state["uu_candidates"]} · 本次通过：{state["uu_discovery_verified"] ?? state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
                 foreach(var item in uuIssues)_uuReport+=$"\r\n{UuReason(item!["code"]!.GetValue<string>())}\r\n{item["code"]} {item["detail"]}\r\n{item["path"]}\r\n";
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
@@ -734,7 +736,9 @@ internal sealed partial class MainForm : Form
             if(_protocol.Text!=entryText)_protocol.Text=entryText;
             _help.SetToolTip(_protocol,protocolText+"\n"+entryText);
             _latency.Text=mode=="connected" && latency is not null?$"{latency} ms":"—";
-            _uu.Text=$"{state["uu_verified_programs"] ?? (JsonNode)0} 个程序已验证";
+            _uu.Text=state["error"]?.GetValue<string>()=="UU_TRUST_NOT_VERIFIED"
+                ?"信任核验未通过"
+                :$"{state["uu_discovery_verified"] ?? state["uu_verified_programs"] ?? (JsonNode)0} 个程序已验证";
             UpdateRates(state,mode=="connected" && guard);
             _telemetry.Text=mode=="connected"?(state["verified_exit_ipv6"] is not null?"双栈出口已验证 · ":"")+"防泄漏保护已启用":"连接通过验证后显示协议、出口与实时速率。";
             _usageUpdated.Text=$"用量更新：{(at is null?"—":DateTimeOffset.FromUnixTimeSeconds(at.Value).ToLocalTime().ToString("HH:mm:ss"))}  ·  {(fresh?"服务器账单统计":"上次读取值，等待刷新")}";

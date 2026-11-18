@@ -73,7 +73,7 @@ def download_profile(url, profile_id):
         raise RuntimeError(f"IMPORT_HTTP_{error.code}") from None
 
 
-def probe_account(admin, account_id):
+def probe_account(admin, account_id, expected_backup):
     created = admin.api("/api/flclash/create", {"user_id": account_id}, expected=201)["profile"]
     profile_id = str(uuid.UUID(created["id"]))
     path = "/api/flclash/" + profile_id
@@ -83,11 +83,11 @@ def probe_account(admin, account_id):
         print("PRODUCTION_FLCLASH_IMPORT=PASS", flush=True)
         profile["tun"]["enable"] = False
         exits = {node["server"] for node in profile["proxies"] if node["type"] == "wireguard"}
-        if not exits:
-            raise RuntimeError("ISSUED_UDP_NODES_MISSING")
+        if expected_backup not in exits:
+            raise RuntimeError("ISSUED_BACKUP_NODE_MISSING")
         if any(ipaddress.ip_address(address).version != 4 for address in exits):
             raise RuntimeError("ISSUED_UDP_ENDPOINT_INVALID")
-        if not probe(sys.argv[1], profile, exits, "2603:c020:c015:8100::10"):
+        if not probe(sys.argv[1], profile, {expected_backup}, "2603:c020:c015:8100::10"):
             raise RuntimeError("ISSUED_PROFILE_PROXY_FAILED")
         for _ in range(8):
             profiles = admin.api("/api/flclash")["profiles"]
@@ -119,8 +119,8 @@ def main():
             "quota_bytes": 10485760,
             "expires_at": int(time.time()) + 3600,
             "enabled": True,
-            "ingress_access": "both",
-            "ingress_preferred": "primary",
+            "ingress_access": "backup",
+            "ingress_preferred": "backup",
         }})
         account_id = str(uuid.UUID(saved["saved_user_id"]))
         if not any(user["id"] == account_id and user.get("username") == username and
@@ -128,7 +128,7 @@ def main():
                    for user in saved["users"]):
             raise RuntimeError("TEMPORARY_ACCOUNT_NOT_VERIFIED")
         print("TEMPORARY_ACCOUNT_CREATED=PASS", flush=True)
-        probe_account(admin, account_id)
+        probe_account(admin, account_id, saved["ingress_endpoints"]["backup"])
     finally:
         state = admin.api("/api/control")
         owned = [user for user in state["users"] if user.get("name") == username]

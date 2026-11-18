@@ -423,10 +423,10 @@ internal static class OracleAcceptance
             Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
             ownedCiDevice=login["registration"]!["device_id"]!.GetValue<string>();
             Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+ownedCiDevice);
-            // Exact identities observed in failed main runs 43574325984 and
-            // 43575513345. Never
+            // Exact identities observed in failed main runs 43574325984,
+            // 43575513345 and 44271623029. Never
             // delete by account-wide, name-prefix or age-based heuristics.
-            foreach(string priorFailedCi in new[]{"82cd151654c7","d8a1b9adf004"}){
+            foreach(string priorFailedCi in new[]{"82cd151654c7","d8a1b9adf004","b0eb3ba5c647"}){
                 if(priorFailedCi!=ownedCiDevice && login["devices"] is JsonArray devicesBefore && devicesBefore.Any(d=>d?["id"]?.GetValue<string>()==priorFailedCi && d?["current"]?.GetValue<bool>()==false)){
                     login=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",priorFailedCi));
                     Check(login["devices"] is JsonArray remaining && remaining.All(d=>d?["id"]?.GetValue<string>()!=priorFailedCi),"PRIOR_EXACT_FAILED_CI_DEVICE_RETIRED");

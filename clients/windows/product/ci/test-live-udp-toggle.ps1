@@ -73,7 +73,12 @@ function Exit-FailureWitness {
 function Print-ControlTimings([int]$Cycle){
  $toggle=Find-Control 'diagnostics-toggle'
  if($Cycle -eq 1){$toggle.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()}
- $button=Find-Control 'connection-diagnostics'
+ $button=$null
+ $buttonDeadline=[Diagnostics.Stopwatch]::StartNew()
+ while(!$button -and $buttonDeadline.Elapsed.TotalSeconds -lt 5){
+  $button=Find-Control 'connection-diagnostics'
+  if(!$button){Start-Sleep -Milliseconds 20}
+ }
  if(!$button){throw 'LIVE_DIAGNOSTICS_BUTTON_UNAVAILABLE'}
  if(![ProxyGuiCloseButton]::PostMessage([IntPtr]$button.Current.NativeWindowHandle,0x00F5,[IntPtr]::Zero,[IntPtr]::Zero)){throw 'LIVE_DIAGNOSTICS_OPEN_FAILED'}
  $watch=[Diagnostics.Stopwatch]::StartNew();$report=$null

@@ -4,7 +4,11 @@ namespace OracleProxy.Product;
 internal static class ServiceBootstrap
 {
     internal static bool Current(JsonObject state,string version)=>
-        state["schema"]?.GetValue<int>()==1 && state["ok"]?.GetValue<bool>()==true &&
+        MatchesService(state,version) && state["ok"]?.GetValue<bool>()==true;
+
+    internal static bool MatchesService(JsonObject state,string version)=>
+        state["schema"]?.GetValue<int>()==1 &&
+        state["ok"] is JsonValue result && result.TryGetValue<bool>(out _) &&
         state["product_version"]?.GetValue<string>()==version &&
         state["login_authenticated"] is JsonValue proof && proof.TryGetValue<bool>(out _);
 

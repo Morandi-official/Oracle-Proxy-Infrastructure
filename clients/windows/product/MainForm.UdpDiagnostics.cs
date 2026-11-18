@@ -5,7 +5,6 @@ namespace OracleProxy.Product;
 internal sealed partial class MainForm
 {
     private readonly SmoothButton _udpStart=new(){Name="udp-six-start",Text="诊断获准的 UDP 入口",Height=40,Margin=new Padding(0,0,10,8)};
-    private readonly SmoothButton _udpCancel=new(){Name="udp-six-cancel",Text="取消 UDP 诊断",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
     private readonly SmoothButton _udpCopy=new(){Name="udp-six-copy",Text="复制 UDP 诊断报告",Height=40,Margin=new Padding(0,0,10,8),Enabled=false};
     private readonly Label _udpHeading=new(){Name="udp-six-heading",AutoSize=true,Visible=false,Margin=new Padding(0,8,0,6),ForeColor=Muted};
     private readonly DataGridView _udpGrid=new(){Name="udp-six-results",Height=206,Visible=false,ReadOnly=true,
@@ -22,9 +21,8 @@ internal sealed partial class MainForm
         ["FORWARD_PATH_NOT_OBSERVED"]="服务器未观察到请求",["SERVER_RESPONSE_NOT_OBSERVED"]="服务器未观察到响应"};
     private void BuildUdpDiagnostics(TableLayoutPanel content,TableLayoutPanel actions,Action<TableLayoutPanel,Button> add)
     {
-        add(actions,_udpStart);add(actions,_udpCancel);add(actions,_udpCopy);
-        _udpStart.Click+=async(_,_)=>await Act("StartUdpDiagnostics");
-        _udpCancel.Click+=async(_,_)=>await Act("CancelUdpDiagnostics");
+        add(actions,_udpStart);add(actions,_udpCopy);
+        _udpStart.Click+=async(_,_)=>await Act(_udpDiagnosing?"CancelUdpDiagnostics":"StartUdpDiagnostics");
         _udpCopy.Click+=(_,_)=>{try{Clipboard.SetText(_udpReport);_detail.Text="UDP 诊断报告已复制，不含密码、令牌或密钥。";}catch{ShowReport("UDP 诊断报告",_udpReport);}};
         _help.SetToolTip(_udpStart,"保持已断开，逐个验证已授权的 UDP 入口并关联服务器记录。约 1—3 分钟，可取消。不会切换为其他传输协议。");
         foreach(var (name,title,weight) in new[]{("address","入口",180f),("port","端口",65f),("client","本机握手 发 / 收",130f),("server","服务端握手 收 / 发",145f),("result","结果",235f)})
@@ -42,6 +40,12 @@ internal sealed partial class MainForm
         if(value.TryGetValue<int>(out int i) && i>=0)return i;
         if(value.TryGetValue<uint>(out uint u))return u;
         return null;
+    }
+    private void UpdateUdpAction()
+    {
+        _udpStart.Text=_udpDiagnosing?"取消 UDP 诊断":"诊断获准的 UDP 入口";
+        _udpStart.Enabled=ActionsAvailable && (_udpDiagnosing ||
+            (_udpAvailable && _lastMode=="disconnected" && !_connectionIntent && _authenticated && _deviceRegistered));
     }
     private void DisplayUdpDiagnostics(JsonObject state)
     {
@@ -81,8 +85,6 @@ internal sealed partial class MainForm
         if(phase is "failed")text.AppendLine("诊断流程未完成，请保留本报告；这不等同于所有获准端口不可用。");
         if(!_udpDiagnosing && !UdpFlag(report["server_capture_closed"]))text.AppendLine("服务器结束确认不可用，采集任务有自动到期限制。");
         _udpReport=text.ToString();_udpCopy.Enabled=true;
-        _udpStart.Enabled=_udpAvailable && _lastMode=="disconnected" && !_udpDiagnosing && !_connectionIntent && _authenticated && _deviceRegistered && !_busy && !_closing;
-        _udpCancel.Enabled=_udpDiagnosing && !_busy && !_closing;
         if(_udpDiagnosing)_timer.Interval=1000;
     }
 }

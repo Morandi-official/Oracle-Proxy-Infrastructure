@@ -531,6 +531,66 @@ internal static partial class UuAclRepair
             throw;
         }
     }
+    // A vendor update can restore the two ordinary-user Modify grants on
+    // the original root. Reapply only that exact narrowing from the active
+    // journal. Never replace the original rollback record.
+    internal static void ReapplyAdvancedRoot(string selectedRoot)
+    {
+        if (!Platform.IsAdmin) throw new UnauthorizedAccessException();
+        var journal = LoadAdvanced();
+        if (journal.Phase != "applied" || journal.Root != selectedRoot)
+            throw new IOException("UU_REPAIR_BACKUP_EXISTS");
+
+        var root = journal.Entries[0];
+        var parents = new Dictionary<string, PathLocked>(StringComparer.OrdinalIgnoreCase);
+        try {
+            foreach (var item in new[] { journal.SourceParent }.Concat(journal.Ancestors))
+                parents.Add(item.Path, new PathLocked(item.Path, item.Directory, false, item.Volume));
+            using var handle = new PathLocked(root.Path, true, true, root.Volume);
+
+            void VerifyParents()
+            {
+                VerifySource(journal, parents, true);
+                foreach (var item in journal.Ancestors)
+                    VerifyObject(parents[item.Path], item, item.After, true, true);
+                handle.Revalidate();
+                if (handle.Identity != root.Identity)
+                    throw ObjectFailure("UU_REPAIR_OBJECT_CHANGED", root);
+            }
+
+            VerifyParents();
+            if (!SignedMain(root.Path)) throw new IOException("UU_PATH_SIGNED_MAIN_REQUIRED");
+            var current = handle.Read();
+            if (!JournalMatches(root, current, root.After, true)) {
+                var narrowed = CheckedDescriptor(current);
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                const AceFlags inheritable = AceFlags.ObjectInherit | AceFlags.ContainerInherit;
+                foreach (var entry in narrowed.DiscretionaryAcl!) {
+                    if (entry is not CommonAce ace || ace.IsCallback ||
+                        ace.AceQualifier != AceQualifier.AccessAllowed ||
+                        ace.AceFlags != inheritable || ace.AccessMask != 0x001301BF ||
+                        !KnownGroups.Contains(ace.SecurityIdentifier.Value)) continue;
+                    if (!seen.Add(ace.SecurityIdentifier.Value))
+                        throw ObjectFailure("UU_REPAIR_ACL_CHANGED", root, root.After, current);
+                    ace.AccessMask = 0x001200A9;
+                }
+                var proposed = EncodeDescriptor(narrowed);
+                if (seen.Count == 0 || !DescriptorMatches(proposed, root.After, false, true))
+                    throw ObjectFailure("UU_REPAIR_ACL_CHANGED", root, root.After, current);
+                VerifyParents();
+                if (handle.Read() != current)
+                    throw ObjectFailure("UU_REPAIR_ACL_CHANGED", root, root.After, handle.Read());
+                handle.Write(proposed);
+                VerifyObject(handle, root, root.After, true, true);
+            }
+            if (!UuDiscovery.Discover().Paths.Any(path =>
+                path.StartsWith(root.Path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                throw new IOException("UU_REPAIR_NOT_VERIFIED");
+        } finally {
+            foreach (var parent in parents.Values) parent.Dispose();
+        }
+    }
+
     private static void RestoreAdvanced()
     {
         if(!Platform.IsAdmin)throw new UnauthorizedAccessException();var journal=LoadAdvanced();

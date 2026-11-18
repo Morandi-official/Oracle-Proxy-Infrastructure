@@ -543,6 +543,7 @@ internal sealed partial class VpnRuntime : IDisposable
         ["native_udp_attempt"]=_nativeUdpAttempt?.DeepClone(),["native_udp_selected_port"]=_core.NativePort,["client_handshake_reply"]=_core.HandshakeReplyReceived,["quic_available"]=_state is not null && TransportPolicy.QuicAvailable(_state),["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),["disconnect_timings"]=_disconnectTimings?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
+        ["uu_discovery_verified"]=_uuInventory?.Paths.Length,
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};
     }
     private static string Code(Exception e)=>e.Message.Length<=80 && e.Message.All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')?e.Message:"SERVICE_OPERATION_FAILED";

@@ -530,6 +530,27 @@ internal static class UuPathProtectionTests
         bool locksProved=false;UuAclRepair.AdvancedTestHook=stage=>{if(stage!="before_first_write")return;bool a=false,b=false;try{Directory.Move(_vendor,_vendor+"-swap");}catch(IOException){a=true;}try{File.Move(_exe,_exe+".swap");}catch(IOException){b=true;}Check(a&&b,"CAPTURED_OBJECTS_NOT_LOCKED_AGAINST_DELETE_RENAME");locksProved=true;};
         try{UuAclRepair.ApplyAdvanced(new[]{_uu});}finally{UuAclRepair.AdvancedTestHook=null;}
         Check(locksProved,"LOCK_PROOF_HOOK_NOT_REACHED");UuAclRepair.Restore();SameTree(before,"LOCK_PROOF_ROLLBACK_FAILED");RemoveOwnedJournal();
+        UuAclRepair.ApplyAdvanced(new[]{_uu});
+        var repaired = CaptureTree();
+        byte[] journalBefore = File.ReadAllBytes(Backup);
+        var raw = new RawSecurityDescriptor(Convert.FromBase64String(repaired[_uu].Binary), 0);
+        var grants = raw.DiscretionaryAcl!.OfType<CommonAce>().Where(ace =>
+            Known.Contains(ace.SecurityIdentifier.Value) &&
+            ace.AceQualifier == AceQualifier.AccessAllowed &&
+            ace.AceFlags == (AceFlags.ObjectInherit | AceFlags.ContainerInherit) &&
+            ace.AccessMask == 0x001200A9).ToArray();
+        Check(grants.Length > 0, "UU_ROOT_REAPPLY_FIXTURE_HAS_NARROWED_GRANTS");
+        foreach (var ace in grants) ace.AccessMask = 0x001301BF;
+        var drift = new byte[raw.BinaryLength];
+        raw.GetBinaryForm(drift, 0);
+        Write(_uu, repaired[_uu] with { Binary = Convert.ToBase64String(drift) });
+        UuAclRepair.ReapplyAdvancedRoot(_uu);
+        SameTree(repaired, "UU_ROOT_REAPPLY_DID_NOT_RESTORE_EXACT_PROTECTION");
+        Check(File.ReadAllBytes(Backup).SequenceEqual(journalBefore), "UU_ROOT_REAPPLY_CHANGED_ORIGINAL_BACKUP");
+        UuAclRepair.Restore();
+        SameTree(before, "UU_ROOT_REAPPLY_BROKE_ORIGINAL_ROLLBACK");
+        RemoveOwnedJournal();
+        Pass("REAL_UU_ROOT_REAPPLY_REPAIRS_RETURNED_MODIFY_GRANTS_AND_PRESERVES_BACKUP");
         UuAclRepair.ApplyAdvanced(new[]{_uu});var after=CaptureTree();string file=Path.Combine(_uu,"assets","binary.cfg");
         var changed=new FileInfo(file).GetAccessControl();changed.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-19"),FileSystemRights.ReadAttributes,AccessControlType.Allow));new FileInfo(file).SetAccessControl(changed);
         var external=CaptureTree();State journal=Read(Backup);string hash=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Backup)));bool cas=false;

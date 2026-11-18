@@ -1,5 +1,5 @@
 """Check an issued FlClash profile using an isolated CI account."""
-import hashlib
+import secrets
 import http.cookiejar
 import json
 import ipaddress
@@ -73,21 +73,8 @@ def download_profile(url, profile_id):
         raise RuntimeError(f"IMPORT_HTTP_{error.code}") from None
 
 
-def main():
-    admin = Admin()
-    state = admin.api("/api/control")
-    wanted = os.environ.get("CI_USERNAME_FINGERPRINT", "")
-    if not re.fullmatch(r"[a-f0-9]{64}", wanted):
-        raise RuntimeError("CI_ACCOUNT_PROOF_UNAVAILABLE")
-    matches = [user for user in state["users"] if user.get("username") and
-               hashlib.sha256(user["username"].encode()).hexdigest() == wanted]
-    if len(matches) != 1 or matches[0].get("is_admin_account") is not False:
-        raise RuntimeError("ISOLATED_CI_ACCOUNT_REQUIRED")
-    ci = matches[0]
-    if ci["status"] != "active":
-        raise RuntimeError("CI_ACCOUNT_UNAVAILABLE")
-
-    created = admin.api("/api/flclash/create", {"user_id": ci["id"]}, expected=201)["profile"]
+def probe_account(admin, account_id):
+    created = admin.api("/api/flclash/create", {"user_id": account_id}, expected=201)["profile"]
     profile_id = str(uuid.UUID(created["id"]))
     path = "/api/flclash/" + profile_id
     try:
@@ -114,6 +101,45 @@ def main():
         if admin.api(path, {"action": "revoke"}).get("deleted") is not True:
             raise RuntimeError("CI_FLCLASH_PROFILE_RETIREMENT_UNCONFIRMED")
         print("CI_FLCLASH_PROFILE_RETIRED=PASS", flush=True)
+
+
+def main():
+    admin = Admin()
+    username = "ci-flclash-" + uuid.uuid4().hex
+    state = admin.api("/api/control")
+    if any(user.get("username") == username or user.get("name") == username for user in state["users"]):
+        raise RuntimeError("TEMPORARY_ACCOUNT_COLLISION")
+    try:
+        saved = admin.api("/api/control", {"operation": "account.save", "data": {
+            "id": None,
+            "name": username,
+            "username": username,
+            "password": secrets.token_urlsafe(32),
+            "device_limit": 1,
+            "quota_bytes": 10485760,
+            "expires_at": int(time.time()) + 3600,
+            "enabled": True,
+            "ingress_access": "both",
+            "ingress_preferred": "primary",
+        }})
+        account_id = str(uuid.UUID(saved["saved_user_id"]))
+        if not any(user["id"] == account_id and user.get("username") == username and
+                   user.get("is_admin_account") is False and user["status"] == "active"
+                   for user in saved["users"]):
+            raise RuntimeError("TEMPORARY_ACCOUNT_NOT_VERIFIED")
+        print("TEMPORARY_ACCOUNT_CREATED=PASS", flush=True)
+        probe_account(admin, account_id)
+    finally:
+        state = admin.api("/api/control")
+        owned = [user for user in state["users"] if user.get("name") == username]
+        if owned:
+            if len(owned) != 1 or owned[0].get("username") not in (None, username) or owned[0].get("is_admin_account") is not False:
+                raise RuntimeError("TEMPORARY_ACCOUNT_RETIREMENT_SCOPE_MISMATCH")
+            account_id = str(uuid.UUID(owned[0]["id"]))
+            state = admin.api("/api/control", {"operation": "account.delete", "data": {"user_id": account_id}})
+            if any(user["id"] == account_id and user.get("username") for user in state["users"]):
+                raise RuntimeError("TEMPORARY_ACCOUNT_RETIREMENT_UNCONFIRMED")
+            print("TEMPORARY_ACCOUNT_RETIRED=PASS", flush=True)
 
 
 if __name__ == "__main__":

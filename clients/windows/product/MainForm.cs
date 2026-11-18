@@ -396,14 +396,15 @@ internal sealed partial class MainForm : Form
     }
     protected override void Dispose(bool disposing){if(disposing){_viewBlend?.Dispose();_lifetime.Cancel();_requestEpoch.Cancel();_timer.Dispose();_help.Dispose();}base.Dispose(disposing);}
     private void CancelRequests(){var previous=_requestEpoch;_requestEpoch=new CancellationTokenSource();previous.Cancel();previous.Dispose();}
+    private bool ActionsAvailable => _serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
     private void RefreshActions()
     {
         if(IsDisposed)return;
         _emergencyRecovery.Enabled=!_provisioning && !_recovering;
-        bool available=_serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
+        bool available=ActionsAvailable;
         _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
         _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_udpPortChoice.Enabled=_transportChoice.Enabled && _transportChoice.SelectedIndex==0;
-        _udpStart.Enabled=available && (_udpDiagnosing || (_udpAvailable && _lastMode=="disconnected" && !_connectionIntent && _authenticated && _deviceRegistered));_maintenance.Enabled=available && !_udpDiagnosing;
+        UpdateUdpAction();_maintenance.Enabled=available && !_udpDiagnosing;
         _deleteDevice.Enabled=available && _hasAccount && !_udpDiagnosing && _knownDevices.SelectedItem is ListedDevice;
         _admissionDelete.Enabled=available && _hasAccount && !_deviceRegistered && _admissionDevices.SelectedItem is ListedDevice;
         UpdateRegistrationActions();
@@ -753,6 +754,7 @@ internal sealed partial class MainForm : Form
             bool restoring=state["login_authenticated"]?.GetValue<bool>()==true && account is null;
             _startupGate.Controls[0].Text=restoring?"正在恢复已保存的登录…":"正在准备安全连接…";
             if(restoring)_timer.Interval=1000;
+            UpdateUdpAction();
             RevealView(restoring?null:_authenticated);
 
     }

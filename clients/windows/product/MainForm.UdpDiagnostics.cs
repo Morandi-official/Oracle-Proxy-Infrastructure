@@ -41,10 +41,16 @@ internal sealed partial class MainForm
         if(value.TryGetValue<uint>(out uint u))return u;
         return null;
     }
+    private void UpdateUdpAction()
+    {
+        _udpStart.Text=_udpDiagnosing?"取消 UDP 诊断":"诊断获准的 UDP 入口";
+        _udpStart.Enabled=ActionsAvailable && (_udpDiagnosing ||
+            (_udpAvailable && _lastMode=="disconnected" && !_connectionIntent && _authenticated && _deviceRegistered));
+    }
     private void DisplayUdpDiagnostics(JsonObject state)
     {
         _udpAvailable=UdpFlag(state["udp_diagnostics_available"]);
-        if(state["udp_diagnostic"] is not JsonObject report){_udpDiagnosing=false;_udpStart.Text="诊断获准的 UDP 入口";_udpHeading.Visible=_udpGrid.Visible=false;_udpCopy.Enabled=false;_udpReport="尚未运行 UDP 诊断。";return;}
+        if(state["udp_diagnostic"] is not JsonObject report){_udpDiagnosing=false;_udpHeading.Visible=_udpGrid.Visible=false;_udpCopy.Enabled=false;_udpReport="尚未运行 UDP 诊断。";return;}
         _udpDiagnosing=UdpFlag(report["running"]);
         string phase=UdpText(report["phase"]);
         string title=phase switch{"starting"=>"准备诊断","running"=>"逐个验证 UDP 入口","stopping"=>"正在停止诊断并整理记录","complete"=>"UDP 诊断完成，当前仍保持断开","cancelled"=>"UDP 诊断已取消","failed"=>"UDP 诊断未完成",_=>"UDP 诊断记录"};
@@ -79,7 +85,6 @@ internal sealed partial class MainForm
         if(phase is "failed")text.AppendLine("诊断流程未完成，请保留本报告；这不等同于所有获准端口不可用。");
         if(!_udpDiagnosing && !UdpFlag(report["server_capture_closed"]))text.AppendLine("服务器结束确认不可用，采集任务有自动到期限制。");
         _udpReport=text.ToString();_udpCopy.Enabled=true;
-        _udpStart.Text=_udpDiagnosing?"取消 UDP 诊断":"诊断获准的 UDP 入口";
         if(_udpDiagnosing)_timer.Interval=1000;
     }
 }

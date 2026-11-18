@@ -1,4 +1,4 @@
-name: Compare saved UDP observations
+name: Compare repeated UDP diagnostics
 on:
   push:
     branches: [main]

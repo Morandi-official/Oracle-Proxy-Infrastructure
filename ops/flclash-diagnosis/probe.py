@@ -1,0 +1,233 @@
+"""Pinned Mihomo + kernel WireGuard in an empty network namespace; synthetic keys only."""
+import ast
+import base64
+import http.client
+import http.server
+import ipaddress
+import importlib.util
+import json
+import os
+from pathlib import Path
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from urllib.parse import parse_qs, urlsplit
+
+ROOT=Path(__file__).resolve().parents[2] / 'server/admin-oracle'
+
+def run(*args,input=None):return subprocess.run(args,input=input,text=True,capture_output=True,check=True).stdout.strip()
+
+def expect_tunnel(fetch,url,alive,clock=time.monotonic,pause=time.sleep):
+ # A listening mixed proxy does not establish that its WireGuard outbound has
+ # finished cold startup. Require the same exact response within a bounded wait.
+ deadline=clock()+12;last='NO_RESPONSE'
+ while True:
+  if not alive():raise AssertionError('MIHOMO_EXITED_BEFORE_WG_READY')
+  try:
+   status,body=fetch(url)
+   if status==200 and body==b'SYNTHETIC_WG_ONLY_RESPONSE':return
+   last='HTTP_'+str(status)+'_BYTES_'+str(len(body))
+  except (OSError,TimeoutError,http.client.HTTPException) as error:last=type(error).__name__
+  if clock()>=deadline:raise AssertionError('MIHOMO_COLD_START_WG_NOT_READY_'+last)
+  pause(.25)
+
+def main(binary):
+ if os.geteuid()!=0 or os.environ.get('ORACLE_ADMIN_DISPOSABLE_CI')!='1':raise ValueError('DISPOSABLE_NAMESPACE_REQUIRED')
+ # Caller starts unshare -n: loopback down, no physical network/default route.
+ if len(json.loads(run('ip','-j','link','show')))!=1:raise ValueError('EMPTY_NAMESPACE_REQUIRED')
+ run('ip','link','set','lo','up')
+ run('ip','link','add','wg0','type','wireguard')
+ private=run('wg','genkey');public=run('wg','pubkey',input=private+'\n')
+ client_private=run('wg','genkey');client_public=run('wg','pubkey',input=client_private+'\n')
+ tree=ast.parse((ROOT/'console/flclash.py').read_text())
+ function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='configuration')
+ env={'ipaddress':ipaddress,'endpoint_config':type('Catalog',(),{'read':staticmethod(lambda:None)}),'transport_address':lambda:'127.0.0.1','ipv6_info':lambda:{'prefix':'fd42:6f70:78:77::/64'}}
+ exec(compile(ast.Module(body=[function],type_ignores=[]),'actual-profile-renderer','exec'),env)
+ config=env['configuration'](None,{'server_public_key':public},{'allowed_ips':['10.77.0.2/32','fd42:6f70:78:77::2/128']},client_private)
+ assert len(config['proxies'])==1 and config['rules']==['MATCH,Proxy UDP'] and not config['proxy-groups']
+ assert config['proxies'][0]['dns']==['https://1.1.1.1/dns-query']
+ request_count=[0];dns_sources=[]
+ class Handler(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+   request_count[0]+=1;body=b'SYNTHETIC_WG_ONLY_RESPONSE';self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+  def log_message(self,*args):pass
+ class DoHHandler(http.server.BaseHTTPRequestHandler):
+  def do_GET(self):
+   encoded=parse_qs(urlsplit(self.path).query).get('dns',[''])[0]
+   if not encoded or len(encoded)>5500:self.send_error(400);return
+   try:body=base64.urlsafe_b64decode(encoded+'='*((-len(encoded))%4))
+   except ValueError:self.send_error(400);return
+   self.answer(body)
+  def do_POST(self):
+   length=int(self.headers.get('Content-Length','0'))
+   if not 12<=length<=4096:self.send_error(400);return
+   self.answer(self.rfile.read(length))
+  def answer(self,body):
+   dns_sources.append(self.client_address[0])
+   if not 12<=len(body)<=4096:self.send_error(400);return
+   end=12
+   while end<len(body) and body[end]:end+=1+body[end]
+   end+=1
+   if end+4>len(body):self.send_error(400);return
+   kind,cls=struct.unpack('!HH',body[end:end+4]);question=body[12:end+4]
+   address=ipaddress.ip_address('10.77.0.1' if kind==1 else 'fd42:6f70:78:77::1').packed if kind in (1,28) else None
+   reply=body[:2]+struct.pack('!HHHHH',0x8180,1,1 if address else 0,0,0)+question
+   if address:reply+=b'\xc0\x0c'+struct.pack('!HHIH',kind,cls,60,len(address))+address
+   self.send_response(200);self.send_header('Content-Type','application/dns-message');self.send_header('Content-Length',str(len(reply)));self.end_headers();self.wfile.write(reply)
+  def log_message(self,*args):pass
+ class V6(http.server.ThreadingHTTPServer):address_family=socket.AF_INET6
+ with tempfile.TemporaryDirectory() as directory:
+  folder=Path(directory);keyfile=folder/'server.key';keyfile.write_text(private+'\n');keyfile.chmod(0o600)
+  run('wg','set','wg0','private-key',str(keyfile),'listen-port','443','peer',client_public,'allowed-ips','10.77.0.2/32,fd42:6f70:78:77::2/128')
+  run('ip','addr','add','10.77.0.1/24','dev','wg0')
+  run('ip','-6','addr','add','fd42:6f70:78:77::1/64','dev','wg0','nodad')
+  run('ip','link','set','wg0','up')
+  for server in (http.server.ThreadingHTTPServer(('10.77.0.1',18080),Handler),V6(('fd42:6f70:78:77::1',18080),Handler)):
+   threading.Thread(target=server.serve_forever,daemon=True).start()
+  # Private CA exists only in this disposable namespace. Keep TLS checking on;
+  # trust it in the test child using Go's standard certificate-file mechanism.
+  cert=folder/'resolver.crt';tlskey=folder/'resolver.key'
+  run('openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout',str(tlskey),'-out',str(cert),'-subj','/CN=WireGuard DoH fixture','-addext','subjectAltName=IP:10.77.0.1')
+  tlskey.chmod(0o600)
+  resolver=http.server.ThreadingHTTPServer(('10.77.0.1',18443),DoHHandler)
+  tls=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);tls.load_cert_chain(cert,tlskey)
+  resolver.socket=tls.wrap_socket(resolver.socket,server_side=True)
+  threading.Thread(target=resolver.serve_forever,daemon=True).start()
+  profile=folder/'profile.yaml';profile.write_text(json.dumps(config));profile.chmod(0o600)
+  run(binary,'-t','-d',directory,'-f',str(profile))
+  print('ACTUAL_FLCLASH_EXPORT_ACCEPTED_BY_PINNED_MIHOMO=PASS',flush=True)
+  # FlClash controls TUN privileges. This fixture exercises its SAME outbound
+  # through HTTP proxy, with no OS route changes or production network access.
+  config['tun']['enable']=False;config['dns']['enable']=False
+  config['proxies'][0]['dns']=['https://10.77.0.1:18443/dns-query']
+  profile.write_text(json.dumps(config))
+  child_env=os.environ.copy();child_env['SSL_CERT_FILE']=str(cert)
+  process=subprocess.Popen([binary,'-d',directory,'-f',str(profile)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=child_env)
+  try:
+   for _ in range(100):
+    try:
+     with socket.create_connection(('127.0.0.1',7890),timeout=.1):break
+    except OSError:time.sleep(.05)
+   def response(url,timeout=4):
+    client=http.client.HTTPConnection('127.0.0.1',7890,timeout=timeout)
+    try:
+     client.request('GET',url,headers={'Connection':'close'});reply=client.getresponse()
+     return reply.status,reply.read()
+    finally:client.close()
+   def fetch(url,timeout=8):return response(url,timeout)[1]
+   for host in ('10.77.0.1','[fd42:6f70:78:77::1]'):
+    expect_tunnel(response,'http://'+host+':18080/test',lambda:process.poll() is None)
+   expect_tunnel(response,'http://doh-wireguard-test.invalid:18080/test',lambda:process.poll() is None)
+   assert dns_sources and all(ipaddress.ip_address(a)==ipaddress.ip_address('10.77.0.2') for a in dns_sources)
+   print('MIHOMO_REMOTE_DOH_REAL_TLS_DNS_THROUGH_WIREGUARD_NO_DIRECT_RESOLVER=PASS',flush=True)
+   rows=run('wg','show','wg0','transfer').splitlines();assert any(int(r.split()[1])>0 and int(r.split()[2])>0 for r in rows)
+   assert any(int(r.split()[1])>0 for r in run('wg','show','wg0','latest-handshakes').splitlines())
+   print('MIHOMO_EXPORT_REAL_WIREGUARD_UDP443_IPV4_AND_IPV6=PASS',flush=True)
+   run('wg','set','wg0','peer',client_public,'remove');before=request_count[0]
+   try:answer=fetch('http://10.77.0.1:18080/after-revoke',timeout=4)
+   except (OSError,TimeoutError,http.client.HTTPException):answer=b''
+   assert answer!=b'SYNTHETIC_WG_ONLY_RESPONSE' and request_count[0]==before
+   before_dns=len(dns_sources)
+   try:fetch('http://after-revoke-doh.invalid:18080/test',timeout=4)
+   except (OSError,TimeoutError,http.client.HTTPException):pass
+   assert len(dns_sources)==before_dns
+   print('MIHOMO_UDP_FAILURE_HAS_NO_DIRECT_OR_TLS_FALLBACK=PASS',flush=True)
+  finally:
+   process.terminate()
+   try:process.wait(timeout=5)
+   except subprocess.TimeoutExpired:process.kill();process.wait()
+
+  # Upgrade the same device's profile to the actual two-node renderer, then
+  # keep its file and Mihomo process unchanged while server permissions change.
+  spec=importlib.util.spec_from_file_location('ingress_fixture',ROOT/'control/ingress.py')
+  ingress=importlib.util.module_from_spec(spec);spec.loader.exec_module(ingress)
+  state_folder=folder/'ingress';state_folder.mkdir(mode=0o700)
+  ingress.READY=state_folder/'ready'
+  def command(args,*,input=None,accepted=(0,)):
+   result=subprocess.run(args,input=input,capture_output=True,text=True,timeout=10)
+   if result.returncode not in accepted:raise RuntimeError('SYNTHETIC_INGRESS_SETUP_FAILED')
+   return result
+  controller=ingress.Controller(command,state_folder)
+  controller.config=lambda:['127.0.0.1','127.0.0.2']
+  controller.ensure('127.0.0.2')
+  Path('/proc/sys/net/ipv4/conf/wgopbackup/rp_filter').write_text('2\n')
+  ingress.READY.write_text(controller.public_key+'\n');ingress.READY.chmod(0o600)
+  # Loopback-generated encrypted packets use OUTPUT rather than physical
+  # PREROUTING in this empty namespace. Production uses the typed ingress rules.
+  controller.ensure_rule('iptables','nat','OUTPUT',['-d','127.0.0.2/32','-p','udp','--dport','443','-m','comment','--comment','fixture-local-backup','-j','REDIRECT','--to-ports','51821'])
+  plan=[{'public_key':client_public,'addresses':['10.77.0.2/32','fd42:6f70:78:77::2/128'],'roles':['primary'],'active':True}]
+  controller.sync(plan)
+  catalog={'primary':{'public_ipv4':'127.0.0.1'},'backup':{'public_ipv4':'127.0.0.2'}}
+  env['endpoint_config']=type('Catalog',(),{'read':staticmethod(lambda:catalog)})
+  row=type('Profile',(),{'account_id':'fixture'})()
+  snapshot={'server_public_key':public,'endpoint_public_keys':{'primary':public,'backup':controller.public_key},'users':[{'id':'fixture','ingress':{'access':'primary','preferred':'primary'}}]}
+  config=env['configuration'](row,snapshot,{'allowed_ips':['10.77.0.2/32','fd42:6f70:78:77::2/128']},client_private)
+  assert len(config['proxies'])==2 and len(config['proxy-groups'])==1
+  assert all(n['private-key']==client_private for n in config['proxies'])
+  config['tun']['enable']=False;config['dns']['enable']=False
+  config['proxy-groups'][0].update(url='http://10.77.0.1:18080/health',interval=1,timeout=500)
+  for node in config['proxies']:node['dns']=['https://10.77.0.1:18443/dns-query']
+  profile.write_text(json.dumps(config));original_profile=profile.read_bytes()
+  run(binary,'-t','-d',directory,'-f',str(profile))
+  process=subprocess.Popen([binary,'-d',directory,'-f',str(profile)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=child_env)
+  try:
+   for _ in range(100):
+    try:
+     with socket.create_connection(('127.0.0.1',7890),timeout=.1):break
+    except OSError:time.sleep(.05)
+   expect_tunnel(response,'http://10.77.0.1:18080/primary',lambda:process.poll() is None)
+   plan[0]['roles']=['backup'];controller.sync(plan)
+   for host in ('10.77.0.1','[fd42:6f70:78:77::1]'):
+    expect_tunnel(response,'http://'+host+':18080/permission-switch',lambda:process.poll() is None)
+   assert any(int(line.split()[1])>0 for line in run('wg','show','wgopbackup','latest-handshakes').splitlines())
+   plan[0]['roles']=['primary'];controller.sync(plan)
+   expect_tunnel(response,'http://10.77.0.1:18080/revoked-backup',lambda:process.poll() is None)
+   assert profile.read_bytes()==original_profile
+   print('MIHOMO_SAME_PROFILE_SAME_PROCESS_SAME_DEVICE_KEY_SERVER_PERMISSION_SWITCH_WITHOUT_REIMPORT=PASS',flush=True)
+  finally:
+   process.terminate()
+   try:process.wait(timeout=5)
+   except subprocess.TimeoutExpired:process.kill();process.wait()
+
+  # Keep the production fallback timing, global DNS and respect-rules enabled.
+  # Use a synthetic TLS resolver behind backup WireGuard. The two public
+  # addresses, DNS target and explicit listener are the only fixture values.
+  plan[0]['roles']=['backup'];controller.sync(plan)
+  snapshot['users'][0]['ingress']={'access':'backup','preferred':'backup'}
+  config=env['configuration'](row,snapshot,{'allowed_ips':['10.77.0.2/32','fd42:6f70:78:77::2/128']},client_private)
+  assert config['dns']['enable'] and config['dns']['respect-rules']
+  config['tun']['enable']=False
+  resolver_url='https://10.77.0.1:18443/dns-query'
+  config['dns'].update(listen='127.0.0.1:15353',nameserver=[resolver_url],
+                       **{'proxy-server-nameserver':[resolver_url]})
+  for node in config['proxies']:node['dns']=[resolver_url]
+  config['proxy-groups'][0]['url']='http://10.77.0.1:18080/health'
+  profile.write_text(json.dumps(config))
+  run(binary,'-t','-d',directory,'-f',str(profile))
+  process=subprocess.Popen([binary,'-d',directory,'-f',str(profile)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=child_env)
+  try:
+   expect_tunnel(response,'http://10.77.0.1:18080/numeric',lambda:process.poll() is None)
+   print('MIHOMO_BACKUP_ONLY_NUMERIC_HTTP_PRODUCTION_POLICY=PASS',flush=True)
+   dns_sources.clear()
+   expect_tunnel(response,'http://backup-doh-check.invalid:18080/domain',lambda:process.poll() is None)
+   assert dns_sources and all(ipaddress.ip_address(a)==ipaddress.ip_address('10.77.0.2') for a in dns_sources)
+   print('MIHOMO_BACKUP_ONLY_DO_H_WITH_GLOBAL_DNS_ENABLED=PASS',flush=True)
+   labels=b''.join(bytes([len(part)])+part for part in [b'backup-fake-ip-check',b'invalid'])
+   question=bytes.fromhex('761201000001000000000000')+labels+b'\x00\x00\x01\x00\x01'
+   with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as dns:
+    dns.settimeout(4);dns.connect(('127.0.0.1',15353));dns.send(question);answer=dns.recv(1024)
+   assert answer[:2]==question[:2] and struct.unpack('!H',answer[6:8])[0]==1
+   fake=ipaddress.ip_address(answer[-4:]);assert fake in ipaddress.ip_network('198.18.0.0/15')
+   expect_tunnel(response,'http://'+str(fake)+':18080/fake-ip',lambda:process.poll() is None)
+   print('MIHOMO_GLOBAL_FAKE_IP_ROUNDTRIP_BACKUP_ONLY=PASS',flush=True)
+  finally:
+   process.terminate()
+   try:process.wait(timeout=5)
+   except subprocess.TimeoutExpired:process.kill();process.wait()
+
+if __name__=='__main__':main(str(Path(sys.argv[1]).resolve()))

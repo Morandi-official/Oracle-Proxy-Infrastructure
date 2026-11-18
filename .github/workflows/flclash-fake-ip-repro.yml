@@ -1,0 +1,25 @@
+name: FlClash backup-only resolver reproduction
+on:
+  pull_request:
+    paths: ['ops/flclash-diagnosis/**', '.github/workflows/flclash-fake-ip-repro.yml']
+permissions:
+  contents: read
+jobs:
+  mihomo-isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify backup-only HTTPS and DNS with native WireGuard
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y wireguard-tools
+          candidate="$RUNNER_TEMP/mihomo-1.19.33.gz"
+          curl --fail --location --retry 2 --max-time 90 -o "$candidate" https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-v1-v1.19.33.gz
+          echo "8ec92e7b2fdc6b853ba00156bab7e4e965c8b0d843b8c4ac8ab98795f02ad524  $candidate" | sha256sum --check --status
+          gzip -dc "$candidate" > "$RUNNER_TEMP/mihomo-1.19.33"
+          chmod 700 "$RUNNER_TEMP/mihomo-1.19.33"
+          sudo env ORACLE_ADMIN_DISPOSABLE_CI=1 unshare -n python3 ops/flclash-diagnosis/probe.py "$RUNNER_TEMP/mihomo-1.19.33"

@@ -27,7 +27,7 @@ jobs:
           echo "8ec92e7b2fdc6b853ba00156bab7e4e965c8b0d843b8c4ac8ab98795f02ad524  $candidate" | sha256sum --check --status
           gzip -dc "$candidate" > "$RUNNER_TEMP/mihomo-1.19.33"
           chmod 700 "$RUNNER_TEMP/mihomo-1.19.33"
-      - name: Issue, download, connect, and retire a dedicated acceptance profile
+      - name: Issue, download, connect, and retire a backup-only profile
         env:
           ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
           ADMIN_LOCAL_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}

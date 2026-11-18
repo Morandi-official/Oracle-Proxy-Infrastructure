@@ -1,0 +1,22 @@
+name: Read the reported FlClash device
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/flclash-device-readback.yml]
+permissions:
+  contents: read
+jobs:
+  readback:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: oracle-ops
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read and encrypt the device-specific status
+        env:
+          ADMIN_LOCAL_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_ADMIN_LOCAL_USERNAME }}
+          ADMIN_LOCAL_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
+        run: python3 ops/flclash-diagnosis/device_readback.py

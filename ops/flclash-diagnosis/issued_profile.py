@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "distribution"))
 
 from flclash_live_probe import NoRedirect, probe
+from windows_tun import probe_tun
 
 BASE = "https://vpn-admin.morandi.dpdns.org"
 
@@ -87,7 +88,13 @@ def probe_account(admin, account_id, expected_backup):
             raise RuntimeError("ISSUED_BACKUP_NODE_MISSING")
         if any(ipaddress.ip_address(address).version != 4 for address in exits):
             raise RuntimeError("ISSUED_UDP_ENDPOINT_INVALID")
-        if not probe(sys.argv[1], profile, {expected_backup}, "2603:c020:c015:8100::10"):
+        binary = str(Path(sys.argv[1]).resolve())
+        proxy_ok = probe(binary, profile, {expected_backup}, "2603:c020:c015:8100::10")
+        if os.environ.get("TEST_FLCLASH_WINDOWS_TUN") == "1":
+            print("WINDOWS_PROXY_ONLY=" + ("PASS" if proxy_ok else "FAIL"), flush=True)
+            if not probe_tun(binary, profile, expected_backup):
+                raise RuntimeError("ISSUED_PROFILE_WINDOWS_TUN_FAILED")
+        elif not proxy_ok:
             raise RuntimeError("ISSUED_PROFILE_PROXY_FAILED")
         for _ in range(8):
             profiles = admin.api("/api/flclash")["profiles"]

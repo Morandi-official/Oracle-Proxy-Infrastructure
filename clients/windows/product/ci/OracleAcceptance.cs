@@ -394,14 +394,14 @@ internal static class OracleAcceptance
             if(!process.HasExited){process.Kill(true);await process.WaitForExitAsync();}
         }
     }
-    internal static bool IngressCatalogMatchesPolicy(JsonObject login)
+    internal static bool IngressCatalogMatchesPolicy(JsonObject login,JsonObject expected)
     {
         try{
             string? access=login["account"]?["ingress"]?["access"]?.GetValue<string>(),preferred=login["account"]?["ingress"]?["preferred"]?.GetValue<string>();
             if(access is not ("primary" or "backup" or "both") || preferred is not ("primary" or "backup") || access!="both" && access!=preferred)return false;
             string[] roles=access=="both"?[preferred,preferred=="primary"?"backup":"primary"]:[access];
-            string Address(string role)=>role=="primary"?"152.67.154.225":"150.230.113.158";
-            string Private(string role)=>role=="primary"?"10.0.0.6":"10.0.0.246";
+            string Address(string role)=>expected[role]!["public_ipv4"]!.GetValue<string>();
+            string Private(string role)=>expected[role]!["private_ipv4"]!.GetValue<string>();
             if(login["network_endpoints"] is not JsonObject catalog || catalog["primary"]?.GetValue<string>()!=Address(roles[0]) ||
                 catalog["schema"]?.GetValue<int>()!=(roles.Length==2?1:2) ||
                 (roles.Length==1?catalog["backup"] is not null:catalog["backup"]?.GetValue<string>()!=Address(roles[1])))return false;
@@ -434,9 +434,15 @@ internal static class OracleAcceptance
             }
             string primary=login["network_endpoints"]!["primary"]!.GetValue<string>();
             Console.WriteLine("MIGRATION_SCOPED_INGRESS_POLICY="+login["account"]?["ingress"]?["access"]?.GetValue<string>()+"/"+login["account"]?["ingress"]?["preferred"]?.GetValue<string>()+";DEFAULT="+primary);
-            Check(IngressCatalogMatchesPolicy(login),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
+            var expectedEndpoints=JsonNode.Parse(File.ReadAllText("ops/network/endpoints.json"))!.AsObject();
+            Check(IngressCatalogMatchesPolicy(login,expectedEndpoints),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
+            using var runningUu=Process.GetProcessById(int.Parse(Environment.GetEnvironmentVariable("ORACLE_CI_RUNNING_UU_PID")!));
+            Check(!runningUu.HasExited && connected["uu_candidates"]?.GetValue<int>()>0 &&
+                connected["uu_rejected"]?.GetValue<int>()>0 && connected["uu_verified_programs"]?.GetValue<int>()==0 &&
+                connected["guard"]?.GetValue<bool>()==true && connected["tun_permitted"]?.GetValue<bool>()==true,
+                "REAL_FIRST_CONNECT_WITH_RUNNING_UNVERIFIED_UU_AND_NO_DIRECT_EXCEPTION");
             var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
             Check(connected["transport_address"]?.GetValue<string>()==primary && connected["transport_port"]?.GetValue<int>()==443 && connected["transport_private_address"]?.GetValue<string>()==login["network_endpoints"]!["private_ipv4"]![primary]!.GetValue<string>() && allowed.Contains(await ExitIp()),"MIGRATION_NORMAL_CONNECT_ACTUAL_PRIMARY_PRIVATE_AND_PORT_WITH_VERIFIED_EXIT");
             // Connection admission already requires the IPv6 exit probe as well.

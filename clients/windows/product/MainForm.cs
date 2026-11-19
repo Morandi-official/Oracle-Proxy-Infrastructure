@@ -681,6 +681,11 @@ internal sealed partial class MainForm : Form
             if(_help.GetToolTip(_version)!=productVersion)_help.SetToolTip(_version,productVersion);
             _uuReport="UU 自动发现与信任核验（只读）\r\n服务版本："+(state["product_version"]?.GetValue<string>() ?? "未知")+
                 $"\r\n候选：{state["uu_candidates"]} · 本次通过：{state["uu_discovery_verified"] ?? state["uu_verified_programs"]} · 拒绝：{state["uu_rejected"]}\r\n";
+            int uuVerified=state["uu_discovery_verified"]?.GetValue<int>() ?? state["uu_verified_programs"]?.GetValue<int>() ?? 0;
+            bool uuDetected=state["uu_candidates"]?.GetValue<int>()>0;
+            bool uuNeedsTunnel=uuDetected && uuVerified==0;
+            if(uuNeedsTunnel)
+                _uuReport+="\r\n未验证的 UU 程序在连接后走 VPN。可在断开时修复权限，恢复 UU 直连。";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
                 foreach(var item in uuIssues)_uuReport+=$"\r\n{UuReason(item!["code"]!.GetValue<string>())}\r\n{item["code"]} {item["detail"]}\r\n{item["path"]}\r\n";
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
@@ -745,7 +750,9 @@ internal sealed partial class MainForm : Form
             _latency.Text=mode=="connected" && latency is not null?$"{latency} ms":"—";
             _uu.Text=state["error"]?.GetValue<string>()=="UU_TRUST_NOT_VERIFIED"
                 ?"信任核验未通过"
-                :$"{state["uu_discovery_verified"] ?? state["uu_verified_programs"] ?? (JsonNode)0} 个程序已验证";
+                :uuNeedsTunnel?"已识别 · 走 VPN":uuVerified>0?$"{uuVerified} 个程序已验证":state["uu_candidates"] is null?"待识别":"未发现 UU";
+            string uuHelp=uuNeedsTunnel?"UU 暂无直连权限。连接后使用 VPN，可在断开时修复权限。":"仅通过信任核验的 UU 程序可以直连。";
+            if(_help.GetToolTip(_uu)!=uuHelp)_help.SetToolTip(_uu,uuHelp);
             UpdateRates(state,mode=="connected" && guard);
             _telemetry.Text=mode=="connected"?(state["verified_exit_ipv6"] is not null?"双栈出口已验证 · ":"")+"防泄漏保护已启用":"连接通过验证后显示协议、出口与实时速率。";
             _usageUpdated.Text=$"用量更新：{(at is null?"—":DateTimeOffset.FromUnixTimeSeconds(at.Value).ToLocalTime().ToString("HH:mm:ss"))}  ·  {(fresh?"服务器账单统计":"上次读取值，等待刷新")}";

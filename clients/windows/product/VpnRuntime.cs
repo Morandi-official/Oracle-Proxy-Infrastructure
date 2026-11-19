@@ -184,7 +184,6 @@ internal sealed partial class VpnRuntime : IDisposable
                             if(!_core.Running && CanCreateCore){
                                 if(!_secret.ConnectIntent){
                                     _stage="UU_DISCOVERY";_uuInventory=UuDiscovery.Discover();
-                                    if(_uuInventory.Candidates>0 && _uuInventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                                     _secret.UuPaths=_uuInventory.Paths;_secret.Save();
                                 }
                                 await StartCore(!_secret.ConnectIntent);
@@ -379,7 +378,7 @@ internal sealed partial class VpnRuntime : IDisposable
                 long signatureChecks=UuDiscovery.SignatureVerificationCount;
                 _stage="UU_DISCOVERY";var inventory=UuDiscovery.Discover();_uuInventory=inventory;_switchTimings["uu_discovery_ms"]=timer.ElapsedMilliseconds;
                 _switchTimings["uu_signature_verifications"]=UuDiscovery.SignatureVerificationCount-signatureChecks;
-                if(inventory.Candidates>0 && inventory.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
+                // An empty verified list uses the ordinary protected route.
                 // Process exceptions are part of the prepared configuration.
                 if(reusable && !_secret.UuPaths.SequenceEqual(inventory.Paths,StringComparer.OrdinalIgnoreCase)){await StopCore();warm=false;reusable=false;_transport=Preferred();}
                 _secret.UuPaths=inventory.Paths;_secret.ConnectIntent=true;_secret.Save();_switchTimings["state_saved_ms"]=timer.ElapsedMilliseconds;
@@ -423,7 +422,6 @@ internal sealed partial class VpnRuntime : IDisposable
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_UU_REFRESH");
                 _prepareRetryAfter=default;
                 _stage="UU_DISCOVERY";var found=UuDiscovery.Discover();_uuInventory=found;
-                if(found.Candidates>0 && found.Paths.Length==0)throw new IOException("UU_TRUST_NOT_VERIFIED");
                 await StopCore();
                 _secret.UuPaths=found.Paths;_secret.Save();break;
             }

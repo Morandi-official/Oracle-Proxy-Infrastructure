@@ -13,7 +13,16 @@ Set-Content "$root/authorized" 'DISPOSABLE_GITHUB_ONLY'
 $action=New-ScheduledTaskAction -Execute $test -Argument '--oracle-watchdog'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog' -Action $action -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'
+$runningUu=$null
+$uuFixture=Join-Path $root ('GameViewer-'+[Guid]::NewGuid().ToString('N'))
 try{
+  if($env:ORACLE_ACCEPTANCE_SCOPE -eq 'endpoint-migration'){
+    New-Item -ItemType Directory -Path $uuFixture | Out-Null
+    $uuExecutable=Join-Path $uuFixture 'GameViewerFixture.exe'
+    Copy-Item -LiteralPath "$env:SystemRoot/System32/ping.exe" -Destination $uuExecutable
+    $runningUu=Start-Process -FilePath $uuExecutable -ArgumentList @('-t','127.0.0.1') -WindowStyle Hidden -PassThru
+    $env:ORACLE_CI_RUNNING_UU_PID=[string]$runningUu.Id
+  }
   $setup=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
   if($setup.ExitCode -ne 0){throw 'Oracle acceptance setup failed'}
   if($env:ORACLE_ACCEPTANCE_SCOPE -ne "endpoint-migration"){New-CIUuNetworkFixture}
@@ -47,6 +56,12 @@ try{
     Write-Host 'REAL_AUTHENTICATED_API_CACHE_UNINSTALL_LEAVES_NO_PRODUCT_RESOURCES=PASS'
   }
 }finally{
+  if($runningUu){
+    if(!$runningUu.HasExited){$runningUu.Kill();$runningUu.WaitForExit()}
+    $runningUu.Dispose()
+  }
+  Remove-Item Env:ORACLE_CI_RUNNING_UU_PID -ErrorAction SilentlyContinue
+  if(Test-Path -LiteralPath $uuFixture){Remove-Item -LiteralPath $uuFixture -Recurse -Force}
   Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD -ErrorAction SilentlyContinue
   if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){
     $recover=Start-Process $exe -ArgumentList '--recover' -Wait -PassThru

@@ -239,7 +239,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: Proxy-0.3.0-rc34-win-x64-unsigned-acceptance-candidate
+          name: Proxy-0.3.0-rc44-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             dist/candidate/*-setup.exe
@@ -251,7 +251,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: Proxy-0.3.0-rc34-corresponding-source
+          name: Proxy-0.3.0-rc44-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt

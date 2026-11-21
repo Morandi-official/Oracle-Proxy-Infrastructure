@@ -75,6 +75,7 @@ public final class TunnelEngine {
     private GoBackend backend;
     private TunnelProfile profile;
     private TunnelProfile.Candidate connected;
+    private Network lastProbeNetwork;
     private final Tunnel tunnel = new Tunnel() {
         @Override public String getName() {
             return "Proxy";
@@ -159,7 +160,8 @@ public final class TunnelEngine {
                     throw new IOException("VPN_START_FAILED");
                 }
                 trace("native tunnel started");
-                Result result = verify(target, candidate, deadline, callback);
+                Network previousNetwork = lastProbeNetwork;
+                Result result = verify(target, candidate, deadline, callback, previousNetwork);
                 if (result != null && up && !callback.cancelled()) {
                     profile = target;
                     connected = candidate;
@@ -192,7 +194,7 @@ public final class TunnelEngine {
         }
         try {
             return verify(profile, connected, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS,
-                    null) != null && up;
+                    null, null) != null && up;
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             return false;
@@ -225,15 +227,35 @@ public final class TunnelEngine {
     }
 
     private Result verify(TunnelProfile target, TunnelProfile.Candidate candidate, long deadline,
-                          Callback callback) throws InterruptedException {
+                          Callback callback, Network previousNetwork) throws InterruptedException {
         long probeDeadline = Math.min(deadline, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS);
         Network vpn = awaitNetwork(target, Math.min(probeDeadline,
-                SystemClock.elapsedRealtime() + VPN_NETWORK_WAIT_MS), callback);
+                SystemClock.elapsedRealtime() + VPN_NETWORK_WAIT_MS), callback, previousNetwork);
         if (vpn == null || cancelled(callback)) {
             trace("compatible Android VPN network unavailable");
             return null;
         }
+        lastProbeNetwork = vpn;
         trace("Android VPN network ready");
+        // An Android network agent is visible slightly before all its routes
+        // are ready. Retry early socket failures on the same VPN within the
+        // original deadline, keeping both address-family checks mandatory.
+        for (int attempt = 0; attempt < 3 && up && !cancelled(callback)
+                && SystemClock.elapsedRealtime() < probeDeadline; attempt++) {
+            Result result = verifyOnce(target, candidate, vpn, probeDeadline, callback);
+            if (result != null) {
+                return result;
+            }
+            if (probeDeadline - SystemClock.elapsedRealtime() < 500) {
+                break;
+            }
+            Thread.sleep(160);
+        }
+        return null;
+    }
+
+    private Result verifyOnce(TunnelProfile target, TunnelProfile.Candidate candidate, Network vpn,
+                              long probeDeadline, Callback callback) throws InterruptedException {
         long remaining = probeDeadline - SystemClock.elapsedRealtime();
         if (remaining <= 0) {
             return null;
@@ -293,7 +315,7 @@ public final class TunnelEngine {
         return actual.getHostAddress();
     }
 
-    private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback)
+    private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback, Network previousNetwork)
             throws InterruptedException {
         do {
             if (!up || cancelled(callback)) {
@@ -302,11 +324,11 @@ public final class TunnelEngine {
             // Use the network owned by this VPN and this exact profile, not the underlying
             // Android default selected before VpnService finished installing routes.
             Network network = connectivity.getActiveNetwork();
-            if (network != null && matches(network, target.interfaceAddresses)) {
+            if (network != null && !network.equals(previousNetwork) && matches(network, target.interfaceAddresses)) {
                 return network;
             }
             for (Network candidate : connectivity.getAllNetworks()) {
-                if (matches(candidate, target.interfaceAddresses)) {
+                if (!candidate.equals(previousNetwork) && matches(candidate, target.interfaceAddresses)) {
                     return candidate;
                 }
             }

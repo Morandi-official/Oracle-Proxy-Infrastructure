@@ -58,9 +58,14 @@ public final class AndroidLifecycleTest {
         AtomicInteger verified6 = new AtomicInteger();
         FixtureApi api = new FixtureApi();
         TunnelEngine engine = new TunnelEngine(context, (network, expected, ipv6, timeout) -> {
-            String observed = http(network, expected, 18080, "GET", "/exit", "", timeout);
-            (ipv6 ? verified6 : verified4).incrementAndGet();
-            return observed;
+            try {
+                String observed = http(network, expected, 18080, "GET", "/exit", "", timeout);
+                (ipv6 ? verified6 : verified4).incrementAndGet();
+                return observed;
+            } catch (IOException error) {
+                android.util.Log.d("ProxyTunnel", "Isolated IPv" + (ipv6 ? 6 : 4) + " fixture: " + error);
+                throw error;
+            }
         }, true);
         AppController controller = new AppController(context, api, engine);
         AppController.installForTest(controller);

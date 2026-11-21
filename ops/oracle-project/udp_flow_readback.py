@@ -81,6 +81,9 @@ if __name__ == '__main__':
     if sys.argv[1:] == ['--incident-1532']:
         START = datetime(2026, 11, 21, 7, 32, 16, tzinfo=timezone.utc)
         END = datetime(2026, 11, 21, 7, 35, tzinfo=timezone.utc)
+    elif sys.argv[1:] == ['--incident-1544']:
+        START = datetime(2026, 11, 21, 7, 43, 45, tzinfo=timezone.utc)
+        END = datetime(2026, 11, 21, 7, 44, 16, tzinfo=timezone.utc)
     elif sys.argv[1:]:
         raise ValueError('FIXED_CAPTURE_WINDOW_REQUIRED')
     def deadline(*_):

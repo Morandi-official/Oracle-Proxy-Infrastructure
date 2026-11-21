@@ -713,6 +713,37 @@ def main(arguments):
                 raise
             print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
             return
+        if request.get('request_id')=='udp-flow-readback-1544-20261121':
+            result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py')),'--incident-1544'],capture_output=True,text=True,check=True,timeout=65)
+            if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')
+            print('OCI_UDP_FLOW_READBACK='+json.dumps(json.loads(result.stdout),sort_keys=True),flush=True)
+            current=host.ROOT/'current'
+            command="""from datetime import datetime, timezone
+import json
+from console.models import UdpDiagnostic
+start=datetime.fromtimestamp(1795246830,timezone.utc)
+end=datetime.fromtimestamp(1795247100,timezone.utc)
+matches=[]
+for row in UdpDiagnostic.objects.filter(started_at__range=(start,end)).values('id','started_at','phase','report')[:32]:
+    for item in row['report'].get('trials',[])[:6]:
+        if (item.get('address'),item.get('port'))!=('150.230.113.158',443):
+            continue
+        server=item.get('server') or {}
+        stamp=server.get('server_started_at')
+        if type(stamp) is not int or not 1795247035-12 <= stamp <= 1795247035+4:
+            continue
+        capture=server.get('capture') or {}
+        counters=item.get('client',{}).get('counters',{})
+        matches.append({'id':str(row['id']),'phase':row['phase'],'report_start_utc':row['started_at'].isoformat(),
+                        'trial_start_utc':datetime.fromtimestamp(stamp,timezone.utc).isoformat(),
+                        'server_capture_closed':row['report'].get('server_capture_closed'),
+                        'client_counts':{k:counters.get(k) for k in ('tx_initiations','rx_responses')},
+                        'server_counts':{k:capture.get(k) for k in ('complete_observation','rx_initiations','tx_responses','socket_drops','ring_evictions')},
+                        'kernel_handshake_advanced':server.get('kernel_handshake_advanced')})
+print('UDP_BACKUP_443_MATCHES='+json.dumps(matches,sort_keys=True))
+"""
+            host.as_user(host.APP_USER,[current/'.venv/bin/python','manage.py','shell','-c',command],cwd=current,env=host.read_environment())
+            return
         if request.get('request_id')=='udp-flow-readback-1532-20261121':
             result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py')),'--incident-1532'],capture_output=True,text=True,check=True,timeout=65)
             if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')

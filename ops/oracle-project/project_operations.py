@@ -725,6 +725,41 @@ def main(arguments):
             if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')
             print('OCI_UDP_FLOW_COVERAGE='+json.dumps(json.loads(result.stdout),sort_keys=True),flush=True)
             return
+        if request.get('request_id') == 'udp-flow-readback-1833-20261121':
+            helper = Path(__file__).with_name('udp_flow_readback.py')
+            result = subprocess.run(
+                ['/opt/oracle-proxy-admin/current/.venv/bin/python', '-I', str(helper), '--incident-1833'],
+                capture_output=True, text=True, check=True, timeout=65)
+            if len(result.stdout) > 16384:
+                raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')
+            print('OCI_UDP_FLOW_READBACK=' + json.dumps(json.loads(result.stdout), sort_keys=True), flush=True)
+            current = host.ROOT / 'current'
+            command = """import json
+from datetime import datetime, timezone
+from console.models import UdpDiagnostic
+row = UdpDiagnostic.objects.filter(pk='32b40016-054e-4de5-9956-6945f4a3a130').values('phase', 'started_at', 'report').first()
+result = {}
+if row:
+    report = row['report']
+    result = {'phase': row['phase'], 'server_capture_closed': report.get('server_capture_closed'),
+              'started_at': row['started_at'].isoformat(), 'trials': []}
+    for item in report.get('trials', [])[:6]:
+        if item.get('port') != 443:
+            continue
+        server = item.get('server') or {}
+        capture = server.get('capture') or {}
+        stamp = server.get('server_started_at')
+        result['trials'].append({
+            'address': item.get('address'),
+            'server_started_at': datetime.fromtimestamp(stamp, timezone.utc).isoformat() if type(stamp) is int else None,
+            'capture': {key: capture.get(key) for key in
+                        ('complete_observation', 'rx_initiations', 'tx_responses', 'socket_drops', 'ring_evictions')},
+            'kernel_handshake_advanced': server.get('kernel_handshake_advanced')})
+print('UDP_DIAGNOSTIC_443=' + json.dumps(result, sort_keys=True))
+"""
+            host.as_user(host.APP_USER, [current / '.venv/bin/python', 'manage.py', 'shell', '-c', command],
+                         cwd=current, env=host.read_environment())
+            return
         if request.get('request_id')=='udp-flow-readback-1544-20261121':
             result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py')),'--incident-1544'],capture_output=True,text=True,check=True,timeout=65)
             if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')

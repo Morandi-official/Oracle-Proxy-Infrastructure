@@ -17,6 +17,7 @@ import tempfile
 import time
 import urllib.request
 import uuid
+from types import SimpleNamespace
 import zipfile
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -56,6 +57,7 @@ def configuration(info, private, address, port, local_port):
     tree=ast.parse((ROOT/'server/admin-oracle/console/flclash.py').read_text())
     function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='configuration')
     env={'ipaddress':ipaddress,'transport_address':lambda:address,
+         'endpoint_config':SimpleNamespace(read=lambda:None),
          'ipv6_info':lambda:{'prefix':'fd42:6f70:78:77::/64'}}
     exec(compile(ast.Module(body=[function],type_ignores=[]),'actual-profile-renderer','exec'),env)
     config=env['configuration'](None,{'server_public_key':info['server_public_key']},info,private)

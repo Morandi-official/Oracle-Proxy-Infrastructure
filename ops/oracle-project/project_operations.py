@@ -698,6 +698,21 @@ def main(arguments):
             retirement=importlib.util.module_from_spec(spec);spec.loader.exec_module(retirement)
             print('LEGACY_ENDPOINT_RETIREMENT='+json.dumps(retirement.apply(),sort_keys=True),flush=True)
             return # Exact old aliases/helper and one completed CI identity; no deployment or OCI deletion.
+        if request.get('request_id')=='cloud-udp-current-ports-20261121':
+            body=sys.stdin.buffer.read(4097)
+            if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')
+            if not body.strip():
+                print('CLOUD_UDP_CURRENT_PORTS_RUNNER_REQUIRED',flush=True)
+                return
+            diagnostic_spec=importlib.util.spec_from_file_location('cloud_udp_identity',Path(__file__).with_name('cloud_udp_identity.py'))
+            diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic)
+            try:result=diagnostic.execute(json.loads(body),paired=True)
+            except Exception as error:
+                code=str(error)
+                print('CLOUD_UDP_ERROR='+(code if re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}',code) else type(error).__name__),flush=True)
+                raise
+            print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
+            return
         if request.get('request_id')=='udp-flow-readback-20261121':
             result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py'))],capture_output=True,text=True,check=True,timeout=65)
             if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')

@@ -14,6 +14,7 @@ jobs:
   source-tests:
     outputs:
       live_enabled: ${{ steps.mode.outputs.enabled }}
+      current_ports: ${{ steps.mode.outputs.current_ports }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -31,9 +32,11 @@ jobs:
           import json,os
           from pathlib import Path
           request=json.loads(Path('ops/oracle-project/request.json').read_text())
-          enabled=request.get('request_id','').startswith('cloud-udp-')
+          current=request.get('request_id')=='cloud-udp-current-ports-20261121'
+          enabled=request.get('request_id','').startswith('cloud-udp-') and not current
           with open(os.environ['GITHUB_OUTPUT'],'a') as output:
               output.write('enabled='+str(enabled).lower()+'\n')
+              output.write('current_ports='+str(current).lower()+'\n')
           PYMODE
   real-cloud:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.source-tests.outputs.live_enabled == 'true'
@@ -83,3 +86,21 @@ jobs:
           path: dist/cloud-udp/result-*.json
           if-no-files-found: ignore
           retention-days: 7
+
+  current-native-ports:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.source-tests.outputs.current_ports == 'true'
+    needs: source-tests
+    runs-on: ubuntu-24.04
+    environment: oracle-ops
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install disposable WireGuard client tooling
+        run: sudo apt-get update && sudo apt-get install -y wireguard-tools
+      - name: Compare native UDP on both configured exits
+        env:
+          CI_KEY: ${{ secrets.ORACLE_CI_OPS_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_CI_KNOWN_HOSTS }}
+        run: sudo -n --preserve-env=GITHUB_ACTIONS,GITHUB_REF,GITHUB_SHA,RUNNER_ENVIRONMENT,CI_KEY,KNOWN_HOSTS python3 -I ops/cloud-udp/current_ports.py

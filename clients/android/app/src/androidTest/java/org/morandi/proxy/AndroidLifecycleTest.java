@@ -90,7 +90,9 @@ public final class AndroidLifecycleTest {
             tap(instrumentation, activity, R.id.connect);
             UiObject2 allow = ui.wait(Until.findObject(By.res("android", "button1")), 7_000);
             assertNotNull("The Android VPN consent dialog was shown", allow);
-            ui.pressBack();
+            UiObject2 deny = ui.wait(Until.findObject(By.res("android", "button2")), 7_000);
+            assertNotNull("The Android VPN consent dialog has a cancel button", deny);
+            deny.click();
             await("consent cancellation", controller, () -> controller.snapshot().message.contains("系统未授权 VPN"));
             assertFalse(engine.isUp());
 

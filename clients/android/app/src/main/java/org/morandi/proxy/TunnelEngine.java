@@ -37,9 +37,9 @@ import java.util.concurrent.TimeUnit;
 import javax.net.ssl.HttpsURLConnection;
 
 public final class TunnelEngine {
-    private static final long VERIFY_DEADLINE_MS = 4_500;
+    private static final long VERIFY_DEADLINE_MS = 6_500;
     private static final long VPN_NETWORK_WAIT_MS = 1_500;
-    private static final long CONNECT_DEADLINE_MS = 38_000;
+    private static final long CONNECT_DEADLINE_MS = 48_000;
     private static final int MAX_TRACE_BYTES = 8_192;
     private static final String TRACE4 = "https://1.1.1.1/cdn-cgi/trace";
     private static final String TRACE6 = "https://[2606:4700:4700::1111]/cdn-cgi/trace";
@@ -149,6 +149,7 @@ public final class TunnelEngine {
                 break;
             }
             callback.trying(candidate.endpoint());
+            trace("attempt UDP " + candidate.port);
             // There is no client-side traffic bypass while a full-route TUN is up.
             // Android can restore normal routes between attempts when a TUN is torn down.
             Config config = target.wireGuardConfig(candidate, key);
@@ -157,6 +158,7 @@ public final class TunnelEngine {
                 if (backend.setState(tunnel, Tunnel.State.UP, config) != Tunnel.State.UP) {
                     throw new IOException("VPN_START_FAILED");
                 }
+                trace("native tunnel started");
                 Result result = verify(target, candidate, deadline, callback);
                 if (result != null && up && !callback.cancelled()) {
                     profile = target;
@@ -170,6 +172,7 @@ public final class TunnelEngine {
             } catch (Exception error) {
                 // Native or configuration exceptions can contain internal arguments.
                 // Return only this allowlisted status to the controller.
+                trace("candidate error " + error.getClass().getSimpleName());
                 disconnect();
                 if (error instanceof IOException &&
                         "VPN_SERVICE_START_FAILED".equals(error.getMessage())) {
@@ -227,8 +230,10 @@ public final class TunnelEngine {
         Network vpn = awaitNetwork(target, Math.min(probeDeadline,
                 SystemClock.elapsedRealtime() + VPN_NETWORK_WAIT_MS), callback);
         if (vpn == null || cancelled(callback)) {
+            trace("compatible Android VPN network unavailable");
             return null;
         }
+        trace("Android VPN network ready");
         long remaining = probeDeadline - SystemClock.elapsedRealtime();
         if (remaining <= 0) {
             return null;
@@ -246,14 +251,17 @@ public final class TunnelEngine {
                         ipv4 = v4.get();
                         ipv6 = v6 == null ? "" : v6.get();
                     } catch (ExecutionException error) {
+                        Throwable cause = error.getCause();
+                        trace("exit probe error " + (cause == null ? "unknown" : cause.getClass().getSimpleName())
+                                + ", handshake=" + hasHandshake(candidate));
                         return null;
                     }
-                    Statistics.PeerStats stats = backend.getStatistics(tunnel).peer(candidate.key);
-                    return stats != null && stats.latestHandshakeEpochMillis() > 0
+                    return hasHandshake(candidate)
                             ? new Result(candidate.endpoint(), ipv4, ipv6) : null;
                 }
                 Thread.sleep(30);
             }
+            trace("exit proof deadline, handshake=" + hasHandshake(candidate));
             return null;
         } finally {
             v4.cancel(true);
@@ -261,6 +269,17 @@ public final class TunnelEngine {
                 v6.cancel(true);
             }
             executor.shutdownNow();
+        }
+    }
+
+    private boolean hasHandshake(TunnelProfile.Candidate candidate) {
+        Statistics.PeerStats stats = backend.getStatistics(tunnel).peer(candidate.key);
+        return stats != null && stats.latestHandshakeEpochMillis() > 0;
+    }
+
+    private static void trace(String stage) {
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("ProxyTunnel", stage);
         }
     }
 

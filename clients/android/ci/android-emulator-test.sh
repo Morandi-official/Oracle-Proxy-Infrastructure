@@ -97,7 +97,13 @@ adb install -t "$app"
 adb install -t "$test_apk"
 adb shell am instrument -w org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
     | tee "$working_dir/instrumentation.txt"
-grep -Eq '^OK \([1-9][0-9]* tests?\)' "$working_dir/instrumentation.txt"
+if ! grep -Eq '^OK \([1-9][0-9]* tests?\)' "$working_dir/instrumentation.txt"; then
+    cat "$working_dir/fixture.log"
+    sudo wg show wg-proxy-ci latest-handshakes | awk '{ print "Fixture handshake time", $2 }' || true
+    sudo wg show wg-proxy-ci transfer | awk '{ print "Fixture bytes received/sent", $2, $3 }' || true
+    adb logcat -d -s ProxyTunnel:D AndroidRuntime:E | tail -100 || true
+    exit 1
+fi
 sudo wg show wg-proxy-ci latest-handshakes | awk '$2 > 0 { found = 1 } END { exit !found }'
 sudo wg show wg-proxy-ci transfer | awk '$2 > 0 && $3 > 0 { found = 1 } END { exit !found }'
 echo 'Android and the Linux peer completed a WireGuard handshake with bidirectional tunnel traffic.'

@@ -110,7 +110,7 @@ public final class ProductionLifecycleTest {
     }
 
     private static void await(String stage, BooleanSupplier condition) {
-        long end = SystemClock.elapsedRealtime() + 45_000;
+        long end = SystemClock.elapsedRealtime() + 65_000;
         while (!condition.getAsBoolean() && SystemClock.elapsedRealtime() < end) {
             SystemClock.sleep(100);
         }

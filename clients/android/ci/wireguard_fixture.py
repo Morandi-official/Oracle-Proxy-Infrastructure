@@ -58,6 +58,7 @@ class ExitProof(QuietHandler):
         if self.path != "/exit" or str(source) not in {CLIENT_IPV4, CLIENT_IPV6}:
             self.send_text(403)
             return
+        print(f"Fixture verified an IPv{source.version} tunnel request", flush=True)
         self.send_text(200, self.server.server_address[0] + "\n")
 
 

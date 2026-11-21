@@ -64,6 +64,7 @@ def audit(coverage_only=False):
             search_query=f'search "{signer.tenancy_id}/{GROUP}/{LOG}" | sort by datetime asc',
             is_return_field_info=False)
         actions, capture, coverage = Counter(), Counter(), Counter()
+        filter_ids = set()
         page, pages, scanned = None, 0, 0
         for _ in range(8):
             options = {'limit': 1000}
@@ -73,13 +74,34 @@ def audit(coverage_only=False):
             pages += 1
             for entry in response.data.results or []:
                 scanned += 1
-                count_flow(entry.data, actions, capture, coverage if coverage_only else None)
+                value=entry.data
+                count_flow(value, actions, capture, coverage if coverage_only else None)
+                if coverage_only and isinstance(value,dict):
+                    event=value.get('logContent',value)
+                    metadata=event.get('oracle') if isinstance(event,dict) else None
+                    if isinstance(metadata,dict):
+                        candidate=next((v for k,v in metadata.items() if k.lower()=='filterocid'),None)
+                        if isinstance(candidate,str) and re.fullmatch(r'ocid1\.capturefilter\.oc1\.[a-z0-9.-]{6,130}',candidate):
+                            filter_ids.add(candidate)
             page = response.headers.get('opc-next-page')
             if not page:
                 break
         result.update(status='OBSERVED', pages=pages, scanned_records=scanned, query_complete=not page, capture_counts=dict(capture),
                       flow_packets=[dict(role=k[0], port=k[1], direction=k[2], action=k[3], packets=n) for k,n in sorted(actions.items())])
         if coverage_only:
+            result['filter_metadata']={'referenced_filters':len(filter_ids)}
+            if len(filter_ids)==1:
+                try:
+                    network=oci.core.VirtualNetworkClient({'region':'uk-london-1'},signer=signer,timeout=(3,8),retry_strategy=retry)
+                    observed=network.get_capture_filter(next(iter(filter_ids))).data
+                    rules=observed.flow_log_capture_filter_rules or []
+                    result['filter_metadata'].update(status='OBSERVED',
+                        is_historical_focused_filter=observed.display_name=='udp-path-focused', rule_count=len(rules),
+                        sampling_intervals=sorted({rule.sampling_rate for rule in rules if type(rule.sampling_rate) is int}))
+                except oci.exceptions.ServiceError as error:
+                    result['filter_metadata'].update(status='OCI_ERROR',http_status=error.status)
+                except (OSError,TypeError,AttributeError) as error:
+                    result['filter_metadata'].update(status='UNAVAILABLE',error_type=type(error).__name__)
             result['observed_address_coverage']=[dict(address=k[0],direction=k[1],protocol=k[2],records=n) for k,n in sorted(coverage.items())]
             try:
                 management=oci.logging.LoggingManagementClient({'region':'uk-london-1'},signer=signer,timeout=(3,8),retry_strategy=retry)

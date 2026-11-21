@@ -35,7 +35,7 @@ function render(data){
  const executionAge=Number.isFinite(data.enforced_at)?Date.now()/1000-data.enforced_at:null;
  const policyFresh=age!==null && age>=0 && age<=data.lease_seconds && executionAge!==null && executionAge>=0 && executionAge<=data.lease_seconds;
  el('enforcement').textContent=data.error?'策略执行异常':!policyFresh?'执行状态未确认':b.guard_blocked?'总量保护已阻断':b.guard_enabled?'用户策略与总量保护正常':'用户策略执行正常';
- el('policy-evidence').textContent=`依据控制服务上报：最近采样 ${time(data.observed_at)}；最近执行 ${time(data.enforced_at)}；放行租约 ${data.lease_seconds} 秒；错误 ${data.error || '无'}；已纳管设备 ${data.peers.filter(p=>p.managed && !p.revoked).length} 台。服务对账号启停、到期、月配额和已纳管设备执行规则；执行时间表示内核租约更新命令成功，不是网页独立读取并验证全部内核规则，也不证明每台设备已连通或逐包计量无缺口。服务器总量保护${b.guard_enabled?'已启用':'未启用'}，与用户策略分开。`;
+ el('policy-evidence').textContent=`依据控制服务上报：最近采样 ${time(data.observed_at)}；最近执行 ${time(data.enforced_at)}；放行租约 ${data.lease_seconds} 秒；错误 ${data.error || '无'}；已纳管设备 ${data.peers.filter(p=>p.managed && !p.revoked).length} 台。服务对账号启停、到期、周期配额和已纳管设备执行规则；执行时间表示内核租约更新命令成功，不是网页独立读取并验证全部内核规则，也不证明每台设备已连通或逐包计量无缺口。服务器总量保护${b.guard_enabled?'已启用':'未启用'}，与用户策略分开。`;
  el('freshness').textContent=age===null?'暂无数据':age<0?'采样时钟异常':`采样 ${Math.floor(age)} 秒前 · 租约 ${data.lease_seconds} 秒`;
  el('notice').classList.toggle('error',Boolean(data.error || !policyFresh || b.guard_blocked));
  el('budget-state').textContent=(b.guard_enabled?(b.guard_blocked?'保护已启用 · 正在阻断 VPN':'保护已启用'):'保护未启用')+' · 其他系统流量仍会消耗出站额度。';
@@ -134,8 +134,13 @@ function positionHelp(help){
  const icon=help.querySelector('.help-icon'),text=help.querySelector('.help-text');if(!icon || !text)return;
  const anchor=icon.getBoundingClientRect(),width=Math.min(28*parseFloat(getComputedStyle(document.documentElement).fontSize),innerWidth-32);
  Object.assign(text.style,{position:'fixed',right:'auto',width:width+'px',left:Math.max(16,Math.min(anchor.left,innerWidth-width-16))+'px'});
+ // Keep even enlarged, long help clear of its own trigger so it can be pinned.
+ text.style.maxHeight=Math.max(0,innerHeight-32)+'px';
+ const below=Math.max(0,innerHeight-anchor.bottom-25),above=Math.max(0,anchor.top-25);
+ const naturalHeight=text.scrollHeight+2,useBelow=below>=naturalHeight || below>=above;
+ text.style.maxHeight=(useBelow?below:above)+'px';
  const height=text.getBoundingClientRect().height;
- text.style.top=Math.max(16,Math.min(anchor.bottom+9,innerHeight-height-16))+'px';
+ text.style.top=(useBelow?anchor.bottom+9:anchor.top-height-9)+'px';
 }
 document.addEventListener('click',event=>{const icon=event.target.closest('.help-icon');if(icon){const help=icon.closest('.help'),open=!help.classList.contains('pinned');positionHelp(help);help.classList.toggle('pinned',open);help.classList.toggle('dismissed',!open);icon.setAttribute('aria-expanded',String(open));}else{for(const help of document.querySelectorAll('.help.pinned')){help.classList.remove('pinned');help.querySelector('.help-icon').setAttribute('aria-expanded','false');}}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const help of document.querySelectorAll('.help')){help.classList.remove('pinned');help.classList.add('dismissed');help.querySelector('.help-icon').setAttribute('aria-expanded','false');}});

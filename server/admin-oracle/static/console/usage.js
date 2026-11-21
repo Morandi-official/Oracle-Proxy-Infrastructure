@@ -18,7 +18,7 @@ function renderUsers(data){
    const select=document.createElement('select');select.setAttribute('aria-label','流量统计范围');
    for(const [key,label] of [['day','今日'],['week','近7天'],['month','当前周期']]){const option=document.createElement('option');option.value=key;option.textContent=label;select.append(option);}select.value='month';
    const summary=document.createElement('span');summary.className='muted';head.append(select,summary);
-   const progress=document.createElement('progress');progress.className='quota-progress';progress.setAttribute('aria-label','共享月配额已用');
+   const progress=document.createElement('progress');progress.className='quota-progress';progress.setAttribute('aria-label','共享周期配额已用');
    const status=document.createElement('p');status.className='muted history-status';
    const chart=document.createElement('div');chart.className='usage-chart';
    const note=document.createElement('p');note.className='muted history-note';

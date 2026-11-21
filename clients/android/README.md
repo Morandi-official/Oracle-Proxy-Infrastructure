@@ -37,7 +37,7 @@ Create or reuse an owner-controlled Android signing keystore. Keep the same sign
 | `ANDROID_SIGNING_KEY_ALIAS` | Signing key alias |
 | `ANDROID_SIGNING_KEY_PASSWORD` | Signing key password |
 
-Keep a secure offline copy of the keystore. Restrict the release environment to the default branch. On `main`, open **Actions → Android client build and acceptance → Run workflow** and enable **Publish a signed APK after Android acceptance**. Publication requires the same signed APK to pass Android acceptance on both emulator API levels. Android release tags use `android-v<version>` and do not replace the Windows release.
+Keep a secure offline copy of the keystore. Restrict the release environment to the default branch. On `main`, open **Actions → Android client build and acceptance → Run workflow** and enable **Publish a signed APK after Android acceptance**. Publication requires the same signed APK to pass Android acceptance on both emulator API levels. A separate job uses the existing dedicated acceptance account in `windows-client-acceptance` to check real account TLS, WireGuard, DNS and verified exit. It removes only the device it enrolled. Android release tags use `android-v<version>` and do not replace the Windows release.
 
 ## References
 

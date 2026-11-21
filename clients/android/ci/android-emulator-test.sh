@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-    echo 'Usage: android-emulator-test.sh API app.apk instrumentation.apk' >&2
+if [[ $# -lt 3 || $# -gt 4 || ( $# -eq 4 && "$4" != production ) ]]; then
+    echo 'Usage: android-emulator-test.sh API app.apk instrumentation.apk [production]' >&2
     exit 2
 fi
 api="$1"
 app="$2"
 test_apk="$3"
+mode="${4:-isolated}"
 image="system-images;android-${api};google_apis;x86_64"
 avd="proxy-api-${api}"
 working_dir="$(mktemp -d)"
@@ -17,9 +18,11 @@ cleanup() {
     if [[ -n "$emulator_pid" ]]; then
         kill "$emulator_pid" 2>/dev/null || true
     fi
-    sudo ip link del wg-proxy-ci 2>/dev/null || true
-    if [[ -f "$working_dir/fixture.pid" ]]; then
-        sudo kill "$(cat "$working_dir/fixture.pid")" 2>/dev/null || true
+    if [[ "$mode" == isolated ]]; then
+        sudo ip link del wg-proxy-ci 2>/dev/null || true
+        if [[ -f "$working_dir/fixture.pid" ]]; then
+            sudo kill "$(cat "$working_dir/fixture.pid")" 2>/dev/null || true
+        fi
     fi
     rm -rf -- "$working_dir"
 }
@@ -45,6 +48,27 @@ adb shell settings put global window_animation_scale 0
 adb shell settings put global transition_animation_scale 0
 adb shell settings put global animator_duration_scale 0
 
+if [[ "$mode" == production ]]; then
+    if [[ -z "${ANDROID_ACCEPTANCE_USERNAME:-}" || -z "${ANDROID_ACCEPTANCE_PASSWORD:-}" ]]; then
+        echo 'The dedicated client acceptance credentials are required.' >&2
+        exit 1
+    fi
+    user_b64="$(printf '%s' "$ANDROID_ACCEPTANCE_USERNAME" | base64 -w0)"
+    pass_b64="$(printf '%s' "$ANDROID_ACCEPTANCE_PASSWORD" | base64 -w0)"
+    printf '::add-mask::%s\n' "$user_b64" "$pass_b64"
+    unset ANDROID_ACCEPTANCE_USERNAME ANDROID_ACCEPTANCE_PASSWORD
+    adb install -t "$app"
+    adb install -t "$test_apk"
+    adb shell am instrument -w -e class org.morandi.proxy.ProductionLifecycleTest \
+        -e proxyProduction 1 -e proxyUser "$user_b64" -e proxyPass "$pass_b64" \
+        -e proxyRun "$GITHUB_RUN_ID" org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
+        | tee "$working_dir/instrumentation.txt"
+    unset user_b64 pass_b64
+    grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
+    echo 'Production Android TLS, enrollment, WireGuard, DNS, disconnect and test-device removal verified.'
+    exit 0
+fi
+
 if ! command -v wg >/dev/null; then
     sudo apt-get -q update
     sudo apt-get -qy install wireguard-tools
@@ -57,8 +81,8 @@ if ! timeout 25 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:18081/key
     exit 1
 fi
 
-adb install "$app"
-adb install "$test_apk"
+adb install -t "$app"
+adb install -t "$test_apk"
 adb shell am instrument -w org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
     | tee "$working_dir/instrumentation.txt"
 grep -Eq '^OK \([1-9][0-9]* tests?\)' "$working_dir/instrumentation.txt"

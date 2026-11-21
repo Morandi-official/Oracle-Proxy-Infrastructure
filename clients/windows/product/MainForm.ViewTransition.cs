@@ -26,6 +26,7 @@ internal sealed partial class MainForm
     private void BlendView(Bitmap? before,Control target)
     {
         if(before is null)return;
+        if(!ClientAppearance.AnimateTransitions){before.Dispose();return;}
         var after=ViewBitmap(target);if(after is null){before.Dispose();return;}
         _viewBlend?.Dispose();_viewBlend=new ViewBlend(before,after);target.Parent!.Controls.Add(_viewBlend);_viewBlend.BringToFront();_viewBlend.Start();
     }

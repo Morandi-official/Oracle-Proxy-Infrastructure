@@ -2,6 +2,43 @@ using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 namespace OracleProxy.Product;
 
+// Shared semantic colors keep the desktop native and legible. High contrast
+// uses Windows system colors rather than substituting a decorative palette.
+internal static class ClientAppearance
+{
+    internal static Color Canvas=>SystemInformation.HighContrast?SystemColors.Control:Color.FromArgb(245,245,247);
+    internal static Color Surface=>SystemInformation.HighContrast?SystemColors.Window:Color.White;
+    internal static Color Ink=>SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(29,29,31);
+    internal static Color SecondaryText=>SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(99,99,102);
+    internal static Color Accent=>SystemInformation.HighContrast?SystemColors.Highlight:Color.FromArgb(0,90,194);
+    internal static Color AccentText=>SystemInformation.HighContrast?SystemColors.HighlightText:Color.White;
+    internal static Color Border=>SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(217,217,222);
+    internal static Color ControlBorder=>SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(142,142,147);
+    internal static Color Hover=>SystemInformation.HighContrast?SystemColors.Control:Color.FromArgb(239,242,247);
+    internal static Color Pressed=>SystemInformation.HighContrast?SystemColors.Control:Color.FromArgb(228,233,241);
+    internal static Color PrimaryHover=>SystemInformation.HighContrast?SystemColors.Highlight:Color.FromArgb(0,77,168);
+    internal static Color PrimaryPressed=>SystemInformation.HighContrast?SystemColors.Highlight:Color.FromArgb(0,66,144);
+    internal static Color DisabledSurface=>SystemInformation.HighContrast?SystemColors.Control:Color.FromArgb(232,232,237);
+    internal static Color DisabledText=>SystemInformation.HighContrast?SystemColors.GrayText:Color.FromArgb(110,110,115);
+    internal static Color Positive=>SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(35,122,70);
+    internal static Color Warning=>SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(139,90,0);
+    internal static Color Destructive=>SystemInformation.HighContrast?SystemColors.WindowText:Color.FromArgb(180,35,24);
+    internal static bool AnimateTransitions=>SystemInformation.UIEffectsEnabled&&!SystemInformation.HighContrast;
+    internal static Font CreateFont(float size,FontStyle style=FontStyle.Regular)=>new(SystemFonts.MessageBoxFont?.FontFamily??FontFamily.GenericSansSerif,size,style);
+}
+
+internal sealed class WrappingLabel : Label
+{
+    internal WrappingLabel(){AutoSize=true;AutoEllipsis=false;}
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        int available=Parent is null?proposedSize.Width:Parent.ClientSize.Width-Parent.Padding.Horizontal-Margin.Horizontal;
+        int width=proposedSize.Width>0?proposedSize.Width:available;
+        if(available>0)width=width>0?Math.Min(width,available):available;
+        return base.GetPreferredSize(new Size(Math.Max(1,width),0));
+    }
+}
+
 // Static, cached GDI+ outlines: two tangent-matched cubics per corner. The
 // curvature tapers to zero at the straight edges; no animation or bitmap cache.
 internal sealed class SmoothOutline : IDisposable
@@ -50,11 +87,11 @@ internal sealed class SmoothButton : Button
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(Parent?.BackColor??SystemColors.Control);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-        Color fill=!Enabled?Color.FromArgb(224,231,237):_pressed?FlatAppearance.MouseDownBackColor:_hover?FlatAppearance.MouseOverBackColor:BackColor;
+        Color fill=!Enabled?ClientAppearance.DisabledSurface:_pressed?FlatAppearance.MouseDownBackColor:_hover?FlatAppearance.MouseOverBackColor:BackColor;
         using(var brush=new SolidBrush(fill))e.Graphics.FillPath(brush,_outline.Get(Size,DeviceDpi));
-        using(var pen=new Pen(Primary&&Enabled?fill:Color.FromArgb(181,198,213)))e.Graphics.DrawPath(pen,_outline.Get(Size,DeviceDpi));
-        if(Focused&&ShowFocusCues){using var pen=new Pen(Color.FromArgb(53,86,119),1.5f);e.Graphics.DrawPath(pen,_focus.Get(Size,DeviceDpi,3,8));}
-        TextRenderer.DrawText(e.Graphics,Text,Font,Rectangle.Inflate(ClientRectangle,-8,-3),Enabled?ForeColor:Color.FromArgb(108,122,136),TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.SingleLine);
+        using(var pen=new Pen(Primary&&Enabled?fill:ClientAppearance.ControlBorder))e.Graphics.DrawPath(pen,_outline.Get(Size,DeviceDpi));
+        if(Focused&&ShowFocusCues){using var pen=new Pen(Primary&&Enabled?ClientAppearance.AccentText:ClientAppearance.Accent,1.5f);e.Graphics.DrawPath(pen,_focus.Get(Size,DeviceDpi,3,8));}
+        TextRenderer.DrawText(e.Graphics,Text,Font,Rectangle.Inflate(ClientRectangle,-8*DeviceDpi/96,-3*DeviceDpi/96),Enabled?ForeColor:ClientAppearance.DisabledText,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.SingleLine);
     }
     protected override void Dispose(bool disposing){if(disposing){_outline.Dispose();_focus.Dispose();}base.Dispose(disposing);}
 }
@@ -66,7 +103,7 @@ internal sealed class SmoothInputFrame : Panel
     private readonly Control _input;
     internal SmoothInputFrame(Control input)
     {
-        _input=input;Name=input.Name+"-frame";Margin=input.Margin;Height=input.Height+16;MinimumSize=new Size(0,36);BackColor=Color.White;
+        _input=input;Name=input.Name+"-frame";Margin=input.Margin;Height=input.Height+16;MinimumSize=new Size(0,36);BackColor=ClientAppearance.Surface;
         SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);
         if(input is TextBox text)text.BorderStyle=BorderStyle.None;
         if(input is ListBox list)list.BorderStyle=BorderStyle.None;
@@ -79,7 +116,7 @@ internal sealed class SmoothInputFrame : Panel
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;using var brush=new SolidBrush(_input.BackColor);e.Graphics.FillPath(brush,_outline.Get(Size,DeviceDpi));
-        using var pen=new Pen(ContainsFocus?Color.FromArgb(86,116,145):Color.FromArgb(194,209,222),ContainsFocus?1.5f:1f);e.Graphics.DrawPath(pen,_outline.Get(Size,DeviceDpi));
+        using var pen=new Pen(ContainsFocus?ClientAppearance.Accent:ClientAppearance.ControlBorder,ContainsFocus?1.5f:1f);e.Graphics.DrawPath(pen,_outline.Get(Size,DeviceDpi));
     }
     protected override void Dispose(bool disposing){if(disposing)_outline.Dispose();base.Dispose(disposing);}
 }
@@ -92,10 +129,10 @@ internal sealed class SmoothCheckBox : CheckBox
     {
         e.Graphics.Clear(Parent?.BackColor??BackColor);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
         float side=17*DeviceDpi/96f;var box=new RectangleF(1,(Height-side)/2,side,side);using var path=SmoothOutline.Create(box,5*DeviceDpi/96f);
-        using(var brush=new SolidBrush(Checked?Color.FromArgb(86,116,145):Color.White))e.Graphics.FillPath(brush,path);
-        using(var pen=new Pen(Focused&&ShowFocusCues?Color.FromArgb(53,86,119):Color.FromArgb(159,180,199),1.4f))e.Graphics.DrawPath(pen,path);
-        if(Checked){using var pen=new Pen(Color.White,2*DeviceDpi/96f){StartCap=LineCap.Round,EndCap=LineCap.Round,LineJoin=LineJoin.Round};e.Graphics.DrawLines(pen,[new PointF(box.X+side*.23f,box.Y+side*.52f),new PointF(box.X+side*.44f,box.Y+side*.72f),new PointF(box.X+side*.8f,box.Y+side*.3f)]);}
-        TextRenderer.DrawText(e.Graphics,Text,Font,new Rectangle((int)side+8,0,Math.Max(1,Width-(int)side-8),Height),Enabled?ForeColor:SystemColors.GrayText,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.WordBreak);
+        using(var brush=new SolidBrush(Checked?(Enabled?ClientAppearance.Accent:ClientAppearance.DisabledText):ClientAppearance.Surface))e.Graphics.FillPath(brush,path);
+        using(var pen=new Pen(Focused&&ShowFocusCues?ClientAppearance.Accent:ClientAppearance.ControlBorder,1.4f))e.Graphics.DrawPath(pen,path);
+        if(Checked){using var pen=new Pen(ClientAppearance.AccentText,2*DeviceDpi/96f){StartCap=LineCap.Round,EndCap=LineCap.Round,LineJoin=LineJoin.Round};e.Graphics.DrawLines(pen,[new PointF(box.X+side*.23f,box.Y+side*.52f),new PointF(box.X+side*.44f,box.Y+side*.72f),new PointF(box.X+side*.8f,box.Y+side*.3f)]);}
+        TextRenderer.DrawText(e.Graphics,Text,Font,new Rectangle((int)side+8,0,Math.Max(1,Width-(int)side-8),Height),Enabled?ForeColor:ClientAppearance.DisabledText,TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.WordBreak);
     }
 }
 
@@ -112,9 +149,9 @@ internal sealed class SmoothProgressBar : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(Parent?.BackColor??BackColor);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;var shape=_outline.Get(Size,DeviceDpi,0.75f,6);
-        using(var brush=new SolidBrush(Color.FromArgb(221,231,240)))e.Graphics.FillPath(brush,shape);
+        using(var brush=new SolidBrush(ClientAppearance.Hover))e.Graphics.FillPath(brush,shape);
         float width=(Width-2)*(_value-_minimum)/(float)Math.Max(1,_maximum-_minimum);
-        if(width>0){var saved=e.Graphics.Save();e.Graphics.SetClip(shape);using var brush=new SolidBrush(Enabled?Color.FromArgb(86,116,145):Color.FromArgb(151,169,185));e.Graphics.FillRectangle(brush,1,1,width,Height-2);e.Graphics.Restore(saved);}
+        if(width>0){var saved=e.Graphics.Save();e.Graphics.SetClip(shape);using var brush=new SolidBrush(Enabled?ClientAppearance.Accent:ClientAppearance.DisabledText);e.Graphics.FillRectangle(brush,1,1,width,Height-2);e.Graphics.Restore(saved);}
     }
     protected override AccessibleObject CreateAccessibilityInstance()=>new ProgressAccessible(this);
     private sealed class ProgressAccessible(SmoothProgressBar owner) : ControlAccessibleObject(owner)
@@ -136,7 +173,7 @@ internal sealed class SmoothComboBox : ComboBox
         if(e.Index<0)return;
         e.DrawBackground();bool selected=(e.State&DrawItemState.Selected)!=0;
         e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;var b=Rectangle.Inflate(e.Bounds,-2,-1);using var path=SmoothOutline.Create(b,6*DeviceDpi/96f);
-        using(var brush=new SolidBrush(selected?Color.FromArgb(221,231,240):Color.White))e.Graphics.FillPath(brush,path);
+        using(var brush=new SolidBrush(selected?ClientAppearance.Hover:ClientAppearance.Surface))e.Graphics.FillPath(brush,path);
         TextRenderer.DrawText(e.Graphics,GetItemText(Items[e.Index]),Font,Rectangle.Inflate(b,-7,0),ForeColor,TextFormatFlags.VerticalCenter|TextFormatFlags.Left|TextFormatFlags.EndEllipsis);
     }
     protected override void OnDropDown(EventArgs e)
@@ -150,10 +187,10 @@ internal sealed class SmoothComboBox : ComboBox
     private void PaintFace(Graphics g)
     {
         g.Clear(Parent?.BackColor??BackColor);g.SmoothingMode=SmoothingMode.AntiAlias;var shape=_outline.Get(Size,DeviceDpi);
-        using(var brush=new SolidBrush(Enabled?Color.White:Color.FromArgb(233,238,243)))g.FillPath(brush,shape);
-        using(var pen=new Pen(Focused?Color.FromArgb(86,116,145):Color.FromArgb(194,209,222),Focused?1.5f:1f))g.DrawPath(pen,shape);
-        int arrow=25*DeviceDpi/96;TextRenderer.DrawText(g,Text,Font,new Rectangle(10*DeviceDpi/96,0,Math.Max(1,Width-arrow-12*DeviceDpi/96),Height),Enabled?ForeColor:SystemColors.GrayText,TextFormatFlags.VerticalCenter|TextFormatFlags.Left|TextFormatFlags.EndEllipsis|TextFormatFlags.SingleLine);
-        float x=Width-arrow/2f,y=Height/2f;using var stroke=new Pen(Enabled?ForeColor:SystemColors.GrayText,1.6f*DeviceDpi/96){StartCap=LineCap.Round,EndCap=LineCap.Round,LineJoin=LineJoin.Round};g.DrawLines(stroke,[new PointF(x-4,y-2),new PointF(x,y+2),new PointF(x+4,y-2)]);
+        using(var brush=new SolidBrush(Enabled?ClientAppearance.Surface:ClientAppearance.DisabledSurface))g.FillPath(brush,shape);
+        using(var pen=new Pen(Focused?ClientAppearance.Accent:ClientAppearance.ControlBorder,Focused?1.5f:1f))g.DrawPath(pen,shape);
+        int arrow=25*DeviceDpi/96;TextRenderer.DrawText(g,Text,Font,new Rectangle(10*DeviceDpi/96,0,Math.Max(1,Width-arrow-12*DeviceDpi/96),Height),Enabled?ForeColor:ClientAppearance.DisabledText,TextFormatFlags.VerticalCenter|TextFormatFlags.Left|TextFormatFlags.EndEllipsis|TextFormatFlags.SingleLine);
+        float x=Width-arrow/2f,y=Height/2f;using var stroke=new Pen(Enabled?ForeColor:ClientAppearance.DisabledText,1.6f*DeviceDpi/96){StartCap=LineCap.Round,EndCap=LineCap.Round,LineJoin=LineJoin.Round};g.DrawLines(stroke,[new PointF(x-4,y-2),new PointF(x,y+2),new PointF(x+4,y-2)]);
     }
     protected override void WndProc(ref Message m)
     {

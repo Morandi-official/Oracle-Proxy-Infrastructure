@@ -16,9 +16,9 @@ function renderUsers(data){
    const content=cell(detail,'');content.colSpan=5;
    const head=document.createElement('div');head.className='history-heading';
    const select=document.createElement('select');select.setAttribute('aria-label','流量统计范围');
-   for(const [key,label] of [['day','今日'],['week','近7天'],['month','本月周期']]){const option=document.createElement('option');option.value=key;option.textContent=label;select.append(option);}select.value='month';
+   for(const [key,label] of [['day','今日'],['week','近7天'],['month','当前周期']]){const option=document.createElement('option');option.value=key;option.textContent=label;select.append(option);}select.value='month';
    const summary=document.createElement('span');summary.className='muted';head.append(select,summary);
-   const progress=document.createElement('progress');progress.className='quota-progress';progress.setAttribute('aria-label','共享月配额已用');
+   const progress=document.createElement('progress');progress.className='quota-progress';progress.setAttribute('aria-label','共享周期配额已用');
    const status=document.createElement('p');status.className='muted history-status';
    const chart=document.createElement('div');chart.className='usage-chart';
    const note=document.createElement('p');note.className='muted history-note';
@@ -51,7 +51,7 @@ async function loadUserUsage(id,force=false){
 function renderUserUsage(id){
  const view=userViews.get(id),u=userById(id);if(!view?.open || !u)return;
  const used=u.usage.rx+u.usage.tx;
- view.summary.textContent=u.quota===null?`本月周期已用 ${size(used)} · 不限额`:`本月周期已用 ${size(used)} / ${size(u.quota)} · 剩余 ${size(u.remaining_bytes)}`;
+ view.summary.textContent=u.quota===null?`当前周期已用 ${size(used)} · 不限额`:`当前周期已用 ${size(used)} / ${size(u.quota)} · 剩余 ${size(u.remaining_bytes)}`;
  view.progress.hidden=u.quota===null;view.progress.max=u.quota || 1;view.progress.value=Math.min(used,u.quota || 1);
  const entry=usageCache.get(id+':'+view.select.value);if(!entry || entry===view.entry)return;
  const data=entry.data;view.entry=entry;

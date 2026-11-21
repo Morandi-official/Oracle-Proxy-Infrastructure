@@ -1,8 +1,10 @@
 """Actual browsers must not submit the obsolete bootstrap secret after a web password change."""
 import importlib.util
 import os
+import re
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 
 spec=importlib.util.spec_from_file_location('live_admin_browser',Path(__file__).with_name('browser_acceptance.py'))
@@ -10,14 +12,21 @@ acceptance=importlib.util.module_from_spec(spec);spec.loader.exec_module(accepta
 
 def main():
     requests=[]
-    stylesheet=(Path(__file__).resolve().parents[2]/'server/admin-oracle/static/console/style.css').read_text()
+    server=Path(__file__).resolve().parents[2]/'server/admin-oracle'
+    stylesheet=(server/'static/console/style.css').read_text()
+    login=(server/'templates/local_login.html').read_text()
+    login=re.sub(r'{% load static %}|{% csrf_token %}|{% if error %}.*?{% endif %}', '', login, flags=re.S)
+    login=login.replace("{% static 'console/style.css' %}", '/static/console/style.css')
     with sync_playwright() as actual:
         def serve(route):
             requests.append(route.request.method)
             assert route.request.method=='GET','Obsolete credentials were submitted'
+            if urlsplit(route.request.url).path=='/static/console/style.css':
+                route.fulfill(status=200,content_type='text/css',body=stylesheet)
+                return
             route.fulfill(status=200,content_type='text/html',headers={'referrer-policy':'same-origin',
                 'set-cookie':'__Host-oracle_csrf=synthetic-only; Path=/; Secure; SameSite=Lax'},
-                body='<style>'+stylesheet+'</style><form><input name="username"><input name="password" type="password"><button>登录</button></form>')
+                body=login)
         class Browser:
             def __init__(self,browser):self.browser=browser
             def new_context(self,**options):

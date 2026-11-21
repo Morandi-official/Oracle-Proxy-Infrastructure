@@ -1,4 +1,4 @@
-"""Anonymous browser acceptance only; never authenticate or export browser state."""
+"""Check the deployed admin UI without exporting credentials or browser state."""
 from urllib.parse import urlsplit
 import time
 import os
@@ -6,6 +6,35 @@ import os
 from playwright.sync_api import sync_playwright, expect, TimeoutError as BrowserTimeout
 
 BASE = 'https://vpn-admin.morandi.dpdns.org'
+
+
+def verify_readability(page, critical_selector):
+    page.evaluate("document.documentElement.style.fontSize = '200%'")
+    try:
+        assert page.evaluate(r"""selector => {
+            const root = document.documentElement;
+            const bodyStyle = getComputedStyle(document.body);
+            const elements = [...document.querySelectorAll(selector)];
+            const channels = value => value.match(/\d+(?:\.\d+)?/g).slice(0, 3).map(Number);
+            const luminance = value => channels(value).map(channel => {
+                const s = channel / 255;
+                return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+            }).reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
+            const ink = luminance(bodyStyle.color);
+            const canvas = luminance(bodyStyle.backgroundColor);
+            if ((Math.max(ink, canvas) + 0.05) / (Math.min(ink, canvas) + 0.05) < 4.5)
+                return false;
+            if (root.scrollWidth > root.clientWidth + 1 || !elements.length)
+                return false;
+            return elements.every(element => {
+                const box = element.getBoundingClientRect();
+                return box.width > 0 && box.left >= -1 && box.right <= root.clientWidth + 1 &&
+                    element.scrollHeight <= element.clientHeight + 1 &&
+                    element.scrollWidth <= element.clientWidth + 1;
+            });
+        }""", critical_selector)
+    finally:
+        page.evaluate("document.documentElement.style.removeProperty('font-size')")
 
 
 def main():
@@ -24,8 +53,10 @@ def main():
                 response = page.goto(BASE + '/login/', wait_until='networkidle')
                 assert response.status == 200
                 assert response.headers['referrer-policy'] == 'same-origin'
-                assert page.locator('body').evaluate('(element) => getComputedStyle(element).backgroundColor') == 'rgb(245, 246, 248)'
-                print(f'BROWSER_{name.upper()}_LIVE_NEUTRAL_WORKSPACE_PALETTE=PASS',flush=True)
+                page.set_viewport_size({'width': 390, 'height': 844})
+                verify_readability(page, 'main h1')
+                page.set_viewport_size({'width': 1280, 'height': 900})
+                print(f'BROWSER_{name.upper()}_LIVE_NARROW_LARGE_TEXT_LOGIN=PASS', flush=True)
                 assert any(cookie['name'] == '__Host-oracle_csrf' and cookie['secure']
                            for cookie in context.cookies())
                 if page.locator('input[name="password"]').count():
@@ -61,6 +92,10 @@ def main():
                         finally:
                             fresh.close()
                         assert control.json().get('administrator',{}).get('username')==username
+                        page.set_viewport_size({'width': 390, 'height': 844})
+                        verify_readability(page, 'main h1, #overview h2')
+                        page.set_viewport_size({'width': 1280, 'height': 900})
+                        print(f'BROWSER_{name.upper()}_LIVE_NARROW_LARGE_TEXT_DASHBOARD=PASS', flush=True)
                         profiles=context.request.get(BASE+'/api/flclash')
                         assert profiles.status==200 and isinstance(profiles.json().get('profiles'),list)
                         assert page.locator('#flclash').count()==1

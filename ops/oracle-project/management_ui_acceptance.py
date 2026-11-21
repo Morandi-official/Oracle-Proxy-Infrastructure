@@ -21,7 +21,7 @@ def main():
    with tempfile.TemporaryDirectory() as temporary:
     driver=fixture.FakeDriver();engine=fixture.agent.Engine(Path(temporary)/'fixture.sqlite3',driver);engine.tick()
     browser=getattr(playwright,name).launch(headless=True);context=browser.new_context(timezone_id='Europe/London');page=context.new_page()
-    profiles_fixture=[]
+    profiles_fixture=[];long_labels=[False]
     accounts={};official_fixture=[None];pending_fixture=[[]];presence_fixture=[False];presence_at=[int(time.time())]
     engine.official_usage=lambda:official_fixture[0] or {'status':'NOT_QUERIED'}
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
@@ -58,6 +58,11 @@ def main():
        for u in data['users']:
         u['username']=accounts.get(u['id']);u['is_admin_account']=u['username']=='owner-ci'
        data['administrator']={'username':'owner-local','device_account_username':'owner-ci'}
+       data['ingress_endpoints']={'primary':'192.0.2.20','backup':'198.51.100.20'}
+       if long_labels[0]:
+        for u in data['users']:u['name']='远程工作站 · '+('Windows_Mixed_连续文字测试_'*3)
+        for p in data['peers']:
+         p['name']='设备归属核对 · '+('Windows_10_与_Windows_11_双栈设备-'*2)
        data['pending_devices']=pending_fixture[0]
        for p in data['peers']:
         if presence_fixture[0] and p['public_key']==fixture.KEY3:p['client_status']={'online':True,'reported_mode':'connected','transport':'wireguard-udp','last_seen_at':presence_at[0]}
@@ -203,6 +208,8 @@ def main():
      confirmed.get_by_role('button',name='管理',exact=True).click()
      expect(page.locator('#device-profile')).to_be_visible()
      expect(page.locator('#device-profile')).to_contain_text('设备识别码')
+     expect(page.locator('#device-profile')).to_contain_text('192.0.2.20')
+     expect(page.locator('#device-profile')).not_to_contain_text('152.67.156.100')
      pending=page.locator('#pending-device-rows tr').filter(has_text='CI pending <b>literal</b>')
      pending.get_by_role('button',name='删除设备',exact=True).click()
      expect(page.locator('#pending-device-rows')).not_to_contain_text('CI pending <b>literal</b>')
@@ -266,10 +273,16 @@ def main():
      expect(page.locator('nav a.active')).to_have_count(1)
      mobile_help=page.locator('#users .help-icon').first;mobile_help.click()
      expect(page.locator('#help-users')).to_be_visible()
+     expect(mobile_help).to_have_attribute('aria-expanded','true')
+     page.locator('#help-users').evaluate('(node)=>node.scrollTop=16')
+     expect(page.locator('#help-users')).to_be_visible()
+     expect(mobile_help).to_have_attribute('aria-expanded','true')
      bounds=page.locator('#help-users').bounding_box();assert bounds['x']>=0 and bounds['x']+bounds['width']<=390
      print(f'SYNTHETIC_{name.upper()}_HOVER_FOCUS_CLICK_ESCAPE_MOBILE_HELP_AND_PERSISTENT_DAY_WEEK_MONTH_CHART=PASS',flush=True)
      # Overview keeps counts visible while connection rows are progressively disclosed.
      page.locator('nav a[href="#overview"]').click()
+     expect(page.locator('#help-users')).not_to_be_visible()
+     expect(mobile_help).to_have_attribute('aria-expanded','false')
      expect(page.locator('#overview #connections')).to_be_visible()
      expect(page.locator('nav a[href="#connections"]')).to_have_count(0)
      expect(page.locator('#connection-details')).not_to_have_attribute('open','')
@@ -285,7 +298,7 @@ def main():
      expect(page.locator('#connection-rows')).not_to_be_visible()
      links=page.locator('nav a')
      assert all(not re.match(r'^[◈◉▤◇⇄⌁⚙≡]',text.strip()) for text in links.all_text_contents())
-     assert page.evaluate("getComputedStyle(document.body).backgroundColor")=='rgb(245, 246, 248)'
+     assert page.evaluate("getComputedStyle(document.body).backgroundColor")=='rgb(245, 245, 247)'
      assert page.evaluate("getComputedStyle(document.documentElement).colorScheme")=='light'
      for link in links.all():
       assert link.evaluate("e=>getComputedStyle(e,'::before').content") in ('none','normal')
@@ -313,6 +326,34 @@ def main():
       page.locator('#connection-details>summary').click()
       page.locator('#devices').evaluate('(node)=>scrollTo(0,node.getBoundingClientRect().top+scrollY-24)');page.wait_for_timeout(100)
       page.screenshot(path=str(screenshots/f'{name}-{width}-devices.png'))
+     # HIG readability: enlarge text without hiding controls or changing functionality.
+     long_labels[0]=True;page.evaluate('refresh()')
+     expect(page.locator('#user-rows')).to_contain_text('Windows_Mixed_连续文字测试_')
+     page.locator('#user-editor').evaluate('(node)=>node.open=true')
+     page.locator('#device-editor').evaluate('(node)=>node.open=true')
+     for width in (1440,900,390):
+      page.set_viewport_size({'width':width,'height':1000 if width>700 else 844})
+      page.evaluate("document.documentElement.style.fontSize='200%'")
+      assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), f'Enlarged dashboard page overflow at {width}px'
+      clipped=page.evaluate('''()=>[...document.querySelectorAll('.metrics strong,.heading h1,.panel-heading h2,.form-actions button,#refresh,.host-trends figcaption')].filter(e=>e.getClientRects().length && e.clientWidth>0 && e.scrollWidth>e.clientWidth+2).map(e=>e.id || e.tagName)''')
+      assert not clipped, f'Enlarged key content was cropped at {width}px: {clipped}'
+      icon=page.locator('#users .help-icon').first;icon.click()
+      expect(page.locator('#help-users')).to_be_visible()
+      bounds=page.locator('#help-users').bounding_box()
+      assert bounds['x']>=0 and bounds['x']+bounds['width']<=width and bounds['y']>=0 and bounds['y']+bounds['height']<=page.viewport_size['height'], 'Enlarged help must stay in the viewport'
+      page.keyboard.press('Escape')
+      if width==900:
+       page.locator('#users').evaluate('(node)=>scrollTo(0,node.getBoundingClientRect().top+scrollY-24)')
+       page.screenshot(path=str(screenshots/f'{name}-{width}-text-200.png'))
+     page.locator('#udp-diag-details').evaluate('(node)=>node.open=true')
+     expect(page.locator('#udp-diag-rows')).to_contain_text('1 / 1 通过')
+     page.locator('#udp-diag-rows').get_by_role('button',name='查看报告',exact=True).click()
+     bounds=page.locator('#udp-diag-dialog').bounding_box()
+     assert bounds['x']>=0 and bounds['x']+bounds['width']<=390 and bounds['height']<=844, 'Enlarged report dialog must stay in viewport'
+     page.keyboard.press('Escape');expect(page.locator('#udp-diag-dialog')).not_to_be_visible()
+     page.evaluate("feedback('这是一条需要阅读后关闭的错误提示。',true)")
+     page.get_by_role('button',name='关闭提示',exact=True).click();expect(page.locator('#feedback')).not_to_be_visible()
+     print(f'SYNTHETIC_{name.upper()}_TEXT_200_LONG_LABELS_UNCROPPED_KEY_CONTENT_BOUNDED_HELP_DIALOG_AND_DISMISS_FEEDBACK=PASS',flush=True)
      page.goto('https://management-fixture.invalid/login/',wait_until='networkidle')
      for width in (1440,900,390):
       page.set_viewport_size({'width':width,'height':1000 if width>700 else 844})

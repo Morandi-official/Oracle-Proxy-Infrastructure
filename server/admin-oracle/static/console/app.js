@@ -6,7 +6,9 @@ const states={active:'可用',disabled:'已禁用',expired:'已到期',quota:'�
 const errors={INVALID_INGRESS_POLICY:'默认入口必须在该用户获准的 IP 范围内。',INGRESS_ISOLATION_NOT_READY:'入口隔离服务尚未就绪，请稍后刷新后再授权备用 IP。',INVALID_RATE:'限速须为0.1到10000 Mbps，空白表示不限。',ACCOUNT_CYCLE_ANCHOR_IMMUTABLE:'账号原始周期起点不能修改。',BANDWIDTH_APPLY_FAILED:'内核限速应用失败，受管流量已阻断，请检查控制服务。',CURRENT_PASSWORD_INCORRECT:"当前密码不正确。",PASSWORD_CONFIRMATION_MISMATCH:"两次新密码不一致。",PASSWORD_TOO_WEAK:"新密码强度不足，请换一个密码。",RATE_LIMITED:"操作过于频繁，请稍后再试。",PROFILE_CREATE_REJECTED:"配置创建未完成，请检查用户和设备名额；如有待核查项，先撤销它。",PROFILE_UNAVAILABLE:"该配置已停用、超额、过期或服务未就绪。",DEVICE_LIMIT_REACHED:'设备数量已达上限，请先撤销旧设备或调整上限。',DEVICE_REVOKED:'该设备已撤销，请在客户端重新生成设备身份。',REVOKE_DEVICES_BEFORE_LOWERING_LIMIT:'请先撤销多余设备，再降低上限。',USERNAME_ALREADY_EXISTS:'登录账号已被使用。',INVALID_USERNAME:'账号须为 3 至 64 位小写字母、数字、点、下划线或连字符。',PASSWORD_LENGTH_12_TO_128_REQUIRED:'密码长度须为 12 至 128 字符。',CONTROL_SERVICE_UNAVAILABLE:'控制服务不可用，当前数据不能作为实时状态。',BASELINE_CONFIRMATION_REQUIRED:'请核对账期用量并勾选确认。',HOST_ADDRESS_REQUIRED:'该 Peer 包含网段路由，暂不能纳管；只支持独立 /32 或 /128 设备地址。',NO_FREE_IPV4_TUNNEL_ADDRESS:'当前接口没有可分配的私有 IPv4 地址。',INVALID_PUBLIC_KEY:'请输入本机生成的 WireGuard 公钥，不是私钥。',PEER_ALREADY_EXISTS:'此 Peer 已存在，请使用“绑定 / 调整已有 Peer”。',PEER_NOT_FOUND:'未找到该 Peer，请刷新后选择已有设备。',INVALID_BUDGET:'额度必须大于零，安全余量必须小于额度。',OFFICIAL_USAGE_NOT_READY:'官方报表未就绪或已过期，请等定时查询完成；无法凭空校准。',CONTROL_UNAVAILABLE:'控制服务暂时不可用；已纳管流量仍受内核规则保护。'};
 let current=null, busy=false, budgetInitialized=false, lastBasic=0, baseAudit=[], activity=[];
 let feedbackTimer;
-function feedback(text, error=false){clearTimeout(feedbackTimer);el('feedback').hidden=false;el('feedback').textContent=text;el('feedback').classList.toggle('error',error);if(!error)feedbackTimer=setTimeout(()=>{el('feedback').hidden=true;},5500);}
+function feedback(text, error=false){clearTimeout(feedbackTimer);el('feedback').hidden=false;el('feedback-text').textContent=text;el('feedback').classList.toggle('error',error);if(!error)feedbackTimer=setTimeout(()=>{el('feedback').hidden=true;},5500);}
+el('feedback-close').addEventListener('click',()=>{clearTimeout(feedbackTimer);el('feedback').hidden=true;});
+function reveal(node,block='nearest'){node.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block});}
 async function api(path, value){
  const options={credentials:'same-origin',redirect:'error',cache:'no-store'};
  if(value){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRFToken':document.querySelector('[name=csrfmiddlewaretoken]').value};options.body=JSON.stringify(value);}
@@ -33,7 +35,7 @@ function render(data){
  const executionAge=Number.isFinite(data.enforced_at)?Date.now()/1000-data.enforced_at:null;
  const policyFresh=age!==null && age>=0 && age<=data.lease_seconds && executionAge!==null && executionAge>=0 && executionAge<=data.lease_seconds;
  el('enforcement').textContent=data.error?'策略执行异常':!policyFresh?'执行状态未确认':b.guard_blocked?'总量保护已阻断':b.guard_enabled?'用户策略与总量保护正常':'用户策略执行正常';
- el('policy-evidence').textContent=`依据控制服务上报：最近采样 ${time(data.observed_at)}；最近执行 ${time(data.enforced_at)}；放行租约 ${data.lease_seconds} 秒；错误 ${data.error || '无'}；已纳管设备 ${data.peers.filter(p=>p.managed && !p.revoked).length} 台。服务对账号启停、到期、月配额和已纳管设备执行规则；执行时间表示内核租约更新命令成功，不是网页独立读取并验证全部内核规则，也不证明每台设备已连通或逐包计量无缺口。服务器总量保护${b.guard_enabled?'已启用':'未启用'}，与用户策略分开。`;
+ el('policy-evidence').textContent=`依据控制服务上报：最近采样 ${time(data.observed_at)}；最近执行 ${time(data.enforced_at)}；放行租约 ${data.lease_seconds} 秒；错误 ${data.error || '无'}；已纳管设备 ${data.peers.filter(p=>p.managed && !p.revoked).length} 台。服务对账号启停、到期、周期配额和已纳管设备执行规则；执行时间表示内核租约更新命令成功，不是网页独立读取并验证全部内核规则，也不证明每台设备已连通或逐包计量无缺口。服务器总量保护${b.guard_enabled?'已启用':'未启用'}，与用户策略分开。`;
  el('freshness').textContent=age===null?'暂无数据':age<0?'采样时钟异常':`采样 ${Math.floor(age)} 秒前 · 租约 ${data.lease_seconds} 秒`;
  el('notice').classList.toggle('error',Boolean(data.error || !policyFresh || b.guard_blocked));
  el('budget-state').textContent=(b.guard_enabled?(b.guard_blocked?'保护已启用 · 正在阻断 VPN':'保护已启用'):'保护未启用')+' · 其他系统流量仍会消耗出站额度。';
@@ -104,9 +106,16 @@ function emptyRow(id,cols,text){const r=document.createElement('tr');const c=cel
 function updateIngressChoices(){const f=el('user-form'),access=f.elements.ingress_access.value;for(const option of f.elements.ingress_preferred.options)option.disabled=access!=='both' && option.value!==access;if(access!=='both')f.elements.ingress_preferred.value=access;}
 el('user-form').elements.ingress_access.addEventListener('change',updateIngressChoices);
 function resetUser(){const f=el('user-form');f.reset();updateIngressChoices();f.elements.id.value='';f.elements.password.required=true;el('user-delete').hidden=true;el('user-editor').open=false;el('user-editor-title').textContent='新建用户';}
-function editUser(u){if(!u)return;el('user-editor').open=true;el('user-editor-title').textContent='编辑 '+(u.username || u.name);const f=el('user-form');f.elements.id.value=u.id;f.elements.name.value=u.name;f.elements.username.value=u.username || '';f.elements.device_limit.value=u.device_limit || 3;f.elements.password.value='';f.elements.password.required=!u.username;el('user-delete').hidden=false;f.elements.quota.value=u.quota===null?'':u.quota/1e9;f.elements.enabled.checked=u.enabled;f.elements.ingress_access.value=u.ingress?.access || 'primary';f.elements.ingress_preferred.value=u.ingress?.preferred || 'primary';updateIngressChoices();for(const direction of ['download','upload'])f.elements[direction+'_mbps'].value=u.rate?.[direction+'_bps']?u.rate[direction+'_bps']/1e6:'';if(u.expires){const d=new Date(u.expires*1000);f.elements.expires.value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}else f.elements.expires.value='';f.scrollIntoView({behavior:'smooth'});}
+function editUser(u){if(!u)return;el('user-editor').open=true;el('user-editor-title').textContent='编辑 '+(u.username || u.name);const f=el('user-form');f.elements.id.value=u.id;f.elements.name.value=u.name;f.elements.username.value=u.username || '';f.elements.device_limit.value=u.device_limit || 3;f.elements.password.value='';f.elements.password.required=!u.username;el('user-delete').hidden=false;f.elements.quota.value=u.quota===null?'':u.quota/1e9;f.elements.enabled.checked=u.enabled;f.elements.ingress_access.value=u.ingress?.access || 'primary';f.elements.ingress_preferred.value=u.ingress?.preferred || 'primary';updateIngressChoices();for(const direction of ['download','upload'])f.elements[direction+'_mbps'].value=u.rate?.[direction+'_bps']?u.rate[direction+'_bps']/1e6:'';if(u.expires){const d=new Date(u.expires*1000);f.elements.expires.value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}else f.elements.expires.value='';reveal(f,'start');f.elements.name.focus({preventScroll:true});}
 async function deleteUser(id){if(!id || !window.confirm('删除此用户并停用其全部设备、注销客户端登录？用量和审计历史会保留，旧设备公钥不能再次使用。'))return;if(await mutate('account.delete',{user_id:id})){if(el('user-form').elements.id.value===id)resetUser();feedback('用户已删除，全部设备已停用，用量与审计记录保留。');}}
-function manageDevice(p,data){const f=el('peer-form');el('device-editor').open=true;f.elements.public_key.value=p.public_key;f.elements.public_key.readOnly=true;f.elements.name.value=p.name || p.fingerprint;f.elements.user_id.value=p.user_id || '';el('device-editor-title').textContent=`管理设备：${p.name || p.fingerprint}${p.revoked?'（已撤销，不能重新启用）':''}`;el('device-profile').hidden=false;el('device-profile').textContent=`设备识别码：${p.fingerprint}\n隧道地址：${p.allowed_ips.join(', ')}\n服务器：152.67.156.100:${data.listen_port}\n服务器公钥：${data.server_public_key || '未读取'}\nDNS、出口及 IPv6 策略：由客户端接入策略下发，请以客户端连接诊断为准\n接入说明：Windows 客户端使用账号登录及本机密钥自动获取接入信息，无需复制或导入此处配置。此处不会展示私钥。`;el('device-editor').scrollIntoView({behavior:'smooth',block:'center'});feedback('设备详情已打开。');}
+function deviceIngressSummary(peer,data){
+ const user=data.users.find(u=>u.id===peer.user_id);if(!user)return '未关联有效用户，请先核对设备归属';
+ const endpoints=data.ingress_endpoints || {},access=user.ingress?.access || 'primary',preferred=user.ingress?.preferred || 'primary';
+ const keys=access==='both'?['primary','backup']:access==='backup'?['backup']:['primary'];
+ keys.sort((a,b)=>Number(b===preferred)-Number(a===preferred));
+ return keys.map(key=>(key==='primary'?'主 IP':'备用 IP')+' '+(endpoints[key] || '未读取')+(keys.length>1 && key===preferred?'（优先）':'')).join('；');
+}
+function manageDevice(p,data){const f=el('peer-form');el('device-editor').open=true;f.elements.public_key.value=p.public_key;f.elements.public_key.readOnly=true;f.elements.name.value=p.name || p.fingerprint;f.elements.user_id.value=p.user_id || '';el('device-editor-title').textContent=`管理设备：${p.name || p.fingerprint}${p.revoked?'（已撤销，不能重新启用）':''}`;el('device-profile').hidden=false;el('device-profile').textContent=`设备识别码：${p.fingerprint}\n隧道地址：${p.allowed_ips.join(', ')}\n获准入口：${deviceIngressSummary(p,data)}\n接口公钥（参考）：${data.server_public_key || '未读取'}\nDNS、出口及 IPv6 策略：由客户端接入策略下发，请以客户端连接诊断为准\n接入说明：实际端口、入口公钥及 DNS 由客户端安全获取；请勿将这里的接口参考值作为完整接入配置。此处不展示私钥。`;reveal(el('device-editor'),'center');f.elements.name.focus({preventScroll:true});feedback('设备详情已打开。');}
 function deleteDeviceButton(parent,p){if(!p.public_key || p.managed===false)return;const b=button(parent,'删除',()=>deleteDevice(p));b.className='danger-quiet';b.dataset.focusKey=(p.fingerprint || p.id)+':delete';b.setAttribute('aria-label','删除设备');}
 async function deleteDevice(p){
  if(!window.confirm(`删除设备“${p.name || p.fingerprint || p.id}”？立即停用密钥、注销该设备登录并释放名额；用量与审计保留。旧密钥不能再次登记。`))return;
@@ -123,13 +132,37 @@ el('peer-form').addEventListener('reset',()=>{el('peer-form').elements.public_ke
 el('budget-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;const source=f.elements.source.value;if(source!=='keep' && !f.elements.confirm.checked){feedback('校准前请核对账期并勾选确认。',true);return;}if(f.elements.guard.checked && current?.budget.remaining_bytes===null && source==='keep'){feedback('执行预算尚未校准，请先选择官方保守校准或手工基线。',true);return;}const data={limit_bytes:Math.round(Number(f.elements.limit.value)*1e12),reserve_bytes:Math.round(Number(f.elements.reserve.value)*1e9),guard_enabled:f.elements.guard.checked,confirm_current_period:source!=='keep' && f.elements.confirm.checked};if(source!=='official'){data.prior_usage_bytes=source==='manual' && f.elements.prior.value!==''?Math.round(Number(f.elements.prior.value)*1e9):null;}const ok=await mutate(source==='official'?'budget.calibrate':'budget.set',data);if(ok){f.elements.prior.value='';f.elements.confirm.checked=false;f.elements.source.value='keep';feedback('保护策略已保存；校准不会清除本月用量。');}});
 function positionHelp(help){
  const icon=help.querySelector('.help-icon'),text=help.querySelector('.help-text');if(!icon || !text)return;
- const anchor=icon.getBoundingClientRect(),width=Math.min(380,innerWidth-32);
+ const anchor=icon.getBoundingClientRect(),width=Math.min(28*parseFloat(getComputedStyle(document.documentElement).fontSize),innerWidth-32);
  Object.assign(text.style,{position:'fixed',right:'auto',width:width+'px',left:Math.max(16,Math.min(anchor.left,innerWidth-width-16))+'px'});
+ // Keep even enlarged, long help clear of its own trigger so it can be pinned.
+ text.style.maxHeight=Math.max(0,innerHeight-32)+'px';
+ const below=Math.max(0,innerHeight-anchor.bottom-25),above=Math.max(0,anchor.top-25);
+ const naturalHeight=text.scrollHeight+2,useBelow=below>=naturalHeight || below>=above;
+ text.style.maxHeight=(useBelow?below:above)+'px';
  const height=text.getBoundingClientRect().height;
- text.style.top=Math.max(16,Math.min(anchor.bottom+9,innerHeight-height-16))+'px';
+ text.style.top=(useBelow?anchor.bottom+9:anchor.top-height-9)+'px';
 }
+function dismissHelp(target){
+ for(const help of target?[target]:document.querySelectorAll('.help')){help.classList.remove('pinned');help.classList.add('dismissed');help.querySelector('.help-icon')?.setAttribute('aria-expanded','false');}
+}
+// Keep fixed help anchored after viewport scrolling, including scrollIntoView.
+// A trigger outside the viewport must not leave help over mobile navigation.
+// Scrolls inside long help do not bubble to this window listener.
+let helpScrollPending=false;
+window.addEventListener('scroll',()=>{
+ if(helpScrollPending)return;helpScrollPending=true;
+ requestAnimationFrame(()=>{
+  helpScrollPending=false;
+  for(const help of document.querySelectorAll('.help')){
+   if(help.classList.contains('dismissed') || !(help.classList.contains('pinned') || help.matches(':hover,:focus-within')))continue;
+   const anchor=help.querySelector('.help-icon').getBoundingClientRect();
+   if(anchor.bottom<=0 || anchor.top>=innerHeight || anchor.right<=0 || anchor.left>=innerWidth)dismissHelp(help);
+   else positionHelp(help);
+  }
+ });
+},{passive:true});
 document.addEventListener('click',event=>{const icon=event.target.closest('.help-icon');if(icon){const help=icon.closest('.help'),open=!help.classList.contains('pinned');positionHelp(help);help.classList.toggle('pinned',open);help.classList.toggle('dismissed',!open);icon.setAttribute('aria-expanded',String(open));}else{for(const help of document.querySelectorAll('.help.pinned')){help.classList.remove('pinned');help.querySelector('.help-icon').setAttribute('aria-expanded','false');}}});
-document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const help of document.querySelectorAll('.help')){help.classList.remove('pinned');help.classList.add('dismissed');help.querySelector('.help-icon').setAttribute('aria-expanded','false');}});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')dismissHelp();});
 document.addEventListener('pointerover',event=>{const help=event.target.closest('.help');if(help){help.classList.remove('dismissed');positionHelp(help);}});
 document.addEventListener('focusin',event=>{const help=event.target.closest('.help');if(help){help.classList.remove('dismissed');positionHelp(help);}});
 el('refresh').addEventListener('click',refresh);refresh();setInterval(()=>{if(!document.hidden)refresh();},5000);
@@ -144,7 +177,7 @@ function updateNavigation(){
  for(const link of sectionLinks){const selected=link===active;link.classList.toggle('active',selected);if(selected)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');}
 }
 window.addEventListener('scroll',()=>{if(!navigationPending){navigationPending=true;requestAnimationFrame(updateNavigation);}},{passive:true});
-window.addEventListener('resize',()=>{updateNavigation();for(const help of document.querySelectorAll('.help.pinned'))positionHelp(help);});window.addEventListener('hashchange',updateNavigation);updateNavigation();
+window.addEventListener('resize',()=>{dismissHelp();updateNavigation();});window.addEventListener('hashchange',updateNavigation);updateNavigation();
 
 function updateFlClashCapacity(){const select=el('flclash-user'),option=select.selectedOptions[0],allowed=Boolean(select.value && option && !option.disabled);el('flclash-form').querySelector('[type=submit]').disabled=!allowed;el('flclash-capacity').textContent=allowed?'可新增 '+option.dataset.remaining+' 份配置 · 与已登记设备共用上限':'请选择有剩余设备名额的可用用户';}
 function renderFlClashUsers(data){const select=el('flclash-user'),value=select.value;select.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='选择用户';select.append(empty);for(const u of data.users.filter(u=>u.username)){const option=document.createElement('option');option.value=u.id;const remaining=Math.max(0,u.device_limit-u.device_count);option.disabled=u.status!=='active' || remaining===0 || Boolean(data.error || data.budget.guard_blocked);option.dataset.remaining=remaining;option.textContent=u.username+' · '+u.device_count+'/'+u.device_limit+' · '+(u.status!=='active'?'账号不可用':remaining?'余 '+remaining+' 个名额':'已达上限');select.append(option);}select.value=value;updateFlClashCapacity();}
@@ -160,9 +193,10 @@ function hostTrend(title,rows,key,color,unit){
  const figure=document.createElement('figure'),label=document.createElement('figcaption');label.textContent=title+' · '+unit;figure.append(label);
  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),points=rows.filter(r=>Number.isFinite(r[key])),scale=v=>unit==='Mbps'?v*8/1e6:v;
  svg.setAttribute('viewBox','0 0 340 128');svg.setAttribute('role','img');svg.setAttribute('aria-label',title+'，'+points.length+' 个有效时间段，空缺未补零');
- const from=rows[0]?.at || 0,to=rows.at(-1)?.at || from+1,max=niceMaximum(Math.max(0,...points.map(r=>scale(r[key])))),left=45,width=285,top=10,height=88;
+ const from=rows[0]?.at || 0,to=rows.at(-1)?.at || from+1,max=niceMaximum(Math.max(0,...points.map(r=>scale(r[key]))));
+ const axisLabel=value=>new Intl.NumberFormat('zh-CN',{maximumSignificantDigits:3}).format(value),left=Math.max(48,Math.min(104,16+axisLabel(max).length*7)),width=330-left,top=10,height=88;
  const drawText=(x,y,text,anchor='end')=>{const t=document.createElementNS(ns,'text');t.setAttribute('x',x);t.setAttribute('y',y);t.setAttribute('text-anchor',anchor);t.textContent=text;svg.append(t);};
- for(let i=0;i<=4;i++){const y=top+height-height*i/4,l=document.createElementNS(ns,'line');l.setAttribute('x1',left);l.setAttribute('x2',left+width);l.setAttribute('y1',y);l.setAttribute('y2',y);l.setAttribute('class','chart-grid');svg.append(l);drawText(left-5,y+3,new Intl.NumberFormat('zh-CN',{maximumSignificantDigits:3}).format(max*i/4));}
+ for(let i=0;i<=4;i++){const y=top+height-height*i/4,l=document.createElementNS(ns,'line');l.setAttribute('x1',left);l.setAttribute('x2',left+width);l.setAttribute('y1',y);l.setAttribute('y2',y);l.setAttribute('class','chart-grid');svg.append(l);drawText(left-5,y+3,axisLabel(max*i/4));}
  let group=[];const flush=()=>{if(!group.length)return;const line=document.createElementNS(ns,'polyline');line.setAttribute('points',group.join(' '));line.setAttribute('fill','none');line.setAttribute('stroke',color);line.setAttribute('stroke-width','2');svg.append(line);if(group.length===1){const [x,y]=group[0].split(' ');const c=document.createElementNS(ns,'circle');c.setAttribute('cx',x);c.setAttribute('cy',y);c.setAttribute('r','2');c.setAttribute('fill',color);svg.append(c);}group=[];};
  for(const row of rows){if(!Number.isFinite(row[key])){flush();continue;}group.push(`${left+width*(row.at-from)/Math.max(1,to-from)} ${top+height-height*scale(row[key])/max}`);}flush();
  const stamp=at=>new Date(at*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});

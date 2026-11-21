@@ -257,7 +257,16 @@ def health(request):
 
 @require_GET
 def privacy_check(request):
-    return render(request,'privacy.html')
+    from . import endpoint_config, transports
+
+    try:
+        catalog = endpoint_config.read()
+    except (OSError, ValueError):
+        catalog = None
+    exits = list(catalog['egress_ipv4']) if catalog else []
+    if catalog and (ipv6 := transports.ipv6_info()):
+        exits.append(ipv6['egress'])
+    return render(request, 'privacy.html', {'expected_exits': exits})
 
 
 @require_GET

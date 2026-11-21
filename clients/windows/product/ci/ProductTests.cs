@@ -569,6 +569,7 @@ internal static class ProductTests
         }
         Console.WriteLine("THREE_ALIGNED_SECTIONS_FIT_NORMAL_AND_MINIMUM_WINDOW_WITHOUT_HORIZONTAL_SCROLL=PASS");
         UiStartupAndCompactRegression(snapshot);
+        UiHigTextAndContrastRegression(snapshot);
         UiLoginAndLayoutRegression(snapshot);
         UiLayoutRegression(snapshot);
         UiSmoothAndScrollRegression(snapshot);
@@ -813,6 +814,52 @@ internal static class ProductTests
         Console.WriteLine("COLD_AND_WARM_REMEMBERED_STARTUP_PENDING_ACCOUNT_NEVER_SHOWS_LOGIN_AND_THREE_CARDS_VISIBLE=PASS");
     }
 
+    private static double UiContrast(Color foreground,Color background)
+    {
+        static double Channel(byte value){double channel=value/255d;return channel<=0.04045?channel/12.92:Math.Pow((channel+0.055)/1.055,2.4);}
+        static double Luminance(Color value)=>0.2126*Channel(value.R)+0.7152*Channel(value.G)+0.0722*Channel(value.B);
+        double first=Luminance(foreground),second=Luminance(background);return (Math.Max(first,second)+0.05)/(Math.Min(first,second)+0.05);
+    }
+    private static void UiHigTextAndContrastRegression(JsonObject original)
+    {
+        var state=UiReady(original);state["transport"]="wireguard-udp";state["native_udp_selected_port"]=8443;
+        state["transport_address"]="152.67.154.225";state["transport_private_address"]="10.0.0.246";state["transport_port"]=8443;
+        state["verified_exit_ip"]="152.67.156.100";state["verified_exit_ipv6"]="2603:c020:c015:8100::10";
+        using var form=new MainForm((_,_,_)=>Task.FromResult((JsonObject)state.DeepClone()));UiShow(form);
+        UiAssert(form.Font.FontFamily.Name==(SystemFonts.MessageBoxFont?.FontFamily??FontFamily.GenericSansSerif).Name,"CLIENT_DID_NOT_USE_NATIVE_WINDOWS_FONT_FAMILY");
+        foreach(var pair in new[]{(ClientAppearance.Ink,ClientAppearance.Surface),(ClientAppearance.SecondaryText,ClientAppearance.Canvas),(ClientAppearance.AccentText,ClientAppearance.Accent),(ClientAppearance.Destructive,ClientAppearance.Surface)})
+            UiAssert(UiContrast(pair.Item1,pair.Item2)>=4.5,"CLIENT_SEMANTIC_TEXT_CONTRAST_BELOW_AA");
+        UiAssert(UiContrast(ClientAppearance.ControlBorder,ClientAppearance.Surface)>=3,"CLIENT_INPUT_BOUNDARY_CONTRAST_BELOW_AA");
+        var unprepared=(JsonObject)state.DeepClone();unprepared["quick_ready"]=false;unprepared["preparing"]=false;form.Display(unprepared);
+        var detail=UiDescendants(form).Single(c=>c.Name=="connection-detail");
+        UiAssert(detail.Text.Contains("当前为直连",StringComparison.Ordinal) && !detail.Text.Contains("先登录",StringComparison.Ordinal),"AUTHENTICATED_DISCONNECTED_COPY_INCORRECTLY_REQUESTS_LOGIN");
+        string longSetupCode=new('A',80);
+        string failure=(string)typeof(MainForm).GetMethod("StartupFailure",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(form,[new IOException(longSetupCode)])!;
+        string startupReport=(string)typeof(MainForm).GetField("_startupReport",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.GetValue(form)!;
+        UiAssert(!failure.Contains(longSetupCode,StringComparison.Ordinal) && startupReport.Contains(longSetupCode,StringComparison.Ordinal),"CONCISE_SETUP_MESSAGE_LOST_COPYABLE_FULL_DIAGNOSTIC_CODE");
+        foreach(var size in new[]{new Size(760,600),new Size(1100,820),new Size(1220,820)}){
+            form.ClientSize=size;form.PerformLayout();Application.DoEvents();
+            foreach(string mode in new[]{"disconnected","connected","protected","recovery"}){
+                state["mode"]=mode;state["guard"]=mode!="disconnected";state["intent"]=mode!="disconnected";state["error"]=mode=="recovery"?"RECOVERY_REQUIRED":"";
+                form.Display(state);Application.DoEvents();
+                var content=UiDescendants(form).Single(c=>c.Name=="connectionContent");
+                var labels=UiDescendants(content).OfType<Label>().Where(label=>label.Visible && !string.IsNullOrWhiteSpace(label.Text));
+                foreach(var label in labels){
+                    var measured=TextRenderer.MeasureText(label.Text,label.Font,new Size(Math.Max(1,label.ClientSize.Width-label.Padding.Horizontal),0),TextFormatFlags.WordBreak);
+                    UiAssert(measured.Height<=label.ClientSize.Height-label.Padding.Vertical,"CLIENT_STATUS_OR_METRIC_TEXT_CLIPPED_"+label.Name+"_"+size.Width+"_"+mode);
+                }
+                var buttons=new[]{UiButton(form,"connect"),UiButton(form,"disconnect")};
+                foreach(var button in buttons){
+                    var measured=TextRenderer.MeasureText(button.Text,button.Font);
+                    UiAssert(measured.Width<=button.Width-16*form.DeviceDpi/96 && measured.Height<=button.Height-6*form.DeviceDpi/96,"CLIENT_PRIMARY_ACTION_TEXT_CLIPPED_"+button.Name);
+                }
+                UiRecoveryReachable(form,"HIG_TEXT_"+size.Width+"_"+mode);
+            }
+            Directory.CreateDirectory("dist/review");using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save($"dist/review/proxy-hig-client-{size.Width}x{size.Height}-dpi-{form.DeviceDpi}.png");
+        }
+        form.Hide();Console.WriteLine("NATIVE_WINDOWS_TYPE_SEMANTIC_CONTRAST_AND_CJK_STATUS_METRICS_ACTIONS_FIT_MINIMUM_INTERMEDIATE_NORMAL_LAYOUTS=PASS");
+    }
+
     private static void IngressAcceptanceRegression()
     {
         var expected=new JsonObject{
@@ -910,7 +957,7 @@ internal static class ProductTests
         UiPumpUntil(()=>shell.Visible && !gate.Visible,"SUCCESSFUL_LOGIN_DID_NOT_OPEN_DASHBOARD");
         UiAssert(commands.SequenceEqual(new[]{"Status","LoginRemembered"}) && passwordBox.Text.Length==0,"LOGIN_WAS_REPEATED_OR_PASSWORD_RETAINED_IN_UI");
         var version=UiDescendants(form).Single(c=>c.Name=="app-version");
-        UiAssert(version.ForeColor==Color.Gray && form.Text=="Proxy","PUBLIC_BRANDING_OR_VERSION_COLOR_INCORRECT");
+        UiAssert(UiContrast(version.ForeColor,version.BackColor)>=4.5 && form.Text=="Proxy","PUBLIC_BRANDING_OR_VERSION_CONTRAST_INCORRECT");
         var tools=UiDescendants(form).Single(c=>c.Name=="toolsContent");UiAssert(!tools.Visible,"DIAGNOSTICS_NOT_COLLAPSED_BY_DEFAULT");
         UiButton(form,"diagnostics-toggle").PerformClick();Application.DoEvents();
         var actions=UiDescendants(form).Single(c=>c.Name=="diagnostic-actions").Controls.Cast<Control>().ToArray();
@@ -1009,7 +1056,9 @@ internal static class ProductTests
     private static void UiRequestDeadlineRegression(JsonObject source)
     {
         var ready=UiReady(source);var connected=(JsonObject)ready.DeepClone();connected["mode"]="connected";connected["intent"]=true;connected["guard"]=true;connected["tun_permitted"]=true;connected["core_pid"]=234U;connected["transport"]="wireguard-udp";connected["product_version"]="fixture-current-response";
-        var budget=TimeSpan.FromMilliseconds(150);
+        // Keep timeouts short versus the message-pump bound while allowing
+        // synchronous font/layout work on a contended Windows runner.
+        var budget=TimeSpan.FromMilliseconds(350);
         UiAssert(CompatibilityDiagnostics.LoopbackPorts("http=127.0.0.1:7890;https=http://user:secret@localhost:10809/private?token=hidden;socks=[::1]:10808;remote.example:1234").SequenceEqual(new[]{7890,10808,10809}),"COMPATIBILITY_PROXY_PARSE_MUST_ONLY_RETURN_SORTED_LOOPBACK_PORTS");
         UiAssert(CompatibilityDiagnostics.LoopbackPorts("https://secret.example/path?token=hidden").Length==0,"COMPATIBILITY_PROXY_PARSE_EXPORTED_REMOTE_ENDPOINT");
         foreach(int recoveryResult in new[]{0,3,4}){

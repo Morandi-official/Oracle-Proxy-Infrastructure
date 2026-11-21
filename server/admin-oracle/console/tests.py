@@ -312,3 +312,18 @@ class PrivacyPageTests(TestCase):
   response=c.get('/privacy-check.js',secure=True)
   text=b''.join(response.streaming_content).decode()
   self.assertIn('RTCPeerConnection',text);self.assertNotIn('getUserMedia',text);self.assertNotIn('fetch(',text)
+
+ def test_public_check_uses_only_configured_public_exits(self):
+  c = Client(HTTP_HOST=HOST)
+  catalog = {'egress_ipv4': ['192.0.2.8', '198.51.100.7'], 'private_ipv4': {'192.0.2.8': '10.0.0.6'}}
+  with patch('console.endpoint_config.read', return_value=catalog), patch('console.transports.ipv6_info', return_value={'egress': '2001:db8::4'}):
+   response = c.get('/privacy-check/', secure=True)
+  for address in ('192.0.2.8', '198.51.100.7', '2001:db8::4'):
+   self.assertContains(response, f'<code>{address}</code>')
+  self.assertNotContains(response, '10.0.0.6')
+
+ def test_public_check_with_unavailable_catalog_reports_uncertainty(self):
+  c = Client(HTTP_HOST=HOST)
+  with patch('console.endpoint_config.read', side_effect=ValueError('invalid endpoint catalog')):
+   response = c.get('/privacy-check/', secure=True)
+  self.assertContains(response, '当前未能读取出口配置')

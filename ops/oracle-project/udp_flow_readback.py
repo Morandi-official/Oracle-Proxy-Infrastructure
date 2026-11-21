@@ -130,6 +130,10 @@ if __name__ == '__main__':
     elif sys.argv[1:] == ['--incident-1544']:
         START = datetime(2026, 11, 21, 7, 43, 45, tzinfo=timezone.utc)
         END = datetime(2026, 11, 21, 7, 44, 16, tzinfo=timezone.utc)
+    elif sys.argv[1:] == ['--incident-1833']:
+        START = datetime(2026, 11, 21, 10, 33, 40, tzinfo=timezone.utc)
+        END = datetime(2026, 11, 21, 10, 36, 0, tzinfo=timezone.utc)
+        PORTS = (443,)
     elif sys.argv[1:] != ['--coverage'] and sys.argv[1:]:
         raise ValueError('FIXED_CAPTURE_WINDOW_REQUIRED')
     def deadline(*_):

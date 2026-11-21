@@ -32,9 +32,16 @@ trap cleanup EXIT
 sudo chmod a+rw /dev/kvm
 sdkmanager platform-tools emulator "$image"
 printf 'no\n' | avdmanager create avd --force --name "$avd" --package "$image"
-emulator -avd "$avd" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on \
+emulator_bin="${ANDROID_HOME:?Android SDK root required}/emulator/emulator"
+[[ -x "$emulator_bin" ]] || { echo 'Android emulator executable missing after SDK install.' >&2; exit 1; }
+"$emulator_bin" -avd "$avd" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on \
     >"$working_dir/emulator.log" 2>&1 &
 emulator_pid=$!
+sleep 2
+if ! kill -0 "$emulator_pid" 2>/dev/null; then
+    cat "$working_dir/emulator.log"
+    exit 1
+fi
 if ! timeout 180 adb wait-for-device; then
     cat "$working_dir/emulator.log"
     exit 1

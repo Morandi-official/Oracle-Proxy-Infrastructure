@@ -277,6 +277,8 @@ def main():
      print(f'SYNTHETIC_{name.upper()}_HOVER_FOCUS_CLICK_ESCAPE_MOBILE_HELP_AND_PERSISTENT_DAY_WEEK_MONTH_CHART=PASS',flush=True)
      # Overview keeps counts visible while connection rows are progressively disclosed.
      page.locator('nav a[href="#overview"]').click()
+     expect(page.locator('#help-users')).not_to_be_visible()
+     expect(mobile_help).to_have_attribute('aria-expanded','false')
      expect(page.locator('#overview #connections')).to_be_visible()
      expect(page.locator('nav a[href="#connections"]')).to_have_count(0)
      expect(page.locator('#connection-details')).not_to_have_attribute('open','')

@@ -142,8 +142,15 @@ function positionHelp(help){
  const height=text.getBoundingClientRect().height;
  text.style.top=(useBelow?anchor.bottom+9:anchor.top-height-9)+'px';
 }
+function dismissHelp(){
+ for(const help of document.querySelectorAll('.help')){help.classList.remove('pinned');help.classList.add('dismissed');help.querySelector('.help-icon')?.setAttribute('aria-expanded','false');}
+}
+// Help belongs to its trigger's current position. Moving the document must not
+// leave a fixed, pinned explanation over a new section or the mobile navigation.
+// Element scrolling inside long help does not bubble here and remains usable.
+window.addEventListener('scroll',dismissHelp,{passive:true});
 document.addEventListener('click',event=>{const icon=event.target.closest('.help-icon');if(icon){const help=icon.closest('.help'),open=!help.classList.contains('pinned');positionHelp(help);help.classList.toggle('pinned',open);help.classList.toggle('dismissed',!open);icon.setAttribute('aria-expanded',String(open));}else{for(const help of document.querySelectorAll('.help.pinned')){help.classList.remove('pinned');help.querySelector('.help-icon').setAttribute('aria-expanded','false');}}});
-document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const help of document.querySelectorAll('.help')){help.classList.remove('pinned');help.classList.add('dismissed');help.querySelector('.help-icon').setAttribute('aria-expanded','false');}});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')dismissHelp();});
 document.addEventListener('pointerover',event=>{const help=event.target.closest('.help');if(help){help.classList.remove('dismissed');positionHelp(help);}});
 document.addEventListener('focusin',event=>{const help=event.target.closest('.help');if(help){help.classList.remove('dismissed');positionHelp(help);}});
 el('refresh').addEventListener('click',refresh);refresh();setInterval(()=>{if(!document.hidden)refresh();},5000);
@@ -158,7 +165,7 @@ function updateNavigation(){
  for(const link of sectionLinks){const selected=link===active;link.classList.toggle('active',selected);if(selected)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');}
 }
 window.addEventListener('scroll',()=>{if(!navigationPending){navigationPending=true;requestAnimationFrame(updateNavigation);}},{passive:true});
-window.addEventListener('resize',()=>{updateNavigation();for(const help of document.querySelectorAll('.help.pinned'))positionHelp(help);});window.addEventListener('hashchange',updateNavigation);updateNavigation();
+window.addEventListener('resize',()=>{dismissHelp();updateNavigation();});window.addEventListener('hashchange',updateNavigation);updateNavigation();
 
 function updateFlClashCapacity(){const select=el('flclash-user'),option=select.selectedOptions[0],allowed=Boolean(select.value && option && !option.disabled);el('flclash-form').querySelector('[type=submit]').disabled=!allowed;el('flclash-capacity').textContent=allowed?'可新增 '+option.dataset.remaining+' 份配置 · 与已登记设备共用上限':'请选择有剩余设备名额的可用用户';}
 function renderFlClashUsers(data){const select=el('flclash-user'),value=select.value;select.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='选择用户';select.append(empty);for(const u of data.users.filter(u=>u.username)){const option=document.createElement('option');option.value=u.id;const remaining=Math.max(0,u.device_limit-u.device_count);option.disabled=u.status!=='active' || remaining===0 || Boolean(data.error || data.budget.guard_blocked);option.dataset.remaining=remaining;option.textContent=u.username+' · '+u.device_count+'/'+u.device_limit+' · '+(u.status!=='active'?'账号不可用':remaining?'余 '+remaining+' 个名额':'已达上限');select.append(option);}select.value=value;updateFlClashCapacity();}

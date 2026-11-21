@@ -12,6 +12,9 @@ mode="${4:-isolated}"
 image="system-images;android-${api};google_apis;x86_64"
 avd="proxy-api-${api}"
 working_dir="$(mktemp -d)"
+export ANDROID_USER_HOME="$working_dir/android-user"
+export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+mkdir -p "$ANDROID_AVD_HOME"
 emulator_pid=
 cleanup() {
     adb emu kill >/dev/null 2>&1 || true
@@ -31,9 +34,11 @@ trap cleanup EXIT
 [[ -e /dev/kvm ]] || { echo 'Android acceptance requires KVM on the runner.' >&2; exit 1; }
 sudo chmod a+rw /dev/kvm
 sdkmanager platform-tools emulator "$image"
-printf 'no\n' | avdmanager create avd --force --name "$avd" --package "$image"
+printf 'no\n' | avdmanager create avd --force --name "$avd" --package "$image" \
+    --path "$ANDROID_AVD_HOME/$avd.avd"
 emulator_bin="${ANDROID_HOME:?Android SDK root required}/emulator/emulator"
 [[ -x "$emulator_bin" ]] || { echo 'Android emulator executable missing after SDK install.' >&2; exit 1; }
+"$emulator_bin" -list-avds | grep -Fxq "$avd"
 "$emulator_bin" -avd "$avd" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on \
     >"$working_dir/emulator.log" 2>&1 &
 emulator_pid=$!

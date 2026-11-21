@@ -698,6 +698,11 @@ def main(arguments):
             retirement=importlib.util.module_from_spec(spec);spec.loader.exec_module(retirement)
             print('LEGACY_ENDPOINT_RETIREMENT='+json.dumps(retirement.apply(),sort_keys=True),flush=True)
             return # Exact old aliases/helper and one completed CI identity; no deployment or OCI deletion.
+        if request.get('request_id')=='udp-flow-readback-20261121':
+            result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py'))],capture_output=True,text=True,check=True,timeout=65)
+            if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')
+            print('OCI_UDP_FLOW_READBACK='+json.dumps(json.loads(result.stdout),sort_keys=True),flush=True)
+            return
         if request.get('request_id')=='endpoint-retirement-audit-20261109':
             spec=importlib.util.spec_from_file_location('endpoint_retirement_audit',Path(__file__).with_name('endpoint_retirement_audit.py'))
             audit=importlib.util.module_from_spec(spec);spec.loader.exec_module(audit)

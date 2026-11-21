@@ -762,7 +762,7 @@ public final class MainActivity extends Activity {
         view.setText(value);
         view.setTextSize(size);
         view.setTextColor(color);
-        view.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE);
+        view.setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE);
         return view;
     }
 

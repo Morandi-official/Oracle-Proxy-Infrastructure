@@ -4,6 +4,7 @@ on:
   pull_request:
     paths: ['clients/android/**', '.github/workflows/android-client.yml']
   push:
+    branches: [main]
     paths: ['clients/android/**', '.github/workflows/android-client.yml']
   workflow_dispatch:
     inputs:
@@ -38,6 +39,9 @@ jobs:
         with:
           gradle-version: '8.13'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - name: Install Android SDK packages
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Build debug and instrumentation APKs
@@ -67,6 +71,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - uses: actions/download-artifact@v4
         with:
           name: android-test-apks
@@ -98,6 +105,9 @@ jobs:
         with:
           gradle-version: '8.13'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Build owner-signed Android APK and matching test APK
         env:
@@ -155,6 +165,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - uses: actions/download-artifact@v4
         with:
           name: owner-signed-android
@@ -183,6 +196,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - uses: actions/download-artifact@v4
         with:
           name: owner-signed-android

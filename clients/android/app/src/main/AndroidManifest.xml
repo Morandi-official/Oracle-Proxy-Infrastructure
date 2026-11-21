@@ -9,6 +9,7 @@
 
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/no_app_backup"
         android:fullBackupContent="false"
         android:icon="@drawable/ic_proxy"
         android:label="@string/proxy_app_name"
@@ -27,11 +28,13 @@
         <service
             android:name="com.wireguard.android.backend.GoBackend$VpnService"
             tools:node="remove" />
+        <!-- Android admits a user-authorized VPN to systemExempted via its VPN app-op. -->
         <service
             android:name=".ProxyVpnService"
             android:exported="false"
             android:foregroundServiceType="systemExempted"
-            android:permission="android.permission.BIND_VPN_SERVICE">
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            tools:ignore="ForegroundServicePermission">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

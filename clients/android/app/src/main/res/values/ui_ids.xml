@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item type="id" name="username" />
+    <item type="id" name="password" />
+    <item type="id" name="remember_login" />
+    <item type="id" name="login" />
+    <item type="id" name="device_name" />
+    <item type="id" name="device_confirm" />
+    <item type="id" name="nav_connection" />
+    <item type="id" name="nav_account" />
+    <item type="id" name="nav_diagnostics" />
+    <item type="id" name="connection_status" />
+    <item type="id" name="connect" />
+    <item type="id" name="disconnect" />
+    <item type="id" name="udp_port" />
+    <item type="id" name="connection_endpoint" />
+    <item type="id" name="verified_ipv4" />
+    <item type="id" name="verified_ipv6" />
+    <item type="id" name="refresh_account" />
+    <item type="id" name="logout" />
+    <item type="id" name="copy_diagnostics" />
+</resources>

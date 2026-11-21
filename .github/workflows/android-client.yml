@@ -1,0 +1,183 @@
+name: Android client build and acceptance
+
+on:
+  pull_request:
+    paths: ['clients/android/**', '.github/workflows/android-client.yml']
+  push:
+    paths: ['clients/android/**', '.github/workflows/android-client.yml']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a signed APK after Android acceptance
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-client-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    defaults:
+      run:
+        working-directory: clients/android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build debug and instrumentation APKs
+        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-test-apks
+          path: |
+            clients/android/app/build/outputs/apk/debug/app-debug.apk
+            clients/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [29, 36]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-test-apks
+          path: android-test-apks
+      - name: Exercise a real VPN against an isolated Linux WireGuard peer
+        run: >-
+          bash clients/android/ci/android-emulator-test.sh ${{ matrix.api }}
+          android-test-apks/debug/app-debug.apk
+          android-test-apks/androidTest/debug/app-debug-androidTest.apk
+
+  signed-release:
+    needs: emulator
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    environment: android-release
+    defaults:
+      run:
+        working-directory: clients/android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build owner-signed Android APK and matching test APK
+        env:
+          ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
+          ANDROID_SIGNING_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ANDROID_SIGNING_KEYSTORE_B64" || -z "$ANDROID_SIGNING_KEYSTORE_PASSWORD" ||
+                -z "$ANDROID_SIGNING_KEY_ALIAS" || -z "$ANDROID_SIGNING_KEY_PASSWORD" ]]; then
+            echo 'Android release signing requires the four owner-managed signing secrets.' >&2
+            exit 1
+          fi
+          umask 077
+          export ANDROID_SIGNING_STORE_PATH="$(mktemp)"
+          trap 'rm -f -- "$ANDROID_SIGNING_STORE_PATH"' EXIT
+          printf '%s' "$ANDROID_SIGNING_KEYSTORE_B64" | base64 --decode > "$ANDROID_SIGNING_STORE_PATH"
+          unset ANDROID_SIGNING_KEYSTORE_B64
+          gradle --no-daemon -PproxyTestRelease=true :app:assembleRelease :app:assembleReleaseAndroidTest
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          "$tools/apksigner" verify --min-sdk-version 29 --print-certs app/build/outputs/apk/release/app-release.apk
+          mkdir release
+          version=$("$tools/aapt" dump badging app/build/outputs/apk/release/app-release.apk |
+            sed -n "1s/.*versionName='\([0-9.]*\)'.*/\1/p")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          cp app/build/outputs/apk/release/app-release.apk release/Proxy-Android.apk
+          printf '%s\n' "$version" > release/version.txt
+          (cd release && sha256sum Proxy-Android.apk > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owner-signed-android
+          path: clients/android/release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owner-signed-instrumentation
+          path: clients/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
+          if-no-files-found: error
+
+  signed-emulator:
+    needs: signed-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [29, 36]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: owner-signed-android
+          path: owner-signed-android
+      - uses: actions/download-artifact@v4
+        with:
+          name: owner-signed-instrumentation
+          path: owner-signed-instrumentation
+      - name: Validate the exact APK being released
+        run: |
+          (cd owner-signed-android && sha256sum -c SHA256SUMS.txt)
+          bash clients/android/ci/android-emulator-test.sh ${{ matrix.api }} \
+            owner-signed-android/Proxy-Android.apk owner-signed-instrumentation/app-release-androidTest.apk
+
+  publish:
+    needs: signed-emulator
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: owner-signed-android
+          path: owner-signed-android
+      - name: Publish the tested APK on GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        working-directory: owner-signed-android
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS.txt
+          version=$(cat version.txt)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release create "android-v$version" Proxy-Android.apk SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "Proxy Android $version" --latest=false \
+            --notes 'Signed Android APK tested on API 29 and 36 against a real WireGuard peer. Requires Android 10 or later.'

@@ -713,6 +713,27 @@ def main(arguments):
                 raise
             print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
             return
+        if request.get('request_id')=='udp-flow-readback-1532-20261121':
+            result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py')),'--incident-1532'],capture_output=True,text=True,check=True,timeout=65)
+            if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')
+            print('OCI_UDP_FLOW_READBACK='+json.dumps(json.loads(result.stdout),sort_keys=True),flush=True)
+            current=host.ROOT/'current'
+            command="""import json
+from console.models import UdpDiagnostic
+row=UdpDiagnostic.objects.filter(pk='d90690c9-4807-4403-a0bc-8fdca123f2e8').values('phase','report').first()
+data={}
+if row:
+    report=row['report']
+    data={'phase':row['phase'],'closed':report.get('server_capture_closed'),'server_finish':report.get('server_finish'),'trials':[]}
+    for item in report.get('trials',[])[:6]:
+        server=item.get('server') or {}
+        capture=server.get('capture') or {}
+        filtered={k:capture.get(k) for k in ('capture_status','ring_evictions','socket_drops','complete_observation','rx_initiations','tx_responses')}
+        data['trials'].append({'address':item.get('address'),'port':item.get('port'),'started_at':server.get('server_started_at'),'capture':filtered})
+print('UDP_SAVED_REPORT_READBACK='+json.dumps(data,sort_keys=True))
+"""
+            host.as_user(host.APP_USER,[current/'.venv/bin/python','manage.py','shell','-c',command],cwd=current,env=host.read_environment())
+            return
         if request.get('request_id')=='udp-flow-readback-20261121':
             result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py'))],capture_output=True,text=True,check=True,timeout=65)
             if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')

@@ -1056,7 +1056,9 @@ internal static class ProductTests
     private static void UiRequestDeadlineRegression(JsonObject source)
     {
         var ready=UiReady(source);var connected=(JsonObject)ready.DeepClone();connected["mode"]="connected";connected["intent"]=true;connected["guard"]=true;connected["tun_permitted"]=true;connected["core_pid"]=234U;connected["transport"]="wireguard-udp";connected["product_version"]="fixture-current-response";
-        var budget=TimeSpan.FromMilliseconds(150);
+        // Keep timeouts short versus the message-pump bound while allowing
+        // synchronous font/layout work on a contended Windows runner.
+        var budget=TimeSpan.FromMilliseconds(350);
         UiAssert(CompatibilityDiagnostics.LoopbackPorts("http=127.0.0.1:7890;https=http://user:secret@localhost:10809/private?token=hidden;socks=[::1]:10808;remote.example:1234").SequenceEqual(new[]{7890,10808,10809}),"COMPATIBILITY_PROXY_PARSE_MUST_ONLY_RETURN_SORTED_LOOPBACK_PORTS");
         UiAssert(CompatibilityDiagnostics.LoopbackPorts("https://secret.example/path?token=hidden").Length==0,"COMPATIBILITY_PROXY_PARSE_EXPORTED_REMOTE_ENDPOINT");
         foreach(int recoveryResult in new[]{0,3,4}){

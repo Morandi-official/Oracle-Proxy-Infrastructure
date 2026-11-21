@@ -370,7 +370,7 @@ internal sealed partial class MainForm : Form
         }catch{}
         _startupReport="版本："+ClientVersion+"\r\n初始化："+code+installed;
         return code switch{
-            "CLIENT_PACKAGE_INCOMPLETE"=>"客户端文件不完整或版本不一致。请完整解压便携包，保留 runtime 文件夹，再重试初始化。",
+            "CLIENT_PACKAGE_INCOMPLETE"=>"客户端文件不完整或版本不一致。请完整解压便携包，保留 runtime 文件夹，再重试初始化。\r\n诊断：CLIENT_PACKAGE_INCOMPLETE",
             "SERVICE_SETUP_CANCELLED"=>"已取消初始化。可以重试或关闭窗口。",
             "SETUP_RESULT_PENDING"=>"初始化尚未结束。可以关闭此窗口，后台维护将继续；结束后重新打开。",
             _=>"系统服务尚未准备完成。可重试、复制初始化诊断或关闭窗口。"

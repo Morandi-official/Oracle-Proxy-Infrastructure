@@ -9,16 +9,24 @@ import re
 import subprocess
 import sqlite3
 import time
+import uuid
 
 REQUEST = 'cloud-udp-selected-pair-20261108'
 STATE = Path('/var/lib/oracle-proxy-control/cloud-udp-diagnostics')
 ACTOR = 'github:204281968'
 
 
-def validate(value):
-    if not isinstance(value, dict) or set(value) != {'action', 'probe_id', 'public_key'}:
+CAPTURE_FIELDS = {'capture-start': set(), 'capture-begin': {'address', 'port'},
+                  'capture-sample': {'sender_indices'}, 'capture-finish': set()}
+
+
+def validate(value, paired=False):
+    keys = {'action', 'probe_id', 'public_key'}
+    action = value.get('action') if isinstance(value, dict) else None
+    extra = CAPTURE_FIELDS.get(action) if paired and isinstance(action, str) else None
+    if not isinstance(value, dict) or set(value) != keys | (extra or set()):
         raise ValueError('INVALID_DIAGNOSTIC_REQUEST')
-    if value['action'] not in ('prepare', 'observe', 'cleanup', 'host-audit', 'endpoint-prepare', 'endpoint-observe', 'endpoint-rollback', 'reconcile-owned'):
+    if extra is None and action not in ('prepare', 'observe', 'cleanup', 'host-audit', 'endpoint-prepare', 'endpoint-observe', 'endpoint-rollback', 'reconcile-owned'):
         raise ValueError('INVALID_DIAGNOSTIC_ACTION')
     if not isinstance(value['probe_id'], str) or not re.fullmatch(r'[a-f0-9]{32}', value['probe_id']):
         raise ValueError('INVALID_DIAGNOSTIC_ID')
@@ -31,6 +39,12 @@ def validate(value):
         raise ValueError('INVALID_DIAGNOSTIC_KEY') from None
     if len(decoded) != 32 or base64.b64encode(decoded).decode() != key:
         raise ValueError('INVALID_DIAGNOSTIC_KEY')
+    if action == 'capture-begin' and (not isinstance(value['address'], str) or len(value['address'])>15 or type(value['port']) is not int or value['port'] not in (443,8443,51820)):
+        raise ValueError('INVALID_DIAGNOSTIC_TARGET')
+    if action == 'capture-sample':
+        indices = value['sender_indices']
+        if not isinstance(indices, list) or len(indices)>16 or any(type(i) is not int or not 0<=i<2**32 for i in indices):
+            raise ValueError('INVALID_DIAGNOSTIC_CORRELATION')
     return value
 
 
@@ -121,8 +135,8 @@ def reconcile_owned():
     return result
 
 
-def execute(value):
-    validate(value)
+def execute(value, paired=False):
+    validate(value, paired)
     if value['action']=='reconcile-owned':return reconcile_owned()
     key, tag = value['public_key'], value['probe_id']
     name = 'Cloud UDP diagnostic ' + tag
@@ -158,8 +172,11 @@ def execute(value):
         if marker['cleaned'] or marker['expires_at'] <= time.time():
             raise ValueError('DIAGNOSTIC_LEASE_EXPIRED')
         if not marker['user_id']:
-            snapshot = rpc('user.save', {'id':None, 'name':name, 'quota_bytes':32*1024*1024,
-                                        'expires_at':marker['expires_at'], 'enabled':True, 'device_limit':1})
+            policy = {'id':None, 'name':name, 'quota_bytes':32*1024*1024,
+                      'expires_at':marker['expires_at'], 'enabled':True, 'device_limit':1}
+            if paired:
+                policy.update(ingress_access='both', ingress_preferred='primary')
+            snapshot = rpc('user.save', policy)
             marker['user_id'] = snapshot['saved_user_id']; save(path, marker)
         peer = next((p for p in snapshot['peers'] if p['public_key'] == key), None)
         if peer is None:
@@ -167,6 +184,15 @@ def execute(value):
     peer = next((p for p in snapshot['peers'] if p['public_key'] == key), None)
     if peer and (peer['user_id'] != marker['user_id'] or peer['name'] != name or not peer['owned']):
         raise ValueError('DIAGNOSTIC_PEER_OWNER_MISMATCH')
+    if value['action'] in CAPTURE_FIELDS:
+        if not peer or marker['cleaned'] or marker['expires_at'] <= time.time():
+            raise ValueError('ACTIVE_DIAGNOSTIC_MARKER_REQUIRED')
+        action = value['action']
+        data = {'diagnostic_id': str(uuid.UUID(hex=tag)), 'public_key': key}
+        data.update({field: value[field] for field in CAPTURE_FIELDS[action]})
+        if action == 'capture-sample':
+            data['complete'] = True
+        return rpc('udp-diagnostic.'+action.removeprefix('capture-'), data)
     if value['action'].startswith('endpoint-'):
         raise ValueError('THIRD_ENDPOINT_EXPERIMENT_RETIRED')
     if value['action'] == 'host-audit':
@@ -186,4 +212,5 @@ def execute(value):
     if peer is None: raise ValueError('DIAGNOSTIC_PEER_MISSING')
     return {'server_public_key':snapshot['server_public_key'], 'allowed_ips':peer['allowed_ips'],
             'handshake':peer['handshake'], 'usage':peer['usage'], 'present':peer['present'],
-            'expires_at':marker['expires_at'], 'budget_blocked':snapshot['budget']['guard_blocked']}
+            'expires_at':marker['expires_at'], 'budget_blocked':snapshot['budget']['guard_blocked'],
+            **({'endpoint_public_keys':snapshot.get('endpoint_public_keys',{})} if paired else {})}

@@ -142,13 +142,25 @@ function positionHelp(help){
  const height=text.getBoundingClientRect().height;
  text.style.top=(useBelow?anchor.bottom+9:anchor.top-height-9)+'px';
 }
-function dismissHelp(){
- for(const help of document.querySelectorAll('.help')){help.classList.remove('pinned');help.classList.add('dismissed');help.querySelector('.help-icon')?.setAttribute('aria-expanded','false');}
+function dismissHelp(target){
+ for(const help of target?[target]:document.querySelectorAll('.help')){help.classList.remove('pinned');help.classList.add('dismissed');help.querySelector('.help-icon')?.setAttribute('aria-expanded','false');}
 }
-// Help belongs to its trigger's current position. Moving the document must not
-// leave a fixed, pinned explanation over a new section or the mobile navigation.
-// Element scrolling inside long help does not bubble here and remains usable.
-window.addEventListener('scroll',dismissHelp,{passive:true});
+// Keep fixed help anchored after viewport scrolling, including scrollIntoView.
+// A trigger outside the viewport must not leave help over mobile navigation.
+// Scrolls inside long help do not bubble to this window listener.
+let helpScrollPending=false;
+window.addEventListener('scroll',()=>{
+ if(helpScrollPending)return;helpScrollPending=true;
+ requestAnimationFrame(()=>{
+  helpScrollPending=false;
+  for(const help of document.querySelectorAll('.help')){
+   if(help.classList.contains('dismissed') || !(help.classList.contains('pinned') || help.matches(':hover,:focus-within')))continue;
+   const anchor=help.querySelector('.help-icon').getBoundingClientRect();
+   if(anchor.bottom<=0 || anchor.top>=innerHeight || anchor.right<=0 || anchor.left>=innerWidth)dismissHelp(help);
+   else positionHelp(help);
+  }
+ });
+},{passive:true});
 document.addEventListener('click',event=>{const icon=event.target.closest('.help-icon');if(icon){const help=icon.closest('.help'),open=!help.classList.contains('pinned');positionHelp(help);help.classList.toggle('pinned',open);help.classList.toggle('dismissed',!open);icon.setAttribute('aria-expanded',String(open));}else{for(const help of document.querySelectorAll('.help.pinned')){help.classList.remove('pinned');help.querySelector('.help-icon').setAttribute('aria-expanded','false');}}});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')dismissHelp();});
 document.addEventListener('pointerover',event=>{const help=event.target.closest('.help');if(help){help.classList.remove('dismissed');positionHelp(help);}});

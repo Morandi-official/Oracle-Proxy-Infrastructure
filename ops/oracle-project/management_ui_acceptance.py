@@ -273,6 +273,10 @@ def main():
      expect(page.locator('nav a.active')).to_have_count(1)
      mobile_help=page.locator('#users .help-icon').first;mobile_help.click()
      expect(page.locator('#help-users')).to_be_visible()
+     expect(mobile_help).to_have_attribute('aria-expanded','true')
+     page.locator('#help-users').evaluate('(node)=>node.scrollTop=16')
+     expect(page.locator('#help-users')).to_be_visible()
+     expect(mobile_help).to_have_attribute('aria-expanded','true')
      bounds=page.locator('#help-users').bounding_box();assert bounds['x']>=0 and bounds['x']+bounds['width']<=390
      print(f'SYNTHETIC_{name.upper()}_HOVER_FOCUS_CLICK_ESCAPE_MOBILE_HELP_AND_PERSISTENT_DAY_WEEK_MONTH_CHART=PASS',flush=True)
      # Overview keeps counts visible while connection rows are progressively disclosed.

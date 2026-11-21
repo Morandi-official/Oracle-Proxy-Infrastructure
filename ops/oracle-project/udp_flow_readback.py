@@ -10,12 +10,14 @@ GROUP = 'ocid1.loggroup.oc1.uk-london-1.amaaaaaaiqqyrzia6rtmdlprq5i6m6zoj7e6lxka
 LOG = 'ocid1.log.oc1.uk-london-1.amaaaaaaiqqyrziag6tnmkfoxsns7bshwj5xiod6tnzsgw5ebuihlozzlrmq'
 START = datetime(2026, 11, 21, 6, 19, 37, tzinfo=timezone.utc)
 END = datetime(2026, 11, 21, 6, 22, tzinfo=timezone.utc)
+LEGACY = {'10.0.0.6': 'legacy_primary_private', '152.67.154.225': 'legacy_primary_public',
+          '10.0.0.10': 'legacy_backup_private', '141.147.78.44': 'legacy_backup_public'}
 LOCAL = {'10.0.0.220': 'primary', '152.67.156.100': 'primary',
          '10.0.0.246': 'backup', '150.230.113.158': 'backup'}
 PORTS = (443, 8443, 51820)
 
 
-def count_flow(value, actions, capture):
+def count_flow(value, actions, capture, coverage=None):
     if not isinstance(value, dict):
         return
     event = value.get('logContent', value)
@@ -28,6 +30,14 @@ def count_flow(value, actions, capture):
     status = data.get('status')
     if status in ('OK', 'SKIPDATA', 'NODATA'):
         capture[status] += 1
+    if coverage is not None:
+        for direction, field in (('source', 'sourceAddress'), ('destination', 'destinationAddress')):
+            address = data.get(field)
+            address_label = LEGACY.get(address, address if address in LOCAL else None)
+            if address_label:
+                protocol = data.get('protocol')
+                protocol_label = {'17': 'UDP', '6': 'TCP', '1': 'ICMP'}.get(str(protocol), 'other')
+                coverage[address_label, direction, protocol_label] += 1
     if data.get('protocol') not in (17, '17') or data.get('action') not in ('ACCEPT', 'REJECT'):
         return
     source, destination = data.get('sourceAddress'), data.get('destinationAddress')
@@ -40,7 +50,7 @@ def count_flow(value, actions, capture):
         actions[LOCAL[destination], data['destinationPort'], 'in', data['action']] += packets
 
 
-def audit():
+def audit(coverage_only=False):
     import oci
 
     result = {'authentication': 'PENDING', 'capture_window_utc': [START.isoformat(), END.isoformat()]}
@@ -53,7 +63,7 @@ def audit():
             time_start=START-timedelta(minutes=1), time_end=min(END+timedelta(minutes=15), datetime.now(timezone.utc)),
             search_query=f'search "{signer.tenancy_id}/{GROUP}/{LOG}" | sort by datetime asc',
             is_return_field_info=False)
-        actions, capture = Counter(), Counter()
+        actions, capture, coverage = Counter(), Counter(), Counter()
         page, pages, scanned = None, 0, 0
         for _ in range(8):
             options = {'limit': 1000}
@@ -63,12 +73,26 @@ def audit():
             pages += 1
             for entry in response.data.results or []:
                 scanned += 1
-                count_flow(entry.data, actions, capture)
+                count_flow(entry.data, actions, capture, coverage if coverage_only else None)
             page = response.headers.get('opc-next-page')
             if not page:
                 break
         result.update(status='OBSERVED', pages=pages, scanned_records=scanned, query_complete=not page, capture_counts=dict(capture),
                       flow_packets=[dict(role=k[0], port=k[1], direction=k[2], action=k[3], packets=n) for k,n in sorted(actions.items())])
+        if coverage_only:
+            result['observed_address_coverage']=[dict(address=k[0],direction=k[1],protocol=k[2],records=n) for k,n in sorted(coverage.items())]
+            try:
+                management=oci.logging.LoggingManagementClient({'region':'uk-london-1'},signer=signer,timeout=(3,8),retry_strategy=retry)
+                log=management.get_log(GROUP,LOG).data
+                source=log.configuration.source
+                resource=source.resource
+                kind=resource.split('.')[1] if isinstance(resource,str) and resource.startswith('ocid1.') else None
+                result['log_metadata']={'status':'OBSERVED','enabled':log.is_enabled,'scope_kind':kind if kind in ('subnet','vcn','instance','vnic') else None,
+                                        'matches_target_vnic':resource=='ocid1.vnic.oc1.uk-london-1.abwgiljtvinh2xd5rknwxycmpniiwzaekj6fub5y27lmefjmfieikxmzauxq'}
+            except oci.exceptions.ServiceError as error:
+                result['log_metadata']={'status':'OCI_ERROR','http_status':error.status}
+            except (AttributeError,TypeError,OSError) as error:
+                result['log_metadata']={'status':'UNAVAILABLE','error_type':type(error).__name__}
     except oci.exceptions.ServiceError as error:
         code = error.code if isinstance(error.code, str) and re.fullmatch(r'[A-Za-z0-9_]{1,80}', error.code) else 'OCI_SERVICE_ERROR'
         result.update(status='OCI_ERROR', http_status=error.status, code=code)
@@ -84,13 +108,23 @@ if __name__ == '__main__':
     elif sys.argv[1:] == ['--incident-1544']:
         START = datetime(2026, 11, 21, 7, 43, 45, tzinfo=timezone.utc)
         END = datetime(2026, 11, 21, 7, 44, 16, tzinfo=timezone.utc)
-    elif sys.argv[1:]:
+    elif sys.argv[1:] != ['--coverage'] and sys.argv[1:]:
         raise ValueError('FIXED_CAPTURE_WINDOW_REQUIRED')
     def deadline(*_):
         raise TimeoutError()
     signal.signal(signal.SIGALRM, deadline)
     signal.alarm(58)
     try:
-        print(json.dumps(audit(), sort_keys=True))
+        if sys.argv[1:] == ['--coverage']:
+            windows = [('successful_cloud', (6,58,48), (7,0,0)),
+                       ('windows_failure', (7,43,45), (7,44,16))]
+            records = {}
+            for label,begin,end in windows:
+                START = datetime(2026,11,21,*begin,tzinfo=timezone.utc)
+                END = datetime(2026,11,21,*end,tzinfo=timezone.utc)
+                records[label] = audit(coverage_only=True)
+            print(json.dumps(records,sort_keys=True))
+        else:
+            print(json.dumps(audit(), sort_keys=True))
     finally:
         signal.alarm(0)

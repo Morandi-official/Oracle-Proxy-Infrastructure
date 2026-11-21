@@ -1,1 +1,4 @@
-{"operation":"preflight","request_id":"endpoint-catalog-apply"}
+{
+  "operation": "preflight",
+  "request_id": "endpoint-catalog-apply"
+}

@@ -21,6 +21,7 @@ class EndpointCatalogTests(unittest.TestCase):
         self.config=json.loads((ROOT/'ops/network/endpoints.json').read_text())
         # Run the transition tests against the address pair used in that migration.
         self.migration=copy.deepcopy(self.config)
+        self.migration['primary']={'public_ipv4':'152.67.154.225','private_ipv4':'10.0.0.6'}
         self.migration['backup']={'public_ipv4':'150.230.113.158','private_ipv4':'10.0.0.246'}
         self.migration['egress_ipv4']=[self.migration['primary']['public_ipv4'],self.migration['backup']['public_ipv4']]
 

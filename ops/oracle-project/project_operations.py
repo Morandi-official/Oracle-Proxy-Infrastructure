@@ -710,6 +710,9 @@ def main(arguments):
             run(['systemctl','restart','oracle-proxy-control.service'])
             run(['systemctl','try-restart','oracle-proxy-quic.service'])
             verify_control()
+            expected = catalog.module().read()
+            if expected and set(expected['egress_ipv4']) == {expected[role]['public_ipv4'] for role in ('primary','backup')}:
+                verify_ingress_egress()
         elif request.get('request_id')=='cloud-udp-selected-pair-20261108':
             body=sys.stdin.buffer.read(4097)
             if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')

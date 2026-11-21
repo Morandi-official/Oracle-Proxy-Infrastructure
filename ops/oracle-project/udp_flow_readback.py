@@ -4,12 +4,14 @@ from datetime import datetime, timedelta, timezone
 import json
 import re
 import signal
+import sys
 
 GROUP = 'ocid1.loggroup.oc1.uk-london-1.amaaaaaaiqqyrzia6rtmdlprq5i6m6zoj7e6lxkausrct3otalalz7zajlfq'
 LOG = 'ocid1.log.oc1.uk-london-1.amaaaaaaiqqyrziag6tnmkfoxsns7bshwj5xiod6tnzsgw5ebuihlozzlrmq'
 START = datetime(2026, 11, 21, 6, 19, 37, tzinfo=timezone.utc)
 END = datetime(2026, 11, 21, 6, 22, tzinfo=timezone.utc)
-LOCAL = {'10.0.0.220': 'primary', '10.0.0.246': 'backup'}
+LOCAL = {'10.0.0.220': 'primary', '152.67.156.100': 'primary',
+         '10.0.0.246': 'backup', '150.230.113.158': 'backup'}
 PORTS = (443, 8443, 51820)
 
 
@@ -48,7 +50,7 @@ def audit():
         result['authentication'] = 'INSTANCE_PRINCIPAL_READY'
         client = oci.loggingsearch.LogSearchClient({'region': 'uk-london-1'}, signer=signer, timeout=(3, 8), retry_strategy=retry)
         details = oci.loggingsearch.models.SearchLogsDetails(
-            time_start=START-timedelta(minutes=1), time_end=END+timedelta(minutes=15),
+            time_start=START-timedelta(minutes=1), time_end=min(END+timedelta(minutes=15), datetime.now(timezone.utc)),
             search_query=f'search "{signer.tenancy_id}/{GROUP}/{LOG}" | sort by datetime asc',
             is_return_field_info=False)
         actions, capture = Counter(), Counter()
@@ -76,6 +78,11 @@ def audit():
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--incident-1532']:
+        START = datetime(2026, 11, 21, 7, 32, 16, tzinfo=timezone.utc)
+        END = datetime(2026, 11, 21, 7, 35, tzinfo=timezone.utc)
+    elif sys.argv[1:]:
+        raise ValueError('FIXED_CAPTURE_WINDOW_REQUIRED')
     def deadline(*_):
         raise TimeoutError()
     signal.signal(signal.SIGALRM, deadline)

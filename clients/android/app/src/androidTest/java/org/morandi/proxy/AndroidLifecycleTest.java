@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.assertEquals;
@@ -63,6 +64,13 @@ public final class AndroidLifecycleTest {
         }, true);
         AppController controller = new AppController(context, api, engine);
         AppController.installForTest(controller);
+        AtomicBoolean attemptedClosedPort = new AtomicBoolean();
+        AppController.Listener observer = state -> {
+            if ((HOST + ":443").equals(state.endpoint)) {
+                attemptedClosedPort.set(true);
+            }
+        };
+        controller.observe(observer);
         MainActivity activity = (MainActivity) instrumentation.startActivitySync(
                 new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
@@ -94,6 +102,7 @@ public final class AndroidLifecycleTest {
             AppController.State connected = controller.snapshot();
             assertTrue(engine.isUp());
             assertTrue(hasVpnRoute(context));
+            assertTrue("The closed UDP port was tried before connecting", attemptedClosedPort.get());
             assertEquals(HOST + ":51820", connected.endpoint);
             assertEquals(InetAddress.getByName(V4), InetAddress.getByName(connected.verifiedIpv4));
             assertEquals(InetAddress.getByName(V6), InetAddress.getByName(connected.verifiedIpv6));
@@ -115,6 +124,7 @@ public final class AndroidLifecycleTest {
             assertTrue(api.events.contains("logout"));
             assertFalse(engine.isUp());
         } finally {
+            controller.removeObserver(observer);
             controller.disconnect();
             instrumentation.runOnMainSync(activity::finish);
         }
@@ -245,7 +255,7 @@ public final class AndroidLifecycleTest {
             JSONObject tunnel = new JSONObject().put("transport_address", HOST)
                     .put("endpoint", HOST + ":51820").put("ipv6_policy", "tunnel")
                     .put("ipv6_egress", V6).put("server_public_key", serverPublicKey)
-                    .put("native_udp_ports", new JSONArray().put(51820))
+                    .put("native_udp_ports", new JSONArray().put(443).put(51820))
                     .put("addresses", new JSONArray().put("10.77.0.2/32").put("fd77:4242:77::2/128"))
                     .put("allowed_ips", new JSONArray().put("0.0.0.0/0").put("::/0"))
                     .put("dns", new JSONArray().put(V4))

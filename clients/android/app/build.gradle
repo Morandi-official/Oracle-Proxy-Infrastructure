@@ -50,6 +50,13 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs {
+            // The Android VpnService uses the WireGuard userspace backend.
+            excludes += ['**/libwg.so', '**/libwg-quick.so']
+        }
+    }
+
     if (providers.gradleProperty('proxyTestRelease').orNull == 'true') {
         if (!hasReleaseSigning) {
             throw new GradleException('Testing the release APK requires production signing.')

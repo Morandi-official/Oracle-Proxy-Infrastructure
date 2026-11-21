@@ -713,6 +713,12 @@ def main(arguments):
                 raise
             print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
             return
+        if request.get('request_id')=='udp-flow-filter-configuration-20261121':
+            helper=Path(__file__).with_name('udp_flow_filter_configuration.py')
+            result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(helper)],capture_output=True,text=True,check=True,timeout=65)
+            if len(result.stdout)>16384:raise ValueError('OCI_FLOW_CONFIGURATION_OUTPUT_LIMIT')
+            print('OCI_UDP_FLOW_CONFIGURATION='+json.dumps(json.loads(result.stdout),sort_keys=True),flush=True)
+            return
         if request.get('request_id')=='udp-flow-log-coverage-20261121':
             helper=Path(__file__).with_name('udp_flow_readback.py')
             result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(helper),'--coverage'],capture_output=True,text=True,check=True,timeout=65)

@@ -285,7 +285,10 @@ if (endpointForm) {
  const command = el('endpoint-command');
  const submit = endpointForm.querySelector('[type=submit]');
  const resetPreview = () => { proposal.hidden = true; command.value = ''; status.textContent = ''; };
- endpointForm.addEventListener('change', resetPreview);
+ endpointForm.addEventListener('change', event => {
+  if (event.target.name !== 'confirmed') endpointForm.elements.confirmed.checked = false;
+  resetPreview();
+ });
  endpointForm.addEventListener('submit', async event => {
   event.preventDefault();
   resetPreview();

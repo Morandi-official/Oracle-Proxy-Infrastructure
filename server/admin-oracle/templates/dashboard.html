@@ -20,7 +20,7 @@
 {% if endpoint_catalog %}
 <p>当前主入口 <strong>{{ endpoint_catalog.primary.public_ipv4 }}</strong>，备用入口 <strong>{{ endpoint_catalog.backup.public_ipv4 }}</strong>。</p>
 <p class="muted">从服务器已登记的地址对中选择。请在 OCI 核对实际绑定，切换期间客户端可能需要重连。</p>
-<form id="endpoint-form" class="form-grid" data-revision="{{ endpoint_catalog.revision }}">
+<form id="endpoint-form" method="post" action="/api/admin/endpoint-proposal" class="form-grid" data-revision="{{ endpoint_catalog.revision }}">
 {% csrf_token %}
 <label>主 IP<select name="primary" required>{% for endpoint in endpoint_choices %}<option value="{{ endpoint.public_ipv4 }}"{% if endpoint == endpoint_catalog.primary %} selected{% endif %}>{{ endpoint.public_ipv4 }} · {{ endpoint.private_ipv4 }}</option>{% endfor %}</select></label>
 <label>备用 IP<select name="backup" required>{% for endpoint in endpoint_choices %}<option value="{{ endpoint.public_ipv4 }}"{% if endpoint == endpoint_catalog.backup %} selected{% endif %}>{{ endpoint.public_ipv4 }} · {{ endpoint.private_ipv4 }}</option>{% endfor %}</select></label>

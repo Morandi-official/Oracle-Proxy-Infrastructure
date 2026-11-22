@@ -44,7 +44,7 @@ def main():
       body=TEMPLATE.from_string((SERVER/'templates/dashboard.html').read_text()).render(Context({
        'csrf_token':'synthetic-browser-only-token','local_auth':True,
        'endpoint_catalog':{'primary':ENDPOINTS[0],'backup':ENDPOINTS[1],'revision':6},
-       'endpoint_choices':ENDPOINTS,
+       'endpoint_choices':ENDPOINTS,'endpoint_version':'baseline-selection',
       }))
       route.fulfill(status=200,content_type='text/html',body=body)
      elif path=='/login/':
@@ -85,10 +85,10 @@ def main():
       elif path.startswith('/api/users/') and path.endswith('/usage'):
        data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
       elif path=='/api/host-status':data={'sample':{'observed_at':int(time.time()),'cpu_count':4,'cpu_percent':25,'cpu_steal_percent':0,'io_wait_percent':0,'memory_percent':30,'memory_used_bytes':3000000000,'memory_total_bytes':10000000000,'load':[1,1,1],'disks':[{'used_percent':20,'used_bytes':20000000000,'total_bytes':100000000000,'available_bytes':80000000000,'inode_percent':3}],'network':{'interfaces':['ens3'],'rx_bytes_per_second':1250000,'tx_bytes_per_second':2500000,'packets_per_second':1000,'drops_delta':0,'errors_delta':0},'conntrack_count':40,'conntrack_max':10000,'tcp_established':12,'tcp_retransmit_percent':0,'alerts':[],'errors':[]},'age_seconds':1,'stale':False,'window':parse_qs(urlsplit(route.request.url).query).get('window',['hour'])[0],'bucket_seconds':60,'recorded_from':int(time.time())-3600,'history':[{'at':int(time.time())-60,'cpu':5,'memory':30,'disk':20,'load':1,'rx':1250000,'tx':2500000},{'at':int(time.time()),'cpu':25,'memory':30,'disk':20,'load':2,'rx':2000000,'tx':3000000}],'events':[]}
-      elif path=='/api/admin/endpoint-proposal':
+      elif path=='/api/admin/endpoint-apply':
        assert route.request.method=='POST' and route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
-       assert route.request.post_data_json=={'primary':'203.0.113.20','backup':'198.51.100.20','revision':6,'confirmed':True}
-       data={'changed':True,'primary':ENDPOINTS[2],'backup':ENDPOINTS[1],'revision':7,'command':'gh workflow run endpoint-settings.yml -f mode=select'}
+       assert route.request.post_data_json=={'primary':'203.0.113.20','backup':'198.51.100.20','version':'baseline-selection'}
+       data={'changed':True,'primary':ENDPOINTS[2],'backup':ENDPOINTS[1],'revision':7,'version':'applied-selection'}
       elif path=='/api/flclash':data={'profiles':profiles_fixture}
       elif path=='/api/flclash/create':
        assert route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
@@ -120,12 +120,12 @@ def main():
      expect(endpoints.locator('[name=primary]')).to_have_value('192.0.2.20')
      expect(endpoints.locator('[name=backup]')).to_have_value('198.51.100.20')
      endpoints.locator('[name=primary]').select_option('203.0.113.20')
-     endpoints.locator('[name=confirmed]').check()
-     endpoints.get_by_role('button',name='生成切换提案').click()
-     expect(page.locator('#endpoint-proposal-status')).to_contain_text('待审核 · 主 203.0.113.20')
-     expect(page.locator('#endpoint-command')).to_have_value('gh workflow run endpoint-settings.yml -f mode=select')
-     endpoints.locator('[name=primary]').select_option('192.0.2.20')
-     expect(page.locator('#endpoint-proposal')).to_be_hidden()
+     endpoints.get_by_role('button',name='应用切换').click()
+     expect(page.locator('#endpoint-current-primary')).to_have_text('203.0.113.20')
+     expect(page.locator('#endpoint-current-backup')).to_have_text('198.51.100.20')
+     expect(page.locator('#endpoint-revision')).to_have_text('7')
+     expect(page.locator('#endpoint-apply-status')).to_contain_text('已切换')
+     expect(endpoints).to_have_attribute('data-version','applied-selection')
      page.evaluate('scrollTo(0,0)')
 
      expect(page.locator('#udp-diag-details')).not_to_have_attribute('open','')

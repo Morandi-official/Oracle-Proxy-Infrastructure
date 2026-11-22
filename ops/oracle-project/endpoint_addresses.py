@@ -117,7 +117,13 @@ def apply():
     finally:os.close(fd)
 
 def _install():
-    catalog=module().validate(json.loads((REPO/'ops/network/endpoints.json').read_text()))
+    catalog_module = module()
+    with catalog_module.selection_lock(create=True):
+        return install_catalog(catalog_module)
+
+
+def install_catalog(catalog_module):
+    catalog=catalog_module.validate(json.loads((REPO/'ops/network/endpoints.json').read_text()))
     if os.geteuid()!=0:raise ValueError('ROOT_REQUIRED')
     fd=os.open(ROOT/'endpoint-addresses.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     try:
@@ -128,6 +134,9 @@ def _install():
         write(CONFIG,(json.dumps(catalog,sort_keys=True)+'\n').encode(),0o644)
         write(STABLE/'endpoint_config.py',(REPO/'server/admin-oracle/console/endpoint_config.py').read_bytes(),0o644)
         write(STABLE/'endpoint_addresses.py',Path(__file__).read_bytes(),0o644)
+        effective = catalog_module.read()
+        result.update(revision=effective['revision'], primary=effective['primary']['public_ipv4'],
+                      backup=effective['backup']['public_ipv4'])
     finally:os.close(fd)
     body=b'[Unit]\nDescription=Proxy configured endpoint addresses\nAfter=network-online.target\nWants=network-online.target\nBefore=oracle-proxy-quic.service\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/libexec/oracle-project/endpoint_addresses.py\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target\n'
     write(UNIT,body,0o644);run(['systemctl','daemon-reload']);run(['systemctl','enable','proxy-endpoint-addresses.service'])

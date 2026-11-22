@@ -35,11 +35,7 @@ class Controller:
 
     def call(self,args,**kwargs):return self.command(args,**kwargs)
 
-    def config(self):
-        try:info=CATALOG.lstat()
-        except FileNotFoundError:return None
-        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise ValueError('INGRESS_CATALOG_UNTRUSTED')
-        value=json.loads(CATALOG.read_text())
+    def configure(self, value):
         device=value.get('interface')
         if not isinstance(device,str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,32}',device) or device in ('lo','wg0',INTERFACE):raise ValueError('INGRESS_EGRESS_INTERFACE_INVALID')
         self.egress_interface=device
@@ -47,6 +43,27 @@ class Controller:
         if addresses[0]==addresses[1] or not all(ipaddress.ip_address(a).is_private for a in addresses):raise ValueError('INGRESS_CATALOG_INVALID')
         self.primary_address=addresses[0]
         return addresses
+
+    def config(self):
+        # The installed helper is shared with the Django API. The explicit
+        # alternate catalog path is used by the isolated network fixture.
+        if not CATALOG.exists() and not CATALOG.is_symlink():
+            return None
+        from importlib.util import module_from_spec, spec_from_file_location
+        if CATALOG == Path('/etc/oracle-proxy-quic/endpoints.json'):
+            if not hasattr(self, 'endpoint_catalog'):
+                path = Path(__file__).with_name('endpoint_config.py')
+                if not path.exists():
+                    path = Path(__file__).resolve().parents[1] / 'console' / 'endpoint_config.py'
+                spec = spec_from_file_location('runtime_endpoint_catalog', path)
+                self.endpoint_catalog = module_from_spec(spec)
+                spec.loader.exec_module(self.endpoint_catalog)
+            value = self.endpoint_catalog.read()
+            return None if value is None else self.configure(value)
+        try:info=CATALOG.lstat()
+        except FileNotFoundError:return None
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022:raise ValueError('INGRESS_CATALOG_UNTRUSTED')
+        return self.configure(json.loads(CATALOG.read_text()))
 
     def ensure_rule(self,tool,table,chain,rule):
         result=self.call([tool,'-w','5','-t',table,'-C',chain,*rule],accepted=(0,1))

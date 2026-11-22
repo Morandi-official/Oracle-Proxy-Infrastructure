@@ -38,11 +38,14 @@ def child(directory,qos=False):
     driver=policy.Driver();driver.initialize(False)
     allowed={'10.77.0.2':120,'fd42:6f70:78:77::2':120};driver.leases(set(allowed),allowed,True)
     controller=module.Controller(command,directory)
-    controller.config()
-    controller.ensure('10.0.0.246')
+    _, backup = controller.config()
+    controller.ensure(backup)
     Path('/proc/sys/net/ipv4/conf/wgopbackup/rp_filter').write_text('2\n')
     module.READY.write_text(controller.public_key+'\n');module.READY.chmod(0o600)
     controller.sync(json.loads((directory/'plan.json').read_text()))
+    spec=importlib.util.spec_from_file_location('endpoint_switch',ROOT/'server/admin-oracle/control/endpoint_switch.py')
+    switch=importlib.util.module_from_spec(spec);spec.loader.exec_module(switch)
+    switch.verify_kernel(controller,json.loads(module.CATALOG.read_text()))
     if qos:
         spec=importlib.util.spec_from_file_location('qos',ROOT/'server/admin-oracle/control/qos.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -91,7 +94,12 @@ def main():
             run('ip','-n',NAMES[0],'link','set','wgc','up')
             run('ip','-n',NAMES[0],'route','add','10.99.0.0/24','dev','wgc')
             run('ip','-n',NAMES[0],'-6','route','add','2603:c020:c015:8100::/64','dev','wgc')
-            (directory/'catalog.json').write_text(json.dumps({'interface':'opx-out','primary':{'private_ipv4':'10.0.0.6'},'backup':{'private_ipv4':'10.0.0.246'}}));(directory/'catalog.json').chmod(0o600)
+            ingress_addresses={'primary':'10.0.0.6','backup':'10.0.0.246'}
+            def write_catalog():
+                value={'interface':'opx-out',**{role:{'private_ipv4':ip} for role,ip in ingress_addresses.items()}}
+                (directory/'catalog.json').write_text(json.dumps(value))
+                (directory/'catalog.json').chmod(0o600)
+            write_catalog()
             plan=[{'public_key':client_public,'addresses':['10.77.0.2/32','fd42:6f70:78:77::2/128'],'roles':['primary'],'active':True}]
             def sync(roles):
                 plan[0]['roles']=roles;(directory/'plan.json').write_text(json.dumps(plan))
@@ -130,10 +138,12 @@ print('READY',flush=True)""")
             echo=subprocess.Popen(['ip','netns','exec',NAMES[1],sys.executable,'-u','-c',server],stdout=subprocess.PIPE,text=True)
             assert echo.stdout.readline().strip()=='READY'
             previous=[None]
-            def probe(role,port,expected,server_key=None,forward=False):
+            def probe(role,port,expected,server_key=None,forward=False,listen_port=None):
+                if listen_port:
+                    run('ip','netns','exec',NAMES[0],'wg','set','wgc','listen-port',str(listen_port))
                 key=server_key or (server_public if role=='primary' else backup_public)
                 if previous[0]:run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',previous[0],'remove')
-                previous[0]=key;address={'primary':'10.0.0.6','backup':'10.0.0.246','legacy':'10.0.0.247','ipv6':'[fd55:77::1]'}[role]
+                previous[0]=key;address={**ingress_addresses,'legacy':'10.0.0.247','ipv6':'[fd55:77::1]'}[role]
                 run('ip','netns','exec',NAMES[0],'wg','set','wgc','peer',key,'allowed-ips','10.77.0.0/24,fd42:6f70:78:77::/64,10.99.0.0/24,2603:c020:c015:8100::/64','endpoint',address+':'+str(port))
                 code='''import socket,sys
 for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:77::1')):
@@ -147,7 +157,7 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
  assert ok==(sys.argv[1]=='True'), 'unexpected ingress authorization result: family='+str(family)+' expected='+sys.argv[1]+' received='+str(ok)
 '''
                 if forward:code=code.replace('10.77.0.1','10.99.0.2').replace('fd42:6f70:78:77::1','2603:c020:c015:8100::20')
-                run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,str(expected),('10.0.0.6' if role=='primary' else '10.0.0.246') if forward else 'local')
+                run('ip','netns','exec',NAMES[0],sys.executable,'-c',code,str(expected),ingress_addresses[role] if forward else 'local')
             for port in (443,8443,51820):probe('primary',port,True);probe('backup',port,False);probe('backup',port,False,server_public)
             for port in (443,8443,51820):probe('legacy',port,False,server_public)
             probe('ipv6',51820,False,server_public)
@@ -183,6 +193,14 @@ for family,host in ((socket.AF_INET,'10.77.0.1'),(socket.AF_INET6,'fd42:6f70:78:
             sync(['backup']);probe('primary',443,False);probe('backup',443,True)
             sync(['primary']);probe('backup',443,False);probe('primary',443,True)
             print('REAL_PERMISSION_SWITCH_REVOKES_WRONG_INGRESS_WITH_SAME_CLIENT_KEY=PASS',flush=True)
+            ingress_addresses['primary'], ingress_addresses['backup'] = ingress_addresses['backup'], ingress_addresses['primary']
+            write_catalog()
+            sync(['primary'])
+            probe('primary',443,True,forward=True,listen_port=43910)
+            probe('backup',443,False,server_public,listen_port=43911)
+            sync(['primary','backup'])
+            probe('backup',443,True,forward=True,listen_port=43912)
+            print('REAL_ROLE_SWAP_PRESERVES_ALLOWLISTS_AND_PAIRED_EGRESS=PASS',flush=True)
         finally:
             if echo:echo.terminate();echo.wait(timeout=5)
             if internet:internet.terminate();internet.wait(timeout=5)

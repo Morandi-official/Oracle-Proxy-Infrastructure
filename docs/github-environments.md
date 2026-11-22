@@ -6,12 +6,13 @@
 
 仓库 **Settings → Environments → 对应环境**。普通参数填 **Environment variables → Add environment variable**；凭据填 **Environment secrets → Add environment secret**。Environment 自身的 Required reviewers、Deployment branches 是审批/分支保护设置，不是地址参数，不随换 IP 修改。
 
-## 当前使用的三个环境
+## 当前使用的环境
 
 | Environment | 用途 | 何时需要改 |
 | --- | --- | --- |
 | `oracle-ops` | 已授权的服务器部署/维护、地址提案、云端诊断 | 换入口 IP 改 `PROXY_*` 普通变量；管理员密码或 SSH 身份轮换才改对应 Secret |
 | `windows-client-acceptance` | main 分支的真实 Windows 客户端联网验收 | 仅验收账号变更、密码轮换或账号停用时更新验收凭据；换 IP 不需要改 |
+| `android-release` | Android 正式 APK 签名 | 首次发布配置，后续更新继续用同一签名 key |
 | `windows-product-build` | PR/非生产构建上下文，离线编译和打包 | 不需要生产服务器或真实用户凭据；不要把管理密码复制进去 |
 
 环境名称不能随意改名：工作流按名称选择环境，改名需同时修改源码引用。环境变量不是立即执行的命令；保存变量不会自动切换服务器，需运行相应工作流并查看结果。
@@ -53,11 +54,23 @@ SSH 维护工作流共享地址目录，先做只读探测，再对选定入口�
 
 `GITHUB_TOKEN` / `github.token` 是 GitHub 为一次工作流临时提供的令牌，不是需要手工添加的 Environment Secret。地址提案仅获得建立配置分支/PR 的权限，不自动合并、不直接写 main。如果仓库禁止 Actions 创建 PR，工作流 Summary 会给出已生成分支的比较链接，由所有者在网页创建 PR，无需新建个人访问令牌。
 
+## android-release
+
+| Secret | 含义 |
+| --- | --- |
+| `ANDROID_SIGNING_KEYSTORE_B64` | PKCS#12 或 JKS 签名库的 Base64 编码 |
+| `ANDROID_SIGNING_KEYSTORE_PASSWORD` | 签名库口令 |
+| `ANDROID_SIGNING_KEY_ALIAS` | APK 签名密钥别名 |
+| `ANDROID_SIGNING_KEY_PASSWORD` | 签名密钥口令 |
+
+安卓发布只在 main 上手动触发。启用 publish 后会验证正式签名包，并使用现有 `windows-client-acceptance` 中的专用账号完成 Android 生产验收。后续 APK 更新保留同一签名密钥。
+
 ## 工作流界面的临时参数
 
 | 工作流/参数 | 用途 | 常用选择 |
 | --- | --- | --- |
 | Primary and backup IP settings / `mode=inspect` | 只读显示仓库期望目录和公共 DNS | 排查当前配置、核对 DNS 服务商时；输出不是 OCI 实时绑定证据 |
+| 同上 / `mode=select`、`selected_primary`、`selected_backup`、`base_revision` | 按当前地址目录选择主、备，保持已登记的公网与私网映射 | 从管理后台「主备 IP」生成提案，不用改 Environment 变量 |
 | 同上 / `mode=prepare` | 为已经在 OCI 准备好的新入口生成配置 PR，保留旧入口用于恢复 | 未来换 IP 的第一阶段 |
 | 同上 / `mode=cutover` | OCI 已完成绑定交换后，更新私网映射并保持主、备入口分别使用各自 IPv4 出口 | 本轮新主 IP 交换到 `10.0.0.6` 后 |
 | 同上 / `confirmed_bindings` | 确认已核对实际 OCI 绑定 | 仅在控制台逐项读回符合变量值后勾选；不会替你执行 OCI 变更 |

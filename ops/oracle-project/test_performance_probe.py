@@ -3,6 +3,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 import io
+from email.message import Message
 
 spec=importlib.util.spec_from_file_location('performance',Path(__file__).with_name('performance_probe.py'))
 performance=importlib.util.module_from_spec(spec);spec.loader.exec_module(performance)
@@ -29,5 +30,18 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(call.call_args.args[0],['tc','-j','-s','qdisc','show'])
     def test_download_budget_is_bounded(self):
         self.assertEqual(performance.MAX_DOWNLOAD,8*1024*1024)
+
+    def test_release_download_is_fixed_and_capped(self):
+        body=io.BytesIO(b'x'*(performance.MAX_DOWNLOAD+1))
+        body.status=206
+        body.headers=Message()
+        body.headers['Content-Type']='application/octet-stream'
+        with patch.object(performance.OPEN,'open',return_value=body) as opener:
+            result=performance.transfer('download','github-release')
+        request=opener.call_args.args[0]
+        self.assertEqual(request.full_url,performance.RELEASE_DOWNLOAD)
+        self.assertEqual(request.headers['Range'],'bytes=0-'+str(performance.MAX_DOWNLOAD-1))
+        self.assertEqual(result['bytes'],performance.MAX_DOWNLOAD)
+        self.assertEqual(result['status'],'OBSERVED')
 
 if __name__=='__main__':unittest.main()

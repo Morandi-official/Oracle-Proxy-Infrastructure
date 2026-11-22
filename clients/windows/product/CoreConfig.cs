@@ -5,8 +5,7 @@ namespace OracleProxy.Product;
 internal static class CoreConfig
 {
     private static string ProcessPattern(string path)=>"(?i)^"+string.Concat(path.Select(c=>"\\.+*?()|[]{}^$".Contains(c)?"\\"+c:c.ToString()))+"$";
-    internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,bool httpsRelay)=>Build(state,secret,socksPassword,httpsRelay?TunnelTransport.WireGuardHttps:TunnelTransport.WireGuardUdp);
-    internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,TunnelTransport transport=TunnelTransport.WireGuardUdp,UdpDiagnosticTarget? diagnosticTarget=null)
+    internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,UdpDiagnosticTarget? diagnosticTarget=null)
     {
         string ingress=TransportPolicy.IngressAddress(state);
         var tunnel=state["tunnel"]!.AsObject();string endpoint=tunnel["endpoint"]!.GetValue<string>();
@@ -18,8 +17,6 @@ internal static class CoreConfig
         foreach(var node in addresses){var parts=node!.GetValue<string>().Split('/');
             if(parts.Length!=2 || !IPAddress.TryParse(parts[0],out var ip) || (ip.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork?parts[1]!="32":parts[1]!="128"))throw new IOException("INVALID_TUNNEL_ADDRESS");}
         string serverKey=(diagnosticTarget is not null && tunnel["server_public_keys"] is JsonObject keys ? keys[diagnosticTarget.Address] : tunnel["server_public_key"])?.GetValue<string>() ?? throw new IOException("UNAUTHORIZED_INGRESS_IDENTITY");if(Convert.FromBase64String(serverKey).Length!=32)throw new IOException("INVALID_SERVER_KEY");
-        if(transport==TunnelTransport.WireGuardHttps && (port!=51820 || tunnel["https_relay"]?.GetValue<bool>()!=true || !System.Text.RegularExpressions.Regex.IsMatch(secret.Token,@"\A[A-Za-z0-9_-]{43}\z")))throw new IOException("HTTPS_RELAY_NOT_AVAILABLE");
-        if(transport==TunnelTransport.WireGuardQuic && (port!=51820 || !TransportPolicy.QuicAvailable(state) || !System.Text.RegularExpressions.Regex.IsMatch(secret.Token,@"\A[A-Za-z0-9_-]{43}\z")))throw new IOException("QUIC_RELAY_NOT_AVAILABLE");
         var rules=new JsonArray();
         if(secret.UuPaths.Length>0)rules.Add(new JsonObject{["process_path_regex"]=new JsonArray(secret.UuPaths.Select(p=>(JsonNode?)JsonValue.Create(ProcessPattern(p))).ToArray()),["action"]="route",["outbound"]="uu-direct"});
         rules.Add(new JsonObject{["port"]=53,["action"]="hijack-dns"});
@@ -33,24 +30,10 @@ internal static class CoreConfig
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="uu-direct"}),
             ["route"]=new JsonObject{["auto_detect_interface"]=true,["find_process"]=true,["rules"]=rules,["final"]="oracle-wireguard"}
         };
-        if(transport==TunnelTransport.WireGuardUdp){
-            // Use a connected UDP socket through the physical direct dialer.
-            // The default WG StdNetBind opens wildcard dual-stack listeners;
-            // the connected path selects the actual IPv4 peer before binding,
-            // as the working backup carriers already do. No encapsulation.
-            config["endpoints"]![0]!["detour"]="oracle-native-udp";
-            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["ipv6_payload"]=dual,["address"]=ingress,["tag"]="oracle-native-udp",["ports"]=new JsonArray(NativeUdpPortPolicy.Select(state,secret,port).Select(p=>(JsonNode?)JsonValue.Create(p)).ToArray())});
-        }
-        if(secret.NativeUdpPortPreference is not (0 or 443 or 8443 or 51820))throw new IOException("INVALID_NATIVE_PORT_PREFERENCE");
-        if(transport==TunnelTransport.WireGuardQuic){
-            config["endpoints"]![0]!["detour"]="oracle-quic-relay";
-            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-quic",["address"]=ingress,["tag"]="oracle-quic-relay",["token"]=secret.Token,["certificate"]=tunnel["quic"]!["certificate"]!.DeepClone()});
-        }
-        if(transport==TunnelTransport.WireGuardHttps){
-            config["endpoints"]![0]!["detour"]="oracle-https-relay";
-            config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-https",["address"]=ingress,["tag"]="oracle-https-relay",["token"]=secret.Token});
-        }
-        diagnosticTarget?.Apply(config,transport);
+        // WireGuard uses connected UDP sockets on the physical interface.
+        config["endpoints"]![0]!["detour"]="oracle-native-udp";
+        config["outbounds"]!.AsArray().Add(new JsonObject{["type"]="oracle-native-udp",["ipv6_payload"]=dual,["address"]=ingress,["tag"]="oracle-native-udp",["ports"]=new JsonArray(NativeUdpPortPolicy.Select(state,secret,port).Select(p=>(JsonNode?)JsonValue.Create(p)).ToArray())});
+        diagnosticTarget?.Apply(config);
         return config;
     }
 }

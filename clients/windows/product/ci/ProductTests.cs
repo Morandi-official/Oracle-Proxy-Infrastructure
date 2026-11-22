@@ -186,9 +186,9 @@ internal static class ProductTests
         // sleeps or a second implementation of the fallback condition.
         var events=new NativeUdpEvidence();
         if(!events.Record("NATIVE_UDP_51820_SEND_INIT") || !events.Record("NATIVE_UDP_51820_INIT_INDEX_123"))return false;
-        bool Decide(long age,bool pending,int failures=2,bool verified=false,bool reply=false)=>CarrierFallbackPolicy.ShouldFallback(TunnelTransport.WireGuardUdp,verified,reply,events.Snapshot(),failures,age,pending);
-        if(Decide(5000,false,1) || CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,false,events.Snapshot()))return false;
-        if(!events.Record("NATIVE_UDP_443_SEND_INIT") || !events.Record("NATIVE_UDP_443_INIT_INDEX_456") || !CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,false,events.Snapshot()))return false;
+        bool Decide(long age,bool pending,int failures=2,bool verified=false,bool reply=false)=>UdpRetryPolicy.ShouldRetry(verified,reply,events.Snapshot(),failures,age,pending);
+        if(Decide(5000,false,1) || UdpRetryPolicy.SilentColdRetry(false,false,events.Snapshot()))return false;
+        if(!events.Record("NATIVE_UDP_443_SEND_INIT") || !events.Record("NATIVE_UDP_443_INIT_INDEX_456") || !UdpRetryPolicy.SilentColdRetry(false,false,events.Snapshot()))return false;
         foreach(long age in new[]{7999L,8000,8333,10000,10665,11999})
             if(Decide(age,false) || Decide(age,true))return false;
         if(!events.Record("NATIVE_UDP_51820_SEND_INIT"))return false;
@@ -201,25 +201,25 @@ internal static class ProductTests
         if(!events.Record("NATIVE_UDP_51820_RECV_REPLY"))return false;
         // A reply on retry 2 can keep the current real HTTP/TLS probe alive;
         // HTTP verification, not the carrier READY banner, commits success.
-        if(CarrierFallbackPolicy.SilentColdRetry(TunnelTransport.WireGuardUdp,false,true,events.Snapshot()) || Decide(10666,true,2,reply:true) || Decide(12000,true,2,reply:true) || Decide(12500,false,0,verified:true,reply:true))return false;
+        if(UdpRetryPolicy.SilentColdRetry(false,true,events.Snapshot()) || Decide(10666,true,2,reply:true) || Decide(12000,true,2,reply:true) || Decide(12500,false,0,verified:true,reply:true))return false;
         Console.WriteLine("COLD_WG_RETRY_AFTER_TWO_LOST_FRESH_INITIATIONS_RECOVERS_AT_10666_MS_WITHOUT_EIGHT_SECOND_RESTART=PASS");
         Console.WriteLine("SILENT_COLD_WG_BLACKHOLE_HAS_TWELVE_SECOND_LIMIT_EVEN_WITH_PENDING_PROBE=PASS");
         // Existing verified generations, missing retry evidence, socket errors,
         // and other transports retain their previous pending-probe behavior.
-        bool Baseline(TunnelTransport transport,JsonObject? evidence,bool verified=false,bool reply=false){
-            long limit=transport==TunnelTransport.WireGuardUdp?8000:6000;
-            return !CarrierFallbackPolicy.SilentColdRetry(transport,verified,reply,evidence)
-                && !CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,2,limit-1,false)
-                && CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,2,limit,false)
-                && !CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,1,15000,false)
-                && !CarrierFallbackPolicy.ShouldFallback(transport,verified,reply,evidence,2,15000,true);
+        bool Baseline(JsonObject? evidence,bool verified=false,bool reply=false){
+            long limit=8000;
+            return !UdpRetryPolicy.SilentColdRetry(verified,reply,evidence)
+                && !UdpRetryPolicy.ShouldRetry(verified,reply,evidence,2,limit-1,false)
+                && UdpRetryPolicy.ShouldRetry(verified,reply,evidence,2,limit,false)
+                && !UdpRetryPolicy.ShouldRetry(verified,reply,evidence,1,15000,false)
+                && !UdpRetryPolicy.ShouldRetry(verified,reply,evidence,2,15000,true);
         }
-        if(!Baseline(TunnelTransport.WireGuardUdp,silent,verified:true) || !Baseline(TunnelTransport.WireGuardUdp,silent,reply:true) || !Baseline(TunnelTransport.WireGuardUdp,null) || !Baseline(TunnelTransport.WireGuardUdp,new JsonObject()) || !Baseline(TunnelTransport.WireGuardQuic,silent) || !Baseline(TunnelTransport.WireGuardHttps,silent))return false;
+        if(!Baseline(silent,verified:true) || !Baseline(silent,reply:true) || !Baseline(null) || !Baseline(new JsonObject()))return false;
         var one=new NativeUdpEvidence();one.Record("NATIVE_UDP_8443_SEND_INIT");
-        if(!Baseline(TunnelTransport.WireGuardUdp,one.Snapshot()))return false;
+        if(!Baseline(one.Snapshot()))return false;
         foreach(string error in new[]{"NATIVE_UDP_51820_READ_ERROR_10054","NATIVE_UDP_443_WRITE_ERROR_10040","NATIVE_UDP_8443_SOCKET_BUFFER_ERROR_10022"}){
             var socket=new NativeUdpEvidence();socket.Record("NATIVE_UDP_51820_SEND_INIT");socket.Record("NATIVE_UDP_443_SEND_INIT");
-            if(!socket.Record(error) || !Baseline(TunnelTransport.WireGuardUdp,socket.Snapshot()))return false;
+            if(!socket.Record(error) || !Baseline(socket.Snapshot()))return false;
         }
         foreach(var malformed in new JsonObject[]{
             new(){["51820"]=new JsonObject{["tx_initiations"]=2,["sender_indices"]=new JsonArray("123")}},
@@ -234,7 +234,7 @@ internal static class ProductTests
             new(){["51820"]=new JsonObject{["tx_initiations"]=2,["unknown"]=0}},
             new(){["51820"]=new JsonObject{["tx_initiations"]=2,["rx_responses"]=1}},
             new(){["51820"]=new JsonObject{["tx_initiations"]=2,["last_write_error"]=10040}}
-        })if(!Baseline(TunnelTransport.WireGuardUdp,malformed))return false;
+        })if(!Baseline(malformed))return false;
         Console.WriteLine("COLD_RETRY_GRACE_REQUIRES_CURRENT_UNVERIFIED_SILENT_ERROR_FREE_WG_RETRY_EVIDENCE_AND_PRESERVES_OTHER_BASELINES=PASS");
         return true;
     }
@@ -454,10 +454,9 @@ internal static class ProductTests
         UiAssert(UdpDiagnosticTarget.All.Select(t=>t.Address).Distinct().ToHashSet().SetEquals(new[]{"152.67.154.225","150.230.113.158"}),"UDP_SELECTED_PRIMARY_BACKUP_TARGETS");
         foreach(var target in UdpDiagnosticTarget.All){
             var config=new JsonObject{["outbounds"]=new JsonArray(new JsonObject{["type"]="oracle-native-udp",["address"]="141.147.78.44",["ports"]=new JsonArray(443,8443)})};
-            target.Apply(config,TunnelTransport.WireGuardUdp);
+            target.Apply(config);
             UiAssert(config["outbounds"]![0]!["address"]!.GetValue<string>()==target.Address && config["outbounds"]![0]!["ports"]!.AsArray().Count==1 && config["outbounds"]![0]!["ports"]![0]!.GetValue<int>()==target.Port,"UDP_TARGET_FIXED_WITHOUT_FALLBACK");
-            bool refused=false;try{target.Apply(config,TunnelTransport.WireGuardHttps);}catch(IOException){refused=true;}
-            UiAssert(refused,"UDP_DIAGNOSTIC_REJECTS_HTTPS");
+
         }
         foreach(var (address,port) in new[]{("127.0.0.1",443),("152.67.156.100",22),("141.147.78.44",0)}){
             bool refused=false;try{_ = new UdpDiagnosticTarget(address,port);}catch(IOException){refused=true;}
@@ -515,10 +514,8 @@ internal static class ProductTests
         var savedNative=nativeEvents.Snapshot();nativeEvents.Clear();
         if(savedNative["8443"]?["sndbuf_after"]?.GetValue<uint>()!=7340032 || savedNative["8443"]?["rx_responses"]?.GetValue<int>()!=1 || savedNative["443"]?["tx_initiations"]?.GetValue<int>()!=1 || savedNative["443"]?["last_read_error"]?.GetValue<uint>()!=10054 || nativeEvents.Snapshot().Count!=0)return 1;
         Console.WriteLine("NATIVE_UDP_PORT_COUNTERS_STRICT_NUMERIC_VOCABULARY_AND_IMMUTABLE_SNAPSHOT=PASS");
-        var carriers=new CarrierMemory();var relayState=new JsonObject{["tunnel"]=new JsonObject{["https_relay"]=true}};
-        carriers.Observe("synthetic-network-a");carriers.Failed(TunnelTransport.WireGuardUdp);
-        if(carriers.Preferred(relayState)!=TunnelTransport.WireGuardHttps || carriers.Observe("synthetic-network-a"))return 1;
-        if(!carriers.Observe("synthetic-network-b") || carriers.Preferred(relayState)!=TunnelTransport.WireGuardUdp)return 1;
+        var network=new CarrierMemory();
+        if(!network.Observe("synthetic-network-a") || network.Observe("synthetic-network-a") || !network.Observe("synthetic-network-b"))return 1;
         Console.WriteLine("NETWORK_CHANGE_RESTORES_NATIVE_UDP_PREFERENCE=PASS");
         Application.EnableVisualStyles();
         var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
@@ -549,7 +546,7 @@ internal static class ProductTests
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-start").Enabled,"UDP_DIAGNOSTIC_BLOCKED_WHILE_PROTECTED");
         snapshot.Remove("udp_diagnostic");form.Display(snapshot);
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-copy").Enabled,"UDP_REPORT_CLEARED_ON_SESSION_RESET");
-        snapshot["mode"]="connected";snapshot["transport"]="wireguard-quic";snapshot["verified_exit_ip"]="152.67.156.100";snapshot["latency_ms"]=186L;snapshot["core_pid"]=123U;
+        snapshot["mode"]="connected";snapshot["transport"]="wireguard-udp";snapshot["verified_exit_ip"]="152.67.156.100";snapshot["latency_ms"]=186L;snapshot["core_pid"]=123U;
         snapshot["traffic"]=new JsonObject{["sample_ms"]=1000L,["rx_bytes"]=10000L,["tx_bytes"]=20000L};form.Display(snapshot);
         snapshot["traffic"]=new JsonObject{["sample_ms"]=2000L,["rx_bytes"]=12048L,["tx_bytes"]=21024L};form.Display(snapshot);
         if(form.DownloadRate!="2.0 KB/s" || form.UploadRate!="1.0 KB/s")return 1;
@@ -579,14 +576,14 @@ internal static class ProductTests
         form.Hide();
         snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
         snapshot["mode"]="disconnected";snapshot["guard"]=false;snapshot["preparing"]=true;snapshot["quick_ready"]=true;
-        snapshot["error"]="";snapshot["transport"]="wireguard-quic";
+        snapshot["error"]="";snapshot["transport"]="wireguard-udp";
         var pollCalls=new List<string>();
         using var idle=new MainForm((command,_,_)=>{pollCalls.Add(command);return Task.FromResult((JsonObject)snapshot.DeepClone());});
         idle.Display(snapshot);idle.CreateControl();idle.PerformLayout();
         IEnumerable<Control> Descendants(Control parent){foreach(Control control in parent.Controls){yield return control;foreach(var child in Descendants(control))yield return child;}}
-        var protocolChoices=Descendants(idle).OfType<ComboBox>().Single(c=>c.Name=="transport-choice");
-        if(protocolChoices.Items.Count!=2 || protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTPS",StringComparison.Ordinal)) || !protocolChoices.Items.Cast<string>().Any(x=>x.Contains("HTTP/3",StringComparison.Ordinal)))return 1;
-        Console.WriteLine("PROTOCOL_CHOICES_ARE_UDP_HTTP3_WITH_SEPARATE_PORT_SELECTOR=PASS");
+        if(Descendants(idle).Any(c=>c.Name=="transport-choice") ||
+           !Descendants(idle).OfType<ComboBox>().Any(c=>c.Name=="udp-port-choice"))return 1;
+        Console.WriteLine("WIREGUARD_UDP_IS_FIXED_AND_PORT_SELECTOR_REMAINS=PASS");
         int textChanges=0,buttonChanges=0,layouts=0;
         foreach(var control in Descendants(idle)){
             control.TextChanged+=(_,_)=>textChanges++;
@@ -614,25 +611,20 @@ internal static class ProductTests
         while((!read.IsCompleted || !click.IsCompleted) && deadline.Elapsed<TimeSpan.FromSeconds(5)){Application.DoEvents();Thread.Sleep(5);}
         if(!read.IsCompletedSuccessfully || !click.IsCompletedSuccessfully || !calls.SequenceEqual(new[]{"Status","Connect"}))return 1;
         Console.WriteLine("CONNECT_CLICK_DURING_PASSIVE_READ_IS_QUEUED_AND_EXECUTED=PASS");
-        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["transport_preference"]="udp";preferenceState["native_udp_8443_available"]=true;preferenceState["native_udp_ports"]=new JsonArray(443,8443,51820);
+        var preferenceState=(JsonObject)snapshot.DeepClone();preferenceState["native_udp_8443_available"]=true;preferenceState["native_udp_ports"]=new JsonArray(443,8443,51820);
         var preferenceCalls=new List<string>();
         using var reselect=new MainForm((command,_,_)=>{preferenceCalls.Add(command);return Task.FromResult((JsonObject)preferenceState.DeepClone());});
         reselect.Display(preferenceState);
-        var sameChoice=Descendants(reselect).OfType<ComboBox>().Single(c=>c.Name=="transport-choice");
-        typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(sameChoice,[EventArgs.Empty]);
-        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdpAdaptive"}))return 1;
-        Console.WriteLine("RESELECTING_NORMAL_UDP_RESTORES_ADAPTIVE_PORT_SELECTION=PASS");
         var portChoice=Descendants(reselect).OfType<ComboBox>().Single(c=>c.Name=="udp-port-choice");
         portChoice.SelectedIndex=portChoice.FindStringExact("8443");
         typeof(ComboBox).GetMethod("OnSelectionChangeCommitted",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.Invoke(portChoice,[EventArgs.Empty]);
-        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdpAdaptive","PreferUdp8443"}))return 1;
+        if(!preferenceCalls.SequenceEqual(new[]{"PreferUdp8443"}))return 1;
         preferenceState["intent"]=true;reselect.Display(preferenceState);
         if(portChoice.Enabled)return 1;
         Console.WriteLine("NATIVE_UDP8443_SELECTED_FROM_MAIN_PORT_PICKER=PASS");
-        foreach(string preference in new[]{"auto","udp"}){
-            var defaults=(JsonObject)snapshot.DeepClone();defaults["intent"]=false;defaults["transport_preference"]=preference;defaults["native_udp_8443_available"]=true;defaults["native_udp_port_preference"]=0;defaults["ok"]=true;
-            var selectionCalls=new List<string>();
-            using var normal=new MainForm((command,_,_)=>{selectionCalls.Add(command);if(command.EndsWith("8443",StringComparison.Ordinal))defaults["native_udp_port_preference"]=8443;return Task.FromResult((JsonObject)defaults.DeepClone());});
+        var defaults=(JsonObject)snapshot.DeepClone();defaults["intent"]=false;defaults["native_udp_8443_available"]=true;defaults["native_udp_port_preference"]=0;defaults["ok"]=true;
+        var selectionCalls=new List<string>();
+        using(var normal=new MainForm((command,_,_)=>{selectionCalls.Add(command);return Task.FromResult((JsonObject)defaults.DeepClone());})){
             normal.Display(defaults);normal.Act("Connect").GetAwaiter().GetResult();
             if(!selectionCalls.SequenceEqual(new[]{"Connect"}))return 1;
         }
@@ -641,8 +633,7 @@ internal static class ProductTests
             rejected.Display(denied);rejected.Act("PreferUdp").GetAwaiter().GetResult();
             if(!deniedCalls.SequenceEqual(new[]{"PreferUdp"}))return 1;
         }
-        if(TransportPolicy.ClientSelection(0,false)!="PreferUdp" || TransportPolicy.ClientSelection(1,false)!="PreferQuic" || TransportPolicy.ClientSelection(1,true)!="PreferQuic" || TransportPolicy.ClientSelection(0,true)!="PreferUdpAdaptive")return 1;
-        Console.WriteLine("NORMAL_UDP_AND_AUTO_CONNECT_PRESERVE_ADAPTIVE_PORT_SELECTION=PASS");
+        Console.WriteLine("CONNECT_PRESERVE_ADAPTIVE_PORT_SELECTION=PASS");
         var pending=(JsonObject)snapshot.DeepClone();pending["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
         pending["registration"]=new JsonObject{["status"]="pending",["device_id"]="112233aabbcc",["device_name"]="DESKTOP-NEW",["requires_slot"]=true};pending["devices"]=new JsonArray();
         using(var registrationForm=new MainForm((command,name,consent)=>Task.FromResult((JsonObject)pending.DeepClone()))){

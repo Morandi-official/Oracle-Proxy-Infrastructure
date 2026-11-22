@@ -57,7 +57,7 @@ using Microsoft.Win32.SafeHandles;
 public static class RuntimeUpgradePipe {
  [DllImport("kernel32.dll")] static extern bool GetNamedPipeServerProcessId(SafePipeHandle handle,out uint pid);
  public static string Send(uint expectedPid,string command) {
-  if(command!="Status" && command!="PreferUdp" && command!="PreferAuto")throw new IOException("FIXED_RUNTIME_FIXTURE_COMMANDS_ONLY");
+  if(command!="Status" && command!="PreferUdp" && command!="PreferUdp443")throw new IOException("FIXED_RUNTIME_FIXTURE_COMMANDS_ONLY");
   using(var pipe=new NamedPipeClientStream(".","OracleProxy.Control.v1",PipeDirection.InOut,PipeOptions.Asynchronous,TokenImpersonationLevel.Impersonation)){
    pipe.Connect(3000);uint pid;if(!GetNamedPipeServerProcessId(pipe.SafePipeHandle,out pid)||pid!=expectedPid)throw new IOException("SERVICE_PID_BINDING_FAILED");
    byte[] request=Encoding.UTF8.GetBytes("{\"version\":1,\"command\":\""+command+"\"}\n");pipe.Write(request,0,request.Length);pipe.Flush();
@@ -68,9 +68,9 @@ public static class RuntimeUpgradePipe {
  }
 }
 '@
-function Assert-RuntimeStatus([uint32]$ExpectedPid,[string]$Command,[string]$Version,[string]$Preference){
+function Assert-RuntimeStatus([uint32]$ExpectedPid,[string]$Command,[string]$Version,[string]$Preference,[int]$Port=0){
  $value=[RuntimeUpgradePipe]::Send($ExpectedPid,$Command) | ConvertFrom-Json
- if($value.schema -ne 1 -or -not $value.ok -or $value.mode -ne 'disconnected' -or $value.intent -ne $false -or $value.guard -ne $false -or $value.product_version -notlike ($Version+'*') -or $value.transport_preference -cne $Preference){throw 'RUNTIME_UPGRADE_AUTHENTICATED_STATUS_OR_STATE_FAILED'}
+ if($value.schema -ne 1 -or -not $value.ok -or $value.mode -ne 'disconnected' -or $value.intent -ne $false -or $value.guard -ne $false -or $value.product_version -notlike ($Version+'*') -or ($Preference -and $value.transport_preference -cne $Preference) -or (!$Preference -and ($value.transport -cne 'wireguard-udp' -or $value.native_udp_port_preference -ne $Port))){throw 'RUNTIME_UPGRADE_AUTHENTICATED_STATUS_OR_STATE_FAILED'}
 }
 
 try {
@@ -141,16 +141,16 @@ try {
  Invoke-RuntimeProduct $new @('--install',$owner)
  $newPid=Get-VerifiedProductService $newHash
  if($newPid -eq $oldPid){throw 'CROSS_RUNTIME_UPGRADE_DID_NOT_REPLACE_PROCESS'}
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc34+' 'udp'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc46+' ''
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $cipherBefore){throw 'CROSS_RUNTIME_UPGRADE_REWROTE_EXISTING_DPAPI_STATE'}
  Invoke-RuntimeWitness 'VerifyUdp'
- Assert-RuntimeStatus $newPid 'PreferAuto' '0.3.0-rc34+' 'auto'
+ Assert-RuntimeStatus $newPid 'PreferUdp443' '0.3.0-rc46+' '' 443
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -eq $cipherBefore){throw 'NET10_SERVICE_DID_NOT_SAVE_SYNTHETIC_PREFERENCE'}
- Invoke-RuntimeWitness 'VerifyAuto'
+ Invoke-RuntimeWitness 'VerifyPort'
  Restart-Service OracleProxyService
  $newPid=Get-VerifiedProductService $newHash
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc34+' 'auto'
- Invoke-RuntimeWitness 'VerifyAuto'
+ Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc46+' '' 443
+ Invoke-RuntimeWitness 'VerifyPort'
  Write-Host 'REAL_NET8_TO_NET10_SYSTEM_DPAPI_OWNER_PUBLIC_PRIVATE_KEY_AND_SCM_PIPE_UPGRADE=PASS'
  Invoke-RuntimeProduct $new @('--uninstall')
  if((Get-Service OracleProxyService -ErrorAction SilentlyContinue) -or (Test-Path $serviceRoot) -or (Test-Path $stateRoot)){throw 'CROSS_RUNTIME_UNINSTALL_NOT_COMPLETE'}

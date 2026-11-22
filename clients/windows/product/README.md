@@ -20,10 +20,9 @@ License: new product integration GPL-3.0-or-later; upstream sing-box GPLv3-or-la
 Main-branch CI additionally uses only the ordinary, low-quota account in the `windows-client-acceptance` Environment to verify actual Oracle egress, explicit device confirmation, usage linkage, GUI-process loss, SCM crash recovery and explicit disconnect. Pull-request jobs do not receive that Environment's credentials. This acceptance harness is excluded from the product executable and never uploads keys, bearer tokens, passwords or screenshots of a real account. A CI enrollment consumes a device slot; logging out intentionally does not erase the server's historical device record.
 
 
-Transport preference is native WireGuard UDP 51820, then authenticated QUIC
-UDP 8443, then authenticated HTTPS/TLS 443. QUIC uses a dedicated public trust
-certificate obtained through verified Oracle HTTPS, hostname and expiry checks,
-and bounded datagram fragmentation; there is no insecure TLS mode.
+The sole VPN transport is native WireGuard UDP. The client retains the UDP
+port picker and automatic failover to another authorized IP. The local control
+service verifies the WireGuard exit before reporting the connection ready.
 
 The GUI requests route-free encrypted preparation while visible. The standby
 core exposes only a random authenticated loopback SOCKS probe, with no TUN or
@@ -38,10 +37,8 @@ connections are never represented as verified or promised to take one second.
 The hosted Oracle acceptance measures the actual IPC click duration, verifies
 ordinary app HTTP exit and fresh UDP DNS, and rejects a prepared switch taking
 1000 ms or more. Route-free standby must leave ordinary app egress direct. The
-QUIC end-to-end gate runs once the server advertises the externally tested port;
-blocking both UDP carriers must still select HTTPS and retain crash protection.
-
-rc9 adds explicit Auto / WireGuard UDP / QUIC HTTP3 preferences, native 51820→443 single-device datagram probing, standard h3 Extended CONNECT-UDP with raw HTTP Datagrams and bounded RFC9298 DATAGRAM Capsules for larger packets, a physical-interface-bound SYSTEM control/carrier path, and tunneled admin-site access. HTTPS is automatic fallback only. Fresh kernel/core verification remains mandatory after process loss; persisted carrier hints never authorize a connection.
+Acceptance covers UDP loss, permitted ingress and port fallback, DNS and
+dual-stack egress, and recovery without opening an unprotected tunnel route.
 
 
 Since rc36, normal window close and “断开并恢复直连” use cold cleanup:

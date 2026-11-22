@@ -22,7 +22,13 @@ import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.Proxy;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+
+import javax.net.ssl.HttpsURLConnection;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.assertFalse;
@@ -58,6 +64,7 @@ public final class ProductionLifecycleTest {
             await("Production device enrollment", () -> controller.snapshot().registered
                     && !controller.snapshot().busy);
 
+            sampleDownload(context.getSystemService(ConnectivityManager.class).getActiveNetwork(), "DIRECT");
             instrumentation.waitForIdleSync();
             instrumentation.runOnMainSync(() -> {
                 android.view.View connect = activity.findViewById(R.id.connect);
@@ -76,6 +83,7 @@ public final class ProductionLifecycleTest {
             Network vpn = vpnNetwork(context);
             assertNotNull("Production VPN network is installed", vpn);
             assertTrue("DNS resolves over the VPN network", vpn.getAllByName("www.cloudflare.com").length > 0);
+            sampleDownload(vpn, "WIREGUARD_UDP");
             controller.disconnect();
             await("Production VPN route removed", () -> !engine.isUp() && vpnNetwork(context) == null);
             controller.removeDevice(controller.snapshot().deviceId);
@@ -84,6 +92,45 @@ public final class ProductionLifecycleTest {
             controller.disconnect();
             instrumentation.runOnMainSync(activity::finish);
             api.cleanUp();
+        }
+    }
+
+    private static void sampleDownload(Network network, String route) {
+        int limit = 2 * 1024 * 1024;
+        long start = SystemClock.elapsedRealtime();
+        HttpsURLConnection connection = null;
+        try {
+            if (network == null) {
+                throw new IOException();
+            }
+            connection = (HttpsURLConnection) network.openConnection(
+                    new URL("https://speed.cloudflare.com/__down?bytes=" + limit), Proxy.NO_PROXY);
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(5_000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            int total = 0;
+            try (InputStream input = connection.getInputStream()) {
+                byte[] buffer = new byte[32768];
+                while (total <= limit && SystemClock.elapsedRealtime() - start < 12_000) {
+                    int read = input.read(buffer, 0, Math.min(buffer.length, limit + 1 - total));
+                    if (read == -1) {
+                        break;
+                    }
+                    total += read;
+                }
+            }
+            if (total != limit) {
+                throw new IOException();
+            }
+            System.out.println("ANDROID_DOWNLOAD_" + route + "_BYTES=" + total
+                    + ";ELAPSED_MS=" + (SystemClock.elapsedRealtime() - start));
+        } catch (IOException failure) {
+            System.out.println("ANDROID_DOWNLOAD_" + route + "=UNAVAILABLE");
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 

@@ -33,7 +33,7 @@ internal sealed class CoreProcess : IDisposable
     internal string SafeStage=>Volatile.Read(ref _safeStage);
     internal uint Pid=>Running?(uint)_process!.Id:0;
     internal bool Running=>_process is not null && !_process.HasExited;
-    internal async Task Start(JsonObject state,DurableState secret,TunnelTransport transport=TunnelTransport.WireGuardUdp,bool standby=false,UdpDiagnosticTarget? diagnosticTarget=null,Action? probeReady=null)
+    internal async Task Start(JsonObject state,DurableState secret,bool standby=false,UdpDiagnosticTarget? diagnosticTarget=null,Action? probeReady=null)
     {
         _stop.Token.ThrowIfCancellationRequested();
         if(Running)throw new IOException("CORE_ALREADY_RUNNING");
@@ -68,7 +68,7 @@ internal sealed class CoreProcess : IDisposable
             if(line.Data?.StartsWith("EGRESS_H3_VERIFIED ",StringComparison.Ordinal)==true){
                 h3Proof?.TrySetResult(InitialProbeRace.Parse(line.Data,_expectedIPv4,(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds));return;
             }
-            if(line.Data is "CARRIER_H3_TLS" or "CARRIER_H3_SETTINGS" or "CARRIER_H3_AUTH" or "CARRIER_H3_READY" or "CARRIER_H3_TLS_TIMEOUT" or "CARRIER_H3_TLS_CERTIFICATE" or "CARRIER_H3_TLS_FAILED" or "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443" or "CARRIER_NATIVE_8443")Volatile.Write(ref _carrierStage,line.Data);
+            if(line.Data is "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443" or "CARRIER_NATIVE_8443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data=="WIREGUARD_REPLY_RECEIVED")Volatile.Write(ref _wireGuardReply,1);
             else if(line.Data is "CARRIER_NATIVE_TRY_51820" or "CARRIER_NATIVE_TRY_443" or "CARRIER_NATIVE_TRY_8443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data is "TUN_CLEANUP_IP_FAILED" or "TUN_CLEANUP_ROUTE_FAILED" or "TUN_CLEANUP_DNS4_FAILED" or "TUN_CLEANUP_DNS6_FAILED")Volatile.Write(ref _safeStage,line.Data);
@@ -76,7 +76,7 @@ internal sealed class CoreProcess : IDisposable
                 if(line.Data!="CORE_CLOSE_FAILED" || !SafeStage.StartsWith("TUN_CLEANUP_",StringComparison.Ordinal))Volatile.Write(ref _safeStage,line.Data);
             }
         };_process.BeginErrorReadLine();
-        await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,transport,diagnosticTarget).ToJsonString());await _process.StandardInput.FlushAsync();
+        await _process.StandardInput.WriteLineAsync(CoreConfig.Build(state,secret,_probeSecret,diagnosticTarget).ToJsonString());await _process.StandardInput.FlushAsync();
         string? ready;
         async Task<string?> ReadStartup(){
             string? line=await _process.StandardOutput.ReadLineAsync();

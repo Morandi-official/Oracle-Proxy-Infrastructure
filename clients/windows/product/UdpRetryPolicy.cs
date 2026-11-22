@@ -3,24 +3,24 @@ namespace OracleProxy.Product;
 
 // A silent initial handshake may have lost both the first initiation and its
 // five-second retry before the first HTTP timeout is visible. Allow just that
-// cold UDP case one bounded retry window; verified links and other carriers
-// retain their existing budgets. This never authorizes traffic or changes WFP.
-internal static class CarrierFallbackPolicy
+// cold UDP case one bounded retry window; verified links
+// retain their existing budget. This never authorizes traffic or changes WFP.
+internal static class UdpRetryPolicy
 {
-    internal static bool ShouldFallback(TunnelTransport transport,bool generationVerified,bool replyReceived,
+    internal static bool ShouldRetry(bool generationVerified,bool replyReceived,
         JsonObject? evidence,int probeFailures,long elapsedMs,bool probePending)
     {
         if(probeFailures<2 || elapsedMs<0)return false;
-        bool cold=SilentColdRetry(transport,generationVerified,replyReceived,evidence);
-        long budget=transport==TunnelTransport.WireGuardUdp?(cold?12000:8000):6000;
+        bool cold=SilentColdRetry(generationVerified,replyReceived,evidence);
+        long budget=cold?12000:8000;
         // Only the silent cold retry has a hard deadline across a pending HTTP
         // request. A genuine WG reply keeps the existing progress-aware probe.
         return elapsedMs>=budget && (!probePending || cold);
     }
 
-    internal static bool SilentColdRetry(TunnelTransport transport,bool generationVerified,bool replyReceived,JsonObject? evidence)
+    internal static bool SilentColdRetry(bool generationVerified,bool replyReceived,JsonObject? evidence)
     {
-        if(transport!=TunnelTransport.WireGuardUdp || generationVerified || replyReceived || evidence is null)return false;
+        if(generationVerified || replyReceived || evidence is null)return false;
         try{
             ulong sent=0;
             foreach(var port in evidence){

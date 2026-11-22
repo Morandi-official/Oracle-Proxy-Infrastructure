@@ -34,9 +34,9 @@ class HostBoundaries(unittest.TestCase):
                 host.require_ingress_release(release)
 
     def test_legacy_rollback_disables_relay_and_forward_recovery_enables_it(self):
-        with patch.object(host,'relay_expected',return_value=False),patch.object(host,'command') as command:
+        with patch.object(host,'relay_expected',return_value=False),patch.object(host,'command'),patch.object(host,'disable_installed_units') as disable:
             host.restart_application()
-            self.assertEqual(command.call_args_list[-1].args[0],['systemctl','disable','--now',host.UNIT_NAMES[3]])
+            disable.assert_called_with(host.UNIT_NAMES[3])
         with patch.object(host,'relay_expected',return_value=True),patch.object(host,'command') as command:
             host.restart_application()
             self.assertIn(unittest.mock.call(['systemctl','enable',host.UNIT_NAMES[3]]),command.call_args_list)
@@ -58,9 +58,9 @@ class HostBoundaries(unittest.TestCase):
             for body in (b'{"ready":false}',b'{}',b'{"ready":1}',b'[]'):
                 response.read.return_value=body;self.assertFalse(host.healthy())
     def test_quic_legacy_rollback_stops_listener_and_renewal_timer(self):
-        with patch.object(host,'quic_expected',return_value=False),patch.object(host,'command') as command:
+        with patch.object(host,'quic_expected',return_value=False),patch.object(host,'command'),patch.object(host,'disable_installed_units') as disable:
             host.restart_application()
-            self.assertIn(unittest.mock.call(['systemctl','disable','--now',host.UNIT_NAMES[4],host.UNIT_NAMES[6]]),command.call_args_list)
+            disable.assert_any_call(host.UNIT_NAMES[6],host.UNIT_NAMES[5],host.UNIT_NAMES[4])
         with patch.object(host,'quic_expected',return_value=True),patch.object(host,'command') as command:
             host.restart_application()
             self.assertIn(unittest.mock.call(['systemctl','restart',host.UNIT_NAMES[4],host.UNIT_NAMES[6]]),command.call_args_list)

@@ -19,7 +19,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from .transports import legacy_transport_address, quic_info, transport_address, ipv6_info
+from .transports import legacy_transport_address, transport_address, ipv6_info
 from . import control
 from .models import Audit, ClientAccount, ClientSession, ClientLoginThrottle
 
@@ -80,6 +80,9 @@ def confirmed(peer):
     return isinstance(receipt,dict) and type(receipt.get('confirmed_at')) is int and receipt['confirmed_at']>0
 
 
+ENDPOINT_ACCESS_SCHEMA = 1
+
+
 def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_stack=False):
     if key in snapshot.get('deleted_public_keys',[]):raise ValueError('DEVICE_REVOKED')
     user=next((u for u in snapshot['users'] if u['id']==str(account.user_id)),None)
@@ -103,7 +106,7 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
         ipv6 = ipv6_info() if dual_stack else None
         dual = bool(ipv6 and any(ipaddress.ip_interface(a).version == 6 and ipaddress.ip_interface(a).ip in ipaddress.ip_network(ipv6['prefix']) for a in peer['allowed_ips']))
         addresses = [a for a in peer['allowed_ips'] if dual or ipaddress.ip_interface(a).version == 4]
-        data['tunnel']={'transport_address':legacy_transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':addresses,'allowed_ips':['0.0.0.0/0','::/0'] if dual else ['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'tunnel' if dual else 'block','ipv6_egress':ipv6['egress'] if dual else None,'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']],'https_relay':snapshot['listen_port']==51820,'quic':quic_info() if snapshot['listen_port']==51820 else None}
+        data['tunnel']={'transport_address':legacy_transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':addresses,'allowed_ips':['0.0.0.0/0','::/0'] if dual else ['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'tunnel' if dual else 'block','ipv6_egress':ipv6['egress'] if dual else None,'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']]}
     from .endpoint_config import user_catalog
     catalog=user_catalog(user,snapshot)
     if catalog and data['tunnel'] is not None:
@@ -234,7 +237,7 @@ def presence(request):
     try:
         value=payload(request,{'mode','transport'})
         if value['mode'] not in ('unknown','pending','disconnected','protected','connected','recovery'):raise ValueError('INVALID_CLIENT_STATUS')
-        if value['transport'] not in (None,'wireguard-udp','wireguard-quic','wireguard-https'):raise ValueError('INVALID_CLIENT_STATUS')
+        if value['transport'] not in (None,'wireguard-udp'):raise ValueError('INVALID_CLIENT_STATUS')
         result=state_for(credential,control.call('state',actor(request),{}),request.META.get('HTTP_X_ORACLE_CLIENT_CAPABILITIES')=='dual-stack-v1')
         mode=value['mode'] if result['registration']['status']=='registered' else 'pending'
         transport=value['transport'] if mode=='connected' else ''

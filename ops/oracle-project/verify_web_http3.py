@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from aioquic.asyncio import connect
 from aioquic.quic.configuration import QuicConfiguration
-from verify_quic import HOST, Http3Probe
+from http3_probe import HOST, Http3Probe
 
 
 class WebProbe(Http3Probe):

@@ -8,6 +8,19 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 from playwright.sync_api import sync_playwright, expect
+import django
+from django.conf import settings
+from django.template import Context, Engine
+
+settings.configure(USE_I18N=False)
+django.setup()
+
+ENDPOINTS = [
+ {'public_ipv4':'192.0.2.20','private_ipv4':'10.0.0.6'},
+ {'public_ipv4':'198.51.100.20','private_ipv4':'10.0.0.246'},
+ {'public_ipv4':'203.0.113.20','private_ipv4':'10.0.0.220'},
+]
+TEMPLATE = Engine()
 
 ROOT=Path(__file__).resolve().parents[2]
 SERVER=ROOT/'server/admin-oracle'
@@ -28,9 +41,11 @@ def main():
     def serve(route):
      path=urlsplit(route.request.url).path
      if path=='/':
-      body=(SERVER/'templates/dashboard.html').read_text().replace('{% csrf_token %}','<input type="hidden" name="csrfmiddlewaretoken" value="synthetic-browser-only-token">')
-      body=re.sub(r'{% if local_auth %}((?:(?!{% (?:if|endif)).)*?){% else %}.*?{% endif %}',r'\1',body,flags=re.S)
-      body=body.replace('{% if local_auth %}','').replace('{% endif %}','')
+      body=TEMPLATE.from_string((SERVER/'templates/dashboard.html').read_text()).render(Context({
+       'csrf_token':'synthetic-browser-only-token','local_auth':True,
+       'endpoint_catalog':{'primary':ENDPOINTS[0],'backup':ENDPOINTS[1],'revision':6},
+       'endpoint_choices':ENDPOINTS,
+      }))
       route.fulfill(status=200,content_type='text/html',body=body)
      elif path=='/login/':
       body=(SERVER/'templates/local_login.html').read_text().replace("{% static 'console/style.css' %}",'/style.css').replace('{% csrf_token %}','<input type="hidden" name="csrfmiddlewaretoken" value="synthetic-browser-only-token">')
@@ -70,6 +85,10 @@ def main():
       elif path.startswith('/api/users/') and path.endswith('/usage'):
        data=engine.dispatch({'operation':'usage.history','actor':'github:204281968','data':{'user_id':path.split('/')[3],'window':parse_qs(urlsplit(route.request.url).query).get('window',['month'])[0]}})
       elif path=='/api/host-status':data={'sample':{'observed_at':int(time.time()),'cpu_count':4,'cpu_percent':25,'cpu_steal_percent':0,'io_wait_percent':0,'memory_percent':30,'memory_used_bytes':3000000000,'memory_total_bytes':10000000000,'load':[1,1,1],'disks':[{'used_percent':20,'used_bytes':20000000000,'total_bytes':100000000000,'available_bytes':80000000000,'inode_percent':3}],'network':{'interfaces':['ens3'],'rx_bytes_per_second':1250000,'tx_bytes_per_second':2500000,'packets_per_second':1000,'drops_delta':0,'errors_delta':0},'conntrack_count':40,'conntrack_max':10000,'tcp_established':12,'tcp_retransmit_percent':0,'alerts':[],'errors':[]},'age_seconds':1,'stale':False,'window':parse_qs(urlsplit(route.request.url).query).get('window',['hour'])[0],'bucket_seconds':60,'recorded_from':int(time.time())-3600,'history':[{'at':int(time.time())-60,'cpu':5,'memory':30,'disk':20,'load':1,'rx':1250000,'tx':2500000},{'at':int(time.time()),'cpu':25,'memory':30,'disk':20,'load':2,'rx':2000000,'tx':3000000}],'events':[]}
+      elif path=='/api/admin/endpoint-proposal':
+       assert route.request.method=='POST' and route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
+       assert route.request.post_data_json=={'primary':'203.0.113.20','backup':'198.51.100.20','revision':6,'confirmed':True}
+       data={'changed':True,'primary':ENDPOINTS[2],'backup':ENDPOINTS[1],'revision':7,'command':'gh workflow run endpoint-settings.yml -f mode=select'}
       elif path=='/api/flclash':data={'profiles':profiles_fixture}
       elif path=='/api/flclash/create':
        assert route.request.headers['x-csrftoken']=='synthetic-browser-only-token'
@@ -97,6 +116,18 @@ def main():
     try:
      page.goto('https://management-fixture.invalid/',wait_until='networkidle')
      expect(page.locator('#remaining')).to_have_text('未知')
+     endpoints=page.locator('#endpoint-form')
+     expect(endpoints.locator('[name=primary]')).to_have_value('192.0.2.20')
+     expect(endpoints.locator('[name=backup]')).to_have_value('198.51.100.20')
+     endpoints.locator('[name=primary]').select_option('203.0.113.20')
+     endpoints.locator('[name=confirmed]').check()
+     endpoints.get_by_role('button',name='生成切换提案').click()
+     expect(page.locator('#endpoint-proposal-status')).to_contain_text('待审核 · 主 203.0.113.20')
+     expect(page.locator('#endpoint-command')).to_have_value('gh workflow run endpoint-settings.yml -f mode=select')
+     endpoints.locator('[name=primary]').select_option('192.0.2.20')
+     expect(page.locator('#endpoint-proposal')).to_be_hidden()
+     page.evaluate('scrollTo(0,0)')
+
      expect(page.locator('#udp-diag-details')).not_to_have_attribute('open','')
      page.locator('#udp-diag-details > summary').click()
      expect(page.locator('#udp-diag-rows')).to_contain_text('1 / 1 通过')

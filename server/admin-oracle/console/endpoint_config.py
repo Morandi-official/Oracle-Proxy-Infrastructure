@@ -1,10 +1,62 @@
 """One root-owned endpoint catalog shared by API, exports and packet observations."""
+from contextlib import contextmanager
+import fcntl
+import hashlib
 import ipaddress
+import os
 import json
 from pathlib import Path
 import stat
 
 PATH=Path('/etc/oracle-proxy-quic/endpoints.json')
+SELECTION_DIR=Path('/var/lib/oracle-proxy-endpoints')
+
+
+def version(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def _read_file(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_size > 4096:
+        raise ValueError('ROOT_ENDPOINT_CATALOG_REQUIRED')
+    return json.loads(path.read_text('ascii'))
+
+
+def read_base():
+    value = _read_file(PATH)
+    return None if value is None else validate(value)
+
+
+@contextmanager
+def selection_lock(*, create=False):
+    if create:
+        created = False
+        try:
+            SELECTION_DIR.mkdir()
+            created = True
+        except FileExistsError:
+            pass
+    info = SELECTION_DIR.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise ValueError('ROOT_ENDPOINT_SELECTION_DIRECTORY_REQUIRED')
+    if create and created:
+        SELECTION_DIR.chmod(0o755)
+    fd = os.open(SELECTION_DIR / 'lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_uid != 0:
+            raise ValueError('ROOT_ENDPOINT_SELECTION_LOCK_REQUIRED')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('ENDPOINT_SELECTION_BUSY') from None
+        yield
+    finally:
+        os.close(fd)
+
 
 def public(value):
     address=ipaddress.ip_address(value)
@@ -30,10 +82,21 @@ def validate(value):
     return value
 
 def read():
-    try:info=PATH.lstat()
-    except FileNotFoundError:return None
-    if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022 or info.st_size>4096:raise ValueError('ROOT_ENDPOINT_CATALOG_REQUIRED')
-    return validate(json.loads(PATH.read_text('ascii')))
+    base = read_base()
+    if base is None:
+        return None
+    selection = _read_file(SELECTION_DIR / 'selection.json')
+    if selection is None:
+        return base
+    if not isinstance(selection, dict) or set(selection) != {'baseline', 'revision', 'primary', 'backup'}:
+        raise ValueError('ENDPOINT_SELECTION_SCHEMA')
+    if selection['baseline'] != version(base):
+        return base  # An explicit GitOps address change supersedes the saved runtime roles.
+    if type(selection['revision']) is not int or selection['revision'] <= base['revision']:
+        raise ValueError('ENDPOINT_SELECTION_REVISION')
+    proposed = propose_selection(base, selection['primary'], selection['backup'], base['revision'])
+    return dict(proposed or base, revision=selection['revision'])
+
 
 def propose_selection(current, primary, backup, revision):
     """Select roles among the exact address pairs already in the catalog."""

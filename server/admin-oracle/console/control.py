@@ -10,7 +10,8 @@ def call(operation, actor, data):
     body = json.dumps({'operation':operation,'actor':actor,'data':data},separators=(',',':')).encode()+b'\n'
     if len(body)>16384: raise ValueError('REQUEST_TOO_LARGE')
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
-        connection.settimeout(12); connection.connect(SOCKET)
+        connection.settimeout(23 if operation == 'endpoint.apply' else 12)
+        connection.connect(SOCKET)
         _, uid, _ = struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
         if uid != 0: raise OSError('Untrusted control service')
         connection.sendall(body); response = bytearray()

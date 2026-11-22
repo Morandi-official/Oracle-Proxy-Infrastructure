@@ -45,7 +45,12 @@ def quic_info():
 
 @require_GET
 def public_certificate(request):
-    result = JsonResponse({'quic':quic_info()})
+    from .endpoint_config import advertised
+    info = quic_info()
+    catalog = advertised()
+    if info and catalog:
+        info['addresses'] = [catalog['primary'], catalog['backup']]
+    result = JsonResponse({'quic':info})
     result['Cache-Control'] = 'no-store'
     return result
 

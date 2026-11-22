@@ -66,6 +66,16 @@ class Rate:
         return self.used <= self.maximum
 
 
+def ingress_target(local, primary):
+    from console.endpoint_config import read
+    catalog = read()
+    if catalog is None or local == catalog['primary']['private_ipv4']:
+        return primary
+    if local == catalog['backup']['private_ipv4']:
+        return ('127.0.0.1', 51821)
+    return None
+
+
 def application(auth=authenticate, udp_target=('127.0.0.1', 51820), refresh=5):
     app = web.Application(client_max_size=1024)
     active = set()
@@ -84,14 +94,9 @@ def application(auth=authenticate, udp_target=('127.0.0.1', 51820), refresh=5):
     async def relay(request):
         if request.query_string or request.headers.get('Origin') or request.headers.get('Cookie'):
             raise web.HTTPForbidden()
-        target=udp_target
-        local=request.headers.get('X-Proxy-Ingress')
-        from console.endpoint_config import read
-        catalog=read()
-        if catalog:
-            if not local:raise web.HTTPForbidden()
-            if catalog and local==catalog['backup']['private_ipv4']:target=('127.0.0.1',51821)
-            elif catalog and local!=catalog['primary']['private_ipv4']:raise web.HTTPForbidden()
+        local = request.headers.get('X-Proxy-Ingress')
+        if ingress_target(local, udp_target) is None:
+            raise web.HTTPForbidden()
         header = request.headers.get('Authorization', '')
         if not re.fullmatch(r'Bearer [A-Za-z0-9_-]{43}', header): raise web.HTTPUnauthorized()
         token = header[7:]
@@ -100,6 +105,9 @@ def application(auth=authenticate, udp_target=('127.0.0.1', 51820), refresh=5):
             raise web.HTTPTooManyRequests()
         async with slots:
             if not await auth(app[AUTH_SESSION], token): raise web.HTTPUnauthorized()
+        target = ingress_target(local, udp_target)
+        if target is None:
+            raise web.HTTPForbidden()
         # Recheck after the awaited auth call so concurrent opens cannot exceed
         # the cap or register the same bearer twice.
         if len(active) >= 32 or identity in active: raise web.HTTPTooManyRequests()
@@ -131,7 +139,7 @@ def application(auth=authenticate, udp_target=('127.0.0.1', 51820), refresh=5):
             async def policy():
                 while True:
                     await asyncio.sleep(refresh)
-                    if not await auth(app[AUTH_SESSION], token): return
+                    if ingress_target(local, udp_target) != target or not await auth(app[AUTH_SESSION], token): return
 
             tasks = [asyncio.create_task(fn()) for fn in (inbound, outbound, policy, protocol.failed.wait)]
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

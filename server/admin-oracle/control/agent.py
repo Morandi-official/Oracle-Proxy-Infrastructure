@@ -78,6 +78,14 @@ class Driver:
             self.ingress=module.Controller(self.command,STATE)
         return self.ingress.sync(plan)
 
+    def select_endpoints(self, data):
+        if not getattr(getattr(self, 'ingress', None), 'ready', False):
+            raise ValueError('INGRESS_ISOLATION_NOT_READY')
+        spec = importlib.util.spec_from_file_location('endpoint_switch', Path(__file__).with_name('endpoint_switch.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.apply(self.ingress, data)
+
     def bandwidth(self,plan):
         shared=getattr(getattr(self,'ingress',None),'ready',False)
         if not hasattr(self,'qos') or getattr(self,'qos_shared',False)!=shared:
@@ -599,6 +607,15 @@ class Engine:
                 self.udp_diagnostics=module.Manager()
             return self.udp_diagnostics.call(operation,data,peer)
         if operation == 'state' and not data: return self.snapshot()
+        if operation == 'endpoint.apply':
+            if actor.startswith('system:'):
+                raise ValueError('ADMINISTRATOR_REQUIRED')
+            if not hasattr(self.driver, 'select_endpoints'):
+                raise ValueError('INGRESS_ISOLATION_NOT_READY')
+            result = self.driver.select_endpoints(data)
+            if result['changed']:
+                self.audit(actor, 'endpoint.applied', result['primary']['public_ipv4']+' / '+result['backup']['public_ipv4'])
+            return result
         if operation == 'usage.history':
             if actor.startswith('system:'):raise ValueError('ADMINISTRATOR_REQUIRED')
             return self.usage_history(data)

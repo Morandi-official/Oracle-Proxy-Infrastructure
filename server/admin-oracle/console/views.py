@@ -147,11 +147,12 @@ def dashboard(request):
     endpoints = [catalog['primary'], catalog['backup'], *catalog['legacy']] if catalog else []
     return render(request, 'dashboard.html', {
         'local_auth': local_auth.enabled(), 'endpoint_catalog': catalog, 'endpoint_choices': endpoints,
+        'endpoint_version': endpoint_config.version(catalog) if catalog else '',
     })
 
 
 @require_http_methods(['POST'])
-def endpoint_proposal(request):
+def endpoint_apply(request):
     rejected = deny(request)
     if rejected is not None:
         return rejected
@@ -159,35 +160,28 @@ def endpoint_proposal(request):
         return JsonResponse({'error': 'INVALID_REQUEST'}, status=400)
     try:
         value = json.loads(request.body)
-    except ValueError:
+    except (ValueError, UnicodeError):
         return JsonResponse({'error': 'INVALID_REQUEST'}, status=400)
-    if (not isinstance(value, dict) or set(value) != {'primary', 'backup', 'revision', 'confirmed'}
-            or value['confirmed'] is not True):
-        return JsonResponse({'error': 'CONFIRM_ACTUAL_OCI_BINDINGS_FIRST'}, status=400)
-    from . import endpoint_config
+    if (not isinstance(value, dict) or set(value) != {'primary', 'backup', 'version'}
+            or not all(isinstance(item, str) and len(item) <= 64 for item in value.values())):
+        return JsonResponse({'error': 'INVALID_REQUEST'}, status=400)
     try:
-        catalog = endpoint_config.read()
-    except (OSError, ValueError):
-        catalog = None
-    if catalog is None:
-        return JsonResponse({'error': 'ENDPOINT_CATALOG_UNAVAILABLE'}, status=503)
-    try:
-        proposed = endpoint_config.propose_selection(
-            catalog, value['primary'], value['backup'], value['revision'])
+        result = control.call('endpoint.apply', audit_actor(request), value)
+    except (OSError, TimeoutError):
+        return JsonResponse({'error': 'ENDPOINT_RESULT_UNCONFIRMED'}, status=503)
     except ValueError as error:
-        return JsonResponse({'error': str(error)}, status=409 if str(error) == 'ENDPOINT_CATALOG_STALE' else 400)
-    if proposed is None:
-        return JsonResponse({'changed': False})
-    primary, backup = proposed['primary']['public_ipv4'], proposed['backup']['public_ipv4']
-    Audit.objects.create(actor=audit_actor(request), action='endpoint.proposal.preview',
-                         resource=f'{primary} / {backup}')
-    command = (
-        'gh workflow run endpoint-settings.yml --repo Morandi-official/Oracle-Proxy-Infrastructure'
-        f' --ref main -f mode=select -f confirmed_bindings=true -f base_revision={catalog["revision"]}'
-        f' -f selected_primary={primary} -f selected_backup={backup}'
-    )
-    return JsonResponse({'changed': True, 'primary': proposed['primary'], 'backup': proposed['backup'],
-                         'revision': proposed['revision'], 'command': command})
+        code = str(error)
+        status = 409 if code in ('ENDPOINT_CATALOG_STALE', 'ENDPOINT_SELECTION_BUSY') else (
+            503 if code in ('INGRESS_ISOLATION_NOT_READY', 'ENDPOINT_CATALOG_UNAVAILABLE',
+                            'ENDPOINT_ROLLBACK_UNVERIFIED') else 400)
+        return JsonResponse({'error': code}, status=status)
+    if result['changed']:
+        try:
+            Audit.objects.create(actor=audit_actor(request), action='endpoint.applied',
+                                 resource=f'{value["primary"]} / {value["backup"]}')
+        except DatabaseError:
+            pass  # The root controller has already recorded the committed change.
+    return JsonResponse(result)
 
 
 

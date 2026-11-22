@@ -20,7 +20,7 @@ urlpatterns = [
     path('api/client/quic-certificate', transports.public_certificate),
     path('api/client/logout', client_api.logout),
     path('api/admin/password',views.admin_password),
-    path('api/admin/endpoint-proposal', views.endpoint_proposal),
+    path('api/admin/endpoint-apply', views.endpoint_apply),
     path('api/status', views.status),
     path('api/host-status', views.host_status),
     path('api/audit', views.audit),

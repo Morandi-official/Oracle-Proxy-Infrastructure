@@ -167,6 +167,11 @@ def require_ingress_release(release):
     # Once kernel entrance isolation exists, an old relay could route a backup
     # public connection to the primary listener. Fail closed on that downgrade.
     if not (INGRESS_RECEIPT.exists() or INGRESS_RECEIPT.is_symlink()):return
+    client_api = release / 'console/client_api.py'
+    if (client_api.is_file() and not client_api.is_symlink()
+            and 'ENDPOINT_ACCESS_SCHEMA = 1' in client_api.read_text()
+            and not (release / 'relay').exists()):
+        return
     for relative,marker in (('relay/server.py','INGRESS_ISOLATION_SCHEMA = 1'),('relay/quic_server.py','INGRESS_ISOLATION_SCHEMA = 1'),('deploy/Caddyfile','header_up X-Proxy-Ingress')):
         path=release/relative
         if path.is_symlink() or not path.is_file() or marker not in path.read_text():raise ValueError('INGRESS_AWARE_RELEASE_REQUIRED')
@@ -188,18 +193,36 @@ def quic_expected():
     return (ROOT / 'current/relay/quic_server.py').is_file()
 
 
+def disable_installed_units(*names):
+    # Only the old product units can exist during an upgrade. Keep their files
+    # for recovery to a previous root-owned release.
+    owned = []
+    for name in names:
+        path = UNIT_DIR / name
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022
+                or 'Description=Oracle Proxy ' not in path.read_text()):
+            raise ValueError('FOREIGN_LEGACY_TRANSPORT_UNIT')
+        owned.append(name)
+    if owned:
+        command(['systemctl', 'disable', '--now', *owned])
+
+
 def restart_application():
     command(['systemctl', 'restart', UNIT_NAMES[0]])
     if quic_expected():
         command(['systemctl', 'enable', UNIT_NAMES[4], UNIT_NAMES[6]])
         command(['systemctl', 'restart', UNIT_NAMES[4], UNIT_NAMES[6]])
     else:
-        command(['systemctl', 'disable', '--now', UNIT_NAMES[4], UNIT_NAMES[6]])
+        disable_installed_units(UNIT_NAMES[6], UNIT_NAMES[5], UNIT_NAMES[4])
     if relay_expected():
         command(['systemctl', 'enable', UNIT_NAMES[3]])
         command(['systemctl', 'restart', UNIT_NAMES[3]])
     else:
-        command(['systemctl', 'disable', '--now', UNIT_NAMES[3]])
+        disable_installed_units(UNIT_NAMES[3])
 
 
 def healthy():
@@ -248,8 +271,6 @@ def install(revision):
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     create_user(APP_USER, STATE)
     create_user(BUILD_USER, '/nonexistent')
-    create_user('oracle-proxy-relay', '/nonexistent')
-    create_user('oracle-proxy-quic', '/nonexistent')
     app = pwd.getpwnam(APP_USER)
     os.chown(STATE, app.pw_uid, app.pw_gid); STATE.chmod(0o700)
     release = ROOT / 'releases' / revision
@@ -279,10 +300,6 @@ def install(revision):
     subprocess.run(['/usr/bin/pkill', '-KILL', '-u', str(build.pw_uid)], check=False)
     (release / 'revision.env').write_text(f'ADMIN_SOURCE_REVISION={revision}\n')
     seal_tree(release)
-    # Execute only after the builder output is sealed root-owned. -I excludes
-    # environment and user module search paths from this fixed key operation.
-    if (release / 'relay/quic_keys.py').is_file():
-        command([release / '.venv/bin/python', '-I', release / 'relay/quic_keys.py'])
     environment['ADMIN_SOURCE_REVISION'] = revision
     previous = (ROOT / 'current').resolve() if (ROOT / 'current').is_symlink() else None
     # This release only adds application-owned tables. Never reverse migrations automatically.
@@ -292,7 +309,7 @@ def install(revision):
         as_user(APP_USER,[release / '.venv/bin/python','manage.py','provision_local_admin'],cwd=release,env=environment)
     as_user(APP_USER, [release / '.venv/bin/python', 'manage.py', 'check', '--deploy', '--fail-level', 'WARNING'],
             cwd=release, env=environment)
-    for name in UNIT_NAMES:
+    for name in UNIT_NAMES[:3]:
         target = UNIT_DIR / name
         # Only replace units carrying our fixed application ownership marker.
         if target.exists() and 'Oracle' not in target.read_text():
@@ -317,7 +334,7 @@ def install(revision):
     if previous is not None:
         (ROOT / 'previous').unlink(missing_ok=True)
         (ROOT / 'previous').symlink_to(previous)
-    command(['systemctl', 'enable', UNIT_NAMES[0], UNIT_NAMES[2], UNIT_NAMES[3]])
+    command(['systemctl', 'enable', UNIT_NAMES[0], UNIT_NAMES[2]])
     command(['systemctl', 'restart', UNIT_NAMES[2]])
     print('ORACLE_ADMIN=ACTIVE_LOOPBACK_ONLY')
     print('Review deploy/Caddyfile and merge its dedicated host block into your existing Caddy config.')

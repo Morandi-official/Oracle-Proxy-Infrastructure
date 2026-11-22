@@ -28,7 +28,7 @@ jobs:
           import asyncio, json, socket, sys
           import certifi
           sys.path.insert(0,'ops/oracle-project')
-          from verify_quic import Http3Probe
+          from http3_probe import Http3Probe
           from aioquic.asyncio import connect
           from aioquic.quic.configuration import QuicConfiguration
 

@@ -5,10 +5,9 @@ import json
 import socket
 import ssl
 import sys
-import urllib.request
 from aioquic.asyncio import connect
 from aioquic.quic.configuration import QuicConfiguration
-from verify_quic import HOST, Http3Probe, probe as quic_probe
+from http3_probe import HOST, Http3Probe
 
 
 def tcp(address):
@@ -31,13 +30,7 @@ async def h3(address):
 
 
 def main():
-    if sys.argv[1:] not in ([],['--vpn']):raise ValueError('FIXED_PROBE_REQUIRED')
-    info=None
-    if '--vpn' in sys.argv[1:]:
-        with urllib.request.urlopen('https://'+HOST+'/api/client/quic-certificate',timeout=10) as response:
-            raw=response.read(8193)
-        if len(raw)>8192:raise ValueError('METADATA_LIMIT')
-        info=json.loads(raw)['quic']
+    if sys.argv[1:]:raise ValueError('FIXED_PROBE_REQUIRED')
     passed=True
     for address in ('152.67.156.100','141.147.78.44'):
         row={'address':address,'tls_tcp':False,'tls_http3':False,'tls_bypass':False}
@@ -46,10 +39,6 @@ def main():
             except Exception as error:row[name+'_error_category']=type(error).__name__
         print('SECONDARY_PUBLIC_CONTROL='+json.dumps(row,sort_keys=True),flush=True)
         passed=passed and row['tls_tcp'] and row['tls_http3']
-        if info is not None:
-            reachable=asyncio.run(quic_probe(info,address))
-            print('SECONDARY_VPN_QUIC='+json.dumps({'address':address,'tls_and_h3':reachable}),flush=True)
-            passed=passed and reachable
     if not passed:raise SystemExit(1)
 
 

@@ -173,22 +173,10 @@ GitHub OAuth HTTP 回包在自动化测试中被模拟；仍需真实 OAuth App�
 已授权 GitHub 管理通道可部署网页和独立控制服务；网页版本回滚保留控制服务、策略与账本。
 
 
-### QUIC preparation (UDP 8443)
+### 客户端连接协议
 
-Native WireGuard UDP 51820 remains the primary carrier. The dedicated unprivileged
-`oracle-proxy-quic` service forwards authenticated QUIC datagrams to loopback wg0;
-HTTPS 443 remains the last carrier. The service has no admin credentials/database
-access and cannot access OCI instance metadata. It validates device policy every
-5 seconds; kernel WireGuard quotas and leases still apply.
-
-A root-owned, dedicated P-256 certificate is generated after source sealing, renewed
-before expiry, and exposed only as a **public** certificate through existing verified
-HTTPS at `/api/client/quic-certificate`. Clients validate hostname, expiry and that
-trust certificate. No private key is returned or copied to GitHub.
-
-The host firewall adds only the fixed IPv4 UDP 8443 rule. OCI security lists/NSGs
-must also allow ingress UDP 8443. `verify_quic.py` independently checks the public
-QUIC TLS handshake without registering a device or using any account password.
-`relay/settings.py` deliberately advertises QUIC disabled until this external gate
-passes; existing clients and the working HTTPS fallback retain their behavior.
-Rollback to a release without QUIC stops its listener and renewal timer.
+客户端代理流量通过 WireGuard UDP，支持已启用入口的 UDP 443、8443
+和 51820。设备权限由 WireGuard 主、备身份与服务端规则独立执行。
+后台网站、账号 API 和网页下载依然使用 HTTPS，网站也可通过 HTTP/3 访问。
+升级会停用旧代理中继的已登记 systemd 单元，现有 WireGuard 密钥、账号、
+账本、主备地址和 Caddy 证书继续使用。

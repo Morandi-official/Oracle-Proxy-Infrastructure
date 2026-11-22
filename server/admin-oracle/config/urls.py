@@ -1,6 +1,6 @@
 from django.urls import include, path
 from django.conf import settings
-from console import views, client_api, transports, flclash, udp_diagnostics
+from console import views, client_api, flclash, udp_diagnostics
 
 urlpatterns = [
     path('privacy-check/',views.privacy_check),
@@ -17,7 +17,6 @@ urlpatterns = [
     path('api/client/device-delete', client_api.remove_device),
     path('api/client/udp-diagnostics', udp_diagnostics.native),
     path('api/udp-diagnostics', udp_diagnostics.administrator),
-    path('api/client/quic-certificate', transports.public_certificate),
     path('api/client/logout', client_api.logout),
     path('api/admin/password',views.admin_password),
     path('api/admin/endpoint-apply', views.endpoint_apply),

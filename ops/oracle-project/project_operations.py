@@ -827,7 +827,6 @@ print('UDP_SAVED_REPORT_READBACK='+json.dumps(data,sort_keys=True))
             catalog=importlib.util.module_from_spec(catalog_spec);catalog_spec.loader.exec_module(catalog)
             print('ENDPOINT_CATALOG='+json.dumps(catalog.install(),sort_keys=True),flush=True)
             run(['systemctl','restart','oracle-proxy-control.service'])
-            run(['systemctl','try-restart','oracle-proxy-quic.service'])
             verify_control()
             expected = catalog.module().read()
             if expected and set(expected['egress_ipv4']) == {expected[role]['public_ipv4'] for role in ('primary','backup')}:

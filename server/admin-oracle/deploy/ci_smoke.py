@@ -57,18 +57,10 @@ def main():
     service_user = subprocess.check_output(['systemctl', 'show', '-p', 'User', '--value',
                                            host.UNIT_NAMES[0]], text=True).strip()
     assert service_user == host.APP_USER
-    assert subprocess.check_output(['systemctl', 'show', '-p', 'User', '--value',
-                                    host.UNIT_NAMES[3]], text=True).strip() == 'oracle-proxy-relay'
-    assert run(['runuser', '-u', 'oracle-proxy-relay', '--', 'test', '!', '-r', host.CONFIG]).returncode == 0
     assert (host.STATE / 'admin.sqlite3').is_file()
-    assert run(['runuser', '-u', 'oracle-proxy-relay', '--', 'test', '!', '-r', host.STATE / 'admin.sqlite3']).returncode == 0
-    print('REAL_RELAY_LOOPBACK_HEALTH_AND_NO_ADMIN_CREDENTIAL_ACCESS=PASS')
-    assert subprocess.check_output(['systemctl','show','-p','User','--value',host.UNIT_NAMES[4]],text=True).strip() == 'oracle-proxy-quic'
-    for private in (host.CONFIG,host.STATE/'admin.sqlite3'):
-        assert run(['runuser','-u','oracle-proxy-quic','--','test','!','-r',private]).returncode == 0
-    assert run(['runuser','-u',host.APP_USER,'--','test','!','-r','/etc/oracle-proxy-quic/private.pem']).returncode == 0
-    assert run(['runuser','-u','oracle-proxy-relay','--','test','!','-r','/etc/oracle-proxy-quic/private.pem']).returncode == 0
-    print('REAL_QUIC_DISTINCT_UID_HEALTH_AND_PRIVATE_KEY_ISOLATION=PASS')
+    for name in host.UNIT_NAMES[3:]:
+        assert subprocess.run(['systemctl', 'is-active', '--quiet', name], check=False).returncode != 0
+    print('FRESH_INSTALL_HAS_NO_LEGACY_PROXY_TRANSPORTS=PASS')
     request = urllib.request.Request(f'http://127.0.0.1:8787/api/status', headers={
         'Host': host.HOST, 'X-Forwarded-Proto': 'https'})
     try:
@@ -104,28 +96,6 @@ def main():
     finally:ingress_marker.unlink()
     assert (host.ROOT / 'current').resolve().name == second
     run([sys.executable, source / 'deploy/host.py', 'rollback'])
-    # Simulate the actual legacy rollback target, which has no relay module.
-    # Only this disposable harness changes its own synthetic sealed release.
-    relay_source = host.ROOT / 'current/relay/server.py'
-    relay_saved = relay_source.with_suffix('.py.legacy-test')
-    relay_source.rename(relay_saved)
-    quic_source=host.ROOT/'current/relay/quic_server.py'
-    quic_saved=quic_source.with_suffix('.py.legacy-test')
-    quic_source.rename(quic_saved)
-    try:
-        host.restart_application()
-        assert host.healthy()
-        assert subprocess.run(['systemctl', 'is-enabled', '--quiet', host.UNIT_NAMES[3]], check=False).returncode != 0
-        assert subprocess.run(['systemctl', 'is-active', '--quiet', host.UNIT_NAMES[3]], check=False).returncode != 0
-        for index in (4,6):
-            assert subprocess.run(['systemctl','is-active','--quiet',host.UNIT_NAMES[index]],check=False).returncode != 0
-    finally:
-        quic_saved.rename(quic_source)
-        relay_saved.rename(relay_source)
-        host.restart_application()
-    assert host.healthy()
-    assert subprocess.run(['systemctl', 'is-enabled', '--quiet', host.UNIT_NAMES[3]], check=False).returncode == 0
-    print('REAL_LEGACY_ROLLBACK_DISALLOWS_RELAY_AUTOSTART_AND_FORWARD_RECOVERY=PASS')
     assert (host.ROOT / 'current').resolve().name == first
     assert host.healthy()
     print('DISPOSABLE_SYSTEMD_NONROOT_STARTUP_UPGRADE_FAILED_START_AUTO_RESTORE_EXPLICIT_ROLLBACK=PASS')

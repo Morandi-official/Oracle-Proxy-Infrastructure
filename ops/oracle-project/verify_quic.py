@@ -27,9 +27,21 @@ class Http3Probe(QuicConnectionProtocol):
         return await asyncio.wait_for(self.status.get(),3)==b'200'
 
 
+def active_targets(info):
+    addresses = info.get('addresses')
+    if addresses is None:
+        return targets()
+    if (not isinstance(addresses, list) or len(addresses) != 2
+            or not all(isinstance(address, str) for address in addresses)
+            or len(set(addresses)) != 2 or not set(addresses) <= set(targets(legacy=True))):
+        raise ValueError('CONFIGURED_INGRESS_REQUIRED')
+    return addresses
+
+
 async def probe(info, address=None):
-    address=address or targets()[0]
-    if address not in targets():raise ValueError('CONFIGURED_INGRESS_REQUIRED')
+    addresses = active_targets(info)
+    address = address or addresses[0]
+    if address not in addresses:raise ValueError('CONFIGURED_INGRESS_REQUIRED')
     config = QuicConfiguration(is_client=True, alpn_protocols=['oracle-wireguard-quic-v1'],
                                server_name=HOST, max_datagram_frame_size=1200)
     config.load_verify_locations(cadata=info['certificate'].encode('ascii'))
@@ -59,7 +71,7 @@ def main():
     if not isinstance(info,dict) or info.get('port')!=8443 or not isinstance(info.get('certificate'),str):
         raise ValueError('QUIC_PUBLIC_CERTIFICATE_MISSING')
     if 'PRIVATE KEY' in info['certificate']: raise ValueError('QUIC_METADATA_REJECTED')
-    passed=all([asyncio.run(probe(info,address)) for address in targets()])
+    passed=all([asyncio.run(probe(info,address)) for address in active_targets(info)])
     # Preparation releases advertise disabled until the external gate passes.
     # Once advertised, a failed public handshake is a deployment failure.
     if (info.get('enabled') is True or '--require-reachable' in sys.argv[1:]) and not passed: raise SystemExit(1)

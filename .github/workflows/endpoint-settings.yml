@@ -3,13 +3,22 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'inspect 只读查看；prepare 准备入口；cutover 已完成 OCI 主绑定交换'
+        description: 'inspect 只读查看；select 选择现有地址；prepare 准备入口；cutover 已完成 OCI 主绑定交换'
         type: choice
-        options: [inspect, prepare, cutover]
+        options: [inspect, prepare, cutover, select]
         default: inspect
         required: true
+      selected_primary:
+        description: 'select 模式的主公网 IPv4，取自已登记地址'
+        type: string
+      selected_backup:
+        description: 'select 模式的备用公网 IPv4，取自已登记地址'
+        type: string
+      base_revision:
+        description: 'select 模式的当前配置版本，见后台主备 IP 模块'
+        type: string
       confirmed_bindings:
-        description: 'prepare/cutover：我已在 OCI 核对 Environment 中的公网/私网绑定实际存在'
+        description: '我已在 OCI 核对所选公网 IPv4 与私网地址的实际绑定'
         type: boolean
         default: false
         required: true
@@ -68,7 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
-      - name: Generate proposal from non-secret Environment variables
+      - name: Generate proposal from selected addresses or non-secret Environment variables
         env:
           PROXY_PRIMARY_IPV4: ${{ vars.PROXY_PRIMARY_IPV4 }}
           PROXY_PRIMARY_PRIVATE_IPV4: ${{ vars.PROXY_PRIMARY_PRIVATE_IPV4 }}
@@ -76,6 +85,9 @@ jobs:
           PROXY_BACKUP_PRIVATE_IPV4: ${{ vars.PROXY_BACKUP_PRIVATE_IPV4 }}
           PROXY_ACTIVE_INGRESS: ${{ vars.PROXY_ACTIVE_INGRESS }}
           SETTINGS_MODE: ${{ inputs.mode }}
+          SELECTED_PRIMARY_IPV4: ${{ inputs.selected_primary }}
+          SELECTED_BACKUP_IPV4: ${{ inputs.selected_backup }}
+          EXPECTED_CATALOG_REVISION: ${{ inputs.base_revision }}
           CONFIRMED_BINDINGS: ${{ inputs.confirmed_bindings }}
         run: |
           [[ "$CONFIRMED_BINDINGS" == true ]] || { echo '请先核对 OCI 实际绑定，再勾选确认'; exit 2; }

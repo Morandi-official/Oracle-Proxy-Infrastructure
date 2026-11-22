@@ -23,11 +23,19 @@ PACKET = b'\x04\0\0\0' + bytes(range(256))*5
 
 
 class Framing(unittest.TestCase):
-    def test_only_configured_ingresses_listen_not_retired_aliases(self):
+    def test_registered_aliases_bind_but_only_current_roles_relay(self):
         from relay.quic_server import listener_hosts
+        from relay.server import ingress_target
         catalog={'primary':{'private_ipv4':'10.0.0.6'},'backup':{'private_ipv4':'10.0.0.246'},'legacy':[{'private_ipv4':'10.0.0.220'}]}
         with patch('console.endpoint_config.read',return_value=catalog):
-            self.assertEqual(listener_hosts(),['10.0.0.6','10.0.0.246'])
+            self.assertEqual(listener_hosts(), ['10.0.0.6', '10.0.0.246', '10.0.0.220'])
+            primary = ('127.0.0.1', 51820)
+            self.assertEqual(ingress_target('10.0.0.6', primary), primary)
+            self.assertEqual(ingress_target('10.0.0.246', primary), ('127.0.0.1', 51821))
+            self.assertIsNone(ingress_target('10.0.0.220', primary))
+            catalog['backup'], catalog['legacy'][0] = catalog['legacy'][0], catalog['backup']
+            self.assertEqual(ingress_target('10.0.0.220', primary), ('127.0.0.1', 51821))
+            self.assertIsNone(ingress_target('10.0.0.246', primary))
 
     def test_out_of_order_round_trip_and_bounded_invalid_input(self):
         for size in (1, 92, 148, CHUNK, CHUNK+1, 1380, 4096):

@@ -11,7 +11,7 @@ from aioquic.quic.events import ConnectionTerminated, DatagramFrameReceived, Str
 
 from .fragments import Reassembly, fragment
 from .capsules import Capsules, encode as capsule
-from .server import PacketQueue, Rate, authenticate, wireguard_packet
+from .server import PacketQueue, Rate, authenticate, ingress_target, wireguard_packet
 
 from aioquic.h3.connection import H3Connection, Setting
 from aioquic.h3.events import HeadersReceived, DataReceived, DatagramReceived
@@ -39,10 +39,10 @@ class RelayState:
 
 
 class RelayProtocol(QuicConnectionProtocol):
-    def __init__(self, *args, state, target=None, **kwargs):
+    def __init__(self, *args, state, ingress=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.state = state
-        self.target = target or state.target
+        self.ingress = ingress
         self.header = bytearray()
         self.started = False
         self.http = None
@@ -56,6 +56,9 @@ class RelayProtocol(QuicConnectionProtocol):
         self.rate = Rate(4 * 1024 * 1024)
         self.auth_slot = False
         self.deadline = asyncio.get_running_loop().call_later(5, self.reject)
+
+    def current_target(self):
+        return self.state.target if self.ingress is None else ingress_target(self.ingress, self.state.target)
 
     def reject(self):
         self.cleanup()
@@ -74,8 +77,12 @@ class RelayProtocol(QuicConnectionProtocol):
         self.header.clear()
 
     def quic_event_received(self, event):
-        if isinstance(event, ProtocolNegotiated) and event.alpn_protocol == H3_ALPN:
-            self.http = DatagramH3(self._quic)
+        if isinstance(event, ProtocolNegotiated):
+            if self.current_target() is None:
+                self.reject()
+                return
+            if event.alpn_protocol == H3_ALPN:
+                self.http = DatagramH3(self._quic)
         if isinstance(event, ConnectionTerminated):
             self.cleanup()
             return
@@ -149,6 +156,8 @@ class RelayProtocol(QuicConnectionProtocol):
     async def authorize(self, token):
         try:
             if not await self.state.auth(self.state.session, token): self.reject(); return
+            target = self.current_target()
+            if target is None: self.reject(); return
             identity = hashlib.sha256(token.encode()).digest()
             previous=self.state.active.get(identity)
             if previous is None and len(self.state.active)>=32: self.reject(); return
@@ -159,7 +168,7 @@ class RelayProtocol(QuicConnectionProtocol):
             self.identity = identity
             self.state.active[identity]=self
             queue = PacketQueue()
-            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(lambda: queue, remote_addr=self.target)
+            transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(lambda: queue, remote_addr=target)
             # A timeout or peer close can occur during the awaited socket creation.
             if self.identity is None: transport.close(); return
             self.udp = transport
@@ -167,7 +176,7 @@ class RelayProtocol(QuicConnectionProtocol):
             if self.http is None: self._quic.send_stream_data(0, b'OK\n', end_stream=True)
             else: self.http.send_headers(self.http_stream,[(b':status',b'200'),(b'capsule-protocol',b'?1')])
             self.transmit()
-            self.tasks.extend([asyncio.create_task(self.outbound(queue)), asyncio.create_task(self.policy(token)),
+            self.tasks.extend([asyncio.create_task(self.outbound(queue)), asyncio.create_task(self.policy(token, target)),
                                asyncio.create_task(self.watch_failure(queue))])
         except asyncio.CancelledError:
             return
@@ -198,11 +207,11 @@ class RelayProtocol(QuicConnectionProtocol):
         except asyncio.CancelledError: return
         except Exception: self.reject()
 
-    async def policy(self, token):
+    async def policy(self, token, target):
         try:
             while True:
                 await asyncio.sleep(self.state.refresh)
-                if not await self.state.auth(self.state.session, token): self.reject(); return
+                if self.current_target() != target or not await self.state.auth(self.state.session, token): self.reject(); return
         except asyncio.CancelledError: return
         except Exception: self.reject()
 
@@ -215,8 +224,9 @@ def listener_hosts():
     from console.endpoint_config import read
     value=read()
     if value is None:return ['0.0.0.0']
-    # Retired aliases must not act as a third entrance to the primary identity.
-    return list(dict.fromkeys(value[role]['private_ipv4'] for role in ('primary','backup')))
+    # Reserve local UDP sockets for registered aliases. Only the two selected
+    # roles can relay traffic, and a switch can activate an alias immediately.
+    return [pair['private_ipv4'] for pair in (value['primary'], value['backup'], *value['legacy'])]
 
 
 async def start_listeners(config,state,hosts=None,port=8443):
@@ -224,12 +234,10 @@ async def start_listeners(config,state,hosts=None,port=8443):
     # translates them back to the matching public IP rather than the default.
     servers=[]
     try:
-        from console.endpoint_config import read
-        catalog=read()
         for host in listener_hosts() if hosts is None else hosts:
-            target=('127.0.0.1',51821) if catalog and host==catalog['backup']['private_ipv4'] else state.target
+            ingress = host if hosts is None else None
             server=await serve(host,port,configuration=config,retry=True,
-                create_protocol=lambda *args,_target=target,**kwargs:RelayProtocol(*args,state=state,target=_target,**kwargs))
+                create_protocol=lambda *args,_ingress=ingress,**kwargs:RelayProtocol(*args,state=state,ingress=_ingress,**kwargs))
             servers.append(server)
             if port==0:port=server._transport.get_extra_info('sockname')[1]
         return servers

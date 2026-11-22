@@ -13,6 +13,8 @@ import urllib.parse
 import urllib.request
 
 MAX_DOWNLOAD=8*1024*1024
+RELEASE_DOWNLOAD=('https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/'
+                  'releases/download/android-v0.1.0/Proxy-Android.apk')
 HEADERS=('server','via','x-cache','content-type')
 OPEN=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -88,26 +90,34 @@ def http_probe(label,url,limit=65536):
     return result
 
 
-def transfer(kind):
-    started=time.monotonic();result={'kind':kind,'status':'UNAVAILABLE','bytes':0}
+def transfer(kind, target='cloudflare'):
+    started=time.monotonic()
+    result={'kind':kind,'target':target,'status':'UNAVAILABLE','bytes':0}
     try:
         if kind=='upload':
             data=bytes(2*1024*1024)
             request=urllib.request.Request('https://speed.cloudflare.com/__up',data=data,method='POST',headers={'Content-Type':'application/octet-stream'})
         else:
-            data=None;request=urllib.request.Request('https://speed.cloudflare.com/__down?bytes='+str(MAX_DOWNLOAD),headers={'Accept-Encoding':'identity'})
+            data=None
+            url = RELEASE_DOWNLOAD if target == 'github-release' else 'https://speed.cloudflare.com/__down?bytes='+str(MAX_DOWNLOAD)
+            request=urllib.request.Request(url,headers={'Accept-Encoding':'identity','Range':'bytes=0-'+str(MAX_DOWNLOAD-1)} if target=='github-release' else {'Accept-Encoding':'identity'})
         with OPEN.open(request,timeout=20) as response:
             result['http_status']=response.status
             if data is not None:
                 response.read(1024);result['bytes']=len(data)
             else:
+                if target == 'github-release' and response.headers.get_content_type() not in (
+                        'application/octet-stream', 'application/vnd.android.package-archive', 'application/zip'):
+                    raise ValueError('RELEASE_BINARY_REQUIRED')
                 while result['bytes']<MAX_DOWNLOAD:
                     block=response.read(min(65536,MAX_DOWNLOAD-result['bytes']))
                     if not block:break
                     result['bytes']+=len(block)
         elapsed=time.monotonic()-started
         result.update(status='OBSERVED',elapsed_ms=round(elapsed*1000),mbps=round(result['bytes']*8/max(elapsed,.001)/1_000_000,3))
-    except Exception as error:result['error_category']=type(error).__name__
+    except Exception as error:
+        result['error_category']=type(error).__name__
+        if hasattr(error,'code'):result['http_status']=error.code
     return result
 
 
@@ -139,6 +149,8 @@ def observe():
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         result['github_http']=list(pool.map(lambda pair:http_probe(*pair),targets))
     result['transfers']=[transfer('download'),transfer('upload')]
+    if result['transfers'][0]['status'] != 'OBSERVED':
+        result['transfers'].append(transfer('download', 'github-release'))
     result['official_shape_sources']=official_shapes()
     result['after']=local();result['elapsed_ms']=round((time.monotonic()-started)*1000)
     return result

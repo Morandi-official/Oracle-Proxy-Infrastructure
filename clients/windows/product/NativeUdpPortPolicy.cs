@@ -10,7 +10,7 @@ internal static class NativeUdpPortPolicy
         if(secret.NativeUdpPortPolicyVersion>=1)return false;
         secret.NativeUdpPortPolicyVersion=1;
         secret.NativeUdpAdaptive=true;
-        secret.CarrierHintUntil=0; // Reassess a fallback learned by the old pinned plan.
+        secret.CarrierHintUntil=0;
         // Older ordinary UI selections persisted a hard 8443 pin. Migrate it
         // once; a later explicit single-port diagnostic remains explicit.
         if(secret.NativeUdpPortPreference==8443)secret.NativeUdpPortPreference=0;
@@ -26,7 +26,7 @@ internal static class NativeUdpPortPolicy
         }
         bool available443=state["tunnel"]?["native_udp_ports"] is JsonArray ports && ports.Any(n=>n?.GetValue<int>()==443);
         if(endpointPort!=51820 || !available443)return [endpointPort];
-        bool cached=secret.CarrierHint=="wireguard-udp" && secret.CarrierHintUntil>DateTimeOffset.UtcNow.ToUnixTimeSeconds() && secret.CarrierNetworkHash==CarrierMemory.NetworkHash(state);
+        bool cached=secret.CarrierHintUntil>DateTimeOffset.UtcNow.ToUnixTimeSeconds() && secret.CarrierNetworkHash==CarrierMemory.NetworkHash(state);
         if(secret.NativeUdpAdaptive && TransportPolicy.Native8443Available(state))return cached && secret.NativeUdpPortHint==8443?[8443,443]:[443,8443];
         return cached && secret.NativeUdpPortHint==443?[443,51820]:[51820,443];
     }

@@ -19,9 +19,8 @@ import (
 	"github.com/sagernet/sing-box/protocol/wireguard"
 )
 
-// Register the configuration surface actually emitted by CoreConfig, including
-// every supported carrier. TLS certificate verification remains in each carrier;
-// unused ACME/proxy protocols are not initialized merely to build a registry.
+// Register the configuration surface actually emitted by CoreConfig, and
+// avoid initializing unused proxy protocols.
 func productInbounds() *inbound.Registry {
 	r := inbound.NewRegistry()
 	tun.RegisterInbound(r)
@@ -31,8 +30,7 @@ func productInbounds() *inbound.Registry {
 func productContext() context.Context {
 	out := outbound.NewRegistry()
 	direct.RegisterOutbound(out)
-	outbound.Register[relayOptions](out, relayType, newRelayOutbound)
-	outbound.Register[quicOptions](out, quicType, newQUICOutbound)
+
 	outbound.Register[nativeOptions](out, nativeType, newNativeOutbound)
 	end := endpoint.NewRegistry()
 	wireguard.RegisterEndpoint(end)

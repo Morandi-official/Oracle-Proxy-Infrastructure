@@ -250,6 +250,27 @@ internal static class OracleAcceptance
         }
         public void Dispose()=>Set(_index,_original);
     }
+    private static async Task SampleDownload(string path)
+    {
+        try{
+            const int limit=2*1024*1024;
+            using var handler=new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false};
+            using var client=new HttpClient(handler){Timeout=TimeSpan.FromSeconds(12)};
+            using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(12));
+            var stopwatch=Stopwatch.StartNew();
+            using var response=await client.GetAsync("https://speed.cloudflare.com/__down?bytes="+limit,HttpCompletionOption.ResponseHeadersRead,timeout.Token);
+            response.EnsureSuccessStatusCode();
+            await using var stream=await response.Content.ReadAsStreamAsync(timeout.Token);
+            byte[] buffer=new byte[32768];int total=0,read;
+            while((read=await stream.ReadAsync(buffer.AsMemory(0,Math.Min(buffer.Length,limit+1-total)),timeout.Token))>0){
+                total+=read;if(total>limit)break;
+            }
+            if(total!=limit)throw new IOException("THROUGHPUT_SAMPLE_SIZE_MISMATCH");
+            Console.WriteLine("WINDOWS_DOWNLOAD_"+path+"_BYTES="+total+";ELAPSED_MS="+stopwatch.ElapsedMilliseconds);
+        }catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException){
+            Console.WriteLine("WINDOWS_DOWNLOAD_"+path+"=UNAVAILABLE");
+        }
+    }
     private static async Task BulkDownload()
     {
         using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false}){Timeout=TimeSpan.FromSeconds(20)};
@@ -269,9 +290,7 @@ internal static class OracleAcceptance
                 if(attempt["ports"]?[number] is JsonObject port)
                     foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error"})Console.WriteLine(prefix+"_PORT_"+number+"_"+key.ToUpperInvariant()+"="+port[key]);
         }
-        foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})
-            if(state["carrier_failures"]?[transport] is JsonObject failure)
-                foreach(string key in new[]{"error","carrier_stage","probe_failures","core_uptime_ms","core_pid"})Console.WriteLine(prefix+"_CARRIER_"+transport.Replace('-','_').ToUpperInvariant()+"_"+key.ToUpperInvariant()+"="+failure[key]);
+
     }
     private static void RequireStableNative(JsonObject state,uint pid)
     {
@@ -437,6 +456,7 @@ internal static class OracleAcceptance
             var expectedEndpoints=JsonNode.Parse(File.ReadAllText("ops/network/endpoints.json"))!.AsObject();
             Check(IngressCatalogMatchesPolicy(login,expectedEndpoints),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();
+            await SampleDownload("DIRECT");
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
             using var runningUu=Process.GetProcessById(int.Parse(Environment.GetEnvironmentVariable("ORACLE_CI_RUNNING_UU_PID")!));
             Check(!runningUu.HasExited && connected["uu_candidates"]?.GetValue<int>()>0 &&
@@ -448,6 +468,7 @@ internal static class OracleAcceptance
             // Connection admission already requires the IPv6 exit probe as well.
             Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");
             Check(connected["tun_route_mask"]?.GetValue<uint>()==15,"ORDINARY_ROUTE_BOTH_IPV4_AND_IPV6_HALVES_USE_OWNED_TUN");
+            await SampleDownload("WIREGUARD_UDP");
             await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
             await LiveGuiUdpToggle();
             // X intentionally clears a non-remembered login. Reauthenticate the
@@ -519,7 +540,7 @@ internal static class OracleAcceptance
                 Check(blocked["ok"]?.GetValue<bool>()==false && blocked["error"]?.GetValue<string>()=="UU_MAINTENANCE_BUSY" && blocked["mode"]?.GetValue<string>()=="disconnected" && blocked["intent"]?.GetValue<bool>()==false,"REAL_CONNECT_REFUSED_DURING_ELEVATED_UU_MAINTENANCE");
             }
             stage="ADAPTIVE_UDP443_WITH_8443_BLOCKED";
-            await Send("Disconnect");var adaptive=await Send("PreferAutoAdaptive");
+            await Send("Disconnect");var adaptive=await Send("PreferUdpAdaptive");
             Check(adaptive["transport_preference"]?.GetValue<string>()=="auto" && adaptive["native_udp_adaptive"]?.GetValue<bool>()==true && adaptive["native_udp_port_preference"]?.GetValue<int>()==0,"REAL_AUTO_POLICY_HAS_NO_FIXED_NATIVE_PORT_PIN");
             using(var alternateLoss=new InitialUdpLoss(native8443Only:true)){
                 var timer=Stopwatch.StartNew();await Send("Connect");var connected=await Connected();
@@ -536,7 +557,7 @@ internal static class OracleAcceptance
                 Check(cached["core_pid"]?.GetValue<uint>()!=prior && cached["native_udp_selected_port"]?.GetValue<int>()==8443 && cached["native_udp_attempt"]?["port_order"]?.GetValue<string>()=="8443,443" && timer.ElapsedMilliseconds<4500 && await ExitIp()=="152.67.156.100","REAL_ADAPTIVE_NATIVE_PORT_MEMORY_SURVIVES_CORE_REPLACEMENT");
             }
             stage="EXPLICIT_AUTO_NATIVE8443_POLICY";
-            await Send("Disconnect");var automatic8443=await Send("PreferAuto8443");
+            await Send("Disconnect");var automatic8443=await Send("PreferUdp8443");
             Check(automatic8443["transport_preference"]?.GetValue<string>()=="auto" && automatic8443["native_udp_port_preference"]?.GetValue<int>()==8443 && automatic8443["native_udp_8443_available"]?.GetValue<bool>()==true,"REAL_NORMAL_AUTO_NATIVE_8443_SELECTION_IS_SERVER_ADVERTISED_AND_PRESERVES_AUTO_POLICY");
             using(var oldIngressLoss=new InitialUdpLoss(oldIngressOnly:true)){
             stage="FIXED_NATIVE_UDP8443";
@@ -553,40 +574,30 @@ internal static class OracleAcceptance
             }
             await Send("Disconnect");
             stage="FORCED_COLD_PROTOCOLS";
-            foreach(string preference in new[]{"PreferUdp","PreferQuic"}){
-                string wanted=preference=="PreferUdp"?"wireguard-udp":"wireguard-quic";
-                for(int cycle=0;cycle<3;cycle++){
-                    await Send("Disconnect");var selected=await Send(preference);
-                    Check(selected["core_pid"]?.GetValue<uint>()==0,"REAL_SELECTION_STOPS_OLD_CORE_"+wanted+"_"+cycle);
-                    using var oldIngressLoss=preference=="PreferQuic" && cycle==0?new InitialUdpLoss(oldIngressOnly:true):null;
-                    using var primaryLoss=preference=="PreferUdp" && cycle==1?new InitialUdpLoss(primaryOnly:true):null;
-                    using var returnLoss=preference=="PreferUdp" && cycle==2?new InitialUdpLoss(primaryRepliesOnly:true):null;
-                    var timer=Stopwatch.StartNew();await Send("Connect");var cold=await Connected();long elapsed=timer.ElapsedMilliseconds;
-                    Console.WriteLine("REAL_COLD_READY_MS_"+wanted+"_"+cycle+"="+elapsed);
-                    Check(cold["transport_address"]?.GetValue<string>()=="141.147.78.44" && cold["transport"]?.GetValue<string>()==wanted && elapsed<(preference=="PreferUdp" && cycle>0?12000:6000) && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+wanted+"_"+cycle);
-                    Check(await DualStackExit() && await Ipv6Stun(),"REAL_FORCED_CARRIER_IPV6_HTTPS_AND_STUN_"+wanted+"_"+cycle);
-                    if(preference=="PreferQuic" && cycle==0)Check(true,"REAL_SECONDARY_QUIC_WHILE_ALL_OLD_INGRESS_UDP_PORTS_ARE_BLOCKED");
-                    Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+wanted+"_"+cycle);
-                    var metered=await Send("Status");
-                    Check(metered["verified_exit_ip"]?.GetValue<string>()=="152.67.156.100" && metered["traffic"]?["sample_ms"]?.GetValue<long>()>0 && metered["traffic"]?["rx_bytes"]?.GetValue<long>()>0 && metered["traffic"]?["tx_bytes"]?.GetValue<long>()>0,"REAL_LOCAL_TUN_UPLOAD_DOWNLOAD_COUNTERS_AND_VERIFIED_EXIT_"+wanted+"_"+cycle);
-                    if(preference=="PreferUdp" && cycle==1)Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_WIREGUARD_UDP443_WHILE_51820_IS_BLOCKED");
-                    if(preference=="PreferUdp" && cycle==2){
-                        Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_UDP443_FRESH_HANDSHAKE_WHILE_ONLY_51820_REPLIES_ARE_DROPPED");
-                        await Send("Disconnect");var portMemory=Stopwatch.StartNew();await Send("Connect");var reused=await Connected();
-                        Console.WriteLine("REAL_RETURN_LOSS_CACHED_UDP443_RECONNECT_MS="+portMemory.ElapsedMilliseconds);
-                        Check(reused["transport"]?.GetValue<string>()==wanted && reused["native_udp_selected_port"]?.GetValue<int>()==443 && portMemory.ElapsedMilliseconds<1500 && await ExitIp()=="152.67.156.100","REAL_CACHED_NATIVE_443_RECONNECT_WITHOUT_PRIMARY_TIMEOUT");
-                        portMemory.Restart();uint oldCore=await ColdCore();var newCore=await Connected();
-                        Console.WriteLine("REAL_RETURN_LOSS_CACHED_UDP443_NEW_CORE_MS="+portMemory.ElapsedMilliseconds);
-                        Check(newCore["core_pid"]?.GetValue<uint>()!=oldCore && newCore["native_udp_selected_port"]?.GetValue<int>()==443 && newCore["transport"]?.GetValue<string>()==wanted && portMemory.ElapsedMilliseconds<4500 && await ExitIp()=="152.67.156.100","REAL_NEW_CORE_STARTS_WITH_VERIFIED_NATIVE_PORT_MEMORY");
-                    }
-                    if(preference=="PreferQuic"){
-                        Check(cold["carrier_stage"]?.GetValue<string>()=="CARRIER_H3_READY","REAL_STANDARD_HTTP3_AUTHENTICATED_"+cycle);
-                        timer.Restart();uint prior=await ColdCore();var restored=await Connected();
-                        Check(restored["core_pid"]?.GetValue<uint>()!=prior && restored["transport"]?.GetValue<string>()==wanted && timer.ElapsedMilliseconds<8000 && await ExitIp()=="152.67.156.100","REAL_HTTP3_HARD_CORE_LOSS_REPLACEMENT_WITHOUT_HTTPS_"+cycle);
-                    }
+            for(int cycle=0;cycle<3;cycle++){
+                await Send("Disconnect");var selected=await Send("PreferUdp");
+                Check(selected["core_pid"]?.GetValue<uint>()==0,"REAL_SELECTION_STOPS_OLD_CORE_"+"wireguard-udp"+"_"+cycle);
+                using var primaryLoss=cycle==1?new InitialUdpLoss(primaryOnly:true):null;
+                using var returnLoss=cycle==2?new InitialUdpLoss(primaryRepliesOnly:true):null;
+                var timer=Stopwatch.StartNew();await Send("Connect");var cold=await Connected();long elapsed=timer.ElapsedMilliseconds;
+                Console.WriteLine("REAL_COLD_READY_MS_"+"wireguard-udp"+"_"+cycle+"="+elapsed);
+                Check(cold["transport_address"]?.GetValue<string>()=="141.147.78.44" && cold["transport"]?.GetValue<string>()=="wireguard-udp" && elapsed<(cycle>0?12000:6000) && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_FORCED_COLD_PROTOCOL_HTTP_DNS_"+"wireguard-udp"+"_"+cycle);
+                Check(await DualStackExit() && await Ipv6Stun(),"REAL_FORCED_CARRIER_IPV6_HTTPS_AND_STUN_"+"wireguard-udp"+"_"+cycle);
+                Check(await AdminThroughVPN() && await CarrierDirectBlocked(),"REAL_ADMIN_VIA_VPN_WITH_PHYSICAL_BYPASS_BLOCKED_"+"wireguard-udp"+"_"+cycle);
+                var metered=await Send("Status");
+                Check(metered["verified_exit_ip"]?.GetValue<string>()=="152.67.156.100" && metered["traffic"]?["sample_ms"]?.GetValue<long>()>0 && metered["traffic"]?["rx_bytes"]?.GetValue<long>()>0 && metered["traffic"]?["tx_bytes"]?.GetValue<long>()>0,"REAL_LOCAL_TUN_UPLOAD_DOWNLOAD_COUNTERS_AND_VERIFIED_EXIT_"+"wireguard-udp"+"_"+cycle);
+                if(cycle==1)Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_WIREGUARD_UDP443_WHILE_51820_IS_BLOCKED");
+                if(cycle==2){
+                    Check(cold["native_udp_selected_port"]?.GetValue<int>()==443,"REAL_NATIVE_UDP443_FRESH_HANDSHAKE_WHILE_ONLY_51820_REPLIES_ARE_DROPPED");
+                    await Send("Disconnect");var portMemory=Stopwatch.StartNew();await Send("Connect");var reused=await Connected();
+                    Console.WriteLine("REAL_RETURN_LOSS_CACHED_UDP443_RECONNECT_MS="+portMemory.ElapsedMilliseconds);
+                    Check(reused["transport"]?.GetValue<string>()=="wireguard-udp" && reused["native_udp_selected_port"]?.GetValue<int>()==443 && portMemory.ElapsedMilliseconds<1500 && await ExitIp()=="152.67.156.100","REAL_CACHED_NATIVE_443_RECONNECT_WITHOUT_PRIMARY_TIMEOUT");
+                    portMemory.Restart();uint oldCore=await ColdCore();var newCore=await Connected();
+                    Console.WriteLine("REAL_RETURN_LOSS_CACHED_UDP443_NEW_CORE_MS="+portMemory.ElapsedMilliseconds);
+                    Check(newCore["core_pid"]?.GetValue<uint>()!=oldCore && newCore["native_udp_selected_port"]?.GetValue<int>()==443 && newCore["transport"]?.GetValue<string>()=="wireguard-udp" && portMemory.ElapsedMilliseconds<4500 && await ExitIp()=="152.67.156.100","REAL_NEW_CORE_STARTS_WITH_VERIFIED_NATIVE_PORT_MEMORY");
                 }
             }
-            await Send("Disconnect");await Send("PreferAuto");
+            await Send("Disconnect");await Send("PreferUdp");
             stage="INITIAL_TRANSIENT_UDP_LOSS";uint initialPid;
             // The acceptance target has a fixed deployed WireGuard port. The
             // ordinary GUI IPC deliberately never exposes the tunnel profile.
@@ -602,7 +613,6 @@ internal static class OracleAcceptance
             // authenticated service IPC, and an actual ordinary direct exit.
             Check(prepared["quick_ready"]?.GetValue<bool>()==true && prepared["guard"]?.GetValue<bool>()==false && prepared["tun_permitted"]?.GetValue<bool>()==false && VpnRuntime.TunnelInactive() && await ExitIp()!="152.67.156.100","REAL_PREPARATION_INACTIVE_TUN_AND_ORDINARY_DIRECT_EXIT_WITHOUT_PRIVILEGED_OWNER_CALLS");
             Check(prepared["transport"]?.GetValue<string>()=="wireguard-udp" && prepared["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && prepared["native_udp_attempt"]?["socket_binding"]?.GetValue<string>()=="native_udp_dual_port" && prepared["native_udp_attempt"]?["started_without_tun"]?.GetValue<bool>()==true && prepared["native_udp_attempt"]?["probe_result"]?.GetValue<string>()=="oracle_egress_verified","REAL_NATIVE_UDP_51820_PREPARATION_VERIFIED_BEFORE_TUN");
-            if(Environment.GetEnvironmentVariable("ORACLE_REQUIRE_QUIC")=="true")Check(prepared["quic_available"]?.GetValue<bool>()==true,"REAL_QUIC_RELEASE_CONFIGURATION_AND_SERVER_METADATA_IN_SYNC");
             var warmPid=prepared["core_pid"]!.GetValue<uint>();var click=Stopwatch.StartNew();
             var quick=await Send("Connect");long clickMs=click.ElapsedMilliseconds;
             Console.WriteLine("REAL_WARM_CONNECT_CLICK_MS="+clickMs);
@@ -641,70 +651,23 @@ internal static class OracleAcceptance
             var recovered=await Connected();
             Check(recovered["login_authenticated"]?.GetValue<bool>()==true && recovered["account"]?["device_count"]?.GetValue<int>()==devices,"REAL_SCM_RECOVERY_REUSES_EXISTING_DEVICE_IDENTITY");
             Check(await ExitIp()=="152.67.156.100","REAL_SCM_RECOVERY_ORACLE_EXIT");
-            stage="AUTOMATIC_QUIC_FALLBACK";await Send("Disconnect");
-            if(prepared["quic_available"]?.GetValue<bool>()==true){
-                using(var nativeLoss=new InitialUdpLoss()){
-                    uint previousPid=await ColdCore();JsonObject replacement=new();
-                    // Deliberately let the background actor replace the dead
-                    // prepared core before Connect. Its old successful probe
-                    // must not authorize the new blocked-UDP generation.
-                    for(int attempt=0;attempt<20;attempt++){
-                        replacement=await Send("Prepare");
-                        if(replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["core_pid"]!.GetValue<uint>()!=previousPid)break;
-                        await Task.Delay(200);
-                    }
-                    foreach(string key in new[]{"mode","error","core_pid","transport","quick_ready","verified_at","connection_stage"})
-                        Console.WriteLine("REPLACEMENT_SAFE_"+key.ToUpperInvariant()+"="+replacement[key]);
-                    if(replacement["failure"] is JsonObject replacementFailure)
-                        foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage"})
-                            Console.WriteLine("REPLACEMENT_SAFE_FAILURE_"+key.ToUpperInvariant()+"="+replacementFailure[key]);
-                    Check(previousPid>0 && replacement["core_pid"]?.GetValue<uint>() is >0 && replacement["quick_ready"]?.GetValue<bool>()==false && replacement["verified_at"] is null && replacement["transport"]?.GetValue<string>()=="wireguard-udp","REAL_REPLACEMENT_CORE_CANNOT_INHERIT_OLD_EXIT_VERIFICATION");
-                    await Send("Connect");var quic=await Connected();
-                    SafeNativeState(quic,"PERMANENT_NATIVE_LOSS");
-                    Check(quic["carrier_failures"]?["wireguard-udp"]?["core_uptime_ms"]?.GetValue<long>() is >=8000 and <=13000,"REAL_PERMANENT_NATIVE_UDP_LOSS_FALLBACK_HAS_THIRTEEN_SECOND_HARD_UPPER_BOUND");
-                    Check(quic["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_NATIVE_UDP_LOSS_SELECTS_QUIC_BEFORE_HTTPS_WITH_HTTP_AND_UDP_DNS");
-                    Check(quic["native_udp_attempt"]?["endpoint_port"]?.GetValue<int>()==51820 && quic["native_udp_attempt"]?["probe_failures"]?.GetValue<int>()>=2 && quic["native_udp_attempt"]?["probe_result"]?.GetValue<string>() is "egress_probe_timeout" or "egress_probe_http_failed","REAL_QUIC_DIAGNOSTICS_RETAIN_NATIVE_UDP_FAILURE_EVIDENCE");
-                    Check(await CarrierDirectBlocked() && await AdminThroughVPN(),"REAL_QUIC_ADMIN_THROUGH_VPN_AND_PHYSICAL_DIRECT_BLOCKED");
-                    uint quicPid=quic["core_pid"]!.GetValue<uint>();
-                    for(int cycle=0;cycle<3;cycle++){
-                        var off=await Send("Disconnect");
-                        Check(off["quick_ready"]?.GetValue<bool>()==true && off["core_pid"]?.GetValue<uint>()==quicPid && VpnRuntime.TunnelInactive() && await ExitIp()!="152.67.156.100","REAL_QUIC_OFF_PRESERVES_PREPARED_CORE_AND_RESTORES_DIRECT_"+cycle);
-                        var restart=Stopwatch.StartNew();var fast=await Send("Connect");long elapsed=restart.ElapsedMilliseconds;
-                        Console.WriteLine("REAL_BLOCKED_UDP_QUIC_RECONNECT_CLICK_MS_"+cycle+"="+elapsed);
-                        foreach(string phase in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","tun_active_ms","complete_ms"})Console.WriteLine("REAL_QUIC_RECONNECT_"+cycle+"_"+phase.ToUpperInvariant()+"="+fast["switch_timings"]?[phase]);
-                        Check(elapsed<1000 && fast["click_to_ready_ms"]?.GetValue<long>() is >=0 and <1000 && fast["mode"]?.GetValue<string>()=="connected" && fast["core_pid"]?.GetValue<uint>()==quicPid && fast["transport"]?.GetValue<string>()=="wireguard-quic" && await ExitIp()=="152.67.156.100" && await FreshDns(),"REAL_BLOCKED_UDP_REPEATED_QUIC_RECONNECT_UNDER_ONE_SECOND_"+cycle);
-                    }
-                    await Send("Disconnect");
-                    await ColdCore();var learned=await Send("Connect");
-                    Check(learned["transport"]?.GetValue<string>()=="wireguard-quic","REAL_SAME_NETWORK_REMEMBERS_FAILED_UDP_AFTER_CORE_LOSS");
-                    await Connected();await Send("Disconnect");
-                    await Send("PreferUdp");await Send("Connect");var explicitFallback=await Connected();
-                    Check(explicitFallback["transport"]?.GetValue<string>()=="wireguard-quic","REAL_EXPLICIT_UDP_STILL_HAS_AUTHENTICATED_QUIC_FALLBACK");
-                    uint fallbackPid=explicitFallback["core_pid"]!.GetValue<uint>();await Send("Disconnect");
-                    var retry=await Send("Connect");
-                    Check(retry["transport"]?.GetValue<string>()=="wireguard-udp" && retry["core_pid"]?.GetValue<uint>() is >0 && retry["core_pid"]!.GetValue<uint>()!=fallbackPid && retry["mode"]?.GetValue<string>()!="connected" && retry["verified_at"] is null,"REAL_EXPLICIT_UDP_RECONNECT_RETRIES_NATIVE_INSTEAD_OF_REUSING_WARM_QUIC");
-                    await Send("Disconnect");await Send("PreferAuto");
-                }
-            }else Console.WriteLine("REAL_QUIC_CARRIER=SERVER_NOT_ADVERTISED_YET");
-            stage="AUTOMATIC_HTTPS_FALLBACK";await Send("Disconnect");
+            stage="UDP_UNAVAILABLE_STAYS_PROTECTED";
+            await Send("Disconnect");
             using(var loss=new InitialUdpLoss(blockQuic:true)){
-                await ColdCore();
-                var pending=await ControlPipe.Send("Connect");
-                Check(pending["mode"]?.GetValue<string>()=="protected" && pending["guard"]?.GetValue<bool>()==true,"REAL_UDP_LOSS_STARTS_WITH_PROTECTED_NATIVE_ATTEMPT");
-                var carrier=await Connected();
-                Check(carrier["transport"]?.GetValue<string>()=="wireguard-https" && await ExitIp()=="152.67.156.100","REAL_AUTOMATIC_HTTPS_WIREGUARD_ORACLE_EXIT_WITH_NATIVE_UDP_BLOCKED");
-                Check(await FreshDns(),"REAL_HTTPS_WIREGUARD_FRESH_UDP_DNS");
-                Check(await DualStackExit() && await Ipv6Stun(),"REAL_HTTPS_FALLBACK_DUALSTACK_IPV6_HTTPS_AND_STUN");
-                Check(await CarrierDirectBlocked() && await AdminThroughVPN(),"REAL_HTTPS_ADMIN_THROUGH_VPN_AND_PHYSICAL_DIRECT_BLOCKED");
-                stage="HTTPS_SERVICE_CRASH_RECOVERY";
-                using(var carrierService=Process.GetProcessesByName(Path.GetFileNameWithoutExtension(Platform.Exe)).Single(p=>p.SessionId==0 && p.MainModule?.FileName==Platform.Exe)){
-                    carrierService.Kill(true);await carrierService.WaitForExitAsync();
+                await Send("Connect");
+                var deadline=Stopwatch.StartNew();
+                while(deadline.Elapsed<TimeSpan.FromSeconds(15)){
+                    var pending=await Send("Status");
+                    Check(pending["mode"]?.GetValue<string>()=="protected" &&
+                        pending["guard"]?.GetValue<bool>()==true &&
+                        pending["transport"]?.GetValue<string>()=="wireguard-udp" &&
+                        pending["verified_at"] is null,"REAL_UNAVAILABLE_UDP_REMAINS_PROTECTED");
+                    await Task.Delay(500);
                 }
-                try{Check(await ExitIp()=="152.67.156.100","REAL_HTTPS_SERVICE_CRASH_NO_DIRECT_EXIT");}catch(IOException){throw;}catch{Console.WriteLine("REAL_HTTPS_SERVICE_CRASH_PROBE_BLOCKED=PASS");}
-                Check(await NoUnexpectedIpv6Exit(),"REAL_SERVICE_CRASH_IPV6_BLOCKED_OR_ORACLE_ONLY");
-                var restored=await Connected();
-                Check(restored["transport"]?.GetValue<string>()=="wireguard-https" && restored["account"]?["device_count"]?.GetValue<int>()==devices && await ExitIp()=="152.67.156.100","REAL_SCM_HTTPS_FALLBACK_RECOVERY_SAME_DEVICE_WHILE_NATIVE_UDP_REMAINS_BLOCKED");
+                Check(await NoUnexpectedIpv6Exit(),"REAL_UNAVAILABLE_UDP_NO_DIRECT_IPV6");
+                await Send("Disconnect");
             }
+            await Send("Connect");await Connected();
             stage="USAGE_LINKAGE";await Task.Delay(6000);var after=await Send("Status");
             Check(after["account"]?["used_bytes"]?.GetValue<long>()>used,"REAL_SERVER_ACCOUNT_USAGE_LINKAGE");
             Check(checked(after["peer_rx_bytes"]!.GetValue<long>()+after["peer_tx_bytes"]!.GetValue<long>())>_deviceUsageStart!.Value,"REAL_SERVER_THIS_DEVICE_USAGE_LINKAGE");

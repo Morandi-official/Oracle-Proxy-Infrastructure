@@ -182,3 +182,47 @@ func testNativePortFailover(t *testing.T, ports []uint16) {
 		})
 	}
 }
+
+type blockedNativeWrite struct {
+	net.Conn
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (c blockedNativeWrite) Write(frame []byte) (int, error) {
+	close(c.started)
+	<-c.finish
+	return len(frame), nil
+}
+
+func TestEstablishedNativeReadCanProgressDuringBlockedSend(t *testing.T) {
+	socket := blockedNativeWrite{started: make(chan struct{}), finish: make(chan struct{})}
+	conn := &nativeConn{
+		sockets: []net.Conn{socket}, ports: []uint16{443}, winner: 0,
+		done: make(chan struct{}), readChanged: make(chan struct{}),
+		incoming: make(chan nativeRead, 1), free: make(chan *[4096]byte, 1),
+	}
+	packet := new([4096]byte)
+	packet[0] = 4
+	writeDone := make(chan error, 1)
+	go func() { _, err := conn.Write(packet[:32]); writeDone <- err }()
+	defer func() {
+		close(socket.finish)
+		if err := <-writeDone; err != nil {
+			t.Error(err)
+		}
+	}()
+	<-socket.started
+
+	conn.incoming <- nativeRead{data: packet, size: 32, index: 0}
+	readDone := make(chan error, 1)
+	go func() { _, err := conn.Read(make([]byte, 32)); readDone <- err }()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("established send blocked independently available receive")
+	}
+}

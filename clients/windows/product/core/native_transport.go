@@ -14,6 +14,23 @@ import (
 	"time"
 )
 
+func validPacket(b []byte) bool {
+	if len(b) < 4 || len(b) > 4096 || b[1] != 0 || b[2] != 0 || b[3] != 0 {
+		return false
+	}
+	switch b[0] {
+	case 1:
+		return len(b) == 148
+	case 2:
+		return len(b) == 92
+	case 3:
+		return len(b) == 64
+	case 4:
+		return len(b) >= 32
+	}
+	return false
+}
+
 type nativeRead struct {
 	data  *[4096]byte
 	size  int
@@ -21,21 +38,22 @@ type nativeRead struct {
 	err   error
 }
 type nativeConn struct {
-	relayConn
-	sockets     []net.Conn
-	ports       []uint16
-	incoming    chan nativeRead
-	free        chan *[4096]byte
-	done        chan struct{}
-	readChanged chan struct{}
-	mu          sync.Mutex
-	winner      int
-	attempt     int
-	sentIndex   int
-	lastInit    []byte
-	once        sync.Once
-	eventMu     sync.Mutex
-	events      map[string]int
+	access          sync.Mutex
+	readAt, writeAt time.Time
+	sockets         []net.Conn
+	ports           []uint16
+	incoming        chan nativeRead
+	free            chan *[4096]byte
+	done            chan struct{}
+	readChanged     chan struct{}
+	mu              sync.Mutex
+	winner          int
+	attempt         int
+	sentIndex       int
+	lastInit        []byte
+	once            sync.Once
+	eventMu         sync.Mutex
+	events          map[string]int
 }
 
 // Fixed, bounded diagnostic events only: no addresses, packet bytes or keys.
@@ -198,6 +216,13 @@ func (c *nativeConn) SetReadDeadline(at time.Time) error {
 	c.access.Unlock()
 	return nil
 }
+func (c *nativeConn) SetWriteDeadline(at time.Time) error {
+	c.access.Lock()
+	c.writeAt = at
+	c.access.Unlock()
+	return nil
+}
+
 func (c *nativeConn) SetDeadline(at time.Time) error {
 	c.access.Lock()
 	c.writeAt = at
@@ -268,8 +293,6 @@ func (c *nativeConn) Write(b []byte) (int, error) {
 	if !validPacket(b) {
 		return 0, errors.New("NATIVE_FRAME_REJECTED")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	select {
 	case <-c.done:
 		return 0, net.ErrClosed
@@ -281,6 +304,13 @@ func (c *nativeConn) Write(b []byte) (int, error) {
 	if expired {
 		return 0, os.ErrDeadlineExceeded
 	}
+	c.mu.Lock()
+	if c.winner >= 0 {
+		index := c.winner
+		c.mu.Unlock()
+		return c.writePacket(index, b)
+	}
+	defer c.mu.Unlock()
 	// A WireGuard peer rejects an initiation whose encrypted timestamp it has
 	// already accepted, even if the first reply was lost. Never race copies of
 	// one initiation to two aliases of that peer. Try the next port only with
@@ -295,35 +325,33 @@ func (c *nativeConn) Write(b []byte) (int, error) {
 	if i < 0 {
 		i = 0
 	}
-	write := func(index int) (int, error) {
-		c.sentIndex = index
-		n, err := c.sockets[index].Write(b)
-		if err != nil {
-			c.event(index, fmt.Sprintf("WRITE_ERROR_%d", nativeError(err)))
-		}
-		if n == len(b) && b[0] == 1 {
-			c.event(index, "SEND_INIT")
-			// Public WG sender index only, bounded for diagnostic correlation.
-			c.eventMu.Lock()
-			if c.events["INIT_INDEX"] < 16 {
-				c.events["INIT_INDEX"]++
-				fmt.Fprintf(os.Stderr, "NATIVE_UDP_%d_INIT_INDEX_%d\n", c.ports[index], binary.LittleEndian.Uint32(b[4:8]))
-			}
-			c.eventMu.Unlock()
-		}
-		return n, err
-	}
-	if c.winner >= 0 {
-		return write(c.winner)
-	}
-	n, err := write(i % len(c.sockets))
+	c.sentIndex = i % len(c.sockets)
+	n, err := c.writePacket(c.sentIndex, b)
 	if err != nil && n == 0 && b[0] == 1 && len(c.sockets) > 1 {
 		// A synchronous failure sent none of THIS initiation. Try the
 		// other socket now: returning the first error would make ClientBind
 		// close both sockets and restart forever on the same blocked port.
 		c.attempt = i + 1
 		fmt.Fprintf(os.Stderr, "CARRIER_NATIVE_TRY_%d\n", c.ports[c.attempt%len(c.sockets)])
-		return write(c.attempt % len(c.sockets))
+		c.sentIndex = c.attempt % len(c.sockets)
+		return c.writePacket(c.sentIndex, b)
+	}
+	return n, err
+}
+func (c *nativeConn) writePacket(index int, b []byte) (int, error) {
+	n, err := c.sockets[index].Write(b)
+	if err != nil {
+		c.event(index, fmt.Sprintf("WRITE_ERROR_%d", nativeError(err)))
+	}
+	if n == len(b) && b[0] == 1 {
+		c.event(index, "SEND_INIT")
+		// Public WG sender index only, bounded for diagnostic correlation.
+		c.eventMu.Lock()
+		if c.events["INIT_INDEX"] < 16 {
+			c.events["INIT_INDEX"]++
+			fmt.Fprintf(os.Stderr, "NATIVE_UDP_%d_INIT_INDEX_%d\n", c.ports[index], binary.LittleEndian.Uint32(b[4:8]))
+		}
+		c.eventMu.Unlock()
 	}
 	return n, err
 }

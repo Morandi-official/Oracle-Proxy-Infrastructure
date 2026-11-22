@@ -7,7 +7,7 @@ import (
 )
 
 func TestProductRegistryConfigurationSurface(t *testing.T) {
-	for _, carrier := range []string{nativeType, quicType, relayType} {
+	for _, carrier := range []string{nativeType} {
 		body := `{"inbounds":[{"type":"socks","tag":"probe","users":[{"username":"service","password":"synthetic"}]},{"type":"tun","tag":"device","stack":"mixed","auto_route":true,"strict_route":true}],"dns":{"servers":[{"type":"udp","server":"1.1.1.1","detour":"wg"}]},"endpoints":[{"type":"wireguard","tag":"wg","system":false,"address":["10.77.0.2/32","fd77::2/128"]}],"outbounds":[{"type":"direct","tag":"uu-direct"},{"type":"` + carrier + `","tag":"carrier"}]}`
 		config, err := json.UnmarshalExtendedContext[option.Options](productContext(), []byte(body))
 		if err != nil {

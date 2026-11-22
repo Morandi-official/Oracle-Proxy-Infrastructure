@@ -1,5 +1,5 @@
 param(
- [Parameter(Mandatory=$true)][ValidateSet('Seed','VerifyUdp','VerifyAuto')][string]$Phase,
+ [Parameter(Mandatory=$true)][ValidateSet('Seed','VerifyUdp','VerifyPort')][string]$Phase,
  [Parameter(Mandatory=$true)][string]$FixtureRoot,
  [Parameter(Mandatory=$true)][string]$ResultPath
 )
@@ -28,8 +28,8 @@ try {
  }else{
   $plain=[Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($statePath),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
   $value=[Text.Encoding]::UTF8.GetString($plain) | ConvertFrom-Json
-  $preference=if($Phase -eq 'VerifyUdp'){'udp'}else{'auto'}
-  if($value.PrivateKey -cne $private -or $value.PublicKey -cne $public -or $value.Token -cne '' -or $value.ConnectIntent -ne $false -or $value.RecoveryRequired -ne $false -or @($value.UuPaths).Count -ne 0 -or $value.TransportPreference -cne $preference){throw 'SYNTHETIC_SYSTEM_IDENTITY_OR_PREFERENCE_CHANGED'}
+  $preferenceOk=if($Phase -eq 'VerifyUdp'){$value.TransportPreference -ceq 'udp'}else{$value.NativeUdpPortPreference -eq 443}
+  if($value.PrivateKey -cne $private -or $value.PublicKey -cne $public -or $value.Token -cne '' -or $value.ConnectIntent -ne $false -or $value.RecoveryRequired -ne $false -or @($value.UuPaths).Count -ne 0 -or -not $preferenceOk){throw 'SYNTHETIC_SYSTEM_IDENTITY_OR_PREFERENCE_CHANGED'}
  }
  [IO.File]::WriteAllText($ResultPath,'{"ok":true,"synthetic_key_pair_preserved":true,"system_dpapi":true}')
  exit 0

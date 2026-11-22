@@ -101,7 +101,7 @@ try {
  Check-InstalledGui
  $firstPid=Check-Installed
  $response=[SetupAcceptancePipe]::PreferUdp([uint32]$firstPid) | ConvertFrom-Json
- if(-not $response.ok -or $response.mode -ne 'disconnected' -or $response.transport_preference -ne 'udp'){throw 'SYNTHETIC_NON_ACCOUNT_STATE_NOT_SAVED'}
+ if(-not $response.ok -or $response.mode -ne 'disconnected' -or $response.transport -ne 'wireguard-udp'){throw 'SYNTHETIC_NON_ACCOUNT_STATE_NOT_SAVED'}
  $savedState=(Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash
  Invoke-SetupProcess $setup $arguments
  $secondPid=Check-Installed

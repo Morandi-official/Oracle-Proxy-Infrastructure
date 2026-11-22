@@ -1,10 +1,10 @@
 name: Windows integrated product candidate (not GA)
 on:
   pull_request:
-    paths: ['clients/windows/product/**', 'server/admin-oracle/relay/settings.py', '.github/workflows/windows-product-candidate.yml']
+    paths: ['clients/windows/product/**', '.github/workflows/windows-product-candidate.yml']
   push:
     branches: [main]
-    paths: ['clients/windows/product/**', 'server/admin-oracle/relay/settings.py', '.github/workflows/windows-product-candidate.yml']
+    paths: ['clients/windows/product/**', '.github/workflows/windows-product-candidate.yml']
 permissions:
   contents: read
 jobs:
@@ -197,8 +197,6 @@ jobs:
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
         run: |
-          $settings=Get-Content -Raw ./server/admin-oracle/relay/settings.py
-          $env:ORACLE_REQUIRE_QUIC=if($settings -match '(?m)^PUBLIC_QUIC_ENABLED = True\s*$'){'true'}else{'false'}
           ./clients/windows/product/ci/oracle-acceptance.ps1
       - name: Assemble allowlisted candidate with licenses and corresponding source
         if: success()

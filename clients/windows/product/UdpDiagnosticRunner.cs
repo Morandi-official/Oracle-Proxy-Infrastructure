@@ -27,7 +27,7 @@ internal sealed class UdpDiagnosticRunner : IDisposable
         if(_task is not null)throw new IOException("DIAGNOSTIC_ALREADY_STARTED");
         _targets=UdpDiagnosticTarget.ForState(state);
         var copy=new DurableState{PrivateKey=secret.PrivateKey,PublicKey=secret.PublicKey,Token=secret.Token,
-            UuPaths=secret.UuPaths.ToArray(),NativeUdpAdaptive=false,TransportPreference="udp"};
+            UuPaths=secret.UuPaths.ToArray(),NativeUdpAdaptive=false};
         _task=Task.Run(()=>Run((JsonObject)state.DeepClone(),copy));
     }
     internal void Cancel(){if(Volatile.Read(ref _disposed)!=0)return;if(Running)Phase("stopping");_stop.Cancel();_api.Cancel();_core?.Cancel();}
@@ -90,7 +90,7 @@ internal sealed class UdpDiagnosticRunner : IDisposable
                 _core=new CoreProcess();if(_stop.IsCancellationRequested)_core.Cancel();
                 try{
                     await VpnRuntime.EnsureTunnelRemoved();
-                    await _core.Start(state,secret,TunnelTransport.WireGuardUdp,standby:true,diagnosticTarget:target);
+                    await _core.Start(state,secret,standby:true,diagnosticTarget:target);
                     await _core.Probe(12);verified=true;
                 }catch(Exception failure){error=Error(failure);}
                 var evidence=_core.NativeEvidence;

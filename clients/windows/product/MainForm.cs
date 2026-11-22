@@ -64,12 +64,11 @@ internal sealed partial class MainForm : Form
     private bool _deviceDetailsShown=true,_deviceToggleShown=true;
     private static readonly Color Ink=ClientAppearance.Ink,Muted=ClientAppearance.SecondaryText,Accent=ClientAppearance.Accent,Border=ClientAppearance.Border;
 
-    private bool _busy,_renderingTransport,_connectionIntent,_closing,_allowClose;
+    private bool _busy,_connectionIntent,_closing,_allowClose;
     private readonly SmoothComboBox _udpPortChoice=new(){Name="udp-port-choice",DropDownStyle=ComboBoxStyle.DropDownList,Width=180};
     private sealed record UdpPortChoice(int Port,string Caption){public override string ToString()=>Caption;}
     private bool _renderingPort;
     private string _portListSignature="";
-    private readonly SmoothComboBox _transportChoice=new(){Name="transport-choice",DropDownStyle=ComboBoxStyle.DropDownList,Width=190};
     private readonly SemaphoreSlim _requests=new(1,1);
     private readonly CancellationTokenSource _lifetime=new();
     private CancellationTokenSource _requestEpoch=new();
@@ -198,16 +197,13 @@ internal sealed partial class MainForm : Form
         _exitIp.Font=new Font(Font.FontFamily,10,FontStyle.Bold);_protocol.Font=new Font(Font.FontFamily,9.5f,FontStyle.Bold);
         var values=new[]{Metric("当前协议",_protocol),Metric("出口 IP",_exitIp),Metric("HTTP 延迟",_latency),Metric("下载速率",_download),Metric("上传速率",_upload),Metric("UU 直连保护",_uu)};
         for(int i=0;i<values.Length;i++)metrics.Controls.Add(values[i],i%3,i/3);Row(connection,metrics);
-        _transportChoice.Items.AddRange(["WireGuard / UDP","QUIC / HTTP/3"]);_transportChoice.SelectedIndex=0;
-        var selection=Actions();selection.Controls.Add(new Label{Text="连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_transportChoice);Row(connection,selection);
+        var selection=Actions();selection.Controls.Add(new Label{Text="连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(new Label{Text="WireGuard / UDP",AutoSize=true,Margin=new Padding(0,8,0,0)});Row(connection,selection);
         selection.Controls.Add(new Label{Text="UDP 端口",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_udpPortChoice);
         _udpPortChoice.Items.AddRange([new UdpPortChoice(0,"优选可用端口"),new UdpPortChoice(443,"443"),new UdpPortChoice(8443,"8443"),new UdpPortChoice(51820,"51820")]);_udpPortChoice.SelectedIndex=0;
         _udpPortChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingPort)await Act((_udpPortChoice.SelectedItem as UdpPortChoice)?.Port switch{443=>"PreferUdp443",8443=>"PreferUdp8443",51820=>"PreferUdp51820",_=>"PreferUdpAdaptive"});};
-        _transportChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingTransport && _transportChoice.SelectedIndex>=0)await Act(TransportPolicy.ClientSelection(_transportChoice.SelectedIndex,_native8443Available));};
         var buttons=Actions();_connect.Margin=new Padding(0,0,10,0);_disconnect.Margin=new Padding(0);buttons.Controls.AddRange([_connect,_disconnect]);Row(connection,buttons);
         _help.SetToolTip(_connect,"使用所选通道连接；必要时自动尝试备用通道。连接通过验证后，普通应用流量经加密隧道发送。");
         _help.SetToolTip(_disconnect,"安全断开 VPN 并恢复普通应用直连，保留已登记设备。");
-        _help.SetToolTip(_transportChoice,"UDP 优先，QUIC 与 HTTPS 作为备用。连接期间请先断开再切换。");
         _telemetry.AutoSize=false;_telemetry.Height=28;_telemetry.AutoEllipsis=true;_telemetry.ForeColor=Muted;_telemetry.Margin=new Padding(0,8,0,0);Row(connection,_telemetry);
         var connectionCard=Card("connectionSection","当前连接",connection);summary.Controls.Add(connectionCard,0,0);connectionCard.Margin=new Padding(0,0,10,12);
         var account=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,10);Row(account,_accountName);
@@ -404,7 +400,7 @@ internal sealed partial class MainForm : Form
         _emergencyRecovery.Enabled=!_provisioning && !_recovering;
         bool available=ActionsAvailable;
         _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
-        _transportChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;_udpPortChoice.Enabled=_transportChoice.Enabled && _transportChoice.SelectedIndex==0;
+        _udpPortChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;
         UpdateUdpAction();_maintenance.Enabled=available && !_udpDiagnosing;
         _deleteDevice.Enabled=available && _hasAccount && !_udpDiagnosing && _knownDevices.SelectedItem is ListedDevice;
         _admissionDelete.Enabled=available && _hasAccount && !_deviceRegistered && _admissionDevices.SelectedItem is ListedDevice;
@@ -634,8 +630,8 @@ internal sealed partial class MainForm : Form
     {
         if(state is null)return "尚未读取系统服务。";
         var report=new System.Text.StringBuilder("连接诊断（不含账号密码、令牌或密钥）\r\n");
-            foreach(string key in new[]{"product_version","egress_probe_protocol","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_preference","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","quic_available","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","uu_discovery_verified","uu_candidates","uu_rejected","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
-            if(state["carrier_failures"] is JsonObject failures)foreach(string transport in new[]{"wireguard-udp","wireguard-quic","wireguard-https"})if(failures[transport] is JsonObject attempt)foreach(string key in new[]{"error","transport_address","started_at","carrier_stage","probe_failures","core_uptime_ms","failed_at","core_pid"})report.Append($"attempt.{transport}.{key}: {attempt[key]}\r\n");
+            foreach(string key in new[]{"product_version","egress_probe_protocol","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","uu_discovery_verified","uu_candidates","uu_rejected","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
+
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})report.Append($"native_udp.{key}: {native[key]}\r\n");
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})report.Append($"native_udp.{port}.{key}: {counters[key]}\r\n");
             if(state["switch_timings"] is JsonObject timings)foreach(string key in new[]{"uu_discovery_ms","uu_signature_verifications","state_saved_ms","guard_installed_ms","protection_joined_ms","tun_active_ms","initial_probe_ms","complete_ms"})report.Append($"switch.{key}: {timings[key]}\r\n");
@@ -661,8 +657,7 @@ internal sealed partial class MainForm : Form
             _snapshotAt=DateTimeOffset.UtcNow;_diagnosticSnapshot=(JsonObject)state.DeepClone();
             _connectionIntent=state["intent"]?.GetValue<bool>()==true;
             _native8443Available=state["native_udp_8443_available"]?.GetValue<bool>()==true;
-            _renderingTransport=true;
-            try{_transportChoice.SelectedIndex=state["transport_preference"]?.GetValue<string>()=="quic"?1:0;}finally{_renderingTransport=false;}
+
             _renderingPort=true;try{
                 int[] availablePorts=(state["native_udp_ports"] as JsonArray)?.Select(p=>p?.GetValue<int>()??0).Where(p=>p is 443 or 8443 or 51820).Distinct().ToArray()??[];
                 string portSignature=string.Join(",",availablePorts);
@@ -670,8 +665,8 @@ internal sealed partial class MainForm : Form
                 int preferred=state["native_udp_port_preference"]?.GetValue<int>()??0;
                 _udpPortChoice.SelectedIndex=Math.Max(0,_udpPortChoice.Items.Cast<UdpPortChoice>().ToList().FindIndex(p=>p.Port==preferred));
             }finally{_renderingPort=false;}
-            _udpPortChoice.Enabled=!_connectionIntent && !_busy && !_udpDiagnosing && _transportChoice.SelectedIndex==0;
-            _transportChoice.Enabled=!_connectionIntent && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
+            _udpPortChoice.Enabled=!_connectionIntent && !_busy && !_udpDiagnosing;
+
             string entry=state["transport_address"]?.GetValue<string>()??"";
             string local=state["transport_private_address"]?.GetValue<string>()??"";
             int? ingressPort=state["transport_port"]?.GetValue<int>();
@@ -694,7 +689,7 @@ internal sealed partial class MainForm : Form
             _lastMode=mode;
             DisplayUdpDiagnostics(state);
             _timer.Interval=_udpDiagnosing?1000:mode is "protected" or "connecting"?100:(state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:mode=="connected"?1000:3000;
-            _mode.Text=mode switch{"connected"=>guard?(state["transport"]?.GetValue<string>() switch{"wireguard-https"=>"已连接 · HTTPS","wireguard-quic"=>"已连接 · QUIC / HTTP/3",_=>"已连接 · UDP"}):"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
+            _mode.Text=mode switch{"connected"=>guard?"已连接 · UDP":"连接保护未验证","connecting"=>"正在连接","protected"=>guard?"已保护 · 等待连接":"保护尚未验证","disconnected"=>"已断开 · 当前直连","recovery"=>"需要恢复处理",_=>"状态未知"};
             _mode.ForeColor=mode=="connected"?ClientAppearance.Positive:mode=="disconnected"?Ink:ClientAppearance.Warning;
             string policy=state["account"]?["status"]?.GetValue<string>() ?? "";
             string detail=state["error"]?.GetValue<string>() is string error && error.Length>0?Message(error):guard?(policy is "disabled" or "expired" or "quota" or "server_budget" or "unavailable"?$"账号状态：{PolicyName(policy)}。防泄漏保护保留。":"连接受保护；中断时保持阻断，防止流量绕过 VPN。"):
@@ -739,7 +734,7 @@ internal sealed partial class MainForm : Form
                 detail="请在账号与设备区核对本机名称和识别码，确认归属并登记后再连接。";
             }
             if(_detail.Text!=detail)_detail.Text=detail;if(_help.GetToolTip(_detail)!=detail)_help.SetToolTip(_detail,detail);
-            string protocolText=mode=="connected"?state["transport"]?.GetValue<string>() switch{"wireguard-udp"=>"WireGuard / UDP","wireguard-quic"=>"QUIC / HTTP/3","wireguard-https"=>"HTTPS / TLS 兜底",_=>"—"}:"—";
+            string protocolText=mode=="connected"?"WireGuard / UDP":"—";
             string exit4=state["verified_exit_ip"]?.GetValue<string>() ?? "待验证",exit6=state["verified_exit_ipv6"]?.GetValue<string>() ?? "";
             _exitIp.Text=mode=="connected"?exit4+(exit6.Length>0?"\n"+exit6:""):"—";
             string exitHelp=mode=="connected"?"IPv4："+exit4+(exit6.Length>0?"\nIPv6："+exit6:""):"连接验证通过后显示出口。";
@@ -832,7 +827,7 @@ internal sealed partial class MainForm : Form
         "DISCONNECT_BEFORE_ENROLLMENT"=>"请先断开 VPN，再确认本机设备。",
         "CLIENT_UPDATE_REQUIRED"=>"请升级客户端并在账号与设备区完成设备确认。",
 
-        "QUIC_NOT_AVAILABLE"=>"服务器暂未提供 QUIC / HTTP/3，请选择 UDP。", "DISCONNECT_BEFORE_TRANSPORT_CHANGE"=>"请先断开，再选择连接方式。",
+        "DISCONNECT_BEFORE_TRANSPORT_CHANGE"=>"请先断开，再选择 UDP 端口。",
         "INVALID_CREDENTIALS"=>"账号或密码错误。", "DEVICE_LIMIT_REACHED"=>"设备名额已满，请在下方删除旧设备后登记本机。", "RATE_LIMITED"=>"登录尝试过于频繁，请稍后重试。",
         "UU_TRUST_NOT_VERIFIED"=>"UU 信任核验未通过，请查看“UU 检查详情”；目录权限问题可使用“修复 UU 权限”。",
         "SERVICE_OPERATION_FAILED"=>"连接未完成，请点击“连接诊断”查看失败阶段和错误码。",

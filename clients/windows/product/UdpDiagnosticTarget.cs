@@ -16,9 +16,8 @@ internal sealed record UdpDiagnosticTarget
         var addresses=state["tunnel"]?["server_public_keys"] is JsonObject keys?keys.Select(p=>EndpointCatalog.Public(p.Key)).ToArray():EndpointCatalog.Addresses(state);
         return addresses.Length==0?All:addresses.SelectMany(a=>new[]{443,8443,51820}.Select(p=>new UdpDiagnosticTarget(a,p))).ToArray();
     }
-    internal void Apply(JsonObject config,TunnelTransport transport)
+    internal void Apply(JsonObject config)
     {
-        if(transport!=TunnelTransport.WireGuardUdp)throw new IOException("DIAGNOSTIC_REQUIRES_NATIVE_UDP");
         var outbound=config["outbounds"]!.AsArray().OfType<JsonObject>().Single(o=>o["type"]?.GetValue<string>()=="oracle-native-udp");
         outbound["address"]=Address;outbound["ports"]=new JsonArray(Port);
     }

@@ -91,7 +91,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install playwright==1.56.0
+      - run: pip install playwright==1.56.0 "$(awk '/^Django==/{print;exit}' server/admin-oracle/requirements.txt)"
       - run: python -m playwright install --with-deps chromium firefox
       - name: Synthetic management UI with real persistent policy engine
         run: python ops/oracle-project/management_ui_acceptance.py

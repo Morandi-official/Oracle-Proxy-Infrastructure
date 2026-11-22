@@ -36,7 +36,7 @@ def main():
     compare='https://github.com/'+REPO+'/compare/main...'+branch+'?expand=1'
     summary=Path(os.environ['GITHUB_STEP_SUMMARY'])
     try:
-        pr=api('pulls',{'head':branch,'base':'main','title':'Apply confirmed primary/backup endpoint settings','body':'Generated from non-secret oracle-ops Environment variables after operator confirmation of OCI bindings. Review the exact public/private mapping and expected exit before merging. This PR changes only the endpoint catalog and its lightweight apply request; it does not create, rebind or delete OCI resources or change DNS.\n\nGitHub Actions does not automatically retrigger PR workflows with GITHUB_TOKEN. The generating workflow validates the schema and proposal rules; a human merge triggers the main endpoint-only checks and deployment.'})
+        pr=api('pulls',{'head':branch,'base':'main','title':'Apply confirmed primary/backup endpoint settings','body':'Generated from an existing address selection or non-secret oracle-ops Environment variables after operator confirmation of OCI bindings. Review the exact public/private mapping and expected exit before merging. This PR changes only the endpoint catalog and its lightweight apply request; it does not create, rebind or delete OCI resources or change DNS.\n\nGitHub Actions does not automatically retrigger PR workflows with GITHUB_TOKEN. The generating workflow validates the schema and proposal rules; a human merge triggers the main endpoint-only checks and deployment.'})
         with summary.open('a') as stream:stream.write('\n配置提案已生成，尚未应用到服务器：[查看并合并 PR]('+pr['html_url']+')。\n')
         print('ENDPOINT_SETTINGS_PR='+pr['html_url'])
     except RuntimeError:

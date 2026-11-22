@@ -17,8 +17,14 @@ VARIABLES={
 
 def propose(current,variables,mode,confirmed):
     schema.validate(current)
-    if mode not in ('prepare','cutover'):raise ValueError('INVALID_ENDPOINT_MODE')
+    if mode not in ('prepare','cutover','select'):raise ValueError('INVALID_ENDPOINT_MODE')
     if not confirmed:raise ValueError('CONFIRM_ACTUAL_OCI_BINDINGS_FIRST')
+    if mode == 'select':
+        revision = variables.get('EXPECTED_CATALOG_REVISION', '')
+        if not re.fullmatch(r'[1-9][0-9]{0,9}', revision):
+            raise ValueError('EXPECTED_CATALOG_REVISION_REQUIRED')
+        return schema.propose_selection(current, variables.get('SELECTED_PRIMARY_IPV4'),
+                                        variables.get('SELECTED_BACKUP_IPV4'), int(revision))
     value=copy.deepcopy(current)
     for role,(public,private) in VARIABLES.items():
         if not variables.get(public) or not variables.get(private):raise ValueError('MISSING_'+public+'_OR_'+private)
@@ -58,7 +64,7 @@ def propose(current,variables,mode,confirmed):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--mode',choices=['prepare','cutover'],required=True);parser.add_argument('--confirmed-bindings',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--mode',choices=['prepare','cutover','select'],required=True);parser.add_argument('--confirmed-bindings',action='store_true');args=parser.parse_args()
     current=load();next_value=propose(current,os.environ,args.mode,args.confirmed_bindings)
     if next_value is None:print('ENDPOINT_SETTINGS=NO_CHANGES');return
     (ROOT/'ops/network/endpoints.json').write_text(json.dumps(next_value,indent=2)+'\n')

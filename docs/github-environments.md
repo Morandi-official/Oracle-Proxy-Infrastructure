@@ -70,6 +70,7 @@ SSH 维护工作流共享地址目录，先做只读探测，再对选定入口�
 | 工作流/参数 | 用途 | 常用选择 |
 | --- | --- | --- |
 | Primary and backup IP settings / `mode=inspect` | 只读显示仓库期望目录和公共 DNS | 排查当前配置、核对 DNS 服务商时；输出不是 OCI 实时绑定证据 |
+| 同上 / `mode=select`、`selected_primary`、`selected_backup`、`base_revision` | 按当前地址目录选择主、备，保持已登记的公网与私网映射 | 从管理后台「主备 IP」生成提案，不用改 Environment 变量 |
 | 同上 / `mode=prepare` | 为已经在 OCI 准备好的新入口生成配置 PR，保留旧入口用于恢复 | 未来换 IP 的第一阶段 |
 | 同上 / `mode=cutover` | OCI 已完成绑定交换后，更新私网映射并保持主、备入口分别使用各自 IPv4 出口 | 本轮新主 IP 交换到 `10.0.0.6` 后 |
 | 同上 / `confirmed_bindings` | 确认已核对实际 OCI 绑定 | 仅在控制台逐项读回符合变量值后勾选；不会替你执行 OCI 变更 |

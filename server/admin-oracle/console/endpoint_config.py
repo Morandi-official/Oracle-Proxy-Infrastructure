@@ -35,6 +35,26 @@ def read():
     if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022 or info.st_size>4096:raise ValueError('ROOT_ENDPOINT_CATALOG_REQUIRED')
     return validate(json.loads(PATH.read_text('ascii')))
 
+def propose_selection(current, primary, backup, revision):
+    """Select roles among the exact address pairs already in the catalog."""
+    validate(current)
+    if type(revision) is not int or revision != current['revision']:
+        raise ValueError('ENDPOINT_CATALOG_STALE')
+    if not isinstance(primary, str) or not isinstance(backup, str) or primary == backup:
+        raise ValueError('ENDPOINT_ROLES_MUST_DIFFER')
+    rows = [current['primary'], current['backup'], *current['legacy']]
+    candidates = {row['public_ipv4']: row for row in rows}
+    if primary not in candidates or backup not in candidates:
+        raise ValueError('ENDPOINT_NOT_IN_CATALOG')
+    proposed = dict(current, primary=candidates[primary], backup=candidates[backup],
+                    active='primary', egress_ipv4=[primary, backup],
+                    legacy=[row for row in rows if row['public_ipv4'] not in (primary, backup)])
+    if proposed == current:
+        return None
+    proposed['revision'] += 1
+    return validate(proposed)
+
+
 def advertised():
     config=read()
     if config is None:return None

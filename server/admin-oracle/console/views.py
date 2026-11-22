@@ -139,7 +139,56 @@ def dashboard(request):
         return redirect('mfa_activate_totp')
     if reason:
         return render(request, 'finish_mfa.html', status=403)
-    return render(request, 'dashboard.html', {'local_auth':local_auth.enabled()})
+    from . import endpoint_config
+    try:
+        catalog = endpoint_config.read()
+    except (OSError, ValueError):
+        catalog = None
+    endpoints = [catalog['primary'], catalog['backup'], *catalog['legacy']] if catalog else []
+    return render(request, 'dashboard.html', {
+        'local_auth': local_auth.enabled(), 'endpoint_catalog': catalog, 'endpoint_choices': endpoints,
+    })
+
+
+@require_http_methods(['POST'])
+def endpoint_proposal(request):
+    rejected = deny(request)
+    if rejected is not None:
+        return rejected
+    if request.content_type != 'application/json' or len(request.body) > 1024:
+        return JsonResponse({'error': 'INVALID_REQUEST'}, status=400)
+    try:
+        value = json.loads(request.body)
+    except ValueError:
+        return JsonResponse({'error': 'INVALID_REQUEST'}, status=400)
+    if (not isinstance(value, dict) or set(value) != {'primary', 'backup', 'revision', 'confirmed'}
+            or value['confirmed'] is not True):
+        return JsonResponse({'error': 'CONFIRM_ACTUAL_OCI_BINDINGS_FIRST'}, status=400)
+    from . import endpoint_config
+    try:
+        catalog = endpoint_config.read()
+    except (OSError, ValueError):
+        catalog = None
+    if catalog is None:
+        return JsonResponse({'error': 'ENDPOINT_CATALOG_UNAVAILABLE'}, status=503)
+    try:
+        proposed = endpoint_config.propose_selection(
+            catalog, value['primary'], value['backup'], value['revision'])
+    except ValueError as error:
+        return JsonResponse({'error': str(error)}, status=409 if str(error) == 'ENDPOINT_CATALOG_STALE' else 400)
+    if proposed is None:
+        return JsonResponse({'changed': False})
+    primary, backup = proposed['primary']['public_ipv4'], proposed['backup']['public_ipv4']
+    Audit.objects.create(actor=audit_actor(request), action='endpoint.proposal.preview',
+                         resource=f'{primary} / {backup}')
+    command = (
+        'gh workflow run endpoint-settings.yml --repo Morandi-official/Oracle-Proxy-Infrastructure'
+        f' --ref main -f mode=select -f confirmed_bindings=true -f base_revision={catalog["revision"]}'
+        f' -f selected_primary={primary} -f selected_backup={backup}'
+    )
+    return JsonResponse({'changed': True, 'primary': proposed['primary'], 'backup': proposed['backup'],
+                         'revision': proposed['revision'], 'command': command})
+
 
 
 @require_GET

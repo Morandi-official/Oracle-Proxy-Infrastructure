@@ -26,7 +26,6 @@ internal sealed class DaemonProcess : IAsyncDisposable
         {
             WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(trustedExecutable))!,
             UseShellExecute = false,
-            CreateNoWindow = true,
         };
         foreach (string name in start.Environment.Keys.ToArray())
         {
@@ -45,7 +44,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
         try
         {
             cancellation.ThrowIfCancellationRequested();
-            process = Process.Start(start) ?? throw new IOException("TAILSCALE_START_FAILED");
+            process = DaemonConsole.Start(start);
             using var readiness = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             readiness.CancelAfter(TimeSpan.FromSeconds(12));
             while (true)
@@ -77,6 +76,15 @@ internal sealed class DaemonProcess : IAsyncDisposable
 
     private static async Task EndProcess(Process process)
     {
+        if (DaemonConsole.SignalExit(process))
+        {
+            try
+            {
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                return;
+            }
+            catch (TimeoutException) { }
+        }
         try
         {
             if (!process.HasExited)

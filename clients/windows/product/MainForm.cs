@@ -374,7 +374,7 @@ internal sealed partial class MainForm : Form
             "CLIENT_PACKAGE_INCOMPLETE"=>"客户端文件不完整或版本不一致。请完整解压便携包，保留 runtime 文件夹，再重试初始化。\r\n诊断：CLIENT_PACKAGE_INCOMPLETE",
             "SERVICE_SETUP_CANCELLED"=>"已取消初始化。可以重试或关闭窗口。",
             "SETUP_RESULT_PENDING"=>"初始化尚未结束。可以关闭此窗口，后台维护将继续；结束后重新打开。",
-            _=>"系统服务尚未准备完成。可重试、复制初始化诊断或关闭窗口。"
+            _=>"系统服务尚未准备完成。可重试、复制登录诊断或关闭窗口。"
         };
     }
     private async Task<bool> ProvisionService()
@@ -857,6 +857,6 @@ internal sealed partial class MainForm : Form
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",
         "LOGIN_SESSION_EXPIRED"=>"登录已过期，请重新登录。",
-        "ACCOUNT_API_UNREACHABLE"=>"暂时无法连接账号服务。已保存的登录会继续重试。",
+        "ACCOUNT_API_UNREACHABLE"=>"暂时无法连接账号服务。可重试登录，有效的已保存会话会自动重试。",
         "LOGIN_REQUIRED"=>"请先登录账号。", "DISCONNECT_BEFORE_LOGIN"=>"更换登录前请先断开。", _=>$"操作尚未完成：{code}。"};
 }

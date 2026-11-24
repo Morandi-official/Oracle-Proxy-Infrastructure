@@ -307,9 +307,11 @@ def register_exit():
     with tempfile.TemporaryDirectory(prefix="oracle-tailnet-key-", dir="/run") as temporary:
         secret = Path(temporary) / "key"
         atomic(secret, key.encode(), 0o600)
+        # Keep the engine's advertised routes usable. The dedicated nft guard
+        # rejects local services and forwards only current account leases.
         tailscale("up", "--login-server=" + ORIGIN, "--auth-key=file:" + str(secret),
                   "--hostname=oracle-proxy-exit", "--advertise-exit-node", "--accept-dns=false",
-                  "--accept-routes=false", "--shields-up", "--timeout=40s", timeout=45)
+                  "--accept-routes=false", "--shields-up=false", "--timeout=40s", timeout=45)
     return wait_for(running_exit)
 
 

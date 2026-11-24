@@ -106,7 +106,6 @@ def main():
     roles=('primary','backup')
     targets={role:str(ipaddress.IPv4Address(config[role]['public_ipv4'])) for role in roles}
     headers=load('wire_headers',Path('server/admin-oracle/control/udp_capture.py'))
-    headers.ADDRESSES={address:socket.inet_aton(address) for address in targets.values()}
     os.umask(0o077)
     probe=uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix='proxy-udp-probe-') as folder:

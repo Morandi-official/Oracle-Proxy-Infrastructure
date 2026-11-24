@@ -179,7 +179,6 @@ public final class ProductionAcceptanceTest {
         assertNotNull("Completed connection timing is present", timing);
         return new JSONObject().put("account_profile_ready", timing.profileReadyMs())
                 .put("native_engine_ready", timing.engineReadyMs())
-                .put("foreground_prepared_ms", timing.foregroundPreparedMs())
                 .put("device_enrollment_ready", timing.enrollmentReadyMs())
                 .put("exit_route_requested", timing.routeRequestedMs())
                 .put("android_vpn_ready", timing.routeReadyMs())

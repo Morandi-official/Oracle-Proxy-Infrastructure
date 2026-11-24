@@ -499,6 +499,21 @@ def tailnet_deployment():
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
     if request.get('operation') == 'enable-https' and request.get('request_id') in (
+        'tailscale-latency-apply', 'tailscale-latency-rollback',
+    ):
+        latency_spec = importlib.util.spec_from_file_location(
+            'oracle_tailnet_latency', REPO / 'ops/tailscale/deploy/latency.py')
+        latency = importlib.util.module_from_spec(latency_spec)
+        latency_spec.loader.exec_module(latency)
+        try:
+            latency.change(tailnet_deployment(), request['request_id'] == 'tailscale-latency-apply')
+        except ValueError as error:
+            code = str(error)
+            if re.fullmatch(r'TAILNET_LATENCY_[A-Z_]+', code):
+                print('PROJECT_TAILSCALE_LATENCY_ERROR=' + code, flush=True)
+            raise
+        return
+    if request.get('operation') == 'enable-https' and request.get('request_id') in (
         'tailscale-gro-apply', 'tailscale-gro-rollback',
     ):
         gro_spec = importlib.util.spec_from_file_location('oracle_tailnet_gro', REPO / 'ops/tailscale/deploy/gro.py')

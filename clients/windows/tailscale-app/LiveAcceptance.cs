@@ -54,6 +54,7 @@ internal static class LiveAcceptance
             for (int run = 0; run < 3; run++)
             {
                 phase = run == 0 ? "FIRST_CONNECT" : "RECONNECT";
+                var startedAt = DateTimeOffset.UtcNow;
                 var timer = Stopwatch.StartNew();
                 string attempt = phase;
                 var timing = new ConcurrentDictionary<string, long>();
@@ -108,6 +109,7 @@ internal static class LiveAcceptance
                 if (!restored.Equals(direct)) throw new IOException("DIRECT_ROUTE_NOT_RESTORED");
                 connections.Add(new
                 {
+                    started_at = startedAt,
                     connect_ms = connectedMs, initial_transport = initialTransport, transport,
                     milestones_ms = timing,
                     direct_route_confirmation_ms = restoring.ElapsedMilliseconds,
@@ -152,13 +154,17 @@ internal static class LiveAcceptance
         latencies.Sort();
         using var single = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         single.CancelAfter(TimeSpan.FromSeconds(30));
+        var downloadStartedAt = DateTimeOffset.UtcNow;
         var timer = Stopwatch.StartNew();
         await Download(web, TransferBytes, single.Token);
         double download = Rate(TransferBytes, timer.Elapsed);
+        var downloadEndedAt = DateTimeOffset.UtcNow;
         single.CancelAfter(TimeSpan.FromSeconds(30));
+        var uploadStartedAt = DateTimeOffset.UtcNow;
         timer.Restart();
         await Upload(web, TransferBytes, single.Token);
         double upload = Rate(TransferBytes, timer.Elapsed);
+        var uploadEndedAt = DateTimeOffset.UtcNow;
         const int downloadPerStream = 8 * 1024 * 1024;
         const int uploadPerStream = 4 * 1024 * 1024;
         var multiDownload = await Aggregate(web, downloadPerStream, Download, cancel);
@@ -168,7 +174,11 @@ internal static class LiveAcceptance
         {
             bytes_each_direction = TransferBytes,
             download_mbps = download,
+            download_started_at = downloadStartedAt,
+            download_ended_at = downloadEndedAt,
             upload_mbps = upload,
+            upload_started_at = uploadStartedAt,
+            upload_ended_at = uploadEndedAt,
             https_p50_ms = Math.Round((latencies[4] + latencies[5]) / 2, 2),
             https_p95_ms = Math.Round(latencies[9], 2),
             aggregate = new { parallel_streams = ParallelStreams, download = multiDownload, upload = multiUpload },
@@ -202,6 +212,7 @@ internal static class LiveAcceptance
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         limit.CancelAfter(TimeSpan.FromSeconds(30));
+        var startedAt = DateTimeOffset.UtcNow;
         var timer = Stopwatch.StartNew();
         int bytes = bytesPerStream * ParallelStreams;
         bool completed = false;
@@ -217,6 +228,8 @@ internal static class LiveAcceptance
         {
             target_bytes = bytes,
             completed_bytes = finished,
+            started_at = startedAt,
+            ended_at = DateTimeOffset.UtcNow,
             throughput_mbps = completed ? (double?)Rate(bytes, timer.Elapsed) : null,
             elapsed_ms = timer.ElapsedMilliseconds,
             status = completed ? "completed" : "timeout",

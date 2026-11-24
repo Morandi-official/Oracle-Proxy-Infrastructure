@@ -480,12 +480,26 @@ start_node admitted false
 select_exit "$exit_node"
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 origin_blocked admitted
+tailscale admitted status --json | jq -e '.ExitNodeStatus == null' >/dev/null
 stop_admitted
 
 start_node admitted
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 start_ms=$(date +%s%3N)
 select_exit "$exit_node"
+for _ in {1..30}; do
+    if tailscale admitted status --json | jq -e --arg exit "$exit_node" \
+        '.BackendState == "Running" and .ExitNodeStatus.ID == $exit' >/dev/null; then
+        break
+    fi
+    sleep 0.05
+done
+tailscale admitted status --json | jq -e --arg exit "$exit_node" \
+    '.BackendState == "Running" and .ExitNodeStatus.ID == $exit' >/dev/null
+printf 'TAILSCALE_LAB_CACHED_ROUTE_MS=%s\n' "$(( $(date +%s%3N) - start_ms ))"
+# A restart can rotate discovery state. Validate traffic after the exit has
+# received current peer data, even when the mapped route appeared earlier.
+ip netns exec "${namespaces[admitted]}" iptables -D OUTPUT -d 192.0.2.1 -p tcp --dport 443 -j REJECT
 wait_for_origin 4 198.18.46.1
 wait_for_origin 6 2001:db8:46::1
 printf 'TAILSCALE_LAB_CACHED_RESTART_VERIFIED_MS=%s\n' "$(( $(date +%s%3N) - start_ms ))"
@@ -493,7 +507,6 @@ apply_lease_policy replace --seconds 2 "$admitted_ipv4" "$admitted_ipv6"
 sleep 3
 origin_blocked admitted
 echo 'TAILSCALE_CACHED_MAP_OBEYS_FORWARD_LEASE=PASS'
-ip netns exec "${namespaces[admitted]}" iptables -D OUTPUT -d 192.0.2.1 -p tcp --dport 443 -j REJECT
 
 stage=revoked-node
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"

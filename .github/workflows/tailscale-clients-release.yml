@@ -277,24 +277,13 @@ jobs:
           cp android/SHA256SUMS.txt SHA256SUMS-Android.txt
           tag="tailscale-v$VERSION"
           target=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null || true)
-          if [[ -z "$target" ]]; then
-            gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" >/dev/null
+          if [[ -n "$target" && "$target" != "$GITHUB_SHA" ]]; then
+            echo 'The existing release tag points to another source revision' >&2
+            exit 1
           fi
-          gh api "repos/$GH_REPO/git/ref/tags/$tag" |
-            jq -e --arg sha "$GITHUB_SHA" '.object.type == "commit" and .object.sha == $sha' >/dev/null
-          if gh release view "$tag" --json isDraft,assets > "$RUNNER_TEMP/tailscale-release.json" 2>/dev/null; then
-            if jq -e '.isDraft == false' "$RUNNER_TEMP/tailscale-release.json" >/dev/null; then
-              jq -e --arg portable "Proxy-$VERSION-win-x64.zip" --arg setup "Proxy-$VERSION-win-x64-setup.exe" \
-                '[.assets[].name] | contains([$portable, $setup, "Proxy-Android.apk", "SHA256SUMS-Windows.txt", "SHA256SUMS-Android.txt"])' \
-                "$RUNNER_TEMP/tailscale-release.json" >/dev/null
-              exit 0
-            fi
-          else
-            gh release create "$tag" --draft --verify-tag --title "Proxy Tailscale $VERSION" \
-              --notes "Windows x64 installation and portable packages, plus the signed Android APK. Production acceptance: Windows https://github.com/$GH_REPO/actions/runs/$WINDOWS_ACCEPTANCE_RUN and Android https://github.com/$GH_REPO/actions/runs/$ANDROID_ACCEPTANCE_RUN."
-          fi
-          gh release upload "$tag" --clobber \
+          gh release create "$tag" \
             "windows/Proxy-$VERSION-win-x64.zip" "windows/Proxy-$VERSION-win-x64-setup.exe" \
-            android/Proxy-Android.apk SHA256SUMS-Windows.txt SHA256SUMS-Android.txt
-          gh release edit "$tag" --draft=false --latest
+            android/Proxy-Android.apk SHA256SUMS-Windows.txt SHA256SUMS-Android.txt \
+            --target "$GITHUB_SHA" --title "Proxy Tailscale $VERSION" --latest \
+            --notes "Windows x64 installation and portable packages, plus the signed Android APK. Production acceptance: Windows https://github.com/$GH_REPO/actions/runs/$WINDOWS_ACCEPTANCE_RUN and Android https://github.com/$GH_REPO/actions/runs/$ANDROID_ACCEPTANCE_RUN."
           gh release view "$tag" --json url,assets --jq '.url, (.assets[].url)'

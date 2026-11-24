@@ -18,9 +18,15 @@ cleanup() {
         for name in exit admitted denied replay; do
             if [[ -S "$lab_dir/$name.sock" ]]; then
                 "$tools_dir/tailscale" --socket "$lab_dir/$name.sock" status --json 2>/dev/null |
-                    jq -c '{BackendState, HaveNodeKey, ExitNodeStatus, HealthCount: (.Health // [] | length)}' || true
+                    jq -c '{BackendState, HaveNodeKey, ExitNodeStatus, Health,
+                        Self: (.Self | {TailscaleIPs, Addrs, Relay}),
+                        Peer: [.Peer[]? | {HostName, TailscaleIPs, PrimaryRoutes, CurAddr, Relay, TxBytes, RxBytes}]}' || true
             fi
         done
+        if [[ ${namespaces[admitted]+yes} == yes ]]; then
+            ip -n "${namespaces[admitted]}" route get 198.18.46.2 || true
+            ip -n "${namespaces[admitted]}" -6 route get 2001:db8:46::2 || true
+        fi
     fi
     for child in "${children[@]}"; do
         kill "$child" 2>/dev/null || true
@@ -32,10 +38,6 @@ cleanup() {
     rm -rf -- "$lab_dir"
 }
 trap cleanup EXIT
-
-ip link add "$bridge" type bridge
-ip addr add 192.0.2.1/24 dev "$bridge"
-ip link set "$bridge" up
 
 create_namespace() {
     local role=$1
@@ -51,13 +53,18 @@ attach_peer() {
     local namespace="${namespaces[$role]}"
     ip link add "$uplink" type veth peer name "${uplink}p"
     ip link set "${uplink}p" netns "$namespace"
-    ip link set "$uplink" master "$bridge"
-    ip link set "$uplink" up
+    ip link set "$uplink" netns "${namespaces[lan]}"
+    ip -n "${namespaces[lan]}" link set "$uplink" master "$bridge"
+    ip -n "${namespaces[lan]}" link set "$uplink" up
     ip -n "$namespace" link set "${uplink}p" name uplink
     ip -n "$namespace" addr add "$address/24" dev uplink
     ip -n "$namespace" link set uplink up
 }
 
+create_namespace lan
+ip -n "${namespaces[lan]}" link add "$bridge" type bridge
+ip -n "${namespaces[lan]}" addr add 192.0.2.1/24 dev "$bridge"
+ip -n "${namespaces[lan]}" link set "$bridge" up
 create_namespace exit
 create_namespace admitted
 create_namespace denied
@@ -67,6 +74,8 @@ attach_peer exit 192.0.2.11
 attach_peer admitted 192.0.2.12
 attach_peer denied 192.0.2.13
 attach_peer replay 192.0.2.14
+stage=private-link
+ip netns exec "${namespaces[admitted]}" ping -q -c 1 -W 2 192.0.2.11 > /dev/null
 ip link add "${bridge}wan" type veth peer name "${bridge}web"
 ip link set "${bridge}wan" netns "${namespaces[exit]}"
 ip link set "${bridge}web" netns "${namespaces[origin]}"
@@ -188,7 +197,8 @@ wait_for_origin() {
 }
 
 stage=headscale-startup
-"$tools_dir/headscale" --config "$lab_dir/headscale.yaml" serve > "$lab_dir/headscale.log" 2>&1 &
+ip netns exec "${namespaces[lan]}" "$tools_dir/headscale" --config "$lab_dir/headscale.yaml" \
+    serve > "$lab_dir/headscale.log" 2>&1 &
 children+=("$!")
 for _ in {1..60}; do
     if [[ -S "$lab_dir/headscale.sock" ]] && headscale users list -o json > /dev/null 2>&1; then break; fi
@@ -220,15 +230,18 @@ fi
 test "$(headscale nodes list --user admitted -o json | jq 'length')" = 1
 echo 'TAILSCALE_SINGLE_USE_ADMISSION=PASS'
 
-stage=isolated-dual-stack-egress
+stage=entry-route
 if http_origin admitted 4 || http_origin admitted 6; then
     echo 'Origin reachable before selecting an exit node' >&2
     exit 1
 fi
 exit_ipv4=$(tailscale exit ip -4)
 tailscale admitted set --exit-node "$exit_ipv4"
+stage=isolated-ipv4-egress
 wait_for_origin 4 198.18.46.1
+stage=isolated-ipv6-egress
 wait_for_origin 6 2001:db8:46::1
+stage=direct-wireguard-peer
 tailscale admitted status --json |
     jq -e --arg remote "$exit_ipv4" '.Peer[] | select(.TailscaleIPs | index($remote)) | .Active and ((.CurAddr // "") | startswith("192.0.2.11:"))' > /dev/null
 echo 'TAILSCALE_DIRECT_WIREGUARD_EXIT_IPV4_IPV6=PASS'

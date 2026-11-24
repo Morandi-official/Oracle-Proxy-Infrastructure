@@ -7,7 +7,8 @@ namespace OracleProxy.Product;
 internal sealed class AccountApi : IDisposable
 {
     internal static readonly Uri Base = new("https://vpn-admin.morandi.dpdns.org/");
-    private readonly HttpClient _http;
+    private readonly HttpClient _directHttp;
+    private readonly HttpClient _protectedHttp;
     private readonly CancellationTokenSource _stop=new();
     private static readonly object AddressGate=new();
     internal const string BootstrapAddress="152.67.156.100";
@@ -26,27 +27,91 @@ internal sealed class AccountApi : IDisposable
     }
     internal AccountApi()
     {
-        var handler=new SocketsHttpHandler{AllowAutoRedirect=false,UseCookies=false,UseProxy=false,ConnectTimeout=TimeSpan.FromSeconds(8),
-            ConnectCallback=async (context,token)=>{
-                if(context.DnsEndPoint.Host!=Base.Host || context.DnsEndPoint.Port!=443)throw new IOException("UNTRUSTED_API_ENDPOINT");
-                uint physical=NativeGuard.PhysicalIPv4Index;if(physical==0)throw new IOException("PHYSICAL_ROUTE_UNAVAILABLE");
-                var tried=new HashSet<string>();
-                async Task<Stream?> Try(string address){
-                    if(!tried.Add(address))return null;
-                    var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp){NoDelay=true};
-                    try{using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token);timeout.CancelAfter(TimeSpan.FromMilliseconds(1500));socket.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)physical));await socket.ConnectAsync(new IPEndPoint(IPAddress.Parse(EndpointCatalog.Public(address)),443),timeout.Token);return new NetworkStream(socket,true);}
-                    catch(Exception e) when(e is SocketException or OperationCanceledException or IOException){socket.Dispose();token.ThrowIfCancellationRequested();return null;}
-                }
-                string[] known;lock(AddressGate){known=KnownAddresses;}
-                foreach(string address in ConnectionCandidates(known)){var stream=await Try(address);if(stream is not null)return stream;}
-                foreach(string address in await PhysicalDns.Resolve(physical,token)){var stream=await Try(address);if(stream is not null)return stream;}
-                throw new IOException("API_ENDPOINTS_UNAVAILABLE");
-            }};
         try{if(File.Exists(AddressCache) && !File.GetAttributes(AddressCache).HasFlag(FileAttributes.ReparsePoint) && new FileInfo(AddressCache).Length<=2048){if(JsonNode.Parse(File.ReadAllText(AddressCache)) is JsonArray cached && cached.Count is >0 and <=2 && cached.All(x=>x is JsonValue)){var addresses=cached.Select(x=>EndpointCatalog.Public(x!.GetValue<string>())).Distinct().ToArray();lock(AddressGate){KnownAddresses=addresses;}}}}catch(Exception e) when(e is IOException or System.Text.Json.JsonException or InvalidOperationException){}
-        // TLS validation and SNI always use Base.Host. Authenticated catalog addresses
-        // are tried first; physical-interface DNS provides future migration recovery.
-        _http=new HttpClient(handler){BaseAddress=Base,Timeout=TimeSpan.FromSeconds(12)};
+        // Separate pools keep a connection opened on the system route from
+        // being reused after protection starts. Both validate the same TLS host.
+        _directHttp = CreateClient(protectedPath: false);
+        _protectedHttp = CreateClient(protectedPath: true);
     }
+
+    private static HttpClient CreateClient(bool protectedPath)
+    {
+        var handler = new SocketsHttpHandler {
+            AllowAutoRedirect = false, UseCookies = false, UseProxy = false,
+            ConnectTimeout = TimeSpan.FromSeconds(8),
+            ConnectCallback = (context, token) => ConnectAccount(
+                context.DnsEndPoint, protectedPath || !NativeGuard.ConfirmedAbsent,
+                TrySystemRoute, ConnectPhysicalRoute, token),
+        };
+        return new HttpClient(handler) { BaseAddress = Base, Timeout = TimeSpan.FromSeconds(12) };
+    }
+
+    internal static async ValueTask<Stream> ConnectAccount(
+        DnsEndPoint endpoint,
+        bool protectedPath,
+        Func<DnsEndPoint, CancellationToken, Task<Stream?>> trySystemRoute,
+        Func<CancellationToken, Task<Stream>> connectPhysicalRoute,
+        CancellationToken cancel)
+    {
+        if (endpoint.Host != Base.Host || endpoint.Port != 443)
+            throw new IOException("UNTRUSTED_API_ENDPOINT");
+        cancel.ThrowIfCancellationRequested();
+        if (!protectedPath) {
+            var connection = await trySystemRoute(endpoint, cancel);
+            if (connection is not null) return connection;
+            cancel.ThrowIfCancellationRequested();
+        }
+        return await connectPhysicalRoute(cancel);
+    }
+
+    private static Task<Stream?> TrySystemRoute(DnsEndPoint endpoint, CancellationToken cancel) =>
+        TrySocket(new Socket(SocketType.Stream, ProtocolType.Tcp), endpoint, null, 4_000, cancel);
+
+    private static async Task<Stream> ConnectPhysicalRoute(CancellationToken cancel)
+    {
+        uint physical = NativeGuard.PhysicalIPv4Index;
+        if (physical == 0) throw new IOException("PHYSICAL_ROUTE_UNAVAILABLE");
+        var tried = new HashSet<string>();
+        async Task<Stream?> TryAddress(string address)
+        {
+            if (!tried.Add(address)) return null;
+            var endpoint = new IPEndPoint(IPAddress.Parse(EndpointCatalog.Public(address)), 443);
+            return await TrySocket(
+                new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp),
+                endpoint, physical, 1_500, cancel);
+        }
+
+        string[] known;
+        lock (AddressGate) { known = KnownAddresses; }
+        foreach (string address in ConnectionCandidates(known)) {
+            var stream = await TryAddress(address);
+            if (stream is not null) return stream;
+        }
+        foreach (string address in await PhysicalDns.Resolve(physical, cancel)) {
+            var stream = await TryAddress(address);
+            if (stream is not null) return stream;
+        }
+        throw new IOException("API_ENDPOINTS_UNAVAILABLE");
+    }
+
+    private static async Task<Stream?> TrySocket(
+        Socket socket, EndPoint endpoint, uint? physical, int timeoutMs, CancellationToken cancel)
+    {
+        try {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+            timeout.CancelAfter(timeoutMs);
+            socket.NoDelay = true;
+            if (physical is uint index)
+                socket.SetSocketOption(SocketOptionLevel.IP, (SocketOptionName)31, IPAddress.HostToNetworkOrder((int)index));
+            await socket.ConnectAsync(endpoint, timeout.Token);
+            return new NetworkStream(socket, ownsSocket: true);
+        } catch (Exception error) when (error is SocketException or OperationCanceledException or IOException) {
+            socket.Dispose();
+            cancel.ThrowIfCancellationRequested();
+            return null;
+        }
+    }
+
     internal async Task<JsonObject> Call(string action,string token,JsonObject? body=null)
     {
         if(action is not ("login" or "authenticate" or "enroll" or "presence" or "state" or "logout" or "udp-diagnostics" or "device-delete"))throw new InvalidOperationException();
@@ -64,11 +129,14 @@ internal sealed class AccountApi : IDisposable
     }
     private async Task<HttpResponseMessage> Send(HttpRequestMessage request,CancellationToken cancel)
     {
-        try{return await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel);}
+        try{
+            var client = NativeGuard.ConfirmedAbsent ? _directHttp : _protectedHttp;
+            return await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel);
+        }
         catch(HttpRequestException error){throw new IOException("ACCOUNT_API_UNREACHABLE",error);}
         catch(OperationCanceledException error)when(!_stop.IsCancellationRequested){throw new IOException("ACCOUNT_API_UNREACHABLE",error);}
     }
     internal void Cancel()=>_stop.Cancel();
-    public void Dispose(){_stop.Cancel();_http.Dispose();_stop.Dispose();}
+    public void Dispose(){_stop.Cancel();_directHttp.Dispose();_protectedHttp.Dispose();_stop.Dispose();}
 }
 internal sealed class ApiException(string code):Exception(code);

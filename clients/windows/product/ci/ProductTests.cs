@@ -442,8 +442,43 @@ internal static class ProductTests
         }));
         try{Application.Run(host);return result;}finally{if(previousDesktop is not null)ChangeDisplaySettings(previousDesktop,0);}
     }
+    private static void AccountRouteRegression()
+    {
+        var endpoint = new DnsEndPoint(AccountApi.Base.Host, 443);
+        var calls = new List<string>();
+        using var ordinary = new MemoryStream();
+        using var physical = new MemoryStream();
+        Task<Stream?> SystemRoute(DnsEndPoint requested, CancellationToken cancel)
+        {
+            UiAssert(requested.Equals(endpoint), "ACCOUNT_SYSTEM_ROUTE_RECEIVES_ONLY_THE_FIXED_HOST");
+            calls.Add("system");
+            return Task.FromResult<Stream?>(ordinary);
+        }
+        Task<Stream> PhysicalRoute(CancellationToken cancel)
+        {
+            calls.Add("physical");
+            return Task.FromResult<Stream>(physical);
+        }
+        var clear = AccountApi.ConnectAccount(endpoint, false, SystemRoute, PhysicalRoute, CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(ReferenceEquals(clear, ordinary) && calls.SequenceEqual(new[] { "system" }),
+            "DISCONNECTED_ACCOUNT_API_PREFERS_ORDINARY_DUAL_STACK_ROUTE");
+        calls.Clear();
+        var guarded = AccountApi.ConnectAccount(endpoint, true, SystemRoute, PhysicalRoute, CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(ReferenceEquals(guarded, physical) && calls.SequenceEqual(new[] { "physical" }),
+            "GUARDED_ACCOUNT_API_NEVER_ATTEMPTS_ORDINARY_ROUTE");
+        calls.Clear();
+        var fallback = AccountApi.ConnectAccount(endpoint, false, (_, _) => {
+            calls.Add("system");
+            return Task.FromResult<Stream?>(null);
+        }, PhysicalRoute, CancellationToken.None).GetAwaiter().GetResult();
+        UiAssert(ReferenceEquals(fallback, physical) && calls.SequenceEqual(new[] { "system", "physical" }),
+            "DISCONNECTED_ACCOUNT_API_RETAINS_PHYSICAL_FALLBACK_BEFORE_TLS");
+        Console.WriteLine("ACCOUNT_API_ROUTE_MODE_AND_TLS_ORIGIN_BOUNDARY=PASS");
+    }
+
     private static void UdpDiagnosticRegression()
     {
+        AccountRouteRegression();
         var stale = new[]{"152.67.154.225","150.230.113.158"};
         UiAssert(AccountApi.ConnectionCandidates(stale).SequenceEqual(new[]{"152.67.156.100","152.67.154.225","150.230.113.158"}) &&
             AccountApi.ConnectionCandidates(new[]{"152.67.156.100"}).SequenceEqual(new[]{"152.67.156.100"}),

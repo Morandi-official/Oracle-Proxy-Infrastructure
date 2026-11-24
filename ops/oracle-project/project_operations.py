@@ -459,6 +459,42 @@ def _retire_rc32_ci_device():
 
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('request_id') == 'restore-wireguard-primary-20261124':
+        helper = Path(__file__).with_name('cloud_udp_identity.py')
+        spec = importlib.util.spec_from_file_location('incident_control_rpc', helper)
+        diagnostic = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(diagnostic)
+        snapshot = diagnostic.rpc('state', {})
+        if snapshot['error'] or snapshot['budget']['guard_blocked']:
+            raise ValueError('RECOVERY_POLICY_NOT_READY')
+        active_users = {user['id'] for user in snapshot['users'] if user['status'] == 'active'}
+        managed = [peer for peer in snapshot['peers'] if peer['managed'] and not peer['user_deleted']]
+        print('INCIDENT_POLICY_SUMMARY='+json.dumps({
+            'managed_count': len(managed),
+            'eligible_installed_count': sum(bool(peer['present'] and not peer['revoked']
+                                                 and peer['user_id'] in active_users) for peer in managed),
+        }, sort_keys=True), flush=True)
+        stable = Path('/usr/local/libexec/oracle-project/endpoint_config.py')
+        spec = importlib.util.spec_from_file_location('incident_catalog', stable)
+        catalog = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(catalog)
+        current = catalog.read()
+        previous = {'public_ipv4': '141.147.78.44', 'private_ipv4': '10.0.0.10'}
+        selected = {'public_ipv4': '152.67.154.225', 'private_ipv4': '10.0.0.6'}
+        if current is None or (current['revision'], current['primary'], current['backup']) != (9, previous, selected):
+            raise ValueError('RECOVERY_ENDPOINTS_CHANGED')
+        applied = diagnostic.rpc('endpoint.apply', {
+            'primary': selected['public_ipv4'], 'backup': previous['public_ipv4'],
+            'version': catalog.version(current),
+        })
+        effective = catalog.read()
+        if not applied['changed'] or (effective['revision'], effective['primary'], effective['backup']) != (10, selected, previous):
+            raise ValueError('RECOVERY_READBACK_MISMATCH')
+        print('INCIDENT_PRIMARY_RESTORED='+json.dumps({
+            'revision': effective['revision'], 'primary': selected, 'backup': previous,
+        }, sort_keys=True), flush=True)
+        verify_ingress_egress()
+        return
     if request.get('request_id')=='retire-only-rc32-completed-ci-20261107':
         _retire_rc32_ci_device()
         return # One exact completed hosted CI peer; no mirror or deployment.

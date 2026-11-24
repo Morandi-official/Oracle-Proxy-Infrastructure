@@ -1,4 +1,4 @@
 {
-  "request_id": "tailscale-vm-origin-parallel",
-  "operation": "preflight"
+  "operation": "status",
+  "request_id": "tailscale-performance-complete"
 }

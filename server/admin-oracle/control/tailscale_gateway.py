@@ -5,6 +5,10 @@ import ipaddress
 import json
 import math
 import re
+import socket
+import struct
+from contextlib import closing
+from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -13,6 +17,45 @@ from tailscale_egress import (
     MAX_LEASE_SECONDS, apply_rules, index_peers, peer_counters, rate_rules, rate_table_exists, renew_rules,
 )
 from tailscale_registry import AdmissionRegistry, CoordinatorAccount
+
+EXIT_SOCKET = "/run/oracle-proxy-tailnet-exit/tailscaled.sock"
+MAX_STATUS_BYTES = 1024 * 1024
+
+
+class ExitStatusConnection(HTTPConnection):
+    def __init__(self, path):
+        super().__init__("local-tailscaled.sock", timeout=2)
+        self.path = path
+
+    def connect(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(self.timeout)
+            sock.connect(self.path)
+            credentials = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            _, uid, _ = struct.unpack("3i", credentials)
+            if uid != 0:
+                raise OSError("UNTRUSTED_TAILSCALE_EXIT_SOCKET")
+        except Exception:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+def read_exit_status(path=EXIT_SOCKET):
+    # The timer and first-device confirmation need only the daemon's LocalAPI.
+    with closing(ExitStatusConnection(path)) as connection:
+        connection.request("GET", "/localapi/v0/status")
+        with connection.getresponse() as response:
+            if response.status != 200:
+                raise OSError("TAILSCALE_EXIT_UNAVAILABLE")
+            body = response.read(MAX_STATUS_BYTES + 1)
+    if len(body) > MAX_STATUS_BYTES:
+        raise OSError("TAILSCALE_STATUS_TOO_LARGE")
+    status = json.loads(body)
+    if not isinstance(status, dict):
+        raise ValueError("INVALID_TAILSCALE_PEER_STATUS")
+    return status
 
 
 class TailscaleGateway:
@@ -56,9 +99,7 @@ class TailscaleGateway:
         coordinator = HeadscaleControl("/usr/local/libexec/oracle-proxy-tailnet/headscale",
                                       "/etc/oracle-proxy-tailnet/headscale.yaml")
         registry = AdmissionRegistry(Path(directory) / "tailscale-devices.sqlite3", coordinator, engine.now)
-        status_command = ["/usr/local/libexec/oracle-proxy-tailnet/tailscale",
-                          "--socket=/run/oracle-proxy-tailnet-exit/tailscaled.sock", "status", "--json"]
-        return cls(engine, raw, registry, coordinator, lambda: json.loads(engine.driver.command(status_command).stdout))
+        return cls(engine, raw, registry, coordinator, read_exit_status)
 
     def close(self):
         self._last_ready_at = None
@@ -95,9 +136,9 @@ class TailscaleGateway:
             stored = self.registry.cached(account, device)
             key = None
             if operation == "confirm":
-                if not self.registry.find(account, device):
+                node = self.registry.find(account, device)
+                if node is None or node.node_id not in self.refresh():
                     raise ValueError("TAILSCALE_ENROLLMENT_PENDING")
-                self.refresh()
             elif operation == "profile":
                 if not stored or stored.node_id is None:
                     if stored and self.registry.find(account, device):
@@ -143,6 +184,7 @@ class TailscaleGateway:
                 raise
 
             leases = {}
+            authorized_nodes = set()
             rate_addresses = {}
             for binding in active:
                 user = engine.db.execute("SELECT * FROM users WHERE id=?", (binding.account_id,)).fetchone()
@@ -152,6 +194,7 @@ class TailscaleGateway:
                 if user["expires"] is not None:
                     seconds = min(seconds, math.floor(user["expires"] - engine.now()))
                 if seconds > 0:
+                    authorized_nodes.add(binding.node_id)
                     leases.update({address: seconds for address in binding.addresses})
                     rate_addresses.setdefault(binding.account_id, set()).update(binding.addresses)
             plan = tuple(sorted((row["slot"], row["download_bps"], row["upload_bps"],
@@ -164,6 +207,7 @@ class TailscaleGateway:
             self._apply(policy + renew_rules(leases))
             self._rate_plan = plan
             self._last_ready_at = engine.now()
+            return authorized_nodes
         except Exception:
             self.close()
             raise

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
@@ -13,6 +14,7 @@ internal static class LiveAcceptance
     private const string Trace = "https://1.1.1.1/cdn-cgi/trace";
     private const string Speed = "https://speed.cloudflare.com/";
     private const int TransferBytes = 10 * 1024 * 1024;
+    private const int ParallelStreams = 4;
 
     internal static async Task<int> Run(string output)
     {
@@ -54,9 +56,12 @@ internal static class LiveAcceptance
                 phase = run == 0 ? "FIRST_CONNECT" : "RECONNECT";
                 var timer = Stopwatch.StartNew();
                 string attempt = phase;
+                var timing = new ConcurrentDictionary<string, long>();
+                report["last_connection_milestones_ms"] = timing;
                 var (daemon, profile) = await ClientConnection.Open(account, session, state, timeout.Token,
-                    stage => phase = attempt + "_" + stage);
+                    stage => phase = attempt + "_" + stage, (stage, elapsed) => timing[stage] = elapsed);
                 long connectedMs = timer.ElapsedMilliseconds;
+                string initialTransport;
                 string transport;
                 try
                 {
@@ -73,6 +78,7 @@ internal static class LiveAcceptance
                         ConnectTimeout = TimeSpan.FromSeconds(8),
                     }) { Timeout = TimeSpan.FromSeconds(15), MaxResponseContentBufferSize = 8192 };
                     await RequireIPv4(tunneled, expected, timeout.Token);
+                    initialTransport = await daemon.Control.ReadExitTransport(profile.NodeId, timeout.Token);
                     if (run == 0)
                     {
                         phase = "TUNNEL_PERFORMANCE";
@@ -87,13 +93,26 @@ internal static class LiveAcceptance
                     }
                     transport = await daemon.Control.ReadExitTransport(profile.NodeId, timeout.Token);
                 }
-                finally { await daemon.DisposeAsync(); }
+                finally
+                {
+                    var stop = Stopwatch.StartNew();
+                    try { await daemon.DisposeAsync(); }
+                    catch { phase = "DISCONNECT_ENGINE"; throw; }
+                    timing["disconnect_engine_duration"] = stop.ElapsedMilliseconds;
+                }
 
                 phase = "RESTORE_DIRECT";
+                var restoring = Stopwatch.StartNew();
                 var restored = await ObserveIPv4(web, timeout.Token);
                 if (!restored.Equals(direct)) throw new IOException("DIRECT_ROUTE_NOT_RESTORED");
-                connections.Add(new { connect_ms = connectedMs, transport });
+                connections.Add(new
+                {
+                    connect_ms = connectedMs, initial_transport = initialTransport, transport,
+                    milestones_ms = timing,
+                    direct_route_confirmation_ms = restoring.ElapsedMilliseconds,
+                });
             }
+            report.Remove("last_connection_milestones_ms");
             result = 0;
         }
         catch (Exception error)
@@ -130,36 +149,81 @@ internal static class LiveAcceptance
             latencies.Add(sample.Elapsed.TotalMilliseconds);
         }
         latencies.Sort();
+        using var single = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        single.CancelAfter(TimeSpan.FromSeconds(30));
         var timer = Stopwatch.StartNew();
-        using (var get = await web.GetAsync(Speed + "__down?bytes=" + TransferBytes, HttpCompletionOption.ResponseHeadersRead, cancel))
-        {
-            get.EnsureSuccessStatusCode();
-            await using var body = await get.Content.ReadAsStreamAsync(cancel);
-            byte[] buffer = new byte[32_768];
-            int received = 0, block;
-            while ((block = await body.ReadAsync(buffer, cancel)) != 0)
-            {
-                received += block;
-                if (received > TransferBytes) throw new IOException("SPEED_DOWNLOAD_LENGTH_MISMATCH");
-            }
-            if (received != TransferBytes) throw new IOException("SPEED_DOWNLOAD_LENGTH_MISMATCH");
-        }
-        double download = Rate(timer.Elapsed);
+        await Download(web, TransferBytes, single.Token);
+        double download = Rate(TransferBytes, timer.Elapsed);
+        single.CancelAfter(TimeSpan.FromSeconds(30));
         timer.Restart();
-        using var post = new ByteArrayContent(new byte[TransferBytes]);
-        using var upload = await web.PostAsync(Speed + "__up", post, cancel);
-        upload.EnsureSuccessStatusCode();
+        await Upload(web, TransferBytes, single.Token);
+        double upload = Rate(TransferBytes, timer.Elapsed);
+        const int downloadPerStream = 8 * 1024 * 1024;
+        const int uploadPerStream = 4 * 1024 * 1024;
+        var multiDownload = await Aggregate(web, downloadPerStream, Download, cancel);
+        var multiUpload = await Aggregate(web, uploadPerStream, Upload, cancel);
+        await RequireIPv4(web, expected, cancel);
         return new
         {
             bytes_each_direction = TransferBytes,
             download_mbps = download,
-            upload_mbps = Rate(timer.Elapsed),
+            upload_mbps = upload,
             https_p50_ms = Math.Round((latencies[4] + latencies[5]) / 2, 2),
             https_p95_ms = Math.Round(latencies[9], 2),
+            aggregate = new { parallel_streams = ParallelStreams, download = multiDownload, upload = multiUpload },
         };
     }
 
-    private static double Rate(TimeSpan elapsed) => Math.Round(8.0 * TransferBytes / elapsed.TotalSeconds / 1_000_000, 2);
+    private static async Task Download(HttpClient web, int bytes, CancellationToken cancel)
+    {
+        using var get = await web.GetAsync(Speed + "__down?bytes=" + bytes, HttpCompletionOption.ResponseHeadersRead, cancel);
+        get.EnsureSuccessStatusCode();
+        await using var body = await get.Content.ReadAsStreamAsync(cancel);
+        byte[] buffer = new byte[32_768];
+        int received = 0, block;
+        while ((block = await body.ReadAsync(buffer, cancel)) != 0)
+        {
+            received += block;
+            if (received > bytes) throw new IOException("SPEED_DOWNLOAD_LENGTH_MISMATCH");
+        }
+        if (received != bytes) throw new IOException("SPEED_DOWNLOAD_LENGTH_MISMATCH");
+    }
+
+    private static async Task Upload(HttpClient web, int bytes, CancellationToken cancel)
+    {
+        using var post = new ByteArrayContent(new byte[bytes]);
+        using var upload = await web.PostAsync(Speed + "__up", post, cancel);
+        upload.EnsureSuccessStatusCode();
+    }
+
+    private static async Task<object> Aggregate(HttpClient web, int bytesPerStream,
+        Func<HttpClient, int, CancellationToken, Task> transfer, CancellationToken cancel)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        limit.CancelAfter(TimeSpan.FromSeconds(30));
+        var timer = Stopwatch.StartNew();
+        int bytes = bytesPerStream * ParallelStreams;
+        bool completed = false;
+        var tasks = Enumerable.Range(0, ParallelStreams).Select(_ => transfer(web, bytesPerStream, limit.Token)).ToArray();
+        try
+        {
+            await Task.WhenAll(tasks);
+            completed = true;
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { }
+        long finished = tasks.LongCount(task => task.IsCompletedSuccessfully) * bytesPerStream;
+        return new
+        {
+            target_bytes = bytes,
+            completed_bytes = finished,
+            throughput_mbps = completed ? (double?)Rate(bytes, timer.Elapsed) : null,
+            elapsed_ms = timer.ElapsedMilliseconds,
+            status = completed ? "completed" : "timeout",
+        };
+    }
+
+    private static double Rate(int bytes, TimeSpan elapsed) =>
+        Math.Round(8.0 * bytes / elapsed.TotalSeconds / 1_000_000, 2);
 
     private static async Task RequireIPv4(HttpClient web, IPAddress expected, CancellationToken cancel)
     {

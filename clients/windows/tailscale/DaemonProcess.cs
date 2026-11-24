@@ -21,7 +21,8 @@ internal sealed class DaemonProcess : IAsyncDisposable
     }
 
     internal static async Task<DaemonProcess> Start(
-        string trustedExecutable, string privateStateDirectory, CancellationToken cancellation)
+        string trustedExecutable, string privateStateDirectory, CancellationToken cancellation,
+        Action<string>? timing = null)
     {
         var instance = Guid.NewGuid().ToString("N");
         var adapter = "ProxyTail-" + instance[..12];
@@ -43,7 +44,9 @@ internal sealed class DaemonProcess : IAsyncDisposable
         start.ArgumentList.Add(@"--socket=\\.\pipe\" + LocalControl.PipePrefix + instance);
         start.ArgumentList.Add("--state=" + Path.Combine(Path.GetFullPath(privateStateDirectory), "state"));
         start.ArgumentList.Add("--tun=" + adapter);
-        start.ArgumentList.Add("--port=0");
+        // Keep the upstream Windows preferred port across reconnects.
+        // Magicsock still chooses an available port if this one is occupied.
+        start.ArgumentList.Add("--port=41641");
 
         Process? process = null;
         SafeFileHandle? job = null;
@@ -51,22 +54,34 @@ internal sealed class DaemonProcess : IAsyncDisposable
         {
             cancellation.ThrowIfCancellationRequested();
             (process, job) = DaemonConsole.Start(start);
+            timing?.Invoke("daemon_spawned");
             using var readiness = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             readiness.CancelAfter(TimeSpan.FromSeconds(12));
-            while (true)
+            using var observation = timing is null ? null : CancellationTokenSource.CreateLinkedTokenSource(readiness.Token);
+            var adapterObservation = observation is null ? Task.CompletedTask : ObserveAdapter(adapter, timing!, observation.Token);
+            try
             {
-                if (process.HasExited)
-                    throw new IOException("TAILSCALE_DAEMON_EXITED");
-                try
+                while (true)
                 {
-                    await control.ReadState(readiness.Token);
-                    break;
+                    if (process.HasExited)
+                        throw new IOException("TAILSCALE_DAEMON_EXITED");
+                    try
+                    {
+                        // The watcher itself proves LocalAPI readiness and selects the
+                        // Windows profile, so a separate status request adds no check.
+                        await control.KeepWindowsProfileSelected(readiness.Token);
+                        break;
+                    }
+                    catch (HttpRequestException) when (!readiness.IsCancellationRequested) { }
+                    catch (OperationCanceledException) when (!readiness.IsCancellationRequested) { }
+                    await Task.Delay(50, readiness.Token);
                 }
-                catch (HttpRequestException) when (!readiness.IsCancellationRequested) { }
-                catch (OperationCanceledException) when (!readiness.IsCancellationRequested) { }
-                await Task.Delay(125, readiness.Token);
             }
-            await control.KeepWindowsProfileSelected(readiness.Token);
+            finally
+            {
+                observation?.Cancel();
+                await adapterObservation;
+            }
             return new DaemonProcess(process, job, control, adapter);
         }
         catch
@@ -83,6 +98,18 @@ internal sealed class DaemonProcess : IAsyncDisposable
             }
             throw;
         }
+    }
+
+    private static async Task ObserveAdapter(string adapter, Action<string> timing, CancellationToken cancellation)
+    {
+        try
+        {
+            while (!NetworkInterface.GetAllNetworkInterfaces().Any(value => value.Name == adapter))
+                await Task.Delay(30, cancellation).ConfigureAwait(false);
+            timing("adapter_visible");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (NetworkInformationException) { }
     }
 
     private static async Task EndProcess(Process process)

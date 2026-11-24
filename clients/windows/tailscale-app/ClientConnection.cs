@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -21,26 +22,40 @@ internal static class ClientConnection
     }
 
     internal static async Task<(DaemonProcess Daemon, ExitProfile Profile)> Open(AccountClient account, string session, string state,
-        CancellationToken cancel, Action<string>? progress = null)
+        CancellationToken cancel, Action<string>? progress = null, Action<string, long>? timing = null)
     {
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        var daemonTask = DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
-            state, attempt.Token);
+        var startedAt = Stopwatch.GetTimestamp();
+        void Mark(string stage) => timing?.Invoke(stage, (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+
+        async Task<T> Record<T>(Task<T> task, string stage)
+        {
+            T result = await task.ConfigureAwait(false);
+            Mark(stage);
+            return result;
+        }
+
+        // Let the account TLS request run while Windows starts the native engine.
+        progress?.Invoke("ACCOUNT_PROFILE");
+        var profileTask = Record(account.Profile(session, false, attempt.Token), "account_ready");
+        var daemonTask = Record(DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
+            state, attempt.Token, timing is null ? null : Mark), "daemon_ready");
         try
         {
-            progress?.Invoke("ACCOUNT_PROFILE");
-            var profile = await account.Profile(session, false, attempt.Token);
+            var profile = await profileTask;
             progress?.Invoke("DAEMON_PROFILE");
             var daemon = await daemonTask;
             if (profile.Key is not null)
             {
                 progress?.Invoke("ENROLLMENT_START");
                 await daemon.Control.Enroll(profile.Coordinator, profile.Key, attempt.Token);
+                Mark("enrollment_started");
                 using var registration = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
                 registration.CancelAfter(TimeSpan.FromSeconds(10));
                 progress?.Invoke("COORDINATOR_NODE_KEY");
                 while (!(await daemon.Control.ReadState(registration.Token)).HasNodeKey)
                     await Task.Delay(125, registration.Token);
+                Mark("node_key_ready");
                 progress?.Invoke("ACCOUNT_CONFIRM");
                 while (true)
                 {
@@ -54,11 +69,13 @@ internal static class ClientConnection
                         await Task.Delay(125, registration.Token);
                     }
                 }
+                Mark("account_confirmed");
             }
             progress?.Invoke("SELECT_EXIT");
             await daemon.Control.SelectExitNode(profile.NodeId, attempt.Token);
+            Mark("exit_selected");
             progress?.Invoke("VERIFY_EXIT");
-            await ExitCheck.Verify(daemon, profile, attempt.Token);
+            await ExitCheck.Verify(daemon, profile, attempt.Token, timing is null ? null : Mark);
             attempt.Token.ThrowIfCancellationRequested();
             return (daemon, profile);
         }

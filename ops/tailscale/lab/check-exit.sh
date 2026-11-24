@@ -178,6 +178,31 @@ tailscale() {
     ip netns exec "${namespaces[$role]}" "$tools_dir/tailscale" --socket "$lab_dir/$role.sock" "$@"
 }
 
+daemon_api() {
+    local role=$1 method=$2 endpoint=$3
+    curl --unix-socket "$lab_dir/$role.sock" --noproxy '*' --fail --silent --show-error \
+        --max-time 5 --request "$method" --header 'Content-Type: application/json' --data-binary @- \
+        "http://local-tailscaled.sock/localapi/v0/$endpoint"
+}
+
+login_via_daemon() {
+    local role=$1 key_file=$2
+    jq -n --rawfile key "$key_file" '{
+        AuthKey: ($key | rtrimstr("\n")),
+        UpdatePrefs: {
+            ControlURL: "http://192.0.2.1:8080",
+            WantRunning: true, ShieldsUp: true, CorpDNS: true, RouteAll: false
+        }
+    }' | daemon_api "$role" POST start > "$lab_dir/$role.login.log"
+    for _ in {1..30}; do
+        if tailscale "$role" status --json | jq -e '.BackendState == "Running" and .HaveNodeKey' >/dev/null; then
+            return
+        fi
+        sleep 0.5
+    done
+    return 1
+}
+
 start_node() {
     local role=$1
     ip netns exec "${namespaces[$role]}" env TS_NO_LOGS_NO_SUPPORT=true \
@@ -250,7 +275,8 @@ start_node replay
 stage=register-exit
 login exit "$lab_dir/exit.key" --advertise-exit-node
 stage=register-authorized-device
-login admitted "$lab_dir/admitted.key"
+login_via_daemon admitted "$lab_dir/admitted.key"
+echo 'TAILSCALE_CLIENT_LOCAL_API_ENROLLMENT=PASS'
 stage=register-unauthorized-device
 login denied "$lab_dir/denied.key"
 stage=reject-replayed-registration
@@ -272,7 +298,12 @@ if http_origin admitted 4 || http_origin admitted 6; then
     exit 1
 fi
 exit_ipv4=$(tailscale exit ip -4)
-tailscale admitted set --exit-node "$exit_ipv4"
+exit_node=$(tailscale exit status --json | jq -er '.Self.ID')
+jq -n --arg id "$exit_node" '{
+    ExitNodeID:$id, ExitNodeIDSet:true, ExitNodeIPSet:true,
+    ExitNodeAllowLANAccess:false, ExitNodeAllowLANAccessSet:true,
+    WantRunning:true, WantRunningSet:true
+}' | daemon_api admitted PATCH prefs > /dev/null
 if command -v tcpdump >/dev/null; then
     ip netns exec "${namespaces[exit]}" timeout 28 tcpdump -nnl -i any -s 96 \
         'tcp port 8081 and (host 198.18.47.2 or host 2001:db8:47::2)' \

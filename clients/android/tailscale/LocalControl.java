@@ -1,16 +1,22 @@
 package org.morandi.proxy.tailscale;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import libtailscale.Application;
+import libtailscale.InputStream;
 import libtailscale.LocalAPIResponse;
+import org.json.JSONException;
 import org.json.JSONObject;
 
-/** Reads the daemon directly through its JNI binding on a worker thread. */
+/** Controls the daemon directly through its JNI binding on a worker thread. */
 public final class LocalControl {
-    private static final String STATUS = "/localapi/v0/status?peers=false";
+    private static final String API = "/localapi/v0/";
     private static final int MAX_STATUS_BYTES = 65_536;
+    private static final Pattern ENROLLMENT_KEY =
+            Pattern.compile("hskey-auth-[A-Za-z0-9_-]{12}-[A-Za-z0-9_-]{64}");
     private final Application application;
 
     public LocalControl(Application application) {
@@ -19,16 +25,100 @@ public final class LocalControl {
 
     public DaemonState readState() throws IOException {
         try {
-            LocalAPIResponse response = application.callLocalAPI(3_000, "GET", STATUS, null);
-            byte[] bytes = response.bodyBytes();
-            if (response.statusCode() != 200 || bytes == null || bytes.length > MAX_STATUS_BYTES) {
+            byte[] bytes = request("GET", "status?peers=false", null);
+            if (bytes == null || bytes.length > MAX_STATUS_BYTES) {
                 throw new IOException("INVALID_TAILSCALE_STATUS");
             }
             JSONObject state = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
             return new DaemonState(state.getString("BackendState"), state.optBoolean("HaveNodeKey"));
+        } catch (JSONException error) {
+            throw new IOException("INVALID_TAILSCALE_STATUS");
+        }
+    }
+
+    public void enroll(URI coordinator, String credential) throws IOException {
+        String path = coordinator.getRawPath();
+        String host = coordinator.getHost();
+        if (!"https".equalsIgnoreCase(coordinator.getScheme()) || host == null ||
+                !host.matches("(?i)[a-z0-9-]+(?:\\.[a-z0-9-]+)+") || host.matches("[0-9.]+") ||
+                (coordinator.getPort() != -1 && coordinator.getPort() != 443) ||
+                coordinator.getRawUserInfo() != null || (!path.isEmpty() && !path.equals("/")) ||
+                coordinator.getRawQuery() != null || coordinator.getRawFragment() != null) {
+            throw new IllegalArgumentException("INVALID_TAILSCALE_COORDINATOR");
+        }
+        if (!ENROLLMENT_KEY.matcher(credential).matches()) {
+            throw new IllegalArgumentException("INVALID_TAILSCALE_ENROLLMENT");
+        }
+        try {
+            JSONObject preferences = new JSONObject()
+                    .put("ControlURL", "https://" + host)
+                    .put("WantRunning", true)
+                    .put("ShieldsUp", true)
+                    .put("CorpDNS", true)
+                    .put("RouteAll", false);
+            request("POST", "start", new JSONObject().put("AuthKey", credential).put("UpdatePrefs", preferences));
+        } catch (JSONException error) {
+            throw new IOException("INVALID_TAILSCALE_ENROLLMENT");
+        }
+    }
+
+    public void selectExitNode(long nodeId) throws IOException {
+        if (nodeId <= 0) {
+            throw new IllegalArgumentException("INVALID_TAILSCALE_EXIT_NODE");
+        }
+        try {
+            request("PATCH", "prefs", new JSONObject()
+                    .put("ExitNodeID", Long.toString(nodeId))
+                    .put("ExitNodeIDSet", true)
+                    .put("ExitNodeIPSet", true)
+                    .put("ExitNodeAllowLANAccess", false)
+                    .put("ExitNodeAllowLANAccessSet", true)
+                    .put("WantRunning", true)
+                    .put("WantRunningSet", true));
+        } catch (JSONException error) {
+            throw new IOException("INVALID_TAILSCALE_EXIT_NODE");
+        }
+    }
+
+    public void stop() throws IOException {
+        try {
+            request("PATCH", "prefs", new JSONObject().put("WantRunning", false).put("WantRunningSet", true));
+        } catch (JSONException error) {
+            throw new IOException("INVALID_TAILSCALE_PREFERENCES");
+        }
+    }
+
+    private byte[] request(String method, String endpoint, JSONObject value) throws IOException {
+        try {
+            InputStream body = value == null ? null : new RequestBody(value.toString().getBytes(StandardCharsets.UTF_8));
+            LocalAPIResponse response = application.callLocalAPI(3_000, method, API + endpoint, body);
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IOException("TAILSCALE_LOCAL_CONTROL_REJECTED");
+            }
+            return response.bodyBytes();
         } catch (Exception error) {
             // Native errors may include URLs so the caller receives a fixed code.
             throw new IOException("TAILSCALE_LOCAL_CONTROL_UNAVAILABLE");
+        }
+    }
+
+    private static final class RequestBody implements InputStream {
+        private byte[] bytes;
+
+        RequestBody(byte[] bytes) {
+            this.bytes = bytes;
+        }
+
+        @Override
+        public byte[] read() {
+            byte[] result = bytes;
+            close();
+            return result;
+        }
+
+        @Override
+        public void close() {
+            bytes = null;
         }
     }
 

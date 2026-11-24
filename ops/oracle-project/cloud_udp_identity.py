@@ -26,7 +26,7 @@ def validate(value, paired=False):
     extra = CAPTURE_FIELDS.get(action) if paired and isinstance(action, str) else None
     if not isinstance(value, dict) or set(value) != keys | (extra or set()):
         raise ValueError('INVALID_DIAGNOSTIC_REQUEST')
-    if extra is None and action not in ('prepare', 'observe', 'cleanup', 'host-audit', 'endpoint-prepare', 'endpoint-observe', 'endpoint-rollback', 'reconcile-owned'):
+    if extra is None and action not in ('overview', 'prepare', 'observe', 'cleanup', 'host-audit', 'endpoint-prepare', 'endpoint-observe', 'endpoint-rollback', 'reconcile-owned'):
         raise ValueError('INVALID_DIAGNOSTIC_ACTION')
     if not isinstance(value['probe_id'], str) or not re.fullmatch(r'[a-f0-9]{32}', value['probe_id']):
         raise ValueError('INVALID_DIAGNOSTIC_ID')
@@ -135,9 +135,33 @@ def reconcile_owned():
     return result
 
 
+def overview():
+    path = Path(__file__).with_name('verify_ingress_egress.py')
+    spec = importlib.util.spec_from_file_location('diagnostic_ingress_egress', path)
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
+    config = verifier.read_catalog()
+    if not config:
+        raise ValueError('ENDPOINT_CATALOG_UNAVAILABLE')
+    snapshot = rpc('state', {})
+    error = str(snapshot.get('error') or '')
+    listeners = {}
+    for role, interface in (('primary', 'wg0'), ('backup', 'wgopbackup')):
+        result = subprocess.run(['wg', 'show', interface, 'listen-port'],
+                                capture_output=True, text=True, timeout=5, check=False)
+        text = result.stdout.strip()
+        listeners[role] = int(text) if result.returncode == 0 and text.isdecimal() else None
+    return {
+        'revision': config['revision'], 'primary': config['primary'], 'backup': config['backup'],
+        'listeners': listeners, 'budget_blocked': snapshot['budget']['guard_blocked'],
+        'control_error': error if not error or re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}', error) else 'CONTROL_ERROR',
+    }
+
+
 def execute(value, paired=False):
     validate(value, paired)
     if value['action']=='reconcile-owned':return reconcile_owned()
+    if value['action']=='overview':return overview()
     key, tag = value['public_key'], value['probe_id']
     name = 'Cloud UDP diagnostic ' + tag
     if STATE.is_symlink(): raise ValueError('UNTRUSTED_DIAGNOSTIC_STATE')

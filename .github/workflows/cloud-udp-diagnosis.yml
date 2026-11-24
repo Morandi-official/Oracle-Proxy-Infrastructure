@@ -29,7 +29,7 @@ jobs:
           import json,os
           from pathlib import Path
           request=json.loads(Path('ops/oracle-project/request.json').read_text())
-          current=request.get('request_id') in ('cloud-udp-current-ports-20261121','cloud-udp-current-ports-20261124')
+          current=request.get('request_id') in ('cloud-udp-current-ports-20261121','cloud-udp-current-ports-20261124','udp-flow-incident-20261124')
           enabled=request.get('request_id','').startswith('cloud-udp-') and not current
           with open(os.environ['GITHUB_OUTPUT'],'a') as output:
               output.write('enabled='+str(enabled).lower()+'\n')

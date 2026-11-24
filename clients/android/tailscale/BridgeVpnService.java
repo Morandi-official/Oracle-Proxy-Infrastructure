@@ -3,6 +3,7 @@ package org.morandi.proxy.tailscale;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.Context;
 import android.content.Intent;
 import android.net.IpPrefix;
 import android.net.Network;
@@ -10,11 +11,13 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import libtailscale.IPNService;
 import libtailscale.ParcelFileDescriptor;
 import libtailscale.VPNServiceBuilder;
@@ -22,20 +25,84 @@ import libtailscale.VPNServiceBuilder;
 /** Owns the Android VPN interface requested by the Tailscale engine. */
 public final class BridgeVpnService extends VpnService implements IPNService {
     static final String START = "org.morandi.proxy.action.START_TAILSCALE";
+    private static final String PREPARE = "org.morandi.proxy.action.PREPARE_TAILSCALE";
+    private static final String ATTEMPT = "proxy_attempt";
     private static final String CHANNEL = "tailscale_vpn";
     private static final int NOTIFICATION = 7721;
+    private static final AtomicLong ATTEMPTS = new AtomicLong();
+    // These service handles are installed and consumed on the main thread.
+    private static BridgeVpnService prepared;
+    private static long pendingPreparation;
     private final String identifier = UUID.randomUUID().toString();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicBoolean closed = new AtomicBoolean();
     private boolean attached;
+    private boolean authorized;
+    private long preparedAttempt;
+    private long preparedAtMs;
+
+    static long prepareForeground(Context context) {
+        long attempt = ATTEMPTS.incrementAndGet();
+        prepared = null;
+        pendingPreparation = attempt;
+        try {
+            context.startForegroundService(new Intent(context, BridgeVpnService.class)
+                    .setAction(PREPARE).putExtra(ATTEMPT, attempt));
+            return attempt;
+        } catch (RuntimeException unavailable) {
+            // Keep the ordinary authorized service start available if preparation was rejected.
+            pendingPreparation = 0;
+            return 0;
+        }
+    }
+
+    static long startAuthorized(Context context, long attempt) {
+        var service = prepared;
+        boolean current = attempt != 0 && pendingPreparation == attempt;
+        pendingPreparation = 0;
+        prepared = null;
+        if (current && service != null && service.preparedAttempt == attempt
+                && !service.closed.get() && prepare(context) == null) {
+            service.attachAuthorized();
+            return service.preparedAtMs;
+        }
+        context.startForegroundService(new Intent(context, BridgeVpnService.class).setAction(START));
+        return -1;
+    }
+
+    static void stop(Context context) {
+        prepared = null;
+        pendingPreparation = 0;
+        context.stopService(new Intent(context, BridgeVpnService.class));
+    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null || !START.equals(intent.getAction()) || prepare(this) != null) {
+        String action = intent == null ? null : intent.getAction();
+        boolean preparing = PREPARE.equals(action);
+        long attempt = preparing ? intent.getLongExtra(ATTEMPT, 0) : 0;
+        if (preparing && (attempt == 0 || attempt != pendingPreparation)) {
+            if (!authorized && pendingPreparation == 0) stopSelf(startId);
+            return START_NOT_STICKY;
+        }
+        if ((!START.equals(action) && !preparing) || prepare(this) != null) {
             stopSelf(startId);
             return START_NOT_STICKY;
         }
         startForeground(NOTIFICATION, notification("正在准备 VPN"));
+        if (preparing) {
+            preparedAttempt = attempt;
+            preparedAtMs = SystemClock.elapsedRealtime();
+            prepared = this;
+            return START_NOT_STICKY;
+        }
+        if (prepared == this) prepared = null;
+        attachAuthorized();
+        return START_NOT_STICKY;
+    }
+
+    private void attachAuthorized() {
+        authorized = true;
         EngineHost.WORKER.execute(() -> {
             if (closed.get() || attached) {
                 return;
@@ -49,7 +116,6 @@ public final class BridgeVpnService extends VpnService implements IPNService {
                 disconnectVPN();
             }
         });
-        return START_NOT_STICKY;
     }
 
     @Override
@@ -105,6 +171,10 @@ public final class BridgeVpnService extends VpnService implements IPNService {
 
     @Override
     public void onDestroy() {
+        if (prepared == this) {
+            prepared = null;
+            if (pendingPreparation == preparedAttempt) pendingPreparation = 0;
+        }
         detach();
         stopForeground(STOP_FOREGROUND_REMOVE);
         super.onDestroy();

@@ -24,3 +24,38 @@ jobs:
         run: bash ops/tailscale/lab/fetch-tools.sh "$RUNNER_TEMP/proxy-tailscale-tools"
       - name: Verify device admission and isolated IPv4, IPv6 and DNS exit
         run: sudo bash ops/tailscale/lab/check-exit.sh "$RUNNER_TEMP/proxy-tailscale-tools"
+  windows-local-control:
+    runs-on: windows-2025
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Probe the Windows Tailscale engine on a separate protected pipe
+        run: ./ops/tailscale/lab/check-windows.ps1
+  android-native-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out pinned Android engine source
+        uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale-android
+          ref: 62d1e58c2ecaf52914476ecb97239fbbf70298ea
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build the Tailscale Android bridge for emulator and phone
+        run: |
+          make build-unstripped-aar
+          archive=android/libs/libtailscale_unstripped.aar
+          unzip -l "$archive" | awk '/jni\/arm64-v8a\/libgojni.so$/{phone=1} /jni\/x86_64\/libgojni.so$/{emulator=1} END{exit !(phone && emulator)}'
+          unzip -p "$archive" classes.jar > "$RUNNER_TEMP/tailscale-native-bridge.jar"
+          jar tf "$RUNNER_TEMP/tailscale-native-bridge.jar" | awk '/libtailscale\/IPNService.class$/{service=1} /libtailscale\/Application.class$/{app=1} END{exit !(service && app)}'
+          echo 'TAILSCALE_ANDROID_NATIVE_BRIDGE_BUILD=PASS'

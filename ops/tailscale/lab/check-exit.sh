@@ -91,6 +91,7 @@ create_namespace admitted
 create_namespace denied
 create_namespace replay
 create_namespace origin
+mkdir -p -- /etc/netns
 attach_peer exit 192.0.2.11
 attach_peer admitted 192.0.2.12
 attach_peer denied 192.0.2.13

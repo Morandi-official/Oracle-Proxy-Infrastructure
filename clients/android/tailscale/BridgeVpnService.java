@@ -16,7 +16,6 @@ import java.net.UnknownHostException;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import libtailscale.IPNService;
-import libtailscale.Libtailscale;
 import libtailscale.ParcelFileDescriptor;
 import libtailscale.VPNServiceBuilder;
 
@@ -41,8 +40,9 @@ public final class BridgeVpnService extends VpnService implements IPNService {
                 return;
             }
             try {
-                EngineHost.from(this).engine();
-                Libtailscale.requestVPN(this);
+                EngineHost host = EngineHost.from(this);
+                host.engine();
+                host.attach(this);
                 attached = true;
             } catch (IOException | RuntimeException failure) {
                 disconnectVPN();
@@ -64,6 +64,14 @@ public final class BridgeVpnService extends VpnService implements IPNService {
             builder.setUnderlyingNetworks(new Network[] { network });
         }
         return new TunnelBuilder(builder);
+    }
+
+    void updateUnderlyingNetwork(Network network) {
+        main.post(() -> {
+            if (!closed.get()) {
+                setUnderlyingNetworks(network == null ? new Network[0] : new Network[] { network });
+            }
+        });
     }
 
     @Override
@@ -105,7 +113,7 @@ public final class BridgeVpnService extends VpnService implements IPNService {
         if (closed.compareAndSet(false, true)) {
             EngineHost.WORKER.execute(() -> {
                 if (attached) {
-                    Libtailscale.serviceDisconnect(this);
+                    EngineHost.from(this).detach(this);
                     attached = false;
                 }
             });

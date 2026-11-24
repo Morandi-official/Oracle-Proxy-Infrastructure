@@ -28,5 +28,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_DIRECT_PROTECTED_PIPE_FAILED' }
 }
 finally {
-    Remove-Item -LiteralPath $work -Recurse -Force
+    # Console-host and antivirus handles can outlive the daemon briefly.
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+        if (!(Test-Path -LiteralPath $work)) { break }
+        try {
+            Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop
+            break
+        } catch {
+            if ($attempt -eq 11) { throw }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }

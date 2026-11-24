@@ -24,7 +24,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
         var control = new LocalControl(instance);
         var start = new ProcessStartInfo(Path.GetFullPath(trustedExecutable))
         {
-            WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(trustedExecutable))!,
+            WorkingDirectory = AppContext.BaseDirectory,
             UseShellExecute = false,
         };
         foreach (string name in start.Environment.Keys.ToArray())

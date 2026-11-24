@@ -3,14 +3,18 @@ package org.morandi.proxy.tailscale;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
+import android.net.RouteInfo;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
 import java.io.IOException;
+import java.net.Inet4Address;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
@@ -42,6 +46,8 @@ final class EngineHost implements AppContext {
     private final SharedPreferences state;
     private final ConnectivityManager networks;
     private Application engine;
+    private NetworkSnapshot publishedNetwork;
+    private BridgeVpnService vpn;
 
     private EngineHost(Context context) {
         this.context = context.getApplicationContext();
@@ -63,6 +69,21 @@ final class EngineHost implements AppContext {
                 throw new IOException("TAILSCALE_STATE_DIRECTORY_UNAVAILABLE");
             }
             engine = Libtailscale.start(root.getAbsolutePath(), "", false, this);
+            var request = new NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build();
+            networks.registerNetworkCallback(request, new ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(Network network) { scheduleNetworkUpdate(); }
+                @Override public void onLost(Network network) { scheduleNetworkUpdate(); }
+                @Override public void onLinkPropertiesChanged(Network network, LinkProperties properties) {
+                    scheduleNetworkUpdate();
+                }
+                @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                    scheduleNetworkUpdate();
+                }
+            });
+            scheduleNetworkUpdate();
         }
         return engine;
     }
@@ -134,13 +155,76 @@ final class EngineHost implements AppContext {
         if (isInternetNetwork(active)) {
             return active;
         }
+        Network fallback = null;
         for (Network candidate : networks.getAllNetworks()) {
             if (isInternetNetwork(candidate)) {
-                return candidate;
+                NetworkCapabilities capabilities = networks.getNetworkCapabilities(candidate);
+                if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    return candidate;
+                }
+                if (fallback == null) {
+                    fallback = candidate;
+                }
             }
         }
-        return null;
+        return fallback;
     }
+
+    void attach(BridgeVpnService service) {
+        vpn = service;
+        Libtailscale.requestVPN(service);
+        service.updateUnderlyingNetwork(underlyingNetwork());
+        scheduleNetworkUpdate();
+    }
+
+    void detach(BridgeVpnService service) {
+        if (vpn == service) {
+            vpn = null;
+        }
+        Libtailscale.serviceDisconnect(service);
+    }
+
+    private void scheduleNetworkUpdate() {
+        WORKER.execute(this::publishNetwork);
+    }
+
+    private void publishNetwork() {
+        Network network = underlyingNetwork();
+        LinkProperties properties = network == null ? null : networks.getLinkProperties(network);
+        if (network != null && properties == null) {
+            return;  // A later link-properties callback supplies the full route and DNS snapshot.
+        }
+        String iface = "";
+        String gateway = "";
+        StringBuilder dns = new StringBuilder();
+        if (properties != null) {
+            iface = properties.getInterfaceName() == null ? "" : properties.getInterfaceName();
+            for (RouteInfo route : properties.getRoutes()) {
+                if (route.isDefaultRoute() && route.getGateway() != null) {
+                    gateway = route.getGateway().getHostAddress();
+                    if (route.getGateway() instanceof Inet4Address) break;
+                }
+            }
+            for (var server : properties.getDnsServers()) {
+                dns.append(server.getHostAddress()).append(' ');
+            }
+            if (properties.getDomains() != null) {
+                dns.append('\n').append(properties.getDomains());
+            }
+        }
+        var next = new NetworkSnapshot(network, iface, gateway, dns.toString());
+        if (!next.equals(publishedNetwork)) {
+            publishedNetwork = next;
+            Libtailscale.onAndroidNetworkChanged(iface, network == null ? 0 : network.getNetworkHandle(),
+                    gateway, next.dns());
+            if (vpn != null) {
+                vpn.updateUnderlyingNetwork(network);
+            }
+        }
+    }
+
+    private record NetworkSnapshot(Network network, String iface, String gateway, String dns) {}
 
     private boolean isInternetNetwork(Network network) {
         NetworkCapabilities available = network == null ? null : networks.getNetworkCapabilities(network);

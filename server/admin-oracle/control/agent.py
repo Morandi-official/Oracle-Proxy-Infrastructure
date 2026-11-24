@@ -809,7 +809,10 @@ def main():
         import sys
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from tailscale_gateway import TailscaleGateway
-        engine.tailscale = TailscaleGateway.load(engine, STATE, tailnet_configuration)
+        try:
+            engine.tailscale = TailscaleGateway.load(engine, STATE, tailnet_configuration)
+        except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+            print('TAILSCALE_GATEWAY_UNAVAILABLE', flush=True)
     allowed_uid = pwd.getpwnam('oracle-proxy-admin').pw_uid
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     if Path(SOCKET).exists(): Path(SOCKET).unlink()

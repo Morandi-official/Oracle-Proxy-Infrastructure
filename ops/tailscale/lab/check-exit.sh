@@ -279,6 +279,47 @@ origin_blocked() {
     ! http_origin "$1" 4 && ! http_origin "$1" 6
 }
 
+measure_path() {
+    local phase=$1 url=http://198.18.47.2:8081
+    local samples="$lab_dir/$phase.rtt" rates="$lab_dir/$phase.rates"
+    local -a request=(ip netns exec "${namespaces[admitted]}" curl --noproxy '*' --silent --fail
+        --connect-timeout 1 --max-time 4 --output /dev/null)
+    for _ in {1..20}; do
+        "${request[@]}" --write-out '%{time_connect}\n' "$url/" >> "$samples"
+    done
+    for _ in {1..3}; do
+        "${request[@]}" --write-out '%{speed_download} ' "$url/throughput" >> "$rates"
+        "${request[@]}" --header 'Expect:' --upload-file "$lab_dir/upload" \
+            --write-out '%{speed_upload}\n' "$url/throughput" >> "$rates"
+    done
+    python3 - "$phase" "$samples" "$rates" <<'PY'
+import json
+import math
+import statistics
+import sys
+
+phase, samples_path, rates_path = sys.argv[1:]
+with open(samples_path) as values:
+    rtt = sorted(float(value) * 1000 for value in values)
+with open(rates_path) as values:
+    download, upload = zip(*(tuple(float(rate) * 8 / 1_000_000 for rate in line.split()) for line in values))
+print("TAILSCALE_LAB_PERFORMANCE=" + json.dumps({
+    "path": phase, "down_mbps_median": round(statistics.median(download), 1),
+    "up_mbps_median": round(statistics.median(upload), 1),
+    "tcp_connect_ms_p50": round(statistics.median(rtt), 3),
+    "tcp_connect_ms_p95": round(rtt[math.ceil(len(rtt) * .95) - 1], 3),
+}))
+PY
+}
+
+select_exit() {
+    jq -n --arg id "$1" '{
+        ExitNodeID:$id, ExitNodeIDSet:true, ExitNodeIPSet:true,
+        ExitNodeAllowLANAccess:false, ExitNodeAllowLANAccessSet:true,
+        WantRunning:true, WantRunningSet:true
+    }' | daemon_api admitted PATCH prefs > /dev/null
+}
+
 stage=headscale-startup
 ip netns exec "${namespaces[lan]}" "$tools_dir/headscale" --config "$lab_dir/headscale.yaml" \
     serve > "$lab_dir/headscale.log" 2>&1 &
@@ -321,6 +362,13 @@ stage=origin-reachable-from-exit
 test "$(http_origin exit 4)" = 198.18.46.1
 test "$(http_origin exit 6)" = 2001:db8:46::1
 
+stage=direct-baseline
+truncate -s 64M "$lab_dir/upload"
+ip -n "${namespaces[admitted]}" route add 198.18.47.2/32 via 192.0.2.11
+ip -n "${namespaces[origin]}" route add 192.0.2.12/32 via 198.18.46.1
+measure_path direct_baseline
+ip -n "${namespaces[admitted]}" route del 198.18.47.2/32 via 192.0.2.11
+
 stage=entry-route
 if http_origin admitted 4 || http_origin admitted 6; then
     echo 'Origin reachable before selecting an exit node' >&2
@@ -328,11 +376,7 @@ if http_origin admitted 4 || http_origin admitted 6; then
 fi
 exit_ipv4=$(tailscale exit ip -4)
 exit_node=$(tailscale exit status --json | jq -er '.Self.ID')
-jq -n --arg id "$exit_node" '{
-    ExitNodeID:$id, ExitNodeIDSet:true, ExitNodeIPSet:true,
-    ExitNodeAllowLANAccess:false, ExitNodeAllowLANAccessSet:true,
-    WantRunning:true, WantRunningSet:true
-}' | daemon_api admitted PATCH prefs > /dev/null
+select_exit "$exit_node"
 if command -v tcpdump >/dev/null; then
     ip netns exec "${namespaces[exit]}" timeout 28 tcpdump -nnl -i any -s 96 \
         'tcp port 8081 and (host 198.18.47.2 or host 2001:db8:47::2)' \
@@ -373,6 +417,24 @@ echo 'TAILSCALE_ACCOUNT_NODE_TRAFFIC_COUNTERS=PASS'
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 wait_for_origin 4 198.18.46.1
 wait_for_origin 6 2001:db8:46::1
+stage=tunnel-performance
+measure_path wireguard_direct
+for _ in {1..5}; do
+    select_exit ''
+    start_ms=$(date +%s%3N)
+    select_exit "$exit_node"
+    for _ in {1..20}; do
+        if [[ "$(http_origin admitted 4)" == 198.18.46.1 && "$(http_origin admitted 6)" == 2001:db8:46::1 ]]; then
+            printf 'TAILSCALE_LAB_RESELECT_VERIFIED_MS=%s\n' "$(( $(date +%s%3N) - start_ms ))"
+            break
+        fi
+        sleep .1
+    done
+    test "$(http_origin admitted 4)" = 198.18.46.1
+    test "$(http_origin admitted 6)" = 2001:db8:46::1
+    apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
+done
+stage=fail-closed-forwarding-lease
 apply_lease_policy replace --seconds 2 "$admitted_ipv4" "$admitted_ipv6"
 sleep 3
 origin_blocked admitted

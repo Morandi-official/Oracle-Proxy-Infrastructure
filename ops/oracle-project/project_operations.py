@@ -383,9 +383,11 @@ def install_control():
     lock.touch(exist_ok=True)
     previous = target.read_bytes() if target.exists() else None
     previous_unit = unit.read_bytes() if unit.exists() else None
-    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py','endpoint_switch.py')}
+    modules = ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py','endpoint_switch.py',
+               'tailscale_control.py','tailscale_egress.py','tailscale_gateway.py','tailscale_registry.py')
+    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in modules}
     atomic(target.with_name('ipv6_addresses.py'), (SERVER/'control/ipv6_addresses.py').read_bytes(), 0o644)
-    for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py','endpoint_switch.py'):
+    for name in modules:
         atomic(target.with_name(name),(SERVER/'control'/name).read_bytes(),0o644)
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
     ingress_unit=Path('/etc/systemd/system/proxy-ingress-routing.service')

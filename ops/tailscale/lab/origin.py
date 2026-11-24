@@ -7,14 +7,38 @@ import struct
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+CHUNK = bytes(256 * 1024)
+SAMPLE_SIZE = 64 * 1024 * 1024
+
 
 class Origin(BaseHTTPRequestHandler):
-    def do_GET(self):
-        body = (self.client_address[0] + "\n").encode("ascii")
+    def send_body(self, body):
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/throughput":
+            self.send_response(200)
+            self.send_header("Content-Length", str(SAMPLE_SIZE))
+            self.end_headers()
+            for _ in range(SAMPLE_SIZE // len(CHUNK)):
+                self.wfile.write(CHUNK)
+        else:
+            self.send_body((self.client_address[0] + "\n").encode("ascii"))
+
+    def do_PUT(self):
+        if self.path != "/throughput" or self.headers.get("Content-Length") != str(SAMPLE_SIZE):
+            self.send_error(400)
+            return
+        remaining = SAMPLE_SIZE
+        while remaining:
+            received = self.rfile.read(min(remaining, len(CHUNK)))
+            if not received:
+                return
+            remaining -= len(received)
+        self.send_body(b"ok\n")
 
     def log_message(self, _format, *_args):
         pass

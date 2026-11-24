@@ -59,6 +59,10 @@ class TailscaleGateway:
         return (user is not None and not self.engine.budget_state()["guard_blocked"]
                 and self.engine.reason(user) == "active")
 
+    def _rate_supported(self, user_id):
+        # The legacy throughput classes only cover the legacy tunnel devices.
+        return all(value is None for value in self.engine.rate(user_id).values())
+
     def _account(self, user_id):
         if user_id not in self._accounts:
             username = "proxy-" + user_id.replace("-", "")
@@ -69,6 +73,8 @@ class TailscaleGateway:
         user = self.engine.db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         if not self._eligible(user):
             raise ValueError("TAILSCALE_ACCOUNT_NOT_ACTIVE")
+        if not self._rate_supported(user_id):
+            raise ValueError("TAILSCALE_RATE_POLICY_UNAVAILABLE")
         if not isinstance(device, str) or not re.fullmatch(r"[a-f0-9]{64}", device):
             raise ValueError("INVALID_PROXY_DEVICE_ID")
         account = self._account(user_id)
@@ -127,7 +133,7 @@ class TailscaleGateway:
             leases = {}
             for binding in active:
                 user = engine.db.execute("SELECT * FROM users WHERE id=?", (binding.account_id,)).fetchone()
-                if not self._eligible(user):
+                if not self._eligible(user) or not self._rate_supported(binding.account_id):
                     continue
                 seconds = MAX_LEASE_SECONDS
                 if user["expires"] is not None:

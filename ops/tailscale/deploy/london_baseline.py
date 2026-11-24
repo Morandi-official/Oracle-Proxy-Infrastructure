@@ -4,9 +4,9 @@ import ipaddress
 import json
 import math
 import os
-import re
 import statistics
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +16,7 @@ from time import monotonic
 HOST = "lon.speedtest.clouvider.net"
 ORIGIN = "https://" + HOST + "/backend"
 IPERF = Path("/usr/bin/iperf3")
+PRLIMIT = Path("/usr/bin/prlimit")
 IPERF_PORT = "5205"
 IPERF_REQUEST_BYTES = 12 * 1024 * 1024
 IPERF_SAMPLE_LIMIT = 16 * 1024 * 1024
@@ -60,20 +61,17 @@ def json_output(result, limit, error, base):
 
 
 def verify_address(args, expected, base):
-    result = base.command(*args, "--max-filesize", "1024", "--max-time", "6", ORIGIN + "/getIP.php", timeout=7)
-    output = json_output(result, 1024, "LONDON_ORIGIN_ADDRESS_UNVERIFIED", base)
+    with tempfile.NamedTemporaryFile(prefix="proxy-origin-trace-") as body:
+        result = base.command(str(PRLIMIT), "--fsize=1025:1025", "--", *args,
+                              "--max-filesize", "1024", "--max-time", "6", "--output", body.name,
+                              ORIGIN + "/getIP.php", timeout=7)
+        raw = body.read(1025)
+    if result.returncode or len(raw) > 1024:
+        raise base.ProbeFailure("LONDON_ORIGIN_ADDRESS_UNVERIFIED")
+    output = json.loads(raw)
     address = output.get("processedString")
     if not isinstance(address, str) or ipaddress.ip_address(address.strip()) != expected:
         raise base.ProbeFailure("LONDON_ORIGIN_EGRESS_MISMATCH")
-
-
-def has_stream_limit(base):
-    result = base.command("/usr/bin/curl", "-q", "--version", timeout=3)
-    if result.returncode or len(result.stdout) > 4096:
-        return False
-    version = re.match(rb"curl (\d+)\.(\d+)\.", result.stdout)
-    # curl 8.4 adds a running --max-filesize limit for unknown-length bodies.
-    return version is not None and tuple(map(int, version.groups())) >= (8, 4)
 
 
 def milliseconds(value, scale=1000):
@@ -83,7 +81,7 @@ def milliseconds(value, scale=1000):
 
 
 def https_stream(args, upload, payload, base):
-    tail = ("--output", "/dev/null", "--max-time", "13", "--write-out", "%{json}")
+    tail = ("--max-time", "13", "--write-out", "%{json}")
     if upload:
         tail += ("--max-filesize", "8192", "--header", "Expect:",
                  "--header", "Content-Type: application/octet-stream",
@@ -91,7 +89,13 @@ def https_stream(args, upload, payload, base):
     else:
         tail += ("--max-filesize", str(HTTP_DOWNLOAD + 1),
                  ORIGIN + "/garbage.php?ckSize=" + str(HTTP_DOWNLOAD // 2**20))
-    result = base.command(*args, *tail, input=payload if upload else None, timeout=14)
+    # Older curl releases only enforce --max-filesize when the response has
+    # a length header. Bound the output file even for a chunked response.
+    limit = 8193 if upload else HTTP_DOWNLOAD + 1
+    with tempfile.NamedTemporaryFile(prefix="proxy-origin-data-") as body:
+        result = base.command(str(PRLIMIT), f"--fsize={limit}:{limit}", "--", *args,
+                              "--output", body.name, *tail,
+                              input=payload if upload else None, timeout=14)
     data = json_output(result, 8192, "LONDON_ORIGIN_HTTPS_TRANSFER_FAILED", base)
     expected = HTTP_UPLOAD if upload else HTTP_DOWNLOAD
     if data.get("http_code") != 200 or data.get("size_upload" if upload else "size_download") != expected:
@@ -177,7 +181,7 @@ def observe(catalog_path, base):
             raise base.ProbeFailure("LONDON_ORIGIN_ROOT_PREFLIGHT_REQUIRED")
         addresses = base.configured_addresses(Path(catalog_path))
         method = "IPERF3_TCP" if IPERF.is_file() else "LIBRESPEED_HTTPS"
-        if method == "LIBRESPEED_HTTPS" and not has_stream_limit(base):
+        if not PRLIMIT.is_file():
             raise base.ProbeFailure("LONDON_ORIGIN_NO_BOUNDED_DOWNLOAD_RUNTIME")
     except base.ProbeFailure as error:
         return {**receipt, "status": "UNAVAILABLE", "reason": str(error)}

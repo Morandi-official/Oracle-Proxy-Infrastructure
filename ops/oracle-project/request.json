@@ -1,4 +1,4 @@
 {
-  "operation": "preflight",
-  "request_id": "tailscale-london-origin-baseline"
+  "request_id": "tailscale-london-origin-baseline",
+  "operation": "preflight"
 }

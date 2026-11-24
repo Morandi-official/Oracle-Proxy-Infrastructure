@@ -8,6 +8,7 @@ on:
       - server/admin-oracle/control/tailscale_control.py
       - server/admin-oracle/control/tailscale_egress.py
       - clients/windows/tailscale/**
+      - clients/android/tailscale/**
   workflow_dispatch:
 
 permissions:
@@ -41,21 +42,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Check out pinned Android engine source
         uses: actions/checkout@v4
         with:
           repository: tailscale/tailscale-android
           ref: 62d1e58c2ecaf52914476ecb97239fbbf70298ea
+          path: upstream/tailscale-android
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: upstream/tailscale-android/go.mod
           cache: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
       - name: Build the Tailscale Android bridge for emulator and phone
+        working-directory: upstream/tailscale-android
         run: |
           make build-unstripped-aar
           archive=android/libs/libtailscale_unstripped.aar
@@ -63,3 +69,10 @@ jobs:
           unzip -p "$archive" classes.jar > "$RUNNER_TEMP/tailscale-native-bridge.jar"
           jar tf "$RUNNER_TEMP/tailscale-native-bridge.jar" | awk '/libtailscale\/IPNService.class$/{service=1} /libtailscale\/Application.class$/{app=1} END{exit !(service && app)}'
           echo 'TAILSCALE_ANDROID_NATIVE_BRIDGE_BUILD=PASS'
+      - name: Compile the Android client binding against the built bridge
+        run: |
+          platform=$(find "$ANDROID_HOME/platforms" -maxdepth 2 -name android.jar | sort -V | tail -n 1)
+          test -n "$platform"
+          javac --release 17 -cp "$RUNNER_TEMP/tailscale-native-bridge.jar:$platform" \
+            -d "$RUNNER_TEMP/tailscale-client-classes" clients/android/tailscale/LocalControl.java
+          echo 'TAILSCALE_ANDROID_LOCAL_API_BINDING_COMPILED=PASS'

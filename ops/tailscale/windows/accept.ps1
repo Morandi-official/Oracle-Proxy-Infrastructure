@@ -1,12 +1,16 @@
 param(
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory)][string]$BundleDirectory,
-    [switch]$Live
+    [switch]$Live,
+    [switch]$RetentionExperiment
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
     -not [Environment]::Is64BitProcess) { throw 'HOSTED_WINDOWS_ACCEPTANCE_REQUIRED' }
 if ($Live -and $env:GITHUB_REF -ne 'refs/heads/main') { throw 'MAIN_ONLY_ORACLE_ACCEPTANCE_REQUIRED' }
+if ($RetentionExperiment -and (!$Live -or $env:TOP_LEVEL_PUSH -ne 'true')) {
+    throw 'WINDOWS_RETENTION_REQUIRES_FOCUSED_MAIN_WORKFLOW'
+}
 $credentials = @{}
 foreach ($name in @('ORACLE_CLIENT_ACCEPTANCE_USERNAME', 'ORACLE_CLIENT_ACCEPTANCE_PASSWORD')) {
     $credentials[$name] = [Environment]::GetEnvironmentVariable($name)
@@ -68,18 +72,24 @@ try {
     Write-Output 'WINDOWS_SETUP_AND_PORTABLE_PAYLOAD_ACCEPTED'
 
     if ($Live) {
-        $report = Join-Path $work 'ACCEPTANCE.json'
+        $reportName = if ($RetentionExperiment) { 'RETAINED_COORDINATOR.json' } else { 'ACCEPTANCE.json' }
+        $argument = if ($RetentionExperiment) { '--acceptance-retained-coordinator' } else { '--acceptance' }
+        $report = Join-Path $work $reportName
         foreach ($name in $credentials.Keys) { [Environment]::SetEnvironmentVariable($name, $credentials[$name]) }
         try {
-            $status = Invoke-BoundedProcess (Join-Path $desktop 'Proxy.exe') @('--acceptance', ('"' + $report + '"')) 270000
+            $status = Invoke-BoundedProcess (Join-Path $desktop 'Proxy.exe') @($argument, ('"' + $report + '"')) 270000
         }
         finally { Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD -ErrorAction SilentlyContinue }
         if (!(Test-Path -LiteralPath $report -PathType Leaf)) { throw 'WINDOWS_LIVE_REPORT_MISSING' }
         $evidence = Get-Content -LiteralPath $report -Raw
         $summary = $evidence | ConvertFrom-Json
         Write-Output $evidence
+        if ($RetentionExperiment) {
+            if ($summary.experiment -cne 'retained-coordinator') { throw 'WINDOWS_RETENTION_REPORT_MISMATCH' }
+            Copy-Item -LiteralPath $report -Destination (Join-Path $out $reportName)
+        }
         if ($status -ne 0 -or !$summary.accepted) { throw 'WINDOWS_ORACLE_ACCEPTANCE_FAILED' }
-        Copy-Item -LiteralPath $report -Destination (Join-Path $out 'ACCEPTANCE.json')
+        if (!$RetentionExperiment) { Copy-Item -LiteralPath $report -Destination (Join-Path $out $reportName) }
     }
 }
 finally {

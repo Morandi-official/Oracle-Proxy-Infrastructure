@@ -1,4 +1,4 @@
-param([string]$ClientArtifact, [string]$BundleDir)
+param([string]$ClientArtifact, [string]$BundleDir, [switch]$RetentionExperiment)
 
 $ErrorActionPreference = 'Stop'
 $version = '1.104.7'
@@ -32,8 +32,10 @@ try {
     if ($ClientArtifact -or $BundleDir) {
         $client = if ($BundleDir) { [IO.Path]::GetFullPath($BundleDir) } else { Join-Path $work 'client' }
         if (Test-Path -LiteralPath $client) { throw 'TAILSCALE_BUNDLE_MUST_BE_NEW' }
+        $probe = $RetentionExperiment.IsPresent.ToString().ToLowerInvariant()
         & dotnet publish "$PSScriptRoot/../../../clients/windows/tailscale-app/Proxy.Tailscale.csproj" `
-            --configuration Release --runtime win-x64 --self-contained true -p:DebugType=None --output $client
+            --configuration Release --runtime win-x64 --self-contained true -p:DebugType=None `
+            "-p:RetainedCoordinatorProbe=$probe" --output $client
         if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_CANDIDATE_BUILD_FAILED' }
         $runtime = Join-Path $client 'engine'
         $null = New-Item -ItemType Directory $runtime

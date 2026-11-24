@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace OracleProxy.Tailscale;
 
 /// <summary>Hosted acceptance for the packaged client using the same connection path as the UI.</summary>
-internal static class LiveAcceptance
+internal static partial class LiveAcceptance
 {
     private const string Username = "ORACLE_CLIENT_ACCEPTANCE_USERNAME";
     private const string Password = "ORACLE_CLIENT_ACCEPTANCE_PASSWORD";
@@ -244,9 +244,12 @@ internal static class LiveAcceptance
         if (!(await ObserveIPv4(web, cancel)).Equals(expected)) throw new IOException("UNEXPECTED_SYSTEM_EGRESS");
     }
 
-    private static async Task<IPAddress> ObserveIPv4(HttpClient web, CancellationToken cancel)
+    private static Task<IPAddress> ObserveIPv4(HttpClient web, CancellationToken cancel) =>
+        ObserveIP(web, Trace, cancel);
+
+    private static async Task<IPAddress> ObserveIP(HttpClient web, string endpoint, CancellationToken cancel)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, Trace);
+        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         request.Headers.ConnectionClose = true;
         using var response = await web.SendAsync(request, cancel);
         response.EnsureSuccessStatusCode();

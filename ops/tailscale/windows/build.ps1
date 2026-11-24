@@ -1,15 +1,21 @@
 param(
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
-    [Parameter(Mandatory)][string]$OutputDirectory
+    [Parameter(Mandatory)][string]$OutputDirectory,
+    [switch]$RetentionExperiment
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'HOSTED_WINDOWS_PACKAGING_REQUIRED'
 }
+if ($RetentionExperiment -and ($env:GITHUB_REF -ne 'refs/heads/main' -or $env:TOP_LEVEL_PUSH -ne 'true')) {
+    throw 'WINDOWS_RETENTION_REQUIRES_FOCUSED_MAIN_WORKFLOW'
+}
 
 $app = "$PSScriptRoot/../../../clients/windows/tailscale-app/Proxy.Tailscale.csproj"
 $project = [xml](Get-Content -LiteralPath $app -Raw)
-if ($project.Project.PropertyGroup.Version -ne $Version) { throw 'WINDOWS_PROJECT_VERSION_MISMATCH' }
+if ($project.SelectSingleNode('/Project/PropertyGroup/Version').InnerText -ne $Version) {
+    throw 'WINDOWS_PROJECT_VERSION_MISMATCH'
+}
 
 $out = [IO.Path]::GetFullPath($OutputDirectory)
 $null = New-Item -ItemType Directory $out
@@ -17,7 +23,7 @@ $work = Join-Path $env:RUNNER_TEMP ('proxy-release-' + [guid]::NewGuid().ToStrin
 $null = New-Item -ItemType Directory $work
 try {
     $payload = Join-Path $work 'payload'
-    & "$PSScriptRoot/../lab/check-windows.ps1" -BundleDir $payload
+    & "$PSScriptRoot/../lab/check-windows.ps1" -BundleDir $payload -RetentionExperiment:$RetentionExperiment
     if (!(Test-Path -LiteralPath (Join-Path $payload 'Proxy.exe'))) { throw 'WINDOWS_CLIENT_MISSING' }
 
     $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'

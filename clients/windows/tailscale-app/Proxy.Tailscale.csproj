@@ -10,6 +10,9 @@
     <Version>0.1.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(RetainedCoordinatorProbe)' == 'true'">
+    <DefineConstants>$(DefineConstants);RETAINED_COORDINATOR_ACCEPTANCE</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <Compile Include="../tailscale/*.cs" LinkBase="Tailscale" />
   </ItemGroup>

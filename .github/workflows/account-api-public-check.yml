@@ -1,0 +1,31 @@
+name: Public account API reachability
+on:
+  pull_request:
+    paths: ['.github/workflows/account-api-public-check.yml']
+permissions:
+  contents: read
+jobs:
+  account-api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Check hostname TLS and anonymous account endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          host=vpn-admin.morandi.dpdns.org
+          url="https://$host/api/client/state"
+          body="$(mktemp)"
+          trap 'rm -f -- "$body"' EXIT
+          for route in dns fixed; do
+            flags=()
+            if [[ "$route" == fixed ]]; then
+              flags=(--resolve "$host:443:152.67.156.100")
+            fi
+            status=$(curl -4 --http1.1 --noproxy '*' --silent --show-error --connect-timeout 5 --max-time 10 \
+              "${flags[@]}" --output "$body" --write-out '%{http_code} %{remote_ip} %{ssl_verify_result}' "$url")
+            read -r http remote tls <<< "$status"
+            printf 'PUBLIC_ACCOUNT_API route=%s status=%s ip=%s tls_verify=%s\n' "$route" "$http" "$remote" "$tls"
+            [[ "$http" == 401 && "$tls" == 0 ]]
+            python3 -c 'import json,sys; assert json.load(open(sys.argv[1])).get("error")=="LOGIN_REQUIRED"' "$body"
+          done

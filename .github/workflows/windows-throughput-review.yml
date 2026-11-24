@@ -1,0 +1,60 @@
+name: Check exact rc47 production Windows download path
+on:
+  pull_request:
+    paths: ['ops/windows-throughput/**', '.github/workflows/windows-throughput-review.yml']
+  push:
+    branches: [main]
+    paths: ['ops/windows-throughput/**', '.github/workflows/windows-throughput-review.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  sample:
+    runs-on: windows-2022
+    environment: ${{ github.event_name == 'push' && 'windows-client-acceptance' || 'windows-product-build' }}
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: clients/windows/product/global.json
+      - name: Build the non-shipped download diagnostic
+        run: dotnet build ops/windows-throughput/WindowsThroughput.csproj -c Release
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45341845901
+          name: Proxy-0.3.0-rc47-win-x64-unsigned-acceptance-candidate
+          path: dist/rc47-evidence
+      - name: Measure the accepted Windows bundle against the production endpoint
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){throw 'Preexisting product service refused'}
+          if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting product directory refused'}
+          $evidence = Get-Content dist/rc47-evidence/BUILD.json -Raw | ConvertFrom-Json
+          if($evidence.source_revision -ne 'd384fd077a992d6713de41c5ded766f463fc4f63' -or !$evidence.real_oracle_acceptance_passed){throw 'Wrong accepted build'}
+          $package = 'Proxy-0.3.0-rc47-win-x64-d384fd077a99.zip'
+          $checksum = (Get-Content dist/rc47-evidence/SHA256SUMS.txt | Where-Object { $_.EndsWith("  $package") })
+          if(!$checksum -or (Get-FileHash "dist/rc47-evidence/$package").Hash -ne ($checksum -split '  ')[0]){throw 'Artifact hash mismatch'}
+          Expand-Archive "dist/rc47-evidence/$package" -DestinationPath dist/rc47-payload
+          $exe = (Resolve-Path dist/rc47-payload/Proxy.exe).Path
+          $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          try {
+            $setup = Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
+            if($setup.ExitCode -ne 0){throw 'Exact accepted package installation failed'}
+            dotnet run --project ops/windows-throughput/WindowsThroughput.csproj -c Release --no-build
+            if($LASTEXITCODE -ne 0){throw 'Production download diagnostic failed'}
+          } finally {
+            if(Get-Service OracleProxyService -ErrorAction SilentlyContinue) {
+              $off = Start-Process $exe -ArgumentList '--recover' -Wait -PassThru
+              if($off.ExitCode -eq 0){Start-Process $exe -ArgumentList '--uninstall' -Wait | Out-Null}
+            }
+          }

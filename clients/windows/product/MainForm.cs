@@ -296,7 +296,12 @@ internal sealed partial class MainForm : Form
         };
         _login.Click+=async(_,_)=>await Act(_rememberLogin.Checked?"LoginRemembered":"Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
         _password.KeyDown+=async(_,e)=>{if(e.KeyCode==Keys.Enter && _login.Enabled){e.SuppressKeyPress=true;await Act(_rememberLogin.Checked?"LoginRemembered":"Login");}};
-        _timer.Tick+=async(_,_)=>{if(!_busy && !_closing)await Act("Status");};
+        _timer.Tick+=async(_,_)=>{
+            if(_busy || _closing)return;
+            bool restoring=_diagnosticSnapshot?["login_authenticated"]?.GetValue<bool>()==true && !_hasAccount;
+            await Act("Status");
+            if(restoring && _hasAccount)await StartReadyClient();
+        };
         Shown+=async(_,_)=>{if(_realService){if(await ProvisionService())await StartReadyClient();}else{await Act("Status");await StartReadyClient();}};
         IEnumerable<Control> Descendants(Control parent){foreach(Control child in parent.Controls){yield return child;foreach(var nested in Descendants(child))yield return nested;}}
         foreach(var button in Descendants(_shell).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connect || button==_login);StyleButton(_emergencyRecovery);

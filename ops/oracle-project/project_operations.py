@@ -189,6 +189,17 @@ def preflight():
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
         value[report_key] = result
+    if diagnostic_request.get('operation') == 'preflight' and diagnostic_request.get('request_id') == 'tailscale-vnic-capacity-observe':
+        result = {'status': 'UNAVAILABLE_OR_DEADLINE'}
+        try:
+            measured = subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python', '-I',
+                                       str(REPO / 'ops/tailscale/deploy/vnic_capacity.py')],
+                                      capture_output=True, text=True, check=True, timeout=70)
+            if len(measured.stdout) <= 16384:
+                result = json.loads(measured.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        value['tailscale_vnic_capacity'] = result
     print(json.dumps(value, indent=2))
 
 

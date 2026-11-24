@@ -26,8 +26,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public final class AppController {
     private static final String SESSION = "remembered_session";
-    private static final String VERSION = "0.1.0-android";
+    private static final String VERSION = BuildConfig.VERSION_NAME + "-android";
     private static final long STATE_INTERVAL = 30_000;
+    private static final long RESTORE_INTERVAL = 5_000;
     private static final long EXIT_CHECK_INTERVAL = 45_000;
     private static final long POLICY_TIMEOUT = 90_000;
     private static final long SESSION_EXTENSION = TimeUnit.DAYS.toSeconds(30);
@@ -99,7 +100,7 @@ public final class AppController {
             }
         }));
         worker.execute(this::restore);
-        worker.scheduleWithFixedDelay(this::tickSafely, 5, 5, TimeUnit.SECONDS);
+        worker.scheduleWithFixedDelay(this::tickSafely, RESTORE_INTERVAL, RESTORE_INTERVAL, TimeUnit.MILLISECONDS);
     }
 
     public State snapshot() {
@@ -379,11 +380,13 @@ public final class AppController {
             privateKey = key;
             tokenExpiresAt = expiry;
             remember = true;
+            message = "正在恢复已保存的登录…";
+            publish();
             refreshPolicy();
         } catch (Exception failure) {
             if (!handleSessionFailure(failure)) {
-                // A transient outage must not discard a remembered session.
-                message = textFor(failure);
+                // Keep the saved session and retry promptly against the account origin.
+                message = token.isEmpty() ? textFor(failure) : "暂时无法核验账号，正在重试已保存的登录。";
             }
         } finally {
             publish();
@@ -408,7 +411,11 @@ public final class AppController {
         if (token.isEmpty() || tokenExpiresAt <= epochSeconds()) {
             throw new ClientApi.ApiError("LOGIN_REQUIRED");
         }
+        boolean restoring = accountState == null;
         acceptState(api.call("state", token, null));
+        if (restoring) {
+            message = "";
+        }
         enforceActiveProfile();
     }
 
@@ -479,7 +486,7 @@ public final class AppController {
         if (token.isEmpty() || SystemClock.elapsedRealtime() < refreshAfter) {
             return;
         }
-        refreshAfter = SystemClock.elapsedRealtime() + STATE_INTERVAL;
+        refreshAfter = SystemClock.elapsedRealtime() + (accountState == null ? RESTORE_INTERVAL : STATE_INTERVAL);
         try {
             refreshPolicy();
         } catch (Exception failure) {
@@ -487,7 +494,7 @@ public final class AppController {
                 if ("connected".equals(mode) && SystemClock.elapsedRealtime() - policyAt >= POLICY_TIMEOUT) {
                     loseConnection("暂时无法核验账号状态，VPN 已断开。", false);
                 } else if (accountState == null) {
-                    message = textFor(failure);
+                    message = "暂时无法核验账号，正在重试已保存的登录。";
                 }
             }
         }

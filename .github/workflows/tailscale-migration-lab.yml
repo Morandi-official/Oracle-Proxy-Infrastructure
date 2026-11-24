@@ -61,6 +61,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
       - name: Build the Tailscale Android bridge for emulator and phone
         working-directory: upstream/tailscale-android
         run: |
@@ -79,7 +82,7 @@ jobs:
           echo 'TAILSCALE_ANDROID_LOCAL_API_BINDING_COMPILED=PASS'
       - name: Build a disposable Android application using only the new runtime
         run: >-
-          upstream/tailscale-android/android/gradlew --no-daemon
+          gradle --no-daemon
           -p ops/tailscale/lab/android-app
           -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
           assembleDebug

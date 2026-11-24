@@ -61,10 +61,21 @@ internal static class OracleAcceptance
         }
         throw new IOException("DIAGNOSTIC_ACCEPTANCE_DEADLINE");
     }
+    private static async Task<JsonObject> AwaitAccount()
+    {
+        var timer=Stopwatch.StartNew();
+        while(timer.Elapsed<TimeSpan.FromSeconds(20)){
+            var state=await Send("Status");
+            if(state["login_authenticated"]?.GetValue<bool>()==true && state["account"] is JsonObject)return state;
+            await Task.Delay(250);
+        }
+        throw new IOException("REMEMBERED_ACCOUNT_REFRESH_DEADLINE");
+    }
+
     private static async Task VerifyDiagnostics(int devices,bool extended=true)
     {
         await Send("Disconnect");await StoppedService();await Send("AttachClient");
-        var before=await Send("Status");
+        var before=await AwaitAccount();
         var start=Stopwatch.StartNew();await Send("StartUdpDiagnostics");
         Check(start.Elapsed<TimeSpan.FromSeconds(8),"DIAGNOSTIC_START_DOES_NOT_HOLD_RUNTIME_GATE_FOR_PROBES");
         var result=await AwaitDiagnostic();var report=result["udp_diagnostic"]!.AsObject();
@@ -483,6 +494,19 @@ internal static class OracleAcceptance
             Check((await Send("Status"))["login_authenticated"]?.GetValue<bool>()==true,"LIVE_GUI_NONREMEMBERED_LOGIN_SURVIVES_ON_DEMAND_SERVICE_RESTART");
             await Send("Connect");await Connected();await Send("Disconnect");await StoppedService();
             await Send("AttachClient");await VerifyDiagnostics(devices,extended:false);
+            var remembered=RequireSuccess("LoginRemembered",await ControlPipe.Send("LoginRemembered",username,Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD")));
+            Check(remembered["login_remembered_until"]?.GetValue<long>()>DateTimeOffset.UtcNow.ToUnixTimeSeconds(),"COLD_LOGIN_PROOF_SAVED");
+            await Send("Quit");await StoppedService();
+            Platform.VerifyProtected(Platform.StateRoot);
+            Platform.WriteAtomic(Path.Combine(Platform.StateRoot,"api-addresses.json"),
+                System.Text.Encoding.ASCII.GetBytes("""["152.67.154.225","150.230.113.158"]"""));
+            await Send("AttachClient");
+            var restored=await AwaitAccount();
+            Check(restored["registration"]?["device_id"]?.GetValue<string>()==ownedCiDevice &&
+                restored["account"]?["device_count"]?.GetValue<int>()==devices &&
+                restored["network_endpoints"]?["primary"]?.GetValue<string>()==primary,
+                "REAL_COLD_START_RESTORES_REMEMBERED_LOGIN_FROM_PRE_MIGRATION_IP_CACHE");
+
             var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));
             Check(deleted["login_authenticated"]?.GetValue<bool>()==false && deleted["account"] is null && deleted["core_pid"]?.GetValue<uint>()==0 && deleted["intent"]?.GetValue<bool>()==false,"MIGRATION_DEVICE_SELF_DELETE_CLEARS_LOGIN_AND_RETIRES_ONLY_THIS_CI_SLOT");
             ownedCiDevice=null;Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;

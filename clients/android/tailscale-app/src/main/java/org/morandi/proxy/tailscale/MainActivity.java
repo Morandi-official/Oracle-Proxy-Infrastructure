@@ -233,7 +233,8 @@ public final class MainActivity extends Activity {
                 var verified = proof.network();
                 long elapsed = SystemClock.elapsedRealtime() - start;
                 var timing = new ConnectTiming(profileReady, prepared.readyMs(), enrollmentReady, routeRequested,
-                        proof.routeReadyMs(), proof.ipv4VerifiedMs(), proof.ipv6VerifiedMs());
+                        proof.routeReadyMs(), proof.ipv4VerifiedMs(), proof.ipv6VerifiedMs(),
+                        proof.ipv4Transport(), proof.ipv6Transport());
                 runOnUiThread(() -> {
                     if (generation.get() != attempt) return;
                     verifiedNetwork = verified;
@@ -261,7 +262,8 @@ public final class MainActivity extends Activity {
     }
 
     record ConnectTiming(long profileReadyMs, long engineReadyMs, long enrollmentReadyMs,
-                         long routeRequestedMs, long routeReadyMs, long ipv4VerifiedMs, long ipv6VerifiedMs) { }
+                         long routeRequestedMs, long routeReadyMs, long ipv4VerifiedMs, long ipv6VerifiedMs,
+                         String ipv4Transport, String ipv6Transport) { }
 
     private record PreparedEngine(LocalControl control, long readyMs) { }
 

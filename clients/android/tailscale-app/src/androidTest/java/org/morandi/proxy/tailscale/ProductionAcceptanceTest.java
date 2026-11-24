@@ -177,7 +177,9 @@ public final class ProductionAcceptanceTest {
                 .put("exit_route_requested", timing.routeRequestedMs())
                 .put("android_vpn_ready", timing.routeReadyMs())
                 .put("ipv4_exit_verified", timing.ipv4VerifiedMs())
-                .put("ipv6_exit_verified", timing.ipv6VerifiedMs());
+                .put("ipv6_exit_verified", timing.ipv6VerifiedMs())
+                .put("ipv4_exit_transport", timing.ipv4Transport())
+                .put("ipv6_exit_transport", timing.ipv6Transport());
     }
 
     private boolean hasVpn() {

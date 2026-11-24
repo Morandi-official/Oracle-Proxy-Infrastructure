@@ -1,6 +1,6 @@
 {
   "version": "0.1.1",
   "publish": false,
-  "accepted_windows_run": 45395036477,
-  "request": "measure-android-current-network-keepalive"
+  "android_only": true,
+  "request": "measure-bound-http3-exit-verification"
 }

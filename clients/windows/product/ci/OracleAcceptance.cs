@@ -61,12 +61,13 @@ internal static class OracleAcceptance
         }
         throw new IOException("DIAGNOSTIC_ACCEPTANCE_DEADLINE");
     }
-    private static async Task<JsonObject> AwaitAccount()
+    private static async Task<JsonObject> AwaitAccount(Func<bool>? afterRefresh=null)
     {
         var timer=Stopwatch.StartNew();
         while(timer.Elapsed<TimeSpan.FromSeconds(20)){
             var state=await Send("Status");
-            if(state["login_authenticated"]?.GetValue<bool>()==true && state["account"] is JsonObject)return state;
+            if(state["login_authenticated"]?.GetValue<bool>()==true && state["account"] is JsonObject &&
+                (afterRefresh is null || afterRefresh()))return state;
             await Task.Delay(250);
         }
         throw new IOException("REMEMBERED_ACCOUNT_REFRESH_DEADLINE");
@@ -498,10 +499,13 @@ internal static class OracleAcceptance
             Check(remembered["login_remembered_until"]?.GetValue<long>()>DateTimeOffset.UtcNow.ToUnixTimeSeconds(),"COLD_LOGIN_PROOF_SAVED");
             await Send("Quit");await StoppedService();
             Platform.VerifyProtected(Platform.StateRoot);
-            Platform.WriteAtomic(Path.Combine(Platform.StateRoot,"api-addresses.json"),
-                System.Text.Encoding.ASCII.GetBytes("""["152.67.154.225","150.230.113.158"]"""));
+            string cache=Path.Combine(Platform.StateRoot,"api-addresses.json");
+            const string staleCache="""["152.67.154.225","150.230.113.158"]""";
+            Platform.WriteAtomic(cache,System.Text.Encoding.ASCII.GetBytes(staleCache));
             await Send("AttachClient");
-            var restored=await AwaitAccount();
+            // A local recent-account snapshot can render first. The rewritten
+            // address cache proves a fresh authenticated request also completed.
+            var restored=await AwaitAccount(()=>File.ReadAllText(cache)!=staleCache);
             Check(restored["registration"]?["device_id"]?.GetValue<string>()==ownedCiDevice &&
                 restored["account"]?["device_count"]?.GetValue<int>()==devices &&
                 restored["network_endpoints"]?["primary"]?.GetValue<string>()==primary,

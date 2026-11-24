@@ -1,1 +1,4 @@
-{"operation":"enable-https","request_id":"tailscale-gro-apply"}
+{
+  "operation": "preflight",
+  "request_id": "tailscale-performance-during-load"
+}

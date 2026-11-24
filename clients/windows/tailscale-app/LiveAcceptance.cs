@@ -53,7 +53,9 @@ internal static class LiveAcceptance
             {
                 phase = run == 0 ? "FIRST_CONNECT" : "RECONNECT";
                 var timer = Stopwatch.StartNew();
-                var (daemon, profile) = await ClientConnection.Open(account, session, state, timeout.Token);
+                string attempt = phase;
+                var (daemon, profile) = await ClientConnection.Open(account, session, state, timeout.Token,
+                    stage => phase = attempt + "_" + stage);
                 long connectedMs = timer.ElapsedMilliseconds;
                 string transport;
                 try

@@ -66,6 +66,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
                 catch (OperationCanceledException) when (!readiness.IsCancellationRequested) { }
                 await Task.Delay(125, readiness.Token);
             }
+            await control.KeepWindowsProfileSelected(readiness.Token);
             return new DaemonProcess(process, job, control, adapter);
         }
         catch

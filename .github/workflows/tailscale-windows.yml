@@ -1,6 +1,10 @@
 name: Tailscale Windows packages and Oracle acceptance
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ops/tailscale/windows-acceptance.json
   workflow_call:
     inputs:
       version:
@@ -24,10 +28,15 @@ on:
 permissions:
   contents: read
 
+env:
+  TOP_LEVEL_PUSH: ${{ github.event_name == 'push' && github.workflow == 'Tailscale Windows packages and Oracle acceptance' }}
+
 jobs:
   build:
     runs-on: windows-2025
     timeout-minutes: 15
+    outputs:
+      version: ${{ steps.request.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,14 +44,25 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
+      - name: Read the requested version
+        id: request
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:INPUT_VERSION
+          if ($env:TOP_LEVEL_PUSH -eq 'true') {
+            $version = (Get-Content -LiteralPath ./ops/tailscale/windows-acceptance.json -Raw | ConvertFrom-Json).version
+          }
+          if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw 'WINDOWS_VERSION_INVALID' }
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Build the Windows x64 portable and setup distributions
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.request.outputs.version }}
         run: ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows
       - name: Verify the setup installs the exact portable payload
-        if: '!inputs.live_acceptance'
+        if: '!inputs.live_acceptance && env.TOP_LEVEL_PUSH != ''true'''
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.request.outputs.version }}
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
       - uses: actions/upload-artifact@v4
         with:
@@ -52,7 +72,10 @@ jobs:
           retention-days: 3
 
   live:
-    if: inputs.live_acceptance && github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (inputs.live_acceptance ||
+      (github.event_name == 'push' && github.workflow == 'Tailscale Windows packages and Oracle acceptance'))
     needs: build
     runs-on: windows-2025
     timeout-minutes: 12
@@ -67,7 +90,7 @@ jobs:
           path: dist/tailscale-windows
       - name: Measure the installed client's real Oracle route and recovery
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live

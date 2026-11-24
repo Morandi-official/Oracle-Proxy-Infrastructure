@@ -21,22 +21,27 @@ internal static class ClientConnection
     }
 
     internal static async Task<(DaemonProcess Daemon, ExitProfile Profile)> Open(AccountClient account, string session, string state,
-        CancellationToken cancel)
+        CancellationToken cancel, Action<string>? progress = null)
     {
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         var daemonTask = DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
             state, attempt.Token);
         try
         {
+            progress?.Invoke("ACCOUNT_PROFILE");
             var profile = await account.Profile(session, false, attempt.Token);
+            progress?.Invoke("DAEMON_PROFILE");
             var daemon = await daemonTask;
             if (profile.Key is not null)
             {
+                progress?.Invoke("ENROLLMENT_START");
                 await daemon.Control.Enroll(profile.Coordinator, profile.Key, attempt.Token);
                 using var registration = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
                 registration.CancelAfter(TimeSpan.FromSeconds(10));
+                progress?.Invoke("COORDINATOR_NODE_KEY");
                 while (!(await daemon.Control.ReadState(registration.Token)).HasNodeKey)
                     await Task.Delay(125, registration.Token);
+                progress?.Invoke("ACCOUNT_CONFIRM");
                 while (true)
                 {
                     try
@@ -50,7 +55,9 @@ internal static class ClientConnection
                     }
                 }
             }
+            progress?.Invoke("SELECT_EXIT");
             await daemon.Control.SelectExitNode(profile.NodeId, attempt.Token);
+            progress?.Invoke("VERIFY_EXIT");
             await ExitCheck.Verify(daemon, profile, attempt.Token);
             attempt.Token.ThrowIfCancellationRequested();
             return (daemon, profile);
@@ -62,7 +69,10 @@ internal static class ClientConnection
             try { started = await daemonTask; }
             catch { } // The original startup or account failure is preserved.
             if (started is not null)
-                await started.DisposeAsync();
+            {
+                try { await started.DisposeAsync(); }
+                catch (Exception cleanup) { throw new IOException("TAILSCALE_DAEMON_CLEANUP_FAILED", cleanup); }
+            }
             throw;
         }
     }

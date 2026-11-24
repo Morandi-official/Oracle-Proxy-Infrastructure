@@ -18,17 +18,35 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 16
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.release.outputs.version }}
+      android_run: ${{ steps.release.outputs.android_run }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - id: release
         name: Read the requested release version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           requested=$(jq -er '.version | strings | select(test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))' ops/tailscale/release.json)
+          android_run=$(jq -er '.accepted_android_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
+          if [[ -n "$android_run" ]]; then
+            run_api="repos/$GITHUB_REPOSITORY/actions/runs/$android_run"
+            tested=$(gh api "$run_api" | jq -er 'select(.name == "Tailscale production client release" and .head_branch == "main" and .status == "completed" and .event == "push") | .head_sha')
+            gh api "$run_api/jobs?per_page=100" | jq -e '
+              [.jobs[] | select(.conclusion == "success") | .name] | contains(["android-package", "android-acceptance"])' >/dev/null
+            git fetch --no-tags --depth=1 origin "$tested"
+            git diff --exit-code "$tested" "$GITHUB_SHA" -- clients/android/tailscale clients/android/tailscale-app
+            test "$(awk '/^[[:space:]]*versionName / {gsub(/\047/,"",$2); print $2}' clients/android/tailscale-app/build.gradle)" = "$requested"
+          fi
           echo "version=$requested" >> "$GITHUB_OUTPUT"
+          echo "android_run=$android_run" >> "$GITHUB_OUTPUT"
       - name: Wait for the Oracle account gateway and Headscale coordinator
         run: |
           host=https://vpn-admin.morandi.dpdns.org
@@ -77,6 +95,7 @@ jobs:
 
   android-package:
     needs: ready
+    if: needs.ready.outputs.android_run == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 28
     environment: android-release
@@ -188,10 +207,17 @@ jobs:
 
   publish:
     needs: [ready, windows-acceptance, android-package, android-acceptance]
+    if: >-
+      ${{
+        !cancelled() && needs.ready.result == 'success' && needs.windows-acceptance.result == 'success' &&
+        (needs.ready.outputs.android_run != '' ||
+         (needs.android-package.result == 'success' && needs.android-acceptance.result == 'success'))
+      }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -201,16 +227,20 @@ jobs:
         with:
           name: tailscale-android-signed
           path: android
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.ready.outputs.android_run || github.run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: tailscale-android-performance
           path: android-metrics
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.ready.outputs.android_run || github.run_id }}
       - name: Publish the accepted Windows and Android clients together
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.ready.outputs.version }}
-          ANDROID_VERSION: ${{ needs.android-package.outputs.version }}
+          ANDROID_VERSION: ${{ needs.android-package.outputs.version || (needs.ready.outputs.android_run != '' && needs.ready.outputs.version) }}
         run: |
           set -euo pipefail
           test "$VERSION" = "$ANDROID_VERSION"

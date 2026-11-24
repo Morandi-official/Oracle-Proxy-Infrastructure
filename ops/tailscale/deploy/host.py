@@ -232,13 +232,32 @@ def ensure_runtime():
     if not owned():
         CONFIG.mkdir(mode=0o755)
         atomic(OWNER, OWNER_CONTENT, 0o600)
+    # The GitOps bridge runs with umask 0077. Headscale runs under a separate
+    # uid and needs to traverse these root-owned directories.
+    safe_target(CONFIG).chmod(0o755)
     BINARIES.mkdir(mode=0o755, exist_ok=True)
-    safe_target(BINARIES)
+    safe_target(BINARIES).chmod(0o755)
     with tempfile.TemporaryDirectory(prefix="oracle-tailnet-assets-") as temporary:
         directory = Path(temporary)
         command(sys.executable, "-I", SOURCE / "fetch_tools.py", directory, timeout=240)
         for name in ("headscale", "tailscale", "tailscaled"):
             atomic(BINARIES / name, (directory / name).read_bytes(), 0o755)
+
+
+def verify_service_identity(account, policy):
+    # Exercise the actual service identity without initializing its state or
+    # logging service output. The systemd unit owns database/key creation.
+    checks = (
+        (BINARIES / "headscale", "version"),
+        ("/usr/bin/test", "-r", HEADSCALE_CONFIG),
+        ("/usr/bin/test", "-r", policy),
+    )
+    try:
+        for arguments in checks:
+            subprocess.run(arguments, user=account.pw_uid, group=account.pw_gid, extra_groups=(),
+                           timeout=8, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("TAILNET_COORDINATOR_SERVICE_IDENTITY_ACCESS") from None
 
 
 def install_configuration():
@@ -276,6 +295,7 @@ def install_configuration():
         "autoApprovers": {"exitNode": [TAG]},
         "grants": [{"src": ["autogroup:member"], "dst": ["autogroup:internet"], "ip": ["*"]}],
     }).encode())
+    verify_service_identity(account, policy)
     hosts = Path("/etc/hosts").read_text()
     if any(HOST in line.split("#", 1)[0].split() for line in hosts.splitlines()):
         raise ValueError("TAILNET_EXIT_EXISTING_HOST_OVERRIDE")
@@ -364,7 +384,14 @@ def apply(main, snippet):
         install_configuration()
         print("PROJECT_TAILSCALE_STAGE=STARTING_COORDINATOR", flush=True)
         command("systemctl", "start", HEADSCALE_SERVICE, timeout=30)
-        wait_for(coordinator_ready)
+        try:
+            wait_for(coordinator_ready)
+        except ValueError:
+            status = command("systemctl", "show", HEADSCALE_SERVICE, "--property=ExecMainStatus",
+                             "--value", check=False).stdout.strip()
+            if re.fullmatch(rb"[0-9]{1,3}", status):
+                print("PROJECT_TAILSCALE_COORDINATOR_EXEC_STATUS=" + status.decode("ascii"), flush=True)
+            raise
         set_frontend(main, snippet, True)
         verify_key()
         print("PROJECT_TAILSCALE_STAGE=ENROLLING_EXIT", flush=True)

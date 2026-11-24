@@ -1,5 +1,5 @@
 using System.IO.Pipes;
-using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -13,6 +13,9 @@ internal sealed class LocalControl : IDisposable
     private static readonly Regex EnrollmentKey = new(@"\Ahskey-auth-[A-Za-z0-9_-]{12}-[A-Za-z0-9_-]{64}\z",
         RegexOptions.CultureInvariant);
     private readonly HttpClient _client;
+    private readonly CancellationTokenSource _watchLifetime = new();
+    private HttpResponseMessage? _watch;
+    private Task? _watchReader;
 
     internal LocalControl(string instance)
     {
@@ -50,6 +53,8 @@ internal sealed class LocalControl : IDisposable
 
     internal async Task<DaemonState> ReadState(CancellationToken cancellation = default)
     {
+        if (_watchReader is { IsCompleted: true })
+            throw new IOException("TAILSCALE_USER_PROFILE_WATCH_ENDED");
         using var response = await _client.GetAsync(Api + "status?peers=false", cancellation);
         response.EnsureSuccessStatusCode();
         using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellation));
@@ -60,6 +65,41 @@ internal sealed class LocalControl : IDisposable
         var exit = root.TryGetProperty("ExitNodeStatus", out var selected) && selected.ValueKind == JsonValueKind.Object
             && selected.TryGetProperty("ID", out var id) ? id.GetString() ?? "" : "";
         return new DaemonState(state, hasNodeKey, exit);
+    }
+
+    internal async Task KeepWindowsProfileSelected(CancellationToken cancellation)
+    {
+        // Windows clears the current actor when its last LocalAPI request
+        // finishes. Keep a watcher open, as the upstream desktop client does,
+        // so enrollment and routing stay attached to the Windows profile.
+        // NotifyNoNetMap (8192) omits bulky configuration from notifications.
+        var watch = await _client.GetAsync(Api + "watch-ipn-bus?mask=8192",
+            HttpCompletionOption.ResponseHeadersRead, cancellation);
+        try
+        {
+            watch.EnsureSuccessStatusCode();
+            var stream = await watch.Content.ReadAsStreamAsync(cancellation);
+            _watch = watch;
+            _watchReader = DrainWatch(stream, _watchLifetime.Token);
+        }
+        catch
+        {
+            watch.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task DrainWatch(Stream stream, CancellationToken cancellation)
+    {
+        try
+        {
+            byte[] buffer = new byte[4096];
+            while (await stream.ReadAsync(buffer, cancellation).ConfigureAwait(false) != 0) { }
+        }
+        catch (Exception error) when (error is IOException or OperationCanceledException or ObjectDisposedException)
+        {
+            // ReadState reports the closed subscription without daemon output.
+        }
     }
 
     internal async Task Enroll(Uri coordinator, string credential, CancellationToken cancellation = default)
@@ -133,13 +173,23 @@ internal sealed class LocalControl : IDisposable
     {
         using var request = new HttpRequestMessage(method, Api + action);
         if (value is not null)
-            request.Content = JsonContent.Create(value);
+        {
+            var body = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(value));
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            request.Content = body;
+        }
         using var response = await _client.SendAsync(request, cancellation);
         if (!response.IsSuccessStatusCode)
             throw new IOException("TAILSCALE_LOCAL_CONTROL_REJECTED");
     }
 
-    public void Dispose() => _client.Dispose();
+    public void Dispose()
+    {
+        _watchLifetime.Cancel();
+        _watch?.Dispose();
+        _client.Dispose();
+        _watchLifetime.Dispose();
+    }
 }
 
 internal readonly record struct DaemonState(string State, bool HasNodeKey, string ExitId);

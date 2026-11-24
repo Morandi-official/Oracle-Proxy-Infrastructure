@@ -6,6 +6,7 @@ test "$(id -u)" -eq 0
 tools_dir=$(realpath "${1:?upstream binary directory required}")
 source_dir=$(dirname "$(realpath "$0")")
 policy_program=$(realpath "$source_dir/../../../server/admin-oracle/control/tailscale_egress.py")
+python3 "$source_dir/check-admission-reuse.py"
 lab_dir=$(mktemp -d /tmp/proxy-ts.XXXXXX)
 bridge="pts$$"
 readonly coordinator=https://headscale.test

@@ -151,7 +151,8 @@ class TailscaleGateway:
                 raise ValueError("INVALID_OPERATION")
         except PermissionError as error:
             raise ValueError(str(error)) from None
-        return {**self.profile, "enrollment_key": key}
+        rate_limited = any(value is not None for value in self.engine.rate(user_id).values())
+        return {**self.profile, "enrollment_key": key, "rate_limited": rate_limited}
 
     def refresh(self):
         """Record observed bytes once and renew only coordinator-bound addresses."""

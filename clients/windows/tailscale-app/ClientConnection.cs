@@ -39,7 +39,7 @@ internal static class ClientConnection
         progress?.Invoke("ACCOUNT_PROFILE");
         var profileTask = Record(account.Profile(session, false, attempt.Token), "account_ready");
         var daemonTask = Record(DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
-            state, attempt.Token, timing is null ? null : Mark), "daemon_ready");
+            state, attempt.Token, timing is null ? null : Mark, authorization: profileTask), "daemon_ready");
         try
         {
             var profile = await profileTask;

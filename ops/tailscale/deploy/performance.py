@@ -4,7 +4,9 @@ import json
 import platform
 import re
 import subprocess
+import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -12,8 +14,12 @@ REPO = Path(__file__).resolve().parents[3]
 EXIT_INTERFACE = "tailscale0"
 DEVICES = {"enp0s6", EXIT_INTERFACE}
 WINDOW_SECONDS = 5
+LOAD_WAIT_SECONDS = 240
+LOAD_CAPTURE_SECONDS = 15
+LOAD_THRESHOLD_BYTES_S = 1024 * 1024
 TAILSCALE = "/usr/local/libexec/oracle-proxy-tailnet/tailscale"
 SOCKET = "/run/oracle-proxy-tailnet-exit/tailscaled.sock"
+RATE_TABLE = "oracle_proxy_tailscale_rates"
 FEATURES = (
     "generic-receive-offload", "generic-segmentation-offload", "rx-gro-list",
     "rx-udp-gro-forwarding", "tx-udp-segmentation", "large-receive-offload",
@@ -124,9 +130,9 @@ def cpu_ticks():
     return rows
 
 
-def cpu_usage(before, after):
+def cpu_usage(before, after, *, include_cores=False):
     percentages = {}
-    softirq = []
+    cores = {}
     for name, old in before.items():
         if name not in after:
             continue
@@ -136,10 +142,13 @@ def cpu_usage(before, after):
             continue
         percentages[name] = round(100 * (total - changes[3] - changes[4]) / total, 1)
         if name != "cpu":
-            softirq.append(round(100 * changes[6] / total, 1))
-    return {"host_busy_pct": percentages.get("cpu"),
-            "busiest_core_pct": max((value for name, value in percentages.items() if name != "cpu"), default=None),
-            "peak_core_softirq_pct": max(softirq, default=None)}
+            cores[name] = {"busy_pct": percentages[name], "softirq_pct": round(100 * changes[6] / total, 1)}
+    summary = {"host_busy_pct": percentages.get("cpu"),
+               "busiest_core_pct": max((core["busy_pct"] for core in cores.values()), default=None),
+               "peak_core_softirq_pct": max((core["softirq_pct"] for core in cores.values()), default=None)}
+    if include_cores:
+        summary["per_core"] = cores
+    return summary
 
 
 def peer_paths():
@@ -155,11 +164,28 @@ def peer_paths():
     return {"exit_running": True, "active_direct_count": direct, "active_relay_count": relayed}
 
 
+def rate_buckets():
+    result = json_command("/usr/sbin/nft", "--json", "list", "table", "inet", RATE_TABLE)
+    if not isinstance(result, dict) or not isinstance(result.get("nftables"), list):
+        tables = json_command("/usr/sbin/nft", "--json", "list", "tables")
+        if isinstance(tables, dict) and isinstance(rows := tables.get("nftables"), list):
+            present = any(isinstance(row, dict) and isinstance(table := row.get("table"), dict)
+                          and table.get("name") == RATE_TABLE and table.get("family") == "inet" for row in rows)
+            if not present:
+                return {"status": "OBSERVED", "download_buckets": 0, "upload_buckets": 0}
+        return {"status": "UNAVAILABLE"}
+    names = {limit["name"] for item in result["nftables"] if isinstance(item, dict)
+             and isinstance(limit := item.get("limit"), dict) and limit.get("table") == RATE_TABLE
+             and isinstance(limit.get("name"), str)}
+    return {"status": "OBSERVED", "download_buckets": sum(name.startswith("daddr_") for name in names),
+            "upload_buckets": sum(name.startswith("saddr_") for name in names)}
+
+
 def delta(before, after):
     return {name: value - before[name] for name, value in after.items() if name in before and value >= before[name]}
 
 
-def observe():
+def physical_interface():
     config = json.loads((REPO / "ops/network/endpoints.json").read_bytes())
     device = config.get("interface")
     if device != "enp0s6":
@@ -168,6 +194,11 @@ def observe():
     v6 = route_interface("-6", "2606:4700:4700::1111")
     if (v4, v6) != (device, device):
         raise ValueError("TAILNET_PERF_PHYSICAL_ROUTE_UNVERIFIED")
+    return device
+
+
+def observe():
+    device = physical_interface()
     kernel = re.match(r"(\d{1,3})\.(\d{1,3})\.(\d{1,5})", platform.release())
     version = tuple(map(int, kernel.groups())) if kernel else ()
     before = {port: nic_counters(port) for port in (device, EXIT_INTERFACE)}
@@ -185,6 +216,7 @@ def observe():
         "kernel": ".".join(map(str, version)),
         "kernel_supports_upstream_udp_gro": version >= (6, 2),
         "paths": peer_paths(),
+        "rate_policy": rate_buckets(),
         "physical": nic(device),
         "tunnel": nic(EXIT_INTERFACE),
         "physical_queues": queues(device),
@@ -194,9 +226,88 @@ def observe():
     }
 
 
+def utc_time():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def load_snapshot(device):
+    roots = [queue for queue in queues(device) if queue["root"]]
+    return {
+        "time": time.monotonic(), "utc": utc_time(),
+        "interfaces": {port: nic_counters(port) for port in (device, EXIT_INTERFACE)},
+        "udp": udp_counters(), "cpu": cpu_ticks(), "queue": roots[0] if len(roots) == 1 else None,
+    }
+
+
+def load_interval(before, after):
+    elapsed = max(after["time"] - before["time"], .001)
+    interfaces = {device: delta(old, after["interfaces"][device])
+                  for device, old in before["interfaces"].items()}
+    tunnel = interfaces[EXIT_INTERFACE]
+    directions = {key: round(tunnel.get(key, 0) / elapsed) for key in ("rx_bytes", "tx_bytes")}
+    old_queue, new_queue = before["queue"], after["queue"]
+    queue = {"status": "UNAVAILABLE_OR_CHANGED"}
+    if old_queue is not None and new_queue is not None and old_queue["kind"] == new_queue["kind"]:
+        counters = {key: new_queue[key] for key in ("drops", "overlimits", "requeues") if key in new_queue}
+        queue = {"kind": new_queue["kind"], "deltas": delta(old_queue, counters),
+                 "backlog_bytes_end": new_queue.get("backlog"), "queue_length_end": new_queue.get("qlen")}
+    return {
+        "started_at": before["utc"], "ended_at": after["utc"], "seconds": round(elapsed, 3),
+        "tunnel_rx_bytes_s": directions["rx_bytes"], "tunnel_tx_bytes_s": directions["tx_bytes"],
+        "network_counter_deltas": interfaces, "udp_counter_deltas": delta(before["udp"], after["udp"]),
+        "cpu": cpu_usage(before["cpu"], after["cpu"], include_cores=True), "physical_queue": queue,
+    }
+
+
+def observe_load():
+    device = physical_interface()
+    started_at = utc_time()
+    started = time.monotonic()
+    deadline = started + LOAD_WAIT_SECONDS
+    old = load_snapshot(device)
+    first = peak_rx = peak_tx = rate_at_first = None
+    hits = intervals = readable = 0
+    while (remaining := deadline - time.monotonic()) > 0:
+        time.sleep(min(remaining, 1))
+        new = load_snapshot(device)
+        interval = load_interval(old, new)
+        intervals += 1
+        old = new
+        if {"rx_bytes", "tx_bytes"} <= interval["network_counter_deltas"][EXIT_INTERFACE].keys():
+            readable += 1
+        else:
+            continue
+        if max(interval["tunnel_rx_bytes_s"], interval["tunnel_tx_bytes_s"]) < LOAD_THRESHOLD_BYTES_S:
+            continue
+        hits += 1
+        if first is None:
+            first = peak_rx = peak_tx = interval
+            deadline = min(deadline, new["time"] + LOAD_CAPTURE_SECONDS)
+            rate_at_first = rate_buckets()
+        if interval["tunnel_rx_bytes_s"] > peak_rx["tunnel_rx_bytes_s"]:
+            peak_rx = interval
+        if interval["tunnel_tx_bytes_s"] > peak_tx["tunnel_tx_bytes_s"]:
+            peak_tx = interval
+    status = "LOAD_OBSERVED" if hits else "LOAD_WAIT_TIMEOUT" if readable else "TUNNEL_COUNTERS_UNAVAILABLE"
+    report = {"status": status, "started_at": started_at,
+              "ended_at": utc_time(), "elapsed_seconds": round(time.monotonic() - started, 3),
+              "threshold_bytes_s": LOAD_THRESHOLD_BYTES_S, "checked_intervals": intervals,
+              "readable_tunnel_intervals": readable, "qualifying_intervals": hits}
+    if hits:
+        report["first_load"] = first
+        report["peak_rx"] = peak_rx
+        report["peak_tx"] = peak_tx
+        report["rate_policy_at_first_load"] = rate_at_first
+        report["rate_policy_at_end"] = rate_buckets()
+    return report
+
+
 if __name__ == "__main__":
     try:
-        print(json.dumps(observe(), sort_keys=True))
+        modes = {(): observe, ("--during-load",): observe_load}
+        if (mode := modes.get(tuple(sys.argv[1:]))) is None:
+            raise ValueError("TAILNET_PERF_UNKNOWN_MODE")
+        print(json.dumps(mode(), sort_keys=True))
     except (OSError, ValueError, TypeError) as error:
         category = str(error)
         if category not in ("TAILNET_PERF_PHYSICAL_INTERFACE_UNVERIFIED", "TAILNET_PERF_PHYSICAL_ROUTE_UNVERIFIED"):

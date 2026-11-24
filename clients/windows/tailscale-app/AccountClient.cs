@@ -29,10 +29,12 @@ internal sealed class AccountClient : IDisposable
     {
         using var response = await Post(confirm ? "confirm" : "profile", token, new { }, cancel);
         var data = response.RootElement;
+        bool? rateLimited = data.TryGetProperty("rate_limited", out var limited)
+            && limited.ValueKind is JsonValueKind.True or JsonValueKind.False ? limited.GetBoolean() : null;
         return new ExitProfile(new Uri(data.GetProperty("coordinator").GetString()!),
             long.Parse(data.GetProperty("exit_node_id").GetString()!, CultureInfo.InvariantCulture),
             data.GetProperty("ipv4").GetString()!, data.GetProperty("ipv6").GetString()!,
-            data.GetProperty("enrollment_key").GetString());
+            data.GetProperty("enrollment_key").GetString(), rateLimited);
     }
 
     internal async Task Release(string token, CancellationToken cancel)
@@ -65,4 +67,5 @@ internal sealed class AccountClient : IDisposable
     public void Dispose() => _http.Dispose();
 }
 
-internal sealed record ExitProfile(Uri Coordinator, long NodeId, string IPv4, string IPv6, string? Key);
+internal sealed record ExitProfile(Uri Coordinator, long NodeId, string IPv4, string IPv6,
+    string? Key, bool? RateLimited);

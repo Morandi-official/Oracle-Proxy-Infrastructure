@@ -22,7 +22,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
 
     internal static async Task<DaemonProcess> Start(
         string trustedExecutable, string privateStateDirectory, CancellationToken cancellation,
-        Action<string>? timing = null)
+        Action<string>? timing = null, Task? authorization = null)
     {
         var instance = Guid.NewGuid().ToString("N");
         var adapter = "ProxyTail-" + instance[..12];
@@ -41,6 +41,8 @@ internal sealed class DaemonProcess : IAsyncDisposable
                 start.Environment.Remove(name);
         }
         start.Environment["TS_NO_LOGS_NO_SUPPORT"] = "true";
+        // The Oracle coordinator exposes Noise upgrades only on HTTPS.
+        start.Environment["TS_FORCE_NOISE_443"] = "true";
         start.ArgumentList.Add(@"--socket=\\.\pipe\" + LocalControl.PipePrefix + instance);
         start.ArgumentList.Add("--state=" + Path.Combine(Path.GetFullPath(privateStateDirectory), "state"));
         start.ArgumentList.Add("--tun=" + adapter);
@@ -61,6 +63,12 @@ internal sealed class DaemonProcess : IAsyncDisposable
             var adapterObservation = observation is null ? Task.CompletedTask : ObserveAdapter(adapter, timing!, observation.Token);
             try
             {
+                // Opening LocalAPI selects the Windows user and can resume its
+                // persisted profile. Allow process and interface initialization
+                // in parallel, but hold off selecting any profile until the
+                // account service authorizes this connection.
+                if (authorization is not null)
+                    await authorization.WaitAsync(readiness.Token);
                 while (true)
                 {
                     if (process.HasExited)

@@ -16,6 +16,14 @@ internal static class ExitCheck
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         limit.CancelAfter(TimeSpan.FromSeconds(10));
+
+        // Probe only addresses of our adapter as they appear. Selecting the
+        // actual exit still requires the target map and both expected egresses.
+        var v4 = VerifyFamily(daemon.AdapterName, V4, profile.IPv4, AddressFamily.InterNetwork,
+            timing is null ? null : () => timing("ipv4_verified"), limit.Token);
+        var v6 = VerifyFamily(daemon.AdapterName, V6, profile.IPv6, AddressFamily.InterNetworkV6,
+            timing is null ? null : () => timing("ipv6_verified"), limit.Token);
+        var probes = Task.WhenAll(v4, v6);
         try
         {
             string exit = profile.NodeId.ToString(CultureInfo.InvariantCulture);
@@ -29,14 +37,7 @@ internal static class ExitCheck
             }
             timing?.Invoke("exit_map_ready");
 
-            // IPv4 and IPv6 may acquire their addresses at different times.
-            // Verify each once over the owned adapter and let the slower family
-            // retry on its own instead of repeating the successful TLS request.
-            var v4 = VerifyFamily(daemon.AdapterName, V4, profile.IPv4, AddressFamily.InterNetwork,
-                timing is null ? null : () => timing("ipv4_verified"), limit.Token);
-            var v6 = VerifyFamily(daemon.AdapterName, V6, profile.IPv6, AddressFamily.InterNetworkV6,
-                timing is null ? null : () => timing("ipv6_verified"), limit.Token);
-            await Task.WhenAll(v4, v6);
+            await probes;
             var verified = await daemon.Control.ReadState(limit.Token);
             if (verified.State != "Running" || verified.ExitId != exit)
                 throw new IOException("EXIT_NOT_VERIFIED");
@@ -44,6 +45,12 @@ internal static class ExitCheck
         catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
         {
             throw new IOException("EXIT_NOT_VERIFIED");
+        }
+        finally
+        {
+            await limit.CancelAsync();
+            try { await probes; }
+            catch { } // Preserve any verification failure reported above.
         }
     }
 

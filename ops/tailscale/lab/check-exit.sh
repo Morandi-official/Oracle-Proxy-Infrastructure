@@ -11,6 +11,7 @@ lab_dir=$(mktemp -d /tmp/proxy-ts.XXXXXX)
 bridge="pts$$"
 readonly coordinator=https://headscale.test
 declare -A namespaces
+declare -A node_pids
 declare -a children
 
 cleanup() {
@@ -151,6 +152,7 @@ cat > "$lab_dir/policy.json" <<'EOF'
 {
   "tagOwners": {"tag:oracle-exit": []},
   "autoApprovers": {"exitNode": ["tag:oracle-exit"]},
+  "nodeAttrs": [{"target": ["admitted@"], "attr": ["cache-network-maps"]}],
   "grants": [
     {"src": ["admitted@"], "dst": ["autogroup:internet", "198.18.47.2/32", "2001:db8:47::2/128"], "ip": ["*"]}
   ]
@@ -234,17 +236,26 @@ login_via_daemon() {
 
 start_node() {
     local role=$1
-    ip netns exec "${namespaces[$role]}" env TS_NO_LOGS_NO_SUPPORT=true \
+    mkdir -p -- "$lab_dir/$role"
+    ip netns exec "${namespaces[$role]}" env TS_NO_LOGS_NO_SUPPORT=true TS_USE_CACHED_NETMAP="${2:-true}" \
         DBUS_SYSTEM_BUS_ADDRESS="unix:path=$lab_dir/no-system-dbus" \
         SSL_CERT_FILE="$lab_dir/ca.pem" \
         "$tools_dir/tailscaled" --state "$lab_dir/$role.state" --socket "$lab_dir/$role.sock" \
-        --tun tailscale0 --port 41641 > "$lab_dir/$role.log" 2>&1 &
-    children+=("$!")
+        --statedir "$lab_dir/$role" --tun tailscale0 --port 41641 > "$lab_dir/$role.log" 2>&1 &
+    node_pids[$role]=$!
+    children+=("${node_pids[$role]}")
     for _ in {1..50}; do
         if [[ -S "$lab_dir/$role.sock" ]]; then return; fi
         sleep 0.1
     done
     return 1
+}
+
+stop_admitted() {
+    printf '%s\n' '{"WantRunning":false,"WantRunningSet":true}' | daemon_api admitted PATCH prefs >/dev/null
+    kill -TERM "${node_pids[admitted]}"
+    wait "${node_pids[admitted]}"
+    test ! -S "$lab_dir/admitted.sock"
 }
 
 login() {
@@ -459,6 +470,30 @@ apply_lease_policy replace --seconds 2 "$admitted_ipv4" "$admitted_ipv6"
 sleep 3
 origin_blocked admitted
 echo 'TAILSCALE_BOTH_FAMILIES_FAIL_CLOSED_ON_LEASE_EXPIRY=PASS'
+
+stage=cached-map-after-clean-stop
+stop_admitted
+# Hold only the isolated client's coordination channel. The exit, carrier and
+# origin remain reachable, and the dedicated forwarding lease still gates data.
+ip netns exec "${namespaces[admitted]}" iptables -I OUTPUT -d 192.0.2.1 -p tcp --dport 443 -j REJECT
+start_node admitted false
+select_exit "$exit_node"
+apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
+origin_blocked admitted
+stop_admitted
+
+start_node admitted
+apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
+start_ms=$(date +%s%3N)
+select_exit "$exit_node"
+wait_for_origin 4 198.18.46.1
+wait_for_origin 6 2001:db8:46::1
+printf 'TAILSCALE_LAB_CACHED_RESTART_VERIFIED_MS=%s\n' "$(( $(date +%s%3N) - start_ms ))"
+apply_lease_policy replace --seconds 2 "$admitted_ipv4" "$admitted_ipv6"
+sleep 3
+origin_blocked admitted
+echo 'TAILSCALE_CACHED_MAP_OBEYS_FORWARD_LEASE=PASS'
+ip netns exec "${namespaces[admitted]}" iptables -D OUTPUT -d 192.0.2.1 -p tcp --dport 443 -j REJECT
 
 stage=revoked-node
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"

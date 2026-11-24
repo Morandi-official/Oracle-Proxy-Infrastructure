@@ -7,21 +7,35 @@ on:
     paths: ['ops/primary-ip-rebind/**', 'ops/oracle-project/request.json', '.github/workflows/primary-ip-rebind-precheck.yml']
 permissions:
   contents: read
-concurrency:
-  group: oracle-project-root-operations
-  cancel-in-progress: false
 jobs:
   source-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 3
+    outputs:
+      requested: ${{ steps.request.outputs.requested }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s ops/primary-ip-rebind -p 'test_*.py' -v
+      - id: request
+        if: github.event_name == 'push'
+        run: |
+          python3 - <<'PY'
+          import json, os, runpy
+          from pathlib import Path
+          request = json.loads(Path('ops/oracle-project/request.json').read_text())
+          request_id = runpy.run_path('ops/primary-ip-rebind/precheck.py')['REQUEST']
+          requested = request == {'operation': 'preflight', 'request_id': request_id}
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              print('requested=' + str(requested).lower(), file=output)
+          PY
   real-precheck:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.source-tests.outputs.requested == 'true'
     needs: source-tests
+    concurrency:
+      group: oracle-project-root-operations
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     environment: oracle-ops
     timeout-minutes: 8

@@ -109,6 +109,9 @@ def client_state(snapshot,account,key,allow_legacy=False,proposed_name='',dual_s
         data['tunnel']={'transport_address':legacy_transport_address(),'endpoint':f"152.67.156.100:{snapshot['listen_port']}",'server_public_key':snapshot['server_public_key'],'addresses':addresses,'allowed_ips':['0.0.0.0/0','::/0'] if dual else ['0.0.0.0/0'],'dns':['1.1.1.1'],'ipv6_policy':'tunnel' if dual else 'block','ipv6_egress':ipv6['egress'] if dual else None,'native_udp_ports':[51820,443,8443] if snapshot['listen_port']==51820 else [snapshot['listen_port']]}
     from .endpoint_config import user_catalog
     catalog=user_catalog(user,snapshot)
+    if catalog and catalog['roles'] == ['primary']:
+        if user.get('ingress', {}).get('access') != 'primary' and len(catalog['addresses']) == 1:
+            data['account']['ingress'] = {'access':'primary','preferred':'primary'}
     if catalog and data['tunnel'] is not None:
         tunnel=data['tunnel'];addresses=catalog['addresses'];default=addresses[0]
         tunnel.update(transport_address=default,server_public_key=catalog['server_public_keys'][default],
@@ -263,7 +266,13 @@ def annotate_devices(snapshot):
     """Administrator-only view. Presence is advisory, never policy authority."""
     from .endpoint_config import read
     catalog=read()
-    if catalog:snapshot['ingress_endpoints']={r:catalog[r]['public_ipv4'] for r in ('primary','backup')}
+    if catalog:
+        snapshot['ingress_endpoints'] = {
+            role:catalog[role]['public_ipv4'] for role in ('primary','backup') if catalog[role]['public_ipv4'] is not None
+        }
+        if catalog['backup']['public_ipv4'] is None:
+            for user in snapshot.get('users', []):
+                user['ingress'] = {'access':'primary','preferred':'primary'}
     now=timezone.now();peers={p['public_key']:p for p in snapshot.get('peers',[])}
     sessions={row.public_key:row for row in ClientSession.objects.select_related('account').filter(expires_at__gt=now)}
     for peer in snapshot.get('peers',[]):
@@ -338,6 +347,10 @@ def save_account(request, value):
         access=ingress.get('ingress_access');preferred=ingress.get('ingress_preferred')
         if access not in ('primary','backup','both') or preferred not in ('primary','backup') or access!='both' and preferred!=access:raise ValueError('INVALID_INGRESS_POLICY')
         if access!='primary':
+            from .endpoint_config import read
+            catalog = read()
+            if catalog and catalog['backup']['public_ipv4'] is None:
+                raise ValueError('SINGLE_PUBLIC_ENDPOINT_REQUIRED')
             state=control.call('state',actor(request),{})
             if not state.get('endpoint_public_keys',{}).get('backup'):raise ValueError('INGRESS_ISOLATION_NOT_READY')
     username, password = value['username'], value['password']

@@ -23,8 +23,13 @@ def read_catalog():
 
 def verify():
     value=read_catalog()
-    if value is None or set(value['egress_ipv4'])!={value[r]['public_ipv4'] for r in ('primary','backup')}:
-        raise ValueError('PAIRED_INGRESS_EGRESS_CATALOG_REQUIRED')
+    if value is None:
+        raise ValueError('INGRESS_EGRESS_CATALOG_REQUIRED')
+    roles = [role for role in ('primary','backup') if value[role]['public_ipv4'] is not None]
+    if set(value['egress_ipv4']) != {value[role]['public_ipv4'] for role in roles}:
+        raise ValueError('INGRESS_EGRESS_CATALOG_MISMATCH')
+    if roles == ['primary'] and run(['wg', 'show', 'wgopbackup', 'peers']).strip():
+        raise ValueError('SINGLE_PUBLIC_ENDPOINT_BACKUP_PEERS_PRESENT')
     primary=value['primary']['private_ipv4'];backup=value['backup']['private_ipv4']
     marker='-m comment --comment proxy-user-ingress-v1'
     chain='OPX_INGRESS_EGRESS'
@@ -41,7 +46,7 @@ def verify():
             network=str(ipaddress.ip_interface(address['local']+'/'+str(address['prefixlen'])).network)
             run(['iptables','-w','5','-t','nat','-C','POSTROUTING','-s',network,'-o',value['interface'],'-m','comment','--comment','proxy-user-ingress-v1','-j',chain])
     result={}
-    for role in ('primary','backup'):
+    for role in roles:
         pair=value[role]
         trace=run(['curl','--fail','--silent','--show-error','--noproxy','*','--proto','=https','--interface',pair['private_ipv4'],
                    '--connect-timeout','8','--max-time','20','https://1.1.1.1/cdn-cgi/trace'])

@@ -1,4 +1,6 @@
 import copy
+import json
+import shutil
 import unittest
 import os
 from pathlib import Path
@@ -15,7 +17,7 @@ class EndpointSettingsTests(unittest.TestCase):
   self.variables={'PROXY_PRIMARY_IPV4':'152.67.154.225','PROXY_PRIMARY_PRIVATE_IPV4':'10.0.0.220','PROXY_BACKUP_IPV4':'150.230.113.158','PROXY_BACKUP_PRIVATE_IPV4':'10.0.0.246'}
  def test_unchanged_does_not_propose_or_increment(self):self.assertIsNone(propose(self.current,self.variables,'prepare',True))
  def test_select_uses_existing_pairs_and_preserves_remaining_addresses(self):
-  current=load()
+  current=copy.deepcopy(self.current)
   primary=current['backup']
   backup=current['primary']
   variables={'SELECTED_PRIMARY_IPV4':primary['public_ipv4'],'SELECTED_BACKUP_IPV4':backup['public_ipv4'],
@@ -73,12 +75,26 @@ class EndpointSettingsTests(unittest.TestCase):
   self.assertFalse(endpoint_only(['ops/network/endpoints.json'],dict(request,operation='deploy')))
 
 class SshFallbackTests(unittest.TestCase):
+ def test_single_endpoint_ssh_targets_have_no_placeholder(self):
+  self.assertEqual(targets(load(), legacy=True), ['152.67.156.100'])
+
  def test_read_only_probe_falls_back_before_any_mutation(self):
   with tempfile.TemporaryDirectory() as directory:
    log=Path(directory)/'calls';fake=Path(directory)/'ssh'
    fake.write_text('#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\nassert sys.argv[-1]=="agent-status"\ntarget=sys.argv[-2]\nwith Path(os.environ["FAKE_SSH_LOG"]).open("a") as f:f.write(target+"\\n")\nraise SystemExit(255 if target.endswith("@"+os.environ["FAIL_ENDPOINT"]) else 0)\n')
    fake.chmod(0o700)
-   values=targets();result=subprocess.run(['bash','-c','source ops/network/select_ssh_endpoint.sh; select_proxy_ssh_endpoint oracle-ci agent-status "$1"; echo "$PROXY_SSH_TARGET"','fixture',str(fake)],cwd=ROOT,env={**os.environ,'FAKE_SSH_LOG':str(log),'FAIL_ENDPOINT':values[0]},text=True,capture_output=True,check=True)
+   fixture = Path(directory)
+   network = fixture / 'ops/network'
+   network.mkdir(parents=True)
+   for relative in ('ops/network/endpoint_catalog.py', 'ops/network/select_ssh_endpoint.sh',
+                    'server/admin-oracle/console/endpoint_config.py'):
+    target = fixture / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / relative, target)
+   example = EndpointSettingsTests()
+   example.setUp()
+   (network / 'endpoints.json').write_text(json.dumps(example.current))
+   values=targets(example.current);result=subprocess.run(['bash','-c','source ops/network/select_ssh_endpoint.sh; select_proxy_ssh_endpoint oracle-ci agent-status "$1"; echo "$PROXY_SSH_TARGET"','fixture',str(fake)],cwd=fixture,env={**os.environ,'FAKE_SSH_LOG':str(log),'FAIL_ENDPOINT':values[0]},text=True,capture_output=True,check=True)
    self.assertEqual(result.stdout.strip(),'oracle-ci@'+values[1])
    self.assertEqual(log.read_text().splitlines(),['oracle-ci@'+values[0],'oracle-ci@'+values[1]])
 

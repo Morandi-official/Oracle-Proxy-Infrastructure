@@ -31,6 +31,7 @@ def protected(path):
 class Controller:
     def __init__(self,command,state):
         self.command=command;self.state=state;self.ready=False;self.cache=None
+        self.single_public = False
         self.key=state/'backup-ingress.key';self.receipt=state/'backup-ingress.json'
 
     def call(self,args,**kwargs):return self.command(args,**kwargs)
@@ -42,6 +43,7 @@ class Controller:
         addresses=[str(ipaddress.IPv4Address(value[role]['private_ipv4'])) for role in ('primary','backup')]
         if addresses[0]==addresses[1] or not all(ipaddress.ip_address(a).is_private for a in addresses):raise ValueError('INGRESS_CATALOG_INVALID')
         self.primary_address=addresses[0]
+        self.single_public = value['backup'].get('public_ipv4', '') is None
         return addresses
 
     def config(self):
@@ -251,12 +253,17 @@ class Controller:
             known={p['public_key'] for p in plan}
             if role=='backup':
                 for key in set(actual)-known:self.call(['wg','set',interface,'peer',key,'remove'])
-            for peer in plan:
-                key=peer['public_key'];wanted=role in peer['roles'] and peer['active']
-                if not wanted and key in actual:self.call(['wg','set',interface,'peer',key,'remove'])
-            for peer in plan:
-                if role in peer['roles'] and peer['active'] and set(actual.get(peer['public_key'],[]))!=set(peer['addresses']):
-                    self.call(['wg','set',interface,'peer',peer['public_key'],'allowed-ips',','.join(peer['addresses'])])
+            eligible = {
+                peer['public_key']: peer['addresses']
+                for peer in plan
+                if peer['active'] and (role == 'primary' if self.single_public else role in peer['roles'])
+            }
+            for key in known - eligible.keys():
+                if key in actual:
+                    self.call(['wg','set',interface,'peer',key,'remove'])
+            for key, addresses in eligible.items():
+                if set(actual.get(key, [])) != set(addresses):
+                    self.call(['wg','set',interface,'peer',key,'allowed-ips',','.join(addresses)])
         return True
 
 

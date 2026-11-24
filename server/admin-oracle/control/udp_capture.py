@@ -26,7 +26,7 @@ _catalog_spec=importlib.util.spec_from_file_location('proxy_endpoint_catalog',_c
 _catalog=importlib.util.module_from_spec(_catalog_spec);_catalog_spec.loader.exec_module(_catalog)
 _config=_catalog.read()
 if _config:
-    ADDRESSES={row['public_ipv4']:socket.inet_aton(row['private_ipv4']) for row in [_config['primary'],_config['backup']]+_config['legacy']}
+    ADDRESSES={row['public_ipv4']:socket.inet_aton(row['private_ipv4']) for row in [_config['primary'],_config['backup']]+_config['legacy'] if row['public_ipv4'] is not None}
 # SOCK_DGRAM AF_PACKET begins at IP. BPF rejects data packets and truncates an initiation/cookie
 # packet after type+index; a response after type+sender+receiver. No part of
 # the handshake's ephemeral key, cookie, authenticator or data is copied.

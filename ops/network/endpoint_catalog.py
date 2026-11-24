@@ -13,7 +13,7 @@ def targets(config=None,legacy=False):
     config=config or load()
     roles=[config['active'],'backup' if config['active']=='primary' else 'primary']
     rows=[config[role] for role in roles]+(config['legacy'] if legacy else [])
-    return list(dict.fromkeys(row['public_ipv4'] for row in rows))
+    return list(dict.fromkeys(row['public_ipv4'] for row in rows if row['public_ipv4'] is not None))
 
 if __name__=='__main__':
     import sys

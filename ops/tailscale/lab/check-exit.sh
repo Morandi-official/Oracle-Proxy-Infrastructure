@@ -434,6 +434,17 @@ for _ in {1..5}; do
     test "$(http_origin admitted 6)" = 2001:db8:46::1
     apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 done
+stage=rate-policy
+ip netns exec "${namespaces[exit]}" env PYTHONPATH="$(dirname "$policy_program")" python3 - "$admitted_ipv4" "$admitted_ipv6" <<'PY'
+import sys
+from tailscale_egress import apply_rules, rate_rules, rate_table_exists
+
+assert not rate_table_exists()
+apply_rules(rate_rules(((1, 100_000_000, 50_000_000, tuple(sys.argv[1:])),), False))
+assert rate_table_exists()
+apply_rules(rate_rules((), True))
+assert not rate_table_exists()
+PY
 stage=fail-closed-forwarding-lease
 apply_lease_policy replace --seconds 2 "$admitted_ipv4" "$admitted_ipv6"
 sleep 3

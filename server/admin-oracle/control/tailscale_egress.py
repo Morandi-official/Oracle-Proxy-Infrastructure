@@ -5,6 +5,7 @@ import ipaddress
 import subprocess
 
 TABLE = "oracle_proxy_tailscale"
+RATE_TABLE = "oracle_proxy_tailscale_rates"
 INTERFACE = "tailscale0"
 POOLS = {
     4: ipaddress.ip_network("100.64.0.0/10"),
@@ -24,6 +25,8 @@ add chain inet {TABLE} inbound {{ type filter hook input priority -10; policy ac
 add rule inet {TABLE} inbound iifname "{INTERFACE}" drop
 add chain inet {TABLE} forward {{ type filter hook forward priority -10; policy accept; }}
 add rule inet {TABLE} forward iifname "{INTERFACE}" oifname "{INTERFACE}" drop
+add rule inet {TABLE} forward iifname "{INTERFACE}" ip daddr {{ 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 }} drop
+add rule inet {TABLE} forward iifname "{INTERFACE}" ip6 daddr {{ ::/128, ::1/128, ::ffff:0:0/96, 64:ff9b::/96, fc00::/7, fe80::/10, ff00::/8 }} drop
 add rule inet {TABLE} forward iifname "{INTERFACE}" ip saddr != @authorized4 drop
 add rule inet {TABLE} forward iifname "{INTERFACE}" ip6 saddr != @authorized6 drop
 add rule inet {TABLE} forward oifname "{INTERFACE}" ip daddr != @authorized4 drop
@@ -67,6 +70,44 @@ def apply_rules(rules):
         check=True,
         timeout=8,
     )
+
+
+def rate_table_exists():
+    result = subprocess.run(["/usr/sbin/nft", "list", "table", "inet", RATE_TABLE],
+                            capture_output=True, timeout=3, check=False)
+    if result.returncode and b"No such file or directory" not in result.stderr:
+        raise OSError("TAILSCALE_RATE_POLICY_UNAVAILABLE")
+    return result.returncode == 0
+
+
+def rate_rules(plan, existing):
+    # Rebuild atomically only when the per-user rates or device addresses change.
+    # All devices and both IP families of one account share each direction's bucket.
+    commands = [f"delete table inet {RATE_TABLE}"] if existing else []
+    if not plan:
+        return "\n".join(commands) + "\n" if commands else ""
+    commands.extend((
+        f"create table inet {RATE_TABLE}",
+        f"add chain inet {RATE_TABLE} forward {{ type filter hook forward priority -9; policy accept; }}",
+    ))
+    for slot, down, up, addrs in plan:
+        if type(slot) is not int or not 1 <= slot <= 256:
+            raise ValueError("INVALID_TAILSCALE_RATE_SLOT")
+        addresses = tuple(ipaddress.ip_address(address) for address in addrs)
+        if any(address not in POOLS[address.version] or getattr(address, "scope_id", None) is not None for address in addresses):
+            raise ValueError("INVALID_TAILNET_ADDRESS")
+        for rate, iface, field in ((down, "oifname", "daddr"), (up, "iifname", "saddr")):
+            if rate is None:
+                continue
+            if type(rate) is not int or not 100_000 <= rate <= 10_000_000_000:
+                raise ValueError("INVALID_TAILSCALE_RATE")
+            bucket = f"{field}_{slot}"
+            commands.append(f"add limit inet {RATE_TABLE} {bucket} {{ rate over {rate // 8} bytes/second burst {max(16_384, rate // 80)} bytes; }}")
+            for family, protocol in ((4, "ip"), (6, "ip6")):
+                hosts = ", ".join(str(address) for address in addresses if address.version == family)
+                if hosts:
+                    commands.append(f'add rule inet {RATE_TABLE} forward {iface} "{INTERFACE}" {protocol} {field} {{ {hosts} }} limit name "{bucket}" drop')
+    return "\n".join(commands) + "\n"
 
 
 def node_counters(status, node_id, addresses):

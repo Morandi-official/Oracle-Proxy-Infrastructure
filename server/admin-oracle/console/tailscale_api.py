@@ -7,7 +7,7 @@ from django.core import signing
 from django.db import DatabaseError
 from django.utils.crypto import constant_time_compare, salted_hmac
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 from . import control
 from .client_api import DUMMY_PASSWORD, native_only, payload, response, throttle
@@ -53,6 +53,7 @@ def profile_request(request, operation):
     if not bearer.startswith("Bearer ") or len(bearer) > 2048:
         return response({"error": "LOGIN_REQUIRED"}, 401)
     try:
+        payload(request, set())
         user, device, proof = signing.loads(bearer[7:], salt=SESSION_SALT, max_age=SESSION_AGE)
         account = ClientAccount.objects.filter(user_id=user).first()
         if account is None or not constant_time_compare(proof, password_proof(account)):
@@ -62,7 +63,8 @@ def profile_request(request, operation):
         return response({"error": "LOGIN_REQUIRED"}, 401)
     except ValueError as error:
         code = str(error)
-        return response({"error": code if re.fullmatch(r"[A-Z_]{1,80}", code) else "INVALID_REQUEST"}, 409)
+        status = 503 if code in ("CONTROL_UNAVAILABLE", "TAILSCALE_SERVICE_UNAVAILABLE") else 409
+        return response({"error": code if re.fullmatch(r"[A-Z_]{1,80}", code) else "INVALID_REQUEST"}, status)
     except (OSError, TimeoutError, DatabaseError):
         return response({"error": "TAILSCALE_SERVICE_UNAVAILABLE"}, 503)
 
@@ -77,3 +79,18 @@ def profile(request):
 @require_POST
 def confirm(request):
     return profile_request(request, "confirm")
+
+
+@csrf_exempt
+@require_POST
+def release(request):
+    return profile_request(request, "release")
+
+
+@require_GET
+def ready(request):
+    try:
+        is_ready = control.call("tailscale.ready", "system:health", {}) == {"ready": True}
+    except (OSError, ValueError):
+        is_ready = False
+    return response({"ready": is_ready}, 200 if is_ready else 503)

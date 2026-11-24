@@ -15,6 +15,8 @@ urlpatterns = [
     path('api/tailscale/v1/login', tailscale_api.login),
     path('api/tailscale/v1/profile', tailscale_api.profile),
     path('api/tailscale/v1/confirm', tailscale_api.confirm),
+    path('api/tailscale/v1/release', tailscale_api.release),
+    path('api/tailscale/v1/ready', tailscale_api.ready),
     path('api/client/authenticate', client_api.authenticate),
     path('api/client/enroll', client_api.enroll),
     path('api/client/presence', client_api.presence),

@@ -1,0 +1,25 @@
+name: Fixed Oracle origin throughput control
+
+on:
+  push:
+    branches: [main]
+    paths: [ops/tailscale/windows/measure-oracle-origin.ps1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-to-oracle:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Measure four simultaneous ranges from the existing Oracle file mirror
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'oracle-origin-throughput.json'
+          ./ops/tailscale/windows/measure-oracle-origin.ps1 -ReportPath $report
+          Get-Content -LiteralPath $report -Raw

@@ -172,6 +172,17 @@ def preflight():
             value['tailscale_performance'] = json.loads(measured.stdout)
         except (OSError, ValueError, subprocess.SubprocessError):
             value['tailscale_performance'] = {'status': 'UNAVAILABLE_OR_DEADLINE'}
+    if diagnostic_request.get('operation') == 'preflight' and diagnostic_request.get('request_id') == 'tailscale-vm-origin-parallel':
+        result = {'status': 'UNAVAILABLE_OR_DEADLINE'}
+        try:
+            measured = subprocess.run([sys.executable, '-I', str(REPO / 'ops/tailscale/deploy/vm_origin.py')],
+                                      capture_output=True, text=True,
+                                      check=True, timeout=115)
+            if len(measured.stdout) <= 16384:
+                result = json.loads(measured.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        value['tailscale_vm_origin'] = result
     print(json.dumps(value, indent=2))
 
 

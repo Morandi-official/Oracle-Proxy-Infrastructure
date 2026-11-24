@@ -24,6 +24,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       android_run: ${{ steps.release.outputs.android_run }}
+      windows_run: ${{ steps.release.outputs.windows_run }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +37,7 @@ jobs:
           set -euo pipefail
           requested=$(jq -er '.version | strings | select(test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))' ops/tailscale/release.json)
           android_run=$(jq -er '.accepted_android_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
+          windows_run=$(jq -er '.accepted_windows_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
           if [[ -n "$android_run" ]]; then
             run_api="repos/$GITHUB_REPOSITORY/actions/runs/$android_run"
             tested=$(gh api "$run_api" | jq -er 'select(.name == "Tailscale production client release" and .head_branch == "main" and .status == "completed" and .event == "push") | .head_sha')
@@ -45,8 +47,17 @@ jobs:
             git diff --exit-code "$tested" "$GITHUB_SHA" -- clients/android/tailscale clients/android/tailscale-app
             test "$(awk '/^[[:space:]]*versionName / {gsub(/\047/,"",$2); print $2}' clients/android/tailscale-app/build.gradle)" = "$requested"
           fi
+          if [[ -n "$windows_run" ]]; then
+            run_api="repos/$GITHUB_REPOSITORY/actions/runs/$windows_run"
+            tested=$(gh api "$run_api" | jq -er 'select(.name == "Tailscale Windows packages and Oracle acceptance" and .head_branch == "main" and .conclusion == "success" and .event == "push") | .head_sha')
+            gh api "$run_api/jobs?per_page=100" | jq -e '[.jobs[] | select(.conclusion == "success") | .name] | contains(["build", "live"])' >/dev/null
+            git fetch --no-tags --depth=1 origin "$tested"
+            git diff --exit-code "$tested" "$GITHUB_SHA" -- clients/windows/tailscale clients/windows/tailscale-app ops/tailscale/windows ops/tailscale/lab/check-windows.ps1 .github/workflows/tailscale-windows.yml
+            test "$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' clients/windows/tailscale-app/Proxy.Tailscale.csproj)" = "$requested"
+          fi
           echo "version=$requested" >> "$GITHUB_OUTPUT"
           echo "android_run=$android_run" >> "$GITHUB_OUTPUT"
+          echo "windows_run=$windows_run" >> "$GITHUB_OUTPUT"
       - name: Wait for the Oracle account gateway and Headscale coordinator
         run: |
           host=https://vpn-admin.morandi.dpdns.org
@@ -63,6 +74,7 @@ jobs:
 
   windows-package:
     needs: ready
+    if: needs.ready.outputs.windows_run == ''
     uses: ./.github/workflows/tailscale-windows.yml
     with:
       version: ${{ needs.ready.outputs.version }}
@@ -209,7 +221,8 @@ jobs:
     needs: [ready, windows-acceptance, android-package, android-acceptance]
     if: >-
       ${{
-        !cancelled() && needs.ready.result == 'success' && needs.windows-acceptance.result == 'success' &&
+        !cancelled() && needs.ready.result == 'success' &&
+        (needs.ready.outputs.windows_run != '' || needs.windows-acceptance.result == 'success') &&
         (needs.ready.outputs.android_run != '' ||
          (needs.android-package.result == 'success' && needs.android-acceptance.result == 'success'))
       }}
@@ -223,6 +236,8 @@ jobs:
         with:
           name: tailscale-windows-client
           path: windows
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.ready.outputs.windows_run || github.run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: tailscale-android-signed
@@ -241,6 +256,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.ready.outputs.version }}
           ANDROID_VERSION: ${{ needs.android-package.outputs.version || (needs.ready.outputs.android_run != '' && needs.ready.outputs.version) }}
+          WINDOWS_ACCEPTANCE_RUN: ${{ needs.ready.outputs.windows_run || github.run_id }}
+          ANDROID_ACCEPTANCE_RUN: ${{ needs.ready.outputs.android_run || github.run_id }}
         run: |
           set -euo pipefail
           test "$VERSION" = "$ANDROID_VERSION"
@@ -274,7 +291,7 @@ jobs:
             fi
           else
             gh release create "$tag" --draft --verify-tag --title "Proxy Tailscale $VERSION" \
-              --notes "Windows (x64) installer and portable package, and signed Android APK. Both clients passed production exit and performance acceptance in workflow $GITHUB_RUN_ID."
+              --notes "Windows x64 installation and portable packages, plus the signed Android APK. Production acceptance: Windows https://github.com/$GH_REPO/actions/runs/$WINDOWS_ACCEPTANCE_RUN and Android https://github.com/$GH_REPO/actions/runs/$ANDROID_ACCEPTANCE_RUN."
           fi
           gh release upload "$tag" --clobber \
             "windows/Proxy-$VERSION-win-x64.zip" "windows/Proxy-$VERSION-win-x64-setup.exe" \

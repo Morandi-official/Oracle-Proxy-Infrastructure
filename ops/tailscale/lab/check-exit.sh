@@ -25,8 +25,8 @@ cleanup() {
             fi
         done
         if [[ ${namespaces[admitted]+yes} == yes ]]; then
-            ip -n "${namespaces[admitted]}" route get 198.18.46.2 || true
-            ip -n "${namespaces[admitted]}" -6 route get 2001:db8:46::2 || true
+            ip -n "${namespaces[admitted]}" route get 198.18.47.2 || true
+            ip -n "${namespaces[admitted]}" -6 route get 2001:db8:47::2 || true
         fi
         if [[ ${namespaces[exit]+yes} == yes ]]; then
             ip -n "${namespaces[exit]}" route show || true
@@ -95,6 +95,12 @@ ip -n "${namespaces[origin]}" addr add 198.18.46.2/24 dev "${bridge}web"
 ip -n "${namespaces[origin]}" -6 addr add 2001:db8:46::2/64 dev "${bridge}web" nodad
 ip -n "${namespaces[exit]}" link set "${bridge}wan" up
 ip -n "${namespaces[origin]}" link set "${bridge}web" up
+# Model an Internet destination beyond the exit's directly connected subnet.
+# Tailscale deliberately excludes locally attached networks from exit routes.
+ip -n "${namespaces[origin]}" addr add 198.18.47.2/32 dev lo
+ip -n "${namespaces[origin]}" -6 addr add 2001:db8:47::2/128 dev lo nodad
+ip -n "${namespaces[exit]}" route add 198.18.47.2/32 via 198.18.46.2
+ip -n "${namespaces[exit]}" -6 route add 2001:db8:47::2/128 via 2001:db8:46::2
 ip netns exec "${namespaces[exit]}" sysctl -q -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
 
 ip netns exec "${namespaces[origin]}" python3 "$source_dir/origin.py" &
@@ -120,7 +126,7 @@ cat > "$lab_dir/policy.json" <<'EOF'
   "tagOwners": {"tag:oracle-exit": []},
   "autoApprovers": {"exitNode": ["tag:oracle-exit"]},
   "grants": [
-    {"src": ["admitted@"], "dst": ["autogroup:internet", "198.18.46.2/32", "2001:db8:46::2/128"], "ip": ["*"]}
+    {"src": ["admitted@"], "dst": ["autogroup:internet", "198.18.47.2/32", "2001:db8:47::2/128"], "ip": ["*"]}
   ]
 }
 EOF
@@ -192,8 +198,8 @@ login() {
 
 http_origin() {
     local role=$1 family=$2
-    local url=http://198.18.46.2:8081/
-    if [[ "$family" == 6 ]]; then url=http://[2001:db8:46::2]:8081/; fi
+    local url=http://198.18.47.2:8081/
+    if [[ "$family" == 6 ]]; then url=http://[2001:db8:47::2]:8081/; fi
     ip netns exec "${namespaces[$role]}" curl --noproxy '*' --silent --fail \
         --connect-timeout 1 --max-time 2 "$url"
 }
@@ -262,7 +268,7 @@ exit_ipv4=$(tailscale exit ip -4)
 tailscale admitted set --exit-node "$exit_ipv4"
 if command -v tcpdump >/dev/null; then
     ip netns exec "${namespaces[exit]}" timeout 28 tcpdump -nnl -i any -s 96 \
-        'tcp port 8081 and (host 198.18.46.2 or host 2001:db8:46::2)' \
+        'tcp port 8081 and (host 198.18.47.2 or host 2001:db8:47::2)' \
         > "$lab_dir/forwarding.log" 2>&1 &
     children+=("$!")
 fi
@@ -276,7 +282,7 @@ tailscale admitted status --json |
 echo 'TAILSCALE_DIRECT_WIREGUARD_EXIT_IPV4_IPV6=PASS'
 
 stage=udp-dns-egress
-test "$(ip netns exec "${namespaces[admitted]}" dig +tries=1 +time=2 +short @198.18.46.2 egress.test A)" = 198.18.46.2
+test "$(ip netns exec "${namespaces[admitted]}" dig +tries=1 +time=2 +short @198.18.47.2 egress.test A)" = 198.18.47.2
 echo 'TAILSCALE_UDP_DNS_THROUGH_EXIT=PASS'
 
 stage=unauthorized-and-revoked-egress

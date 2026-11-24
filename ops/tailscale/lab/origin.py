@@ -31,16 +31,16 @@ class DnsOrigin(socketserver.BaseRequestHandler):
         if len(query) < 12 or not query[12:].lower().startswith(question):
             return
         header = query[:2] + struct.pack("!5H", 0x8180, 1, 1, 0, 0)
-        address = ipaddress.IPv4Address("198.18.46.2").packed
+        address = ipaddress.IPv4Address("198.18.47.2").packed
         answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 0, len(address)) + address
         transport.sendto(header + question + answer, self.client_address)
 
 
 if __name__ == "__main__":
     servers = [
-        ThreadingHTTPServer(("198.18.46.2", 8081), Origin),
-        IPv6Origin(("2001:db8:46::2", 8081), Origin),
-        socketserver.UDPServer(("198.18.46.2", 53), DnsOrigin),
+        ThreadingHTTPServer(("198.18.47.2", 8081), Origin),
+        IPv6Origin(("2001:db8:47::2", 8081), Origin),
+        socketserver.UDPServer(("198.18.47.2", 53), DnsOrigin),
     ]
     for server in servers[:-1]:
         threading.Thread(target=server.serve_forever, daemon=True).start()

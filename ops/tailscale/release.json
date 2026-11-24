@@ -2,5 +2,6 @@
   "version": "0.1.1",
   "publish": false,
   "android_only": true,
-  "request": "measure-bound-http3-exit-verification"
+  "android_latency_only": true,
+  "request": "measure-android-foreground-preparation-overlap"
 }

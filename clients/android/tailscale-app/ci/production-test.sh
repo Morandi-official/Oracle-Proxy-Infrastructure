@@ -45,8 +45,12 @@ password_b64=$(printf '%s' "$ANDROID_ACCEPTANCE_PASSWORD" | base64 -w0)
 printf '::add-mask::%s\n' "$user_b64" "$password_b64"
 unset ANDROID_ACCEPTANCE_USERNAME ANDROID_ACCEPTANCE_PASSWORD
 
+timing_only=()
+if [[ "${ANDROID_ACCEPTANCE_LATENCY_ONLY:-false}" == true ]]; then
+    timing_only=(-e proxyLatencyOnly 1)
+fi
 adb shell am instrument -w -e class org.morandi.proxy.tailscale.ProductionAcceptanceTest \
-    -e proxyProduction 1 -e proxyUser "$user_b64" -e proxyPass "$password_b64" \
+    -e proxyProduction 1 -e proxyUser "$user_b64" -e proxyPass "$password_b64" "${timing_only[@]}" \
     org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner | tee "$scratch/acceptance.txt"
 unset user_b64 password_b64
 grep -Eq '^OK \(1 test\)' "$scratch/acceptance.txt"

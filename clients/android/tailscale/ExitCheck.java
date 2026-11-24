@@ -20,6 +20,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
 final class ExitCheck {
@@ -38,6 +39,9 @@ final class ExitCheck {
         long verificationStarted = SystemClock.elapsedRealtime();
         long deadline = verificationStarted + 10_000;
         var workers = Executors.newFixedThreadPool(2);
+        var peerWorker = Executors.newSingleThreadExecutor();
+        var peerProbeStarted = new AtomicLong(-1);
+        var peerProbeReply = new AtomicLong(-1);
         var changed = new Semaphore(0);
         var listener = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) { changed.release(); }
@@ -49,6 +53,7 @@ final class ExitCheck {
         Network probing = null;
         Network triedQuic = null;
         long routeReady = -1;
+        long exitPeerMapped = -1;
         FamilyProof ipv4Verified = null;
         FamilyProof ipv6Verified = null;
         String expectedExit = Long.toString(profile.exitId());
@@ -60,8 +65,23 @@ final class ExitCheck {
             registered = true;
             while (SystemClock.elapsedRealtime() < deadline && !cancelled.getAsBoolean()) {
                 var state = control.readState();
-                var vpn = "Running".equals(state.state()) && expectedExit.equals(state.exitId())
-                        ? vpnFor(state.addresses()) : null;
+                boolean selected = expectedExit.equals(state.exitId());
+                boolean running = "Running".equals(state.state());
+                var vpn = running && selected ? vpnFor(state.addresses()) : null;
+                if (exitPeerMapped < 0 && selected && !state.exitPeerIpv4().isEmpty()
+                        && (running || "Starting".equals(state.state()))) {
+                    exitPeerMapped = SystemClock.elapsedRealtime() - start;
+                    if (vpn == null) {
+                        // Prime only the authorized peer while Android publishes the VPN route.
+                        peerWorker.execute(() -> {
+                            if (cancelled.getAsBoolean() || vpnFor(state.addresses()) != null) return;
+                            peerProbeStarted.set(SystemClock.elapsedRealtime() - start);
+                            if (control.primeExitPeer(state.exitPeerIpv4()) && !cancelled.getAsBoolean()) {
+                                peerProbeReply.set(SystemClock.elapsedRealtime() - start);
+                            }
+                        });
+                    }
+                }
                 if (probing == null || !probing.equals(vpn)) {
                     probing = vpn;
                     routeReady = vpn == null ? -1 : SystemClock.elapsedRealtime() - start;
@@ -97,7 +117,8 @@ final class ExitCheck {
                                 && fresh(ipv4Verified, currentAt) && fresh(ipv6Verified, currentAt)
                                 && !cancelled.getAsBoolean()) {
                             return new Proof(vpn, routeReady, ipv4Verified.at(), ipv6Verified.at(),
-                                    ipv4Verified.transport(), ipv6Verified.transport());
+                                    ipv4Verified.transport(), ipv6Verified.transport(), exitPeerMapped,
+                                    peerProbeStarted.get(), peerProbeReply.get());
                         }
                     }
                 }
@@ -107,13 +128,15 @@ final class ExitCheck {
             }
             throw new IOException(cancelled.getAsBoolean() ? "CONNECTION_CANCELLED" : "EXIT_NOT_VERIFIED");
         } finally {
+            peerWorker.shutdownNow();
             workers.shutdownNow();
             if (registered) networks.unregisterNetworkCallback(listener);
         }
     }
 
     record Proof(Network network, long routeReadyMs, long ipv4VerifiedMs, long ipv6VerifiedMs,
-                 String ipv4Transport, String ipv6Transport) { }
+                 String ipv4Transport, String ipv6Transport, long exitPeerMappedMs,
+                 long peerProbeStartedMs, long peerProbeReplyMs) { }
 
     private record FamilyProof(long at, String transport) { }
 

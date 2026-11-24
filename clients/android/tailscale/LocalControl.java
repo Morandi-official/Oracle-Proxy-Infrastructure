@@ -1,5 +1,6 @@
 package org.morandi.proxy.tailscale;
 
+import android.net.InetAddresses;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -40,9 +41,40 @@ public final class LocalControl {
             }
             var exit = state.optJSONObject("ExitNodeStatus");
             return new DaemonState(state.getString("BackendState"), state.optBoolean("HaveNodeKey"),
-                    exit == null ? "" : exit.optString("ID"), Collections.unmodifiableList(addresses));
+                    exit == null ? "" : exit.optString("ID"), Collections.unmodifiableList(addresses),
+                    selectedExitIpv4(exit));
         } catch (JSONException error) {
             throw new IOException("INVALID_TAILSCALE_STATUS");
+        }
+    }
+
+    private static String selectedExitIpv4(JSONObject exit) {
+        var prefixes = exit == null ? null : exit.optJSONArray("TailscaleIPs");
+        if (prefixes == null) return "";
+        for (int index = 0; index < prefixes.length(); index++) {
+            String prefix = prefixes.optString(index);
+            if (!prefix.endsWith("/32")) continue;
+            try {
+                var address = InetAddresses.parseNumericAddress(prefix.substring(0, prefix.length() - 3));
+                byte[] octets = address.getAddress();
+                if (octets.length == 4 && octets[0] == 100 && (octets[1] & 0xc0) == 64) {
+                    return address.getHostAddress();
+                }
+            } catch (IllegalArgumentException invalid) {
+                // Skip malformed or non-tailnet peer addresses.
+            }
+        }
+        return "";
+    }
+
+    boolean primeExitPeer(String address) {
+        try {
+            var value = request("POST", "ping?type=TSMP&ip=" + address, null, 500);
+            if (value == null || value.length > MAX_STATUS_BYTES) return false;
+            var reply = new JSONObject(new String(value, StandardCharsets.UTF_8));
+            return reply.optString("Err").isEmpty() && address.equals(reply.optString("NodeIP"));
+        } catch (IOException | JSONException failure) {
+            return false;
         }
     }
 
@@ -126,9 +158,13 @@ public final class LocalControl {
     }
 
     private byte[] request(String method, String endpoint, JSONObject value) throws IOException {
+        return request(method, endpoint, value, 3_000);
+    }
+
+    private byte[] request(String method, String endpoint, JSONObject value, int timeoutMs) throws IOException {
         try {
             InputStream body = value == null ? null : new RequestBody(value.toString().getBytes(StandardCharsets.UTF_8));
-            LocalAPIResponse response = application.callLocalAPI(3_000, method, API + endpoint, body);
+            LocalAPIResponse response = application.callLocalAPI(timeoutMs, method, API + endpoint, body);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IOException("TAILSCALE_LOCAL_CONTROL_REJECTED");
             }
@@ -159,5 +195,6 @@ public final class LocalControl {
         }
     }
 
-    public record DaemonState(String state, boolean hasNodeKey, String exitId, List<String> addresses) {}
+    public record DaemonState(String state, boolean hasNodeKey, String exitId, List<String> addresses,
+                              String exitPeerIpv4) {}
 }

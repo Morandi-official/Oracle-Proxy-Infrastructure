@@ -698,14 +698,14 @@ def main(arguments):
             retirement=importlib.util.module_from_spec(spec);spec.loader.exec_module(retirement)
             print('LEGACY_ENDPOINT_RETIREMENT='+json.dumps(retirement.apply(),sort_keys=True),flush=True)
             return # Exact old aliases/helper and one completed CI identity; no deployment or OCI deletion.
-        if request.get('request_id')=='cloud-udp-current-ports-20261121':
+        if request.get('request_id') in ('cloud-udp-current-ports-20261121','cloud-udp-current-ports-20261124'):
             body=sys.stdin.buffer.read(4097)
             if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')
-            if not body.strip():
-                print('CLOUD_UDP_CURRENT_PORTS_RUNNER_REQUIRED',flush=True)
-                return
             diagnostic_spec=importlib.util.spec_from_file_location('cloud_udp_identity',Path(__file__).with_name('cloud_udp_identity.py'))
             diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic)
+            if not body.strip():
+                print('CLOUD_UDP_OVERVIEW='+json.dumps(diagnostic.overview(),sort_keys=True),flush=True)
+                return
             try:result=diagnostic.execute(json.loads(body),paired=True)
             except Exception as error:
                 code=str(error)

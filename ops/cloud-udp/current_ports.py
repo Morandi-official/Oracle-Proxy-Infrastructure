@@ -143,6 +143,13 @@ def main():
                 raise RuntimeError(action+' '+code)
             return json.loads(lines[0].split('=',1)[1])
 
+        status = rpc('overview')
+        print('CLOUD_UDP_ACTIVE_CATALOG='+json.dumps(status,sort_keys=True),flush=True)
+        membership = [config['primary'], config['backup'], *config['legacy']]
+        if any(status[role] not in membership for role in roles) or status['primary'] == status['backup']:
+            raise ValueError('RUNTIME_ENDPOINT_OUTSIDE_REGISTERED_CATALOG')
+        targets = {role: status[role]['public_ipv4'] for role in roles}
+        headers.ADDRESSES = {address: socket.inet_aton(address) for address in targets.values()}
         capture_open=False
         rows=[]
         try:

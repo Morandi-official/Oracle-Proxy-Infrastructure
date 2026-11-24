@@ -57,6 +57,7 @@ public final class ProductionAcceptanceTest {
     public void signedClientThroughOracleExit() throws Exception {
         var arguments = InstrumentationRegistry.getArguments();
         assertEquals("Production mode must be explicit", "1", arguments.getString("proxyProduction"));
+        boolean latencyOnly = "1".equals(arguments.getString("proxyLatencyOnly"));
         assertTrue("Fresh installation must have no login", EngineHost.from(context).decryptFromPref("client-session").isEmpty());
         var loginUser = credential(arguments, "proxyUser");
         var loginPassword = credential(arguments, "proxyPass");
@@ -65,7 +66,12 @@ public final class ProductionAcceptanceTest {
         var report = new JSONObject();
         try {
             await("Internet access before VPN", () -> networks.getActiveNetwork() != null && !hasVpn());
-            report.put("baseline", measurePath(false));
+            if (latencyOnly) {
+                report.put("latency_only", true);
+                assertTrue("Direct HTTPS before VPN", probeLatency() > 0);
+            } else {
+                report.put("baseline", measurePath(false));
+            }
 
             await("Login controls are available", () -> enabled(activity, R.id.login));
             instrumentation.runOnMainSync(() -> {
@@ -84,7 +90,7 @@ public final class ProductionAcceptanceTest {
             var vpn = networks.getActiveNetwork();
             assertTrue("Android default network is the verified VPN", isVpn(vpn));
             assertTrue("DNS resolves over the VPN network", vpn.getAllByName("speed.cloudflare.com").length > 0);
-            report.put("vpn", measurePath(true));
+            if (!latencyOnly) report.put("vpn", measurePath(true));
             var control = new LocalControl(EngineHost.from(context).engine());
             report.put("exit_transport", control.exitPath());
 

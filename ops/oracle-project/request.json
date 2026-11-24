@@ -1,1 +1,4 @@
-{"operation":"enable-https","request_id":"tailscale-stage-apply"}
+{
+  "operation": "enable-https",
+  "request_id": "tailscale-stage-apply"
+}

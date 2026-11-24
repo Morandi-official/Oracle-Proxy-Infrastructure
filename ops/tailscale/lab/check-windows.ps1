@@ -22,7 +22,8 @@ try {
     $cli = $cliFiles[0].FullName
     if ((& $cli version | Select-Object -First 1) -ne $version) { throw 'TAILSCALE_ENGINE_VERSION_MISMATCH' }
 
-    $pipe = '\\.\pipe\ProtectedPrefix\Administrators\OracleProxyTailscaleLab-' + $PID
+    $instance = 'Lab-' + $PID
+    $pipe = '\\.\pipe\ProtectedPrefix\Administrators\OracleProxyTailscale-' + $instance
     $state = Join-Path $work 'state'
     $configuration = [Diagnostics.ProcessStartInfo]::new($engineFiles[0].FullName)
     $configuration.WorkingDirectory = $engineFiles[0].DirectoryName
@@ -48,6 +49,8 @@ try {
     }
     if (!$ready) { throw 'TAILSCALE_PROTECTED_PIPE_UNREACHABLE' }
     Write-Output 'TAILSCALE_WINDOWS_ISOLATED_LOCAL_CONTROL=PASS'
+    & dotnet run --project "$PSScriptRoot/windows-control/WindowsControl.csproj" -- $instance
+    if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_DIRECT_PROTECTED_PIPE_FAILED' }
 }
 finally {
     if ($null -ne $daemon) {

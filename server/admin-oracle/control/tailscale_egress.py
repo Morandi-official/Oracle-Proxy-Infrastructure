@@ -12,6 +12,7 @@ POOLS = {
 }
 MAX_LEASE_SECONDS = 15
 MAX_ADDRESSES = 2048
+MAX_COUNTER_BYTES = 2**63 - 1
 
 
 def install_rules():
@@ -62,6 +63,24 @@ def apply_rules(rules):
         check=True,
         timeout=8,
     )
+
+
+def node_counters(status, node_id, addresses):
+    """Read an exit-side byte sample for the coordinator-verified node."""
+    if status.get("BackendState") != "Running":
+        return None
+    peers = status.get("Peer") or {}
+    if not isinstance(peers, dict):
+        raise ValueError("INVALID_TAILSCALE_PEER_STATUS")
+    matches = [peer for peer in peers.values() if peer.get("ID") == str(node_id)]
+    if not matches:
+        return None
+    if len(matches) != 1 or set(matches[0].get("TailscaleIPs") or []) != set(addresses):
+        raise ValueError("TAILSCALE_PEER_IDENTITY_MISMATCH")
+    received, sent = (matches[0].get(name) for name in ("RxBytes", "TxBytes"))
+    if any(type(value) is not int or not 0 <= value <= MAX_COUNTER_BYTES for value in (received, sent)):
+        raise ValueError("INVALID_TAILSCALE_TRAFFIC_COUNTER")
+    return received, sent
 
 
 def main():

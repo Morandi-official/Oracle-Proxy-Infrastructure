@@ -310,6 +310,8 @@ read -r admitted_ipv4 admitted_ipv6 <<< "$bound"
 test "$admitted_ipv4" = "$(tailscale admitted ip -4)"
 test "$admitted_ipv6" = "$(tailscale admitted ip -6)"
 echo 'TAILSCALE_TICKET_BOUND_TO_COORDINATOR_NODE=PASS'
+tailscale exit status --json | headscale_admission traffic "$admitted" --ticket-id "$admitted_ticket"
+echo 'TAILSCALE_ACCOUNT_NODE_TRAFFIC_COUNTERS=PASS'
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 wait_for_origin 4 198.18.46.1
 wait_for_origin 6 2001:db8:46::1

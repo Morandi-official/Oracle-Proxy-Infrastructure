@@ -508,6 +508,25 @@ sleep 3
 origin_blocked admitted
 echo 'TAILSCALE_CACHED_MAP_OBEYS_FORWARD_LEASE=PASS'
 
+# Both timed trials start with coordination available. A rendered map alone
+# does not show when data begins to work through a newly started daemon.
+for cached in true false; do
+    stage="online-restart-cache-$cached"
+    stop_admitted
+    apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
+    start_ms=$(date +%s%3N)
+    start_node admitted "$cached"
+    select_exit "$exit_node"
+    wait_for_origin 4 198.18.46.1
+    wait_for_origin 6 2001:db8:46::1
+    printf 'TAILSCALE_LAB_ONLINE_RESTART_CACHE=%s ms=%s\n' "$cached" "$(( $(date +%s%3N) - start_ms ))"
+    if [[ "$cached" == true ]]; then
+        grep -qF 'loaded netmap from disk cache;' "$lab_dir/admitted.log"
+    else
+        ! grep -qF 'loaded netmap from disk cache;' "$lab_dir/admitted.log"
+    fi
+done
+
 stage=revoked-node
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 wait_for_origin 4 198.18.46.1

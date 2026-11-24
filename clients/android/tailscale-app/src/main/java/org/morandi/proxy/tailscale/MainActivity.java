@@ -187,7 +187,6 @@ public final class MainActivity extends Activity {
         connect.setEnabled(false);
         disconnect.setEnabled(true);
         status.setText("正在连接");
-        long preparationAttempt = BridgeVpnService.prepareForeground(this);
         EngineHost.CLIENT_ACTIONS.execute(() -> {
             try {
                 checkPending(attempt, Long.MAX_VALUE);
@@ -207,7 +206,7 @@ public final class MainActivity extends Activity {
                 var prepared = preparation.get(8, TimeUnit.SECONDS);
                 var engine = prepared.control();
                 control = engine;
-                long foregroundPreparedAt = beginVpnService(attempt, preparationAttempt);
+                beginVpnService(attempt);
                 if (profile.key() != null) {
                     engine.enroll(profile.coordinator(), profile.key());
                     long deadline = SystemClock.elapsedRealtime() + 10_000;
@@ -235,8 +234,7 @@ public final class MainActivity extends Activity {
                 long elapsed = SystemClock.elapsedRealtime() - start;
                 var timing = new ConnectTiming(profileReady, prepared.readyMs(), enrollmentReady, routeRequested,
                         proof.routeReadyMs(), proof.ipv4VerifiedMs(), proof.ipv6VerifiedMs(),
-                        proof.ipv4Transport(), proof.ipv6Transport(),
-                        foregroundPreparedAt < 0 ? -1 : foregroundPreparedAt - start);
+                        proof.ipv4Transport(), proof.ipv6Transport());
                 runOnUiThread(() -> {
                     if (generation.get() != attempt) return;
                     verifiedNetwork = verified;
@@ -252,7 +250,7 @@ public final class MainActivity extends Activity {
                 }
                 runOnUiThread(() -> {
                     if (generation.get() != attempt) return;
-                    BridgeVpnService.stop(this);
+                    stopService(new Intent(this, BridgeVpnService.class));
                     showLogin(expired ? null : token, message(failure));
                 });
             }
@@ -265,21 +263,22 @@ public final class MainActivity extends Activity {
 
     record ConnectTiming(long profileReadyMs, long engineReadyMs, long enrollmentReadyMs,
                          long routeRequestedMs, long routeReadyMs, long ipv4VerifiedMs, long ipv6VerifiedMs,
-                         String ipv4Transport, String ipv6Transport, long foregroundPreparedMs) { }
+                         String ipv4Transport, String ipv6Transport) { }
 
     private record PreparedEngine(LocalControl control, long readyMs) { }
 
-    private long beginVpnService(int attempt, long preparationAttempt) throws Exception {
-        var started = new CompletableFuture<Long>();
+    private void beginVpnService(int attempt) throws Exception {
+        var started = new CompletableFuture<Void>();
         runOnUiThread(() -> {
             try {
                 checkPending(attempt, Long.MAX_VALUE);
-                started.complete(BridgeVpnService.startAuthorized(this, preparationAttempt));
+                startForegroundService(new Intent(this, BridgeVpnService.class).setAction(BridgeVpnService.START));
+                started.complete(null);
             } catch (Exception failure) {
                 started.completeExceptionally(failure);
             }
         });
-        return started.get(5, TimeUnit.SECONDS);
+        started.get(5, TimeUnit.SECONDS);
     }
 
     private void stopEngine() {
@@ -306,7 +305,7 @@ public final class MainActivity extends Activity {
         stoppingNetwork = formerVpn;
         verifiedNetwork = null;
         accounts.cancelCurrentRequest();
-        BridgeVpnService.stop(this);
+        stopService(new Intent(this, BridgeVpnService.class));
         disconnect.setEnabled(false);
         status.setText("正在恢复直连");
         EngineHost.CLIENT_ACTIONS.execute(() -> {
@@ -333,7 +332,7 @@ public final class MainActivity extends Activity {
         verifiedNetwork = null;
         networks.unregisterNetworkCallback(networkChanges);
         accounts.cancelCurrentRequest();
-        BridgeVpnService.stop(this);
+        stopService(new Intent(this, BridgeVpnService.class));
         EngineHost.CLIENT_ACTIONS.execute(this::stopEngine);
         super.onDestroy();
     }

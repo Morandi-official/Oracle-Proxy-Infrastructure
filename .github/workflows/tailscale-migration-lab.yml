@@ -7,6 +7,7 @@ on:
       - ops/tailscale/lab/**
       - server/admin-oracle/control/tailscale_control.py
       - server/admin-oracle/control/tailscale_egress.py
+      - server/admin-oracle/control/tailscale_registry.py
       - clients/windows/tailscale/**
       - clients/android/tailscale/**
   workflow_dispatch:

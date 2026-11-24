@@ -33,6 +33,8 @@ class BoundNode:
 
 
 class HeadscaleControl:
+    ticket_lifetime_seconds = 300
+
     def __init__(self, binary, configuration):
         self.binary = Path(binary)
         self.configuration = Path(configuration)
@@ -57,7 +59,7 @@ class HeadscaleControl:
     def issue(self, user_id):
         user_id = _positive_id(user_id)
         value = self._call(
-            "preauthkeys", "create", "--user", str(user_id), "--expiration", "5m",
+            "preauthkeys", "create", "--user", str(user_id), "--expiration", f"{self.ticket_lifetime_seconds}s",
             "--reusable=false", "--ephemeral=false",
         )
         key = value.get("key")
@@ -98,3 +100,6 @@ class HeadscaleControl:
 
     def revoke(self, node):
         self._call("nodes", "delete", "--identifier", str(_positive_id(node.node_id)), "--force")
+
+    def expire_ticket(self, ticket_id):
+        self._call("preauthkeys", "expire", "--id", str(_positive_id(ticket_id)))

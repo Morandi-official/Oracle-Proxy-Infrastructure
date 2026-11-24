@@ -169,7 +169,7 @@ headscale() {
 }
 
 headscale_admission() {
-    python3 "$source_dir/check-control.py" "$tools_dir/headscale" "$lab_dir/headscale.yaml" "$@"
+    python3 "$source_dir/check-control.py" "$tools_dir/headscale" "$lab_dir/headscale.yaml" "$lab_dir/proxy-devices.sqlite" "$@"
 }
 
 tailscale() {
@@ -237,11 +237,9 @@ headscale users list -o json > /dev/null
 admitted=$(headscale users create admitted -o json | jq -er '.id')
 denied=$(headscale users create denied -o json | jq -er '.id')
 headscale preauthkeys create --tags tag:oracle-exit --expiration 5m > "$lab_dir/exit.key"
-headscale_admission issue "$admitted" > "$lab_dir/admitted.ticket"
-{ read -r admitted_ticket; read -r admitted_key; } < "$lab_dir/admitted.ticket"
-printf '%s\n' "$admitted_key" > "$lab_dir/admitted.key"
-unset admitted_key
-headscale_admission absent "$admitted" --ticket-id "$admitted_ticket"
+headscale_admission issue "$admitted" > "$lab_dir/admitted.key"
+headscale_admission absent "$admitted"
+headscale_admission pending "$admitted"
 headscale preauthkeys create --user "$denied" --expiration 5m > "$lab_dir/denied.key"
 
 stage=start-nodes
@@ -261,7 +259,7 @@ if login replay "$lab_dir/admitted.key"; then
     exit 1
 fi
 test "$(headscale nodes list --user admitted -o json | jq 'length')" = 1
-headscale_admission absent "$denied" --username denied --ticket-id "$admitted_ticket"
+headscale_admission deny-owner "$denied" --username denied
 echo 'TAILSCALE_SINGLE_USE_ADMISSION=PASS'
 
 stage=origin-reachable-from-exit
@@ -305,12 +303,12 @@ echo 'TAILSCALE_UNAUTHORIZED_DEVICE_DENIED=PASS'
 stage=fail-closed-forwarding-lease
 apply_lease_policy install
 origin_blocked admitted
-bound=$(headscale_admission find "$admitted" --ticket-id "$admitted_ticket")
+bound=$(headscale_admission find "$admitted")
 read -r admitted_ipv4 admitted_ipv6 <<< "$bound"
 test "$admitted_ipv4" = "$(tailscale admitted ip -4)"
 test "$admitted_ipv6" = "$(tailscale admitted ip -6)"
 echo 'TAILSCALE_TICKET_BOUND_TO_COORDINATOR_NODE=PASS'
-tailscale exit status --json | headscale_admission traffic "$admitted" --ticket-id "$admitted_ticket"
+tailscale exit status --json | headscale_admission traffic "$admitted"
 echo 'TAILSCALE_ACCOUNT_NODE_TRAFFIC_COUNTERS=PASS'
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 wait_for_origin 4 198.18.46.1
@@ -324,8 +322,9 @@ stage=revoked-node
 apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
 wait_for_origin 4 198.18.46.1
 wait_for_origin 6 2001:db8:46::1
-headscale_admission revoke "$admitted" --ticket-id "$admitted_ticket"
-headscale_admission absent "$admitted" --ticket-id "$admitted_ticket"
+headscale_admission revoke "$admitted"
+headscale_admission revoke "$admitted"
+headscale_admission absent "$admitted"
 for _ in {1..3}; do
     if origin_blocked admitted; then
         echo 'TAILSCALE_REVOKED_DEVICE_EGRESS_STOPPED=PASS'

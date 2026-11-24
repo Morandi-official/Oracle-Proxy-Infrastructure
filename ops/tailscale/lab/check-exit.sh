@@ -388,6 +388,14 @@ wait_for_origin 4 198.18.46.1
 stage=isolated-ipv6-egress
 wait_for_origin 6 2001:db8:46::1
 stage=direct-wireguard-peer
+ip netns exec "${namespaces[exit]}" env PYTHONPATH="$(dirname "$policy_program")" python3 - "$lab_dir/exit.sock" "$exit_node" <<'PY'
+import sys
+from tailscale_gateway import read_exit_status
+
+socket_path, node_id = sys.argv[1:]
+status = read_exit_status(socket_path)
+assert status['BackendState'] == 'Running' and status['Self']['ID'] == node_id
+PY
 tailscale admitted status --json |
     jq -e --arg remote "$exit_ipv4" '.Peer[] | select(.TailscaleIPs | index($remote)) | .Active and ((.CurAddr // "") | startswith("192.0.2.11:"))' > /dev/null
 echo 'TAILSCALE_DIRECT_WIREGUARD_EXIT_IPV4_IPV6=PASS'

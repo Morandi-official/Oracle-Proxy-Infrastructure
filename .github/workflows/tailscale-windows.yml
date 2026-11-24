@@ -17,7 +17,7 @@ on:
     inputs:
       version:
         description: Windows client SemVer
-        default: '0.1.0'
+        default: '0.1.1'
         required: true
         type: string
       live_acceptance:

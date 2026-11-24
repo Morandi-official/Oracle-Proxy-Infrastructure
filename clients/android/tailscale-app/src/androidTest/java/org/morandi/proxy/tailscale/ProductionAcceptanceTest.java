@@ -29,6 +29,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -43,6 +48,7 @@ public final class ProductionAcceptanceTest {
     private static final String CONNECTED = "已连接 · ";
     private static final int DOWNLOAD_BYTES = 8 * 1024 * 1024;
     private static final int UPLOAD_BYTES = 4 * 1024 * 1024;
+    private static final int STREAMS = 4;
     private final Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
     private final Context context = instrumentation.getTargetContext();
     private final ConnectivityManager networks = context.getSystemService(ConnectivityManager.class);
@@ -74,6 +80,7 @@ public final class ProductionAcceptanceTest {
             assertNotNull("Android VPN consent appeared on clean install", consent);
             consent.click();
             report.put("first_connect_to_verified_ms", awaitVerified(activity));
+            report.put("first_connect_stages_ms", connectionStages(activity));
             var vpn = networks.getActiveNetwork();
             assertTrue("Android default network is the verified VPN", isVpn(vpn));
             assertTrue("DNS resolves over the VPN network", vpn.getAllByName("speed.cloudflare.com").length > 0);
@@ -90,14 +97,17 @@ public final class ProductionAcceptanceTest {
 
             var reconnect = new ArrayList<Long>();
             var disconnect = new ArrayList<Long>();
+            var reconnectStages = new JSONArray();
             for (int attempt = 0; attempt < 3; attempt++) {
                 disconnect.add(disconnect(activity));
                 click(activity, R.id.connect);
                 reconnect.add(awaitVerified(activity));
+                reconnectStages.put(connectionStages(activity));
             }
             disconnect.add(disconnect(activity));
             assertTrue("Direct HTTPS after tunnel shutdown", probeLatency() > 0);
             report.put("reconnect_to_verified_ms", new JSONArray(reconnect));
+            report.put("reconnect_stages_ms", reconnectStages);
             report.put("disconnect_to_direct_ms", new JSONArray(disconnect));
         } finally {
             instrumentation.runOnMainSync(activity::finish);
@@ -156,6 +166,20 @@ public final class ProductionAcceptanceTest {
         return value.get();
     }
 
+    private JSONObject connectionStages(MainActivity activity) throws Exception {
+        var value = new AtomicReference<MainActivity.ConnectTiming>();
+        instrumentation.runOnMainSync(() -> value.set(activity.lastConnectionTiming()));
+        var timing = value.get();
+        assertNotNull("Completed connection timing is present", timing);
+        return new JSONObject().put("account_profile_ready", timing.profileReadyMs())
+                .put("native_engine_ready", timing.engineReadyMs())
+                .put("device_enrollment_ready", timing.enrollmentReadyMs())
+                .put("exit_route_requested", timing.routeRequestedMs())
+                .put("android_vpn_ready", timing.routeReadyMs())
+                .put("ipv4_exit_verified", timing.ipv4VerifiedMs())
+                .put("ipv6_exit_verified", timing.ipv6VerifiedMs());
+    }
+
     private boolean hasVpn() {
         for (Network network : networks.getAllNetworks()) if (isVpn(network)) return true;
         return false;
@@ -192,13 +216,20 @@ public final class ProductionAcceptanceTest {
         }
         for (int sample = 0; sample < 3; sample++) {
             assertEquals("Throughput sampled on the expected route", throughVpn, isVpn(networks.getActiveNetwork()));
-            download.add(transfer(false));
-            upload.add(transfer(true));
+            download.add(singleTransfer(false));
+            upload.add(singleTransfer(true));
         }
+        assertEquals("Parallel download sampled on the expected route", throughVpn, isVpn(networks.getActiveNetwork()));
+        double parallelDownload = parallelTransfer(false);
+        assertEquals("Parallel upload sampled on the expected route", throughVpn, isVpn(networks.getActiveNetwork()));
+        double parallelUpload = parallelTransfer(true);
+        assertEquals("Throughput run retained the expected route", throughVpn, isVpn(networks.getActiveNetwork()));
         return new JSONObject().put("https_p50_ms", percentile(latencies, .50))
                 .put("https_p95_ms", percentile(latencies, .95))
                 .put("down_mbps_median", percentile(download, .50))
-                .put("up_mbps_median", percentile(upload, .50));
+                .put("up_mbps_median", percentile(upload, .50))
+                .put("down_mbps_four_stream", parallelDownload)
+                .put("up_mbps_four_stream", parallelUpload);
     }
 
     private static <T extends Comparable<T>> T percentile(List<T> values, double quantile) {
@@ -228,11 +259,48 @@ public final class ProductionAcceptanceTest {
         }
     }
 
-    private static double transfer(boolean upload) throws IOException {
+    private static double singleTransfer(boolean upload) throws IOException {
+        long started = SystemClock.elapsedRealtimeNanos();
+        transfer(upload, null);
+        return rate(upload ? UPLOAD_BYTES : DOWNLOAD_BYTES, started);
+    }
+
+    private static double parallelTransfer(boolean upload) throws Exception {
+        var workers = Executors.newFixedThreadPool(STREAMS);
+        var start = new CountDownLatch(1);
+        var connections = new ConcurrentLinkedQueue<HttpURLConnection>();
+        var tasks = new ArrayList<Future<Void>>(STREAMS);
+        try {
+            for (int stream = 0; stream < STREAMS; stream++) {
+                tasks.add(workers.submit(() -> {
+                    start.await();
+                    transfer(upload, connections);
+                    return null;
+                }));
+            }
+            long started = SystemClock.elapsedRealtimeNanos();
+            long deadline = started + TimeUnit.SECONDS.toNanos(45);
+            start.countDown();
+            for (var task : tasks) {
+                task.get(Math.max(1, deadline - SystemClock.elapsedRealtimeNanos()), TimeUnit.NANOSECONDS);
+            }
+            return rate(STREAMS * (upload ? UPLOAD_BYTES : DOWNLOAD_BYTES), started);
+        } finally {
+            workers.shutdownNow();
+            for (var connection : connections) connection.disconnect();
+        }
+    }
+
+    private static double rate(int bytes, long started) {
+        double elapsed = (SystemClock.elapsedRealtimeNanos() - started) / 1e9;
+        return Math.round(bytes * 8 / elapsed / 10_000) / 100.0;
+    }
+
+    private static void transfer(boolean upload, ConcurrentLinkedQueue<HttpURLConnection> connections) throws IOException {
         int expected = upload ? UPLOAD_BYTES : DOWNLOAD_BYTES;
         var connection = open(upload ? "/__up" : "/__down?bytes=" + expected + "&sample=" + System.nanoTime());
+        if (connections != null) connections.add(connection);
         byte[] chunk = new byte[32 * 1024];
-        long started = SystemClock.elapsedRealtimeNanos();
         try {
             if (upload) {
                 connection.setRequestMethod("POST");
@@ -254,9 +322,8 @@ public final class ProductionAcceptanceTest {
                     if (total != expected) throw new IOException("DOWNLOAD_SIZE_MISMATCH");
                 }
             }
-            double elapsed = (SystemClock.elapsedRealtimeNanos() - started) / 1e9;
-            return Math.round(expected * 8 / elapsed / 10_000) / 100.0;
         } finally {
+            if (connections != null) connections.remove(connection);
             connection.disconnect();
         }
     }

@@ -36,7 +36,7 @@ jobs:
   windows-local-control:
     uses: ./.github/workflows/tailscale-windows.yml
     with:
-      version: '0.1.0'
+      version: '0.1.1'
   android-native-bridge:
     runs-on: ubuntu-24.04
     timeout-minutes: 24

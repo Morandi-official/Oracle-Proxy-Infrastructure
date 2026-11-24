@@ -17,6 +17,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONObject;
@@ -37,6 +38,7 @@ public final class MainActivity extends Activity {
     private String token;
     private volatile LocalControl control;
     private volatile Network verifiedNetwork;
+    private ConnectTiming lastConnectionTiming;
     private Network stoppingNetwork;
     private ConnectivityManager networks;
     private final ConnectivityManager.NetworkCallback networkChanges = new ConnectivityManager.NetworkCallback() {
@@ -187,11 +189,23 @@ public final class MainActivity extends Activity {
         EngineHost.CLIENT_ACTIONS.execute(() -> {
             try {
                 checkPending(attempt, Long.MAX_VALUE);
+                var host = EngineHost.from(this);
+                // Native setup is detached until this attempt has fresh account authorization.
+                var preparation = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        var local = new LocalControl(host.engine());
+                        return new PreparedEngine(local, SystemClock.elapsedRealtime() - start);
+                    } catch (IOException failure) {
+                        throw new CompletionException(failure);
+                    }
+                }, EngineHost.WORKER);
                 var profile = accounts.profile(session, false);
+                long profileReady = SystemClock.elapsedRealtime() - start;
                 checkPending(attempt, Long.MAX_VALUE);
-                var engine = new LocalControl(EngineHost.from(this).engine());
-                beginVpnService(attempt);
+                var prepared = preparation.get(8, TimeUnit.SECONDS);
+                var engine = prepared.control();
                 control = engine;
+                beginVpnService(attempt);
                 if (profile.key() != null) {
                     engine.enroll(profile.coordinator(), profile.key());
                     long deadline = SystemClock.elapsedRealtime() + 10_000;
@@ -210,13 +224,19 @@ public final class MainActivity extends Activity {
                         }
                     }
                 }
+                long enrollmentReady = SystemClock.elapsedRealtime() - start;
                 checkPending(attempt, Long.MAX_VALUE);
                 engine.selectExitNode(profile.exitId());
-                var verified = new ExitCheck(this).verify(engine, profile, () -> generation.get() != attempt);
+                long routeRequested = SystemClock.elapsedRealtime() - start;
+                var proof = new ExitCheck(this).verify(engine, profile, start, () -> generation.get() != attempt);
+                var verified = proof.network();
                 long elapsed = SystemClock.elapsedRealtime() - start;
+                var timing = new ConnectTiming(profileReady, prepared.readyMs(), enrollmentReady, routeRequested,
+                        proof.routeReadyMs(), proof.ipv4VerifiedMs(), proof.ipv6VerifiedMs());
                 runOnUiThread(() -> {
                     if (generation.get() != attempt) return;
                     verifiedNetwork = verified;
+                    lastConnectionTiming = timing;
                     status.setText("已连接 · " + elapsed + " ms");
                     if (!verified.equals(networks.getActiveNetwork())) recover(verified);
                 });
@@ -234,6 +254,15 @@ public final class MainActivity extends Activity {
             }
         });
     }
+
+    ConnectTiming lastConnectionTiming() {
+        return lastConnectionTiming;
+    }
+
+    record ConnectTiming(long profileReadyMs, long engineReadyMs, long enrollmentReadyMs,
+                         long routeRequestedMs, long routeReadyMs, long ipv4VerifiedMs, long ipv6VerifiedMs) { }
+
+    private record PreparedEngine(LocalControl control, long readyMs) { }
 
     private void beginVpnService(int attempt) throws Exception {
         var started = new CompletableFuture<Void>();

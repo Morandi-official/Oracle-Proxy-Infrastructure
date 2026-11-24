@@ -23,6 +23,7 @@ jobs:
       actions: read
     outputs:
       version: ${{ steps.release.outputs.version }}
+      publish: ${{ steps.release.outputs.publish }}
       android_run: ${{ steps.release.outputs.android_run }}
       windows_run: ${{ steps.release.outputs.windows_run }}
     steps:
@@ -36,6 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           requested=$(jq -er '.version | strings | select(test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))' ops/tailscale/release.json)
+          publish=$(jq -er 'if has("publish") then .publish else true end | select(type == "boolean") | tostring' ops/tailscale/release.json)
           android_run=$(jq -er '.accepted_android_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
           windows_run=$(jq -er '.accepted_windows_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
           if [[ -n "$android_run" ]]; then
@@ -49,13 +51,15 @@ jobs:
           fi
           if [[ -n "$windows_run" ]]; then
             run_api="repos/$GITHUB_REPOSITORY/actions/runs/$windows_run"
-            tested=$(gh api "$run_api" | jq -er 'select(.name == "Tailscale Windows packages and Oracle acceptance" and .head_branch == "main" and .conclusion == "success" and .event == "push") | .head_sha')
-            gh api "$run_api/jobs?per_page=100" | jq -e '[.jobs[] | select(.conclusion == "success") | .name] | contains(["build", "live"])' >/dev/null
+            tested=$(gh api "$run_api" | jq -er 'select(.head_branch == "main" and .status == "completed" and .event == "push" and (.name == "Tailscale Windows packages and Oracle acceptance" or .name == "Tailscale production client release")) | .head_sha')
+            gh api "$run_api/jobs?per_page=100" | jq -e '[.jobs[] | select(.conclusion == "success") | .name] |
+              contains(["build", "live"]) or contains(["windows-package / build", "windows-acceptance"])' >/dev/null
             git fetch --no-tags --depth=1 origin "$tested"
             git diff --exit-code "$tested" "$GITHUB_SHA" -- clients/windows/tailscale clients/windows/tailscale-app ops/tailscale/windows ops/tailscale/lab/check-windows.ps1 .github/workflows/tailscale-windows.yml
             test "$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' clients/windows/tailscale-app/Proxy.Tailscale.csproj)" = "$requested"
           fi
           echo "version=$requested" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "android_run=$android_run" >> "$GITHUB_OUTPUT"
           echo "windows_run=$windows_run" >> "$GITHUB_OUTPUT"
       - name: Wait for the Oracle account gateway and Headscale coordinator
@@ -221,7 +225,7 @@ jobs:
     needs: [ready, windows-acceptance, android-package, android-acceptance]
     if: >-
       ${{
-        !cancelled() && needs.ready.result == 'success' &&
+        !cancelled() && needs.ready.result == 'success' && needs.ready.outputs.publish == 'true' &&
         (needs.ready.outputs.windows_run != '' || needs.windows-acceptance.result == 'success') &&
         (needs.ready.outputs.android_run != '' ||
          (needs.android-package.result == 'success' && needs.android-acceptance.result == 'success'))

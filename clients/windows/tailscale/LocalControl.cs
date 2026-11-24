@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Principal;
 using System.Text.Json;
@@ -77,7 +78,11 @@ internal sealed class LocalControl : IDisposable
             HttpCompletionOption.ResponseHeadersRead, cancellation);
         try
         {
-            watch.EnsureSuccessStatusCode();
+            // tailscaled binds the pipe before its backend is initialized.
+            if (watch.StatusCode == HttpStatusCode.ServiceUnavailable)
+                watch.EnsureSuccessStatusCode();
+            if (!watch.IsSuccessStatusCode)
+                throw new IOException("TAILSCALE_USER_PROFILE_WATCH_REJECTED");
             var stream = await watch.Content.ReadAsStreamAsync(cancellation);
             _watch = watch;
             _watchReader = DrainWatch(stream, _watchLifetime.Token);
@@ -162,8 +167,10 @@ internal sealed class LocalControl : IDisposable
                     continue;
                 if (peer.TryGetProperty("CurAddr", out var address) && !string.IsNullOrEmpty(address.GetString()))
                     return "direct";
+                if (peer.TryGetProperty("PeerRelay", out var peerRelay) && !string.IsNullOrEmpty(peerRelay.GetString()))
+                    return "peer-relay";
                 if (peer.TryGetProperty("Relay", out var relay) && !string.IsNullOrEmpty(relay.GetString()))
-                    return "relay";
+                    return "derp";
             }
         }
         return "unknown";

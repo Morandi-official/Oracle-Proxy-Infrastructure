@@ -26,6 +26,7 @@ jobs:
       publish: ${{ steps.release.outputs.publish }}
       android_run: ${{ steps.release.outputs.android_run }}
       windows_run: ${{ steps.release.outputs.windows_run }}
+      recheck_android: ${{ steps.release.outputs.recheck_android }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,6 +41,10 @@ jobs:
           publish=$(jq -er 'if has("publish") then .publish else true end | select(type == "boolean") | tostring' ops/tailscale/release.json)
           android_run=$(jq -er '.accepted_android_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
           windows_run=$(jq -er '.accepted_windows_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
+          recheck_android=$(jq -er 'if has("recheck_android") then .recheck_android else false end | select(type == "boolean") | tostring' ops/tailscale/release.json)
+          if [[ "$recheck_android" == true ]]; then
+            [[ "$publish" == false && -n "$android_run" && -z "$windows_run" ]]
+          fi
           if [[ -n "$android_run" ]]; then
             run_api="repos/$GITHUB_REPOSITORY/actions/runs/$android_run"
             tested=$(gh api "$run_api" | jq -er 'select(.name == "Tailscale production client release" and .head_branch == "main" and .status == "completed" and .event == "push") | .head_sha')
@@ -62,6 +67,7 @@ jobs:
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "android_run=$android_run" >> "$GITHUB_OUTPUT"
           echo "windows_run=$windows_run" >> "$GITHUB_OUTPUT"
+          echo "recheck_android=$recheck_android" >> "$GITHUB_OUTPUT"
       - name: Wait for the Oracle account gateway and Headscale coordinator
         run: |
           host=https://vpn-admin.morandi.dpdns.org
@@ -78,7 +84,7 @@ jobs:
 
   windows-package:
     needs: ready
-    if: needs.ready.outputs.windows_run == ''
+    if: needs.ready.outputs.windows_run == '' && needs.ready.outputs.recheck_android != 'true'
     uses: ./.github/workflows/tailscale-windows.yml
     with:
       version: ${{ needs.ready.outputs.version }}
@@ -178,10 +184,16 @@ jobs:
           retention-days: 1
 
   android-acceptance:
-    needs: android-package
+    needs: [ready, android-package]
+    if: >-
+      ${{ !cancelled() && needs.ready.result == 'success' &&
+      (needs.android-package.result == 'success' || needs.ready.outputs.recheck_android == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: windows-client-acceptance
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -198,10 +210,14 @@ jobs:
         with:
           name: tailscale-android-signed
           path: application
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.ready.outputs.android_run || github.run_id }}
       - uses: actions/download-artifact@v4
         with:
           name: tailscale-android-test
           path: instrumentation
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.ready.outputs.android_run || github.run_id }}
       - name: Accept the signed application through the Oracle exit
         env:
           ANDROID_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}

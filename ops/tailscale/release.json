@@ -1,1 +1,7 @@
-{"version":"0.1.1","publish":false,"request":"measure-connect-and-throughput"}
+{
+  "version": "0.1.1",
+  "publish": false,
+  "accepted_android_run": 45390728848,
+  "recheck_android": true,
+  "request": "android-after-coordinator-batch-tuning"
+}

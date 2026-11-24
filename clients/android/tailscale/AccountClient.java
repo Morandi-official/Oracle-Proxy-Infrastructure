@@ -1,10 +1,14 @@
 package org.morandi.proxy.tailscale;
 
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URI;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONException;
@@ -14,6 +18,17 @@ final class AccountClient {
     private static final URI BASE = URI.create("https://vpn-admin.morandi.dpdns.org/api/tailscale/v1/");
     private static final int MAX_RESPONSE_BYTES = 16_384;
     private final AtomicReference<HttpURLConnection> request = new AtomicReference<>();
+    private final ConnectivityManager networks;
+    // Account requests are serialized by the client action worker.
+    private Network directPool;
+
+    AccountClient() {
+        this(null);
+    }
+
+    AccountClient(ConnectivityManager networks) {
+        this.networks = networks;
+    }
 
     String login(String username, String password, String device) throws IOException, JSONException {
         var body = new JSONObject().put("username", username).put("password", password).put("device", device);
@@ -38,11 +53,29 @@ final class AccountClient {
         if (current != null) current.disconnect();
     }
 
+    private HttpURLConnection open(URL url) throws IOException {
+        if (networks != null) {
+            var active = networks.getActiveNetwork();
+            var scope = active == null ? null : networks.getNetworkCapabilities(active);
+            if (scope != null && scope.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    && !scope.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    && networks.getBoundNetworkForProcess() == null) {
+                // Android owns a pool per Network object. Reuse it only when its network is the current default.
+                if (!active.equals(directPool)) directPool = active;
+                var connection = (HttpURLConnection) directPool.openConnection(url, Proxy.NO_PROXY);
+                if (active.equals(networks.getActiveNetwork())) return connection;
+                connection.disconnect();
+            }
+        }
+        return (HttpURLConnection) url.openConnection(Proxy.NO_PROXY);
+    }
+
     private JSONObject post(String action, String token, JSONObject body) throws IOException, JSONException {
-        HttpURLConnection connection = (HttpURLConnection) BASE.resolve(action).toURL().openConnection(Proxy.NO_PROXY);
+        HttpURLConnection connection = open(BASE.resolve(action).toURL());
         request.set(connection);
         try {
             connection.setInstanceFollowRedirects(false);
+            connection.setUseCaches(false);
             connection.setConnectTimeout(5_000);
             connection.setReadTimeout(12_000);
             connection.setRequestMethod("POST");

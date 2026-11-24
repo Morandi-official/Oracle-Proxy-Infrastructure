@@ -16,11 +16,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 final class ExitCheck {
@@ -37,25 +34,15 @@ final class ExitCheck {
         long verificationStarted = SystemClock.elapsedRealtime();
         long deadline = verificationStarted + 10_000;
         var workers = Executors.newFixedThreadPool(2);
-        var earlyWorkers = Executors.newFixedThreadPool(2);
         var changed = new Semaphore(0);
-        var availableVpn = new AtomicReference<Network>();
         var listener = new ConnectivityManager.NetworkCallback() {
-            @Override public void onAvailable(Network network) {
-                availableVpn.set(network);
-                changed.release();
-            }
-            @Override public void onLost(Network network) {
-                var prior = availableVpn.get();
-                if (network.equals(prior)) availableVpn.compareAndSet(prior, null);
-                changed.release();
-            }
+            @Override public void onAvailable(Network network) { changed.release(); }
+            @Override public void onLost(Network network) { changed.release(); }
             @Override public void onLinkPropertiesChanged(Network network, android.net.LinkProperties properties) {
                 changed.release();
             }
         };
         Network probing = null;
-        Network triedEarly = null;
         long routeReady = -1;
         long ipv4Verified = -1;
         long ipv6Verified = -1;
@@ -68,55 +55,29 @@ final class ExitCheck {
             registered = true;
             while (SystemClock.elapsedRealtime() < deadline && !cancelled.getAsBoolean()) {
                 var state = control.readState();
-                var active = networks.getActiveNetwork();
-                boolean selected = "Running".equals(state.state()) && expectedExit.equals(state.exitId());
-                var announced = availableVpn.get();
-                var vpn = !selected ? null : ownsVpn(active, state.addresses()) ? active
-                        : ownsVpn(announced, state.addresses()) ? announced : null;
+                var vpn = "Running".equals(state.state()) && expectedExit.equals(state.exitId())
+                        ? vpnFor(state.addresses()) : null;
                 if (probing == null || !probing.equals(vpn)) {
                     probing = vpn;
                     routeReady = vpn == null ? -1 : SystemClock.elapsedRealtime() - start;
                     ipv4Verified = -1;
                     ipv6Verified = -1;
                 }
-                boolean isDefault = vpn != null && vpn.equals(active);
-                if (vpn != null && (isDefault || !vpn.equals(triedEarly))) {
-                    // A visible VPN can carry bound sockets before it becomes the Android default.
-                    // Give that attempt a separate pool so it cannot delay a ready default path.
-                    if (!isDefault) triedEarly = vpn;
-                    var pool = isDefault ? workers : earlyWorkers;
-                    int socketTimeoutMs = isDefault ? 1_500 : 450;
-                    long batchDeadline = Math.min(deadline, SystemClock.elapsedRealtime() + (isDefault ? 3_500 : 650));
-                    BooleanSupplier abort = isDefault ? cancelled
-                            : () -> cancelled.getAsBoolean() || vpn.equals(networks.getActiveNetwork());
+                if (vpn != null) {
                     long elapsed = SystemClock.elapsedRealtime() - start;
                     var first = ipv4Verified < 0 || elapsed - ipv4Verified > MAX_PROOF_AGE_MS
-                            ? pool.submit(() -> proofTime(vpn, V4, profile.ipv4(), start, socketTimeoutMs)) : null;
+                            ? workers.submit(() -> proofTime(vpn, V4, profile.ipv4(), start)) : null;
                     var second = ipv6Verified < 0 || elapsed - ipv6Verified > MAX_PROOF_AGE_MS
-                            ? pool.submit(() -> proofTime(vpn, V6, profile.ipv6(), start, socketTimeoutMs)) : null;
-                    try {
-                        if (first != null) ipv4Verified = awaitProof(first, batchDeadline, abort);
-                        if (second != null) ipv6Verified = awaitProof(second, batchDeadline, abort);
-                    } finally {
-                        if (first != null && !first.isDone()) first.cancel(true);
-                        if (second != null && !second.isDone()) second.cancel(true);
-                    }
+                            ? workers.submit(() -> proofTime(vpn, V6, profile.ipv6(), start)) : null;
+                    if (first != null) ipv4Verified = first.get(4, TimeUnit.SECONDS);
+                    if (second != null) ipv6Verified = second.get(4, TimeUnit.SECONDS);
                     long verifiedAt = SystemClock.elapsedRealtime() - start;
                     if (ipv4Verified >= 0 && verifiedAt - ipv4Verified <= MAX_PROOF_AGE_MS
                             && ipv6Verified >= 0 && verifiedAt - ipv6Verified <= MAX_PROOF_AGE_MS
-                            && vpn.equals(networks.getActiveNetwork()) && ownsVpn(vpn, state.addresses())
+                            && vpn.equals(vpnFor(state.addresses()))
                             && !cancelled.getAsBoolean()) {
-                        var current = control.readState();
-                        long currentAt = SystemClock.elapsedRealtime() - start;
-                        if ("Running".equals(current.state()) && expectedExit.equals(current.exitId())
-                                && vpn.equals(networks.getActiveNetwork()) && ownsVpn(vpn, current.addresses())
-                                && currentAt - ipv4Verified <= MAX_PROOF_AGE_MS
-                                && currentAt - ipv6Verified <= MAX_PROOF_AGE_MS
-                                && !cancelled.getAsBoolean()) {
-                            return new Proof(vpn, routeReady, ipv4Verified, ipv6Verified);
-                        }
+                        return new Proof(vpn, routeReady, ipv4Verified, ipv6Verified);
                     }
-                    if (!isDefault && vpn.equals(networks.getActiveNetwork())) continue;
                 }
                 long elapsed = SystemClock.elapsedRealtime() - verificationStarted;
                 changed.tryAcquire(elapsed < 800 ? 35 : 125, TimeUnit.MILLISECONDS);
@@ -124,7 +85,6 @@ final class ExitCheck {
             }
             throw new IOException(cancelled.getAsBoolean() ? "CONNECTION_CANCELLED" : "EXIT_NOT_VERIFIED");
         } finally {
-            earlyWorkers.shutdownNow();
             workers.shutdownNow();
             if (registered) networks.unregisterNetworkCallback(listener);
         }
@@ -132,44 +92,32 @@ final class ExitCheck {
 
     record Proof(Network network, long routeReadyMs, long ipv4VerifiedMs, long ipv6VerifiedMs) { }
 
-    private static long awaitProof(Future<Long> proof, long deadline, BooleanSupplier abort) throws Exception {
-        while (!proof.isDone() && !abort.getAsBoolean()) {
-            long remaining = deadline - SystemClock.elapsedRealtime();
-            if (remaining <= 0) break;
-            try {
-                return proof.get(Math.min(remaining, 25), TimeUnit.MILLISECONDS);
-            } catch (TimeoutException pending) {
-                // Check the current default route and connection generation before waiting again.
-            }
-        }
-        return proof.isDone() ? proof.get() : -1;
+    private static long proofTime(Network network, URI target, String expected, long start) {
+        return matches(network, target, expected) ? SystemClock.elapsedRealtime() - start : -1;
     }
 
-    private static long proofTime(Network network, URI target, String expected, long start, int timeoutMs) {
-        return matches(network, target, expected, timeoutMs) ? SystemClock.elapsedRealtime() - start : -1;
-    }
-
-    private boolean ownsVpn(Network network, List<String> addresses) {
-        if (network == null || addresses.isEmpty()) return false;
-        var details = networks.getNetworkCapabilities(network);
-        if (details == null || !details.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false;
-        var link = networks.getLinkProperties(network);
-        if (link == null) return false;
+    private Network vpnFor(List<String> addresses) {
+        if (addresses.isEmpty()) return null;
+        var active = networks.getActiveNetwork();
+        var details = active == null ? null : networks.getNetworkCapabilities(active);
+        if (details == null || !details.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null;
+        var link = networks.getLinkProperties(active);
+        if (link == null) return null;
         for (String address : addresses) {
             var expected = InetAddresses.parseNumericAddress(address);
             for (var local : link.getLinkAddresses()) {
-                if (expected.equals(local.getAddress())) return true;
+                if (expected.equals(local.getAddress())) return active;
             }
         }
-        return false;
+        return null;
     }
 
-    private static boolean matches(Network network, URI target, String expected, int timeoutMs) {
+    private static boolean matches(Network network, URI target, String expected) {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) network.openConnection(target.toURL(), Proxy.NO_PROXY);
-            connection.setConnectTimeout(timeoutMs);
-            connection.setReadTimeout(timeoutMs);
+            connection.setConnectTimeout(1_500);
+            connection.setReadTimeout(1_500);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Connection", "close");
             if (connection.getResponseCode() != 200) return false;

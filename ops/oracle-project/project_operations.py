@@ -732,6 +732,15 @@ def main(arguments):
                 raise
             print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
             return
+        if request.get('request_id') == 'sole-ip-origin-speed-preflight-20261124':
+            helper = Path(__file__).with_name('origin_speed_preflight.py')
+            result = subprocess.run(
+                ['/opt/oracle-proxy-admin/current/.venv/bin/python', '-I', str(helper)],
+                capture_output=True, text=True, check=True, timeout=40)
+            if len(result.stdout) > 4096:
+                raise ValueError('ORIGIN_SPEED_PREFLIGHT_OUTPUT_LIMIT')
+            print('ORIGIN_SPEED_PREFLIGHT=' + json.dumps(json.loads(result.stdout), sort_keys=True), flush=True)
+            return
         if request.get('request_id') == 'single-public-ip-preflight-20261124':
             helper = Path(__file__).with_name('single_public_ip_inventory.py')
             result = subprocess.run(

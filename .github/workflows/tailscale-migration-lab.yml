@@ -86,9 +86,35 @@ jobs:
           -p ops/tailscale/lab/android-app
           -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
           assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-runtime-emulator-fixture
+          path: ops/tailscale/lab/android-app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 1
+  android-vpn-service:
+    needs: android-native-bridge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-runtime-emulator-fixture
+          path: fixture
       - name: Launch the native runtime in a real Android emulator
         run: |
           shopt -s nullglob
-          apks=(ops/tailscale/lab/android-app/build/outputs/apk/debug/*.apk)
+          apks=(fixture/*.apk)
           test "${#apks[@]}" = 1
           bash ops/tailscale/lab/check-android.sh "${apks[0]}"

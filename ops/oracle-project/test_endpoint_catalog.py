@@ -1,4 +1,5 @@
 """Changing endpoint metadata must preserve primary routing and foreign aliases."""
+import base64
 import copy
 import importlib.util
 import json
@@ -24,16 +25,31 @@ class EndpointCatalogTests(unittest.TestCase):
         self.migration['primary']={'public_ipv4':'152.67.154.225','private_ipv4':'10.0.0.6'}
         self.migration['backup']={'public_ipv4':'150.230.113.158','private_ipv4':'10.0.0.246'}
         self.migration['egress_ipv4']=[self.migration['primary']['public_ipv4'],self.migration['backup']['public_ipv4']]
+        self.migration['legacy'] = []
 
     def test_catalog_switch_and_bounds(self):
         self.assertIs(catalog.validate(self.config),self.config)
-        with patch.object(catalog,'read',return_value=self.config):
-            self.assertEqual(catalog.advertised()['primary'],self.config['primary']['public_ipv4'])
-            self.config['active']='backup'
-            self.assertEqual(catalog.advertised()['primary'],self.config['backup']['public_ipv4'])
+        with patch.object(catalog,'read',return_value=self.migration):
+            self.assertEqual(catalog.advertised()['primary'],self.migration['primary']['public_ipv4'])
+            self.migration['active']='backup'
+            self.assertEqual(catalog.advertised()['primary'],self.migration['backup']['public_ipv4'])
         for change in ({'revision':True},{'schema':True},{'egress_ipv4':['8.8.8.8']},{'primary':{'public_ipv4':'127.0.0.1','private_ipv4':'10.0.0.220'}}):
             config=copy.deepcopy(self.config);config.update(change)
             with self.assertRaises(ValueError):catalog.validate(config)
+    def test_single_public_endpoint_hides_backup_and_preserves_identity(self):
+        primary = self.config['primary']['public_ipv4']
+        key = base64.b64encode(b'k' * 32).decode()
+        with patch.object(catalog, 'read', return_value=self.config):
+            self.assertIsNone(catalog.advertised()['backup'])
+            self.assertEqual(catalog.advertised()['private_ipv4'], {primary: '10.0.0.6'})
+            policy = {'ingress': {'access': 'backup', 'preferred': 'backup'}}
+            result = catalog.user_catalog(policy, {'server_public_key': key})
+            self.assertEqual(result['roles'], ['primary'])
+            self.assertEqual(result['addresses'], [primary])
+            self.assertEqual(result['server_public_keys'], {primary: key})
+        with self.assertRaisesRegex(ValueError, 'SINGLE_PUBLIC_ENDPOINT_REQUIRED'):
+            catalog.validate(dict(self.config, active='backup'))
+
     def test_apply_preserves_routes_and_foreign_aliases(self):
         self.migration['legacy']=[{'public_ipv4':'152.67.156.100','private_ipv4':'10.0.0.220'}]
         rows=[{'local':'10.0.0.6','prefixlen':24,'label':'enp0s6'},{'local':'10.0.0.10','prefixlen':32,'label':'enp0s6:existing'},{'local':'10.0.0.99','prefixlen':32,'label':'enp0s6:foreign'}]

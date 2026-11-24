@@ -71,15 +71,22 @@ def validate(value):
     subnet=ipaddress.ip_network(value['subnet'],strict=True)
     if subnet.version!=4 or not subnet.is_private or subnet.prefixlen<24:raise ValueError('ENDPOINT_SUBNET_REQUIRED')
     if not isinstance(value['legacy'],list) or len(value['legacy'])>2:raise ValueError('ENDPOINT_LEGACY_LIMIT')
-    rows=[value['primary'],value['backup']]+value['legacy']
-    for row in rows:
+    rows = [value['primary'], value['backup'], *value['legacy']]
+    for index, row in enumerate(rows):
         if not isinstance(row,dict) or set(row)!={'public_ipv4','private_ipv4'}:raise ValueError('ENDPOINT_ADDRESS_PAIR_REQUIRED')
-        public(row['public_ipv4']);private=ipaddress.ip_address(row['private_ipv4'])
+        if index != 1 or row['public_ipv4'] is not None:
+            public(row['public_ipv4'])
+        private = ipaddress.ip_address(row['private_ipv4'])
         if private not in subnet or private in (subnet.network_address,subnet.broadcast_address):raise ValueError('ENDPOINT_PRIVATE_SUBNET_REQUIRED')
     if len({r['public_ipv4'] for r in rows})!=len(rows) or len({r['private_ipv4'] for r in rows})!=len(rows):raise ValueError('DUPLICATE_ENDPOINT')
     exits=value['egress_ipv4']
     if not isinstance(exits,list) or not 1<=len(exits)<=2 or len(set(exits))!=len(exits) or any(x not in {r['public_ipv4'] for r in rows} for x in exits):raise ValueError('OWNED_EGRESS_REQUIRED')
+    if value['backup']['public_ipv4'] is None and (
+        value['active'] != 'primary' or exits != [value['primary']['public_ipv4']] or value['legacy']
+    ):
+        raise ValueError('SINGLE_PUBLIC_ENDPOINT_REQUIRED')
     return value
+
 
 def read():
     base = read_base()
@@ -103,6 +110,8 @@ def propose_selection(current, primary, backup, revision):
     validate(current)
     if type(revision) is not int or revision != current['revision']:
         raise ValueError('ENDPOINT_CATALOG_STALE')
+    if current['backup']['public_ipv4'] is None:
+        raise ValueError('SINGLE_PUBLIC_ENDPOINT_REQUIRED')
     if not isinstance(primary, str) or not isinstance(backup, str) or primary == backup:
         raise ValueError('ENDPOINT_ROLES_MUST_DIFFER')
     rows = [current['primary'], current['backup'], *current['legacy']]
@@ -123,7 +132,7 @@ def advertised():
     if config is None:return None
     active=config[config['active']]['public_ipv4']
     standby=config['backup' if config['active']=='primary' else 'primary']['public_ipv4']
-    return {'schema':1,'revision':config['revision'],'primary':active,'backup':standby,'egress_ipv4':config['egress_ipv4'],'private_ipv4':{row['public_ipv4']:row['private_ipv4'] for row in [config['primary'],config['backup']]+config['legacy']}}
+    return {'schema':1,'revision':config['revision'],'primary':active,'backup':standby,'egress_ipv4':config['egress_ipv4'],'private_ipv4':{row['public_ipv4']:row['private_ipv4'] for row in [config['primary'],config['backup']]+config['legacy'] if row['public_ipv4'] is not None}}
 
 
 def user_catalog(user, snapshot):
@@ -134,6 +143,8 @@ def user_catalog(user, snapshot):
     access=policy['access'];preferred=policy['preferred']
     roles=['primary','backup'] if access=='both' else [access]
     if preferred not in roles:raise ValueError('INVALID_INGRESS_POLICY')
+    if config['backup']['public_ipv4'] is None:
+        roles, preferred = ['primary'], 'primary'
     roles=[preferred]+[r for r in roles if r!=preferred]
     keys={'primary':snapshot['server_public_key'],**snapshot.get('endpoint_public_keys',{})}
     if any(not keys.get(role) for role in roles):raise ValueError('INGRESS_ISOLATION_NOT_READY')

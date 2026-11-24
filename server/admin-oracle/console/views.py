@@ -148,6 +148,7 @@ def dashboard(request):
     return render(request, 'dashboard.html', {
         'local_auth': local_auth.enabled(), 'endpoint_catalog': catalog, 'endpoint_choices': endpoints,
         'endpoint_version': endpoint_config.version(catalog) if catalog else '',
+        'single_public_endpoint': bool(catalog and catalog['backup']['public_ipv4'] is None),
     })
 
 

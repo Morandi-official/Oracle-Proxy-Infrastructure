@@ -275,6 +275,20 @@ def enable_web_firewall():
 def deploy(revision):
     catalog_spec=importlib.util.spec_from_file_location('endpoint_addresses',Path(__file__).with_name('endpoint_addresses.py'))
     catalog=importlib.util.module_from_spec(catalog_spec);catalog_spec.loader.exec_module(catalog)
+    requested = catalog.module().validate(json.loads((REPO / 'ops/network/endpoints.json').read_text()))
+    if requested['backup']['public_ipv4'] is None:
+        import socket
+        address = requested['primary']['public_ipv4']
+        resolved = {row[4][0] for row in socket.getaddrinfo(requested['api_host'], 443, socket.AF_INET)}
+        if resolved != {address}:
+            raise ValueError('SINGLE_PUBLIC_ENDPOINT_DNS_NOT_READY')
+        source = requested['primary']['private_ipv4']
+        trace = subprocess.run(
+            ['curl', '--fail', '--silent', '--noproxy', '*', '--connect-timeout', '4', '--max-time', '8',
+             '--interface', source, 'https://1.1.1.1/cdn-cgi/trace'],
+            capture_output=True, text=True, check=True, timeout=10)
+        if [line[3:] for line in trace.stdout.splitlines() if line.startswith('ip=')] != [address]:
+            raise ValueError('SINGLE_PUBLIC_ENDPOINT_BINDING_NOT_READY')
     print('ENDPOINT_CATALOG='+json.dumps(catalog.install(),sort_keys=True),flush=True)
     request=json.loads(Path(__file__).with_name('request.json').read_text())
     if request.get('request_id')=='rc21-console-deploy-20261027':

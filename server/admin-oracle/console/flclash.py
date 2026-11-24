@@ -92,7 +92,7 @@ def configuration(row,state,peer,private_key):
           'dns':['https://1.1.1.1/dns-query'],'allowed-ips':['0.0.0.0/0']+(['::/0'] if v6 else [])}
     if v6:node['ipv6']=v6
     catalog=endpoint_config.read();keys=state.get('endpoint_public_keys',{})
-    if catalog and keys.get('backup'):
+    if catalog and catalog['backup']['public_ipv4'] is not None and keys.get('backup'):
         user=next(u for u in state['users'] if u['id']==str(row.account_id))
         preferred=user.get('ingress',{}).get('preferred','primary')
         roles=[preferred,'backup' if preferred=='primary' else 'primary']

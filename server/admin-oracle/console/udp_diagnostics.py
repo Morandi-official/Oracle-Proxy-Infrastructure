@@ -16,7 +16,7 @@ def targets():
     from .endpoint_config import read
     config=read()
     addresses=[r['public_ipv4'] for r in [config['primary'],config['backup']]+config['legacy']] if config else ['152.67.156.100','141.147.78.44','152.67.154.225','150.230.113.158']
-    return {(a,p) for a in addresses for p in (443,8443,51820)}
+    return {(a,p) for a in addresses if a is not None for p in (443,8443,51820)}
 COUNTERS={'tx_initiations','rx_responses','rx_cookies','rx_invalid','rx_obsolete','read_errors','write_errors',
           'last_read_error','last_write_error','rcvbuf_before','sndbuf_before','rcvbuf_after','sndbuf_after','socket_buffer_error'}
 ERRORS={'','CORE_START_FAILED','CORE_READY_TIMEOUT','ORACLE_PROBE_TIMEOUT','ORACLE_PROBE_HTTP_FAILED',

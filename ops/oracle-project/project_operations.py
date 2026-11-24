@@ -718,6 +718,45 @@ def main(arguments):
                 raise
             print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
             return
+        if request.get('request_id') == 'udp-readback-0443-20261124':
+            current = host.ROOT / 'current'
+            command = """from datetime import datetime, timezone
+from hashlib import sha256
+import json
+from console.models import UdpDiagnostic
+
+start = datetime(2026, 11, 24, 4, 43, 20, tzinfo=timezone.utc)
+end = datetime(2026, 11, 24, 4, 44, 5, tzinfo=timezone.utc)
+rows = UdpDiagnostic.objects.filter(started_at__range=(start, end)).values('id', 'phase', 'started_at', 'report')[:8]
+result = {'found': False}
+for row in rows:
+    if sha256(str(row['id']).encode()).hexdigest() != '572d5fa7bef0b0d3a9009844dc79e42cf85f2b83679612913b717d1187c53cad':
+        continue
+    report = row['report']
+    result = {'found': True, 'phase': row['phase'], 'started_utc': row['started_at'].isoformat(),
+              'capture_closed': report.get('server_capture_closed'), 'server_finish': report.get('server_finish'),
+              'trials': []}
+    for item in report.get('trials', [])[:6]:
+        address, port = item.get('address'), item.get('port')
+        if address not in {'152.67.154.225', '141.147.78.44'} or port not in {443, 8443, 51820}:
+            continue
+        server = item.get('server') or {}
+        capture = server.get('capture') or {}
+        client = (item.get('client') or {}).get('counters') or {}
+        result['trials'].append({
+            'address': address, 'port': port, 'started_at': server.get('server_started_at'),
+            'client': {key: client.get(key) for key in ('tx_initiations', 'rx_responses', 'rx_invalid', 'read_errors')},
+            'capture': {key: capture.get(key) for key in ('capture_status', 'ring_evictions', 'socket_drops',
+                                                          'complete_observation', 'rx_initiations', 'tx_responses', 'tx_cookies')},
+            'correlated': server.get('index_correlation_available'),
+            'handshake': server.get('kernel_handshake_advanced'),
+        })
+    break
+print('UDP_INCIDENT_SAVED_REPORT=' + json.dumps(result, sort_keys=True), flush=True)
+"""
+            host.as_user(host.APP_USER, [current / '.venv/bin/python', 'manage.py', 'shell', '-c', command],
+                         cwd=current, env=host.read_environment())
+            return
         if request.get('request_id')=='udp-flow-filter-configuration-20261121':
             helper=Path(__file__).with_name('udp_flow_filter_configuration.py')
             result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(helper)],capture_output=True,text=True,check=True,timeout=65)

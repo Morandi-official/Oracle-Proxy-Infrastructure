@@ -15,7 +15,7 @@ cleanup() {
     if ((status != 0)); then
         printf 'Lab failed at stage %s\n' "${stage:-setup}" >&2
         # Logs can contain registration URLs. Keep CI output limited to markers.
-        for name in exit admitted denied; do
+        for name in exit admitted denied replay; do
             if [[ -S "$lab_dir/$name.sock" ]]; then
                 "$tools_dir/tailscale" --socket "$lab_dir/$name.sock" status --json 2>/dev/null |
                     jq -c '{BackendState, HaveNodeKey, ExitNodeStatus, HealthCount: (.Health // [] | length)}' || true
@@ -61,10 +61,12 @@ attach_peer() {
 create_namespace exit
 create_namespace admitted
 create_namespace denied
+create_namespace replay
 create_namespace origin
 attach_peer exit 192.0.2.11
 attach_peer admitted 192.0.2.12
 attach_peer denied 192.0.2.13
+attach_peer replay 192.0.2.14
 ip link add "${bridge}wan" type veth peer name "${bridge}web"
 ip link set "${bridge}wan" netns "${namespaces[exit]}"
 ip link set "${bridge}web" netns "${namespaces[origin]}"
@@ -199,17 +201,23 @@ headscale preauthkeys create --tags tag:oracle-exit --expiration 5m > "$lab_dir/
 headscale preauthkeys create --user "$admitted" --expiration 5m > "$lab_dir/admitted.key"
 headscale preauthkeys create --user "$denied" --expiration 5m > "$lab_dir/denied.key"
 
-stage=exit-and-admission
+stage=start-nodes
 start_node exit
 start_node admitted
 start_node denied
+start_node replay
+stage=register-exit
 login exit "$lab_dir/exit.key" --advertise-exit-node
+stage=register-authorized-device
 login admitted "$lab_dir/admitted.key"
-if login denied "$lab_dir/admitted.key"; then
+stage=register-unauthorized-device
+login denied "$lab_dir/denied.key"
+stage=reject-replayed-registration
+if login replay "$lab_dir/admitted.key"; then
     echo 'A second node reused a consumed enrollment key' >&2
     exit 1
 fi
-login denied "$lab_dir/denied.key"
+test "$(headscale nodes list --user admitted -o json | jq 'length')" = 1
 echo 'TAILSCALE_SINGLE_USE_ADMISSION=PASS'
 
 stage=isolated-dual-stack-egress

@@ -124,7 +124,12 @@ def audit(coverage_only=False):
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--incident-1532']:
+    if sys.argv[1:] == ['--incident-20261124']:
+        START = datetime(2026, 11, 24, 4, 27, 30, tzinfo=timezone.utc)
+        END = datetime(2026, 11, 24, 4, 47, tzinfo=timezone.utc)
+        LOCAL = {'10.0.0.6': 'endpoint_152_67_154_225', '10.0.0.10': 'endpoint_141_147_78_44'}
+        LEGACY = {}
+    elif sys.argv[1:] == ['--incident-1532']:
         START = datetime(2026, 11, 21, 7, 32, 16, tzinfo=timezone.utc)
         END = datetime(2026, 11, 21, 7, 35, tzinfo=timezone.utc)
     elif sys.argv[1:] == ['--incident-1544']:
@@ -151,6 +156,6 @@ if __name__ == '__main__':
                 records[label] = audit(coverage_only=True)
             print(json.dumps(records,sort_keys=True))
         else:
-            print(json.dumps(audit(), sort_keys=True))
+            print(json.dumps(audit(coverage_only=sys.argv[1:] == ['--incident-20261124']), sort_keys=True))
     finally:
         signal.alarm(0)

@@ -23,7 +23,7 @@ internal static class LiveAcceptance
         Environment.SetEnvironmentVariable(Username, null);
         Environment.SetEnvironmentVariable(Password, null);
         string phase = "START";
-        var report = new Dictionary<string, object>();
+        var report = new Dictionary<string, object?>();
         using var account = new AccountClient();
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
         string? session = null;
@@ -65,6 +65,7 @@ internal static class LiveAcceptance
                 string transport;
                 try
                 {
+                    if (run == 0) report["account_rate_limited"] = profile.RateLimited;
                     phase = "VERIFY_SYSTEM_ROUTE";
                     // The caller uses ordinary system routing. The product has
                     // also verified both IP families through its own adapter.

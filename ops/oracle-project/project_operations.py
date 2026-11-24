@@ -156,10 +156,17 @@ def preflight():
             if len(measured.stdout)>65536:raise ValueError('PERFORMANCE_RESULT_LIMIT')
             value['performance_controls']=json.loads(measured.stdout)
         except (OSError,ValueError,subprocess.SubprocessError):value['performance_controls']={'status':'UNAVAILABLE_OR_DEADLINE'}
-    if diagnostic_request == {'operation': 'preflight', 'request_id': 'tailscale-performance-observe'}:
+    if diagnostic_request.get('operation') == 'preflight' and diagnostic_request.get('request_id') in (
+        'tailscale-performance-observe', 'tailscale-performance-during-load',
+    ):
+        during_load = diagnostic_request['request_id'] == 'tailscale-performance-during-load'
+        arguments = [sys.executable, '-I', str(REPO / 'ops/tailscale/deploy/performance.py')]
+        if during_load:
+            arguments.append('--during-load')
+            print('PROJECT_TAILSCALE_LOAD_OBSERVER=WAITING', flush=True)
         try:
-            measured = subprocess.run([sys.executable, '-I', str(REPO / 'ops/tailscale/deploy/performance.py')],
-                                      capture_output=True, text=True, check=True, timeout=60)
+            measured = subprocess.run(arguments, capture_output=True, text=True, check=True,
+                                      timeout=275 if during_load else 60)
             if len(measured.stdout) > 16384:
                 raise ValueError('TAILNET_PERFORMANCE_REPORT_LIMIT')
             value['tailscale_performance'] = json.loads(measured.stdout)

@@ -77,6 +77,11 @@ if [[ "$mode" == production ]]; then
         | tee "$working_dir/instrumentation.txt"
     unset user_b64 pass_b64
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
+    adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
+        grep -E '^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$' |
+        tee "$working_dir/throughput.txt"
+    grep -q '^ANDROID_DOWNLOAD_DIRECT_BYTES=' "$working_dir/throughput.txt"
+    grep -q '^ANDROID_DOWNLOAD_WIREGUARD_UDP_BYTES=' "$working_dir/throughput.txt"
     echo 'Production Android TLS, enrollment, WireGuard, DNS, disconnect and test-device removal verified.'
     exit 0
 fi

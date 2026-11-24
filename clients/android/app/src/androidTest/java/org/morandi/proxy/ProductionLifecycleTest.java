@@ -136,7 +136,7 @@ public final class ProductionLifecycleTest {
             if (total != limit) {
                 throw new IOException();
             }
-            System.out.println("ANDROID_DOWNLOAD_" + route + "_BYTES=" + total
+            android.util.Log.i("ProxySpeedAcceptance", "ANDROID_DOWNLOAD_" + route + "_BYTES=" + total
                     + ";ELAPSED_MS=" + (SystemClock.elapsedRealtime() - start));
         } catch (IOException failure) {
             throw new IOException("ANDROID_DOWNLOAD_" + route + "_FAILED", failure);

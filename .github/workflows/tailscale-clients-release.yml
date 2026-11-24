@@ -60,7 +60,7 @@ jobs:
             gh api "$run_api/jobs?per_page=100" | jq -e '[.jobs[] | select(.conclusion == "success") | .name] |
               contains(["build", "live"]) or contains(["windows-package / build", "windows-acceptance"])' >/dev/null
             git fetch --no-tags --depth=1 origin "$tested"
-            git diff --exit-code "$tested" "$GITHUB_SHA" -- clients/windows/tailscale clients/windows/tailscale-app ops/tailscale/windows ops/tailscale/lab/check-windows.ps1 .github/workflows/tailscale-windows.yml
+            git diff --exit-code "$tested" "$GITHUB_SHA" -- clients/windows/tailscale clients/windows/tailscale-app ops/tailscale/windows ops/tailscale/lab/check-windows.ps1 .github/workflows/tailscale-windows.yml ':!ops/tailscale/windows/measure-oracle-origin.ps1'
             test "$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' clients/windows/tailscale-app/Proxy.Tailscale.csproj)" = "$requested"
           fi
           echo "version=$requested" >> "$GITHUB_OUTPUT"

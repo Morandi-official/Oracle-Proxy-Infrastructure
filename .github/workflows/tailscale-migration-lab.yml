@@ -1,0 +1,24 @@
+name: Tailscale migration data-path lab
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/tailscale-migration-lab.yml
+      - ops/tailscale/lab/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-exit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch pinned upstream packages
+        run: bash ops/tailscale/lab/fetch-tools.sh "$RUNNER_TEMP/proxy-tailscale-tools"
+      - name: Verify device admission and isolated IPv4, IPv6 and DNS exit
+        run: sudo bash ops/tailscale/lab/check-exit.sh "$RUNNER_TEMP/proxy-tailscale-tools"

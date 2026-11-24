@@ -49,6 +49,9 @@ internal static class NativeGuard
     internal static bool Active{
         get{uint e=Function<CountDelegate>("OpGuardCount")(out uint persistent,out uint boot);return e==0 && persistent>=16 && boot>=8;}
     }
+    internal static bool ConfirmedAbsent =>
+        Function<CountDelegate>("OpGuardCount")(out uint persistent, out uint boot) == 0 &&
+        persistent == 0 && boot == 0;
     internal static void Clear(){uint result=Function<ClearDelegate>("OpGuardClear")();if(result!=0)throw new IOException("WFP_CLEAR_"+result);if(Function<CountDelegate>("OpGuardCount")(out uint persistent,out uint boot)!=0 || persistent!=0 || boot!=0)throw new IOException("WFP_CLEAR_NOT_VERIFIED");}
     internal static ulong TunLuid(){uint e=Function<LuidDelegate>("OpTunLuid")(out ulong value);if(e!=0||value==0)throw new IOException("TUN_NOT_READY");return value;}
 }

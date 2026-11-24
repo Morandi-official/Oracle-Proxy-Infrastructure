@@ -280,8 +280,8 @@ internal sealed partial class MainForm : Form
             if(MessageBox.Show(this,$"删除旧设备“{selected.Name}”并登记本机？","释放设备名额",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK)return;
             _deleteDeviceId=selected.Id;try{await Act("DeleteDevice");}finally{_deleteDeviceId=null;}
         };
-        var copyStartup=new SmoothButton{Name="copy-startup-diagnostics",Text="复制初始化诊断",Height=36};
-        Row(loginContent,copyStartup);copyStartup.Click+=(_,_)=>Clipboard.SetText(_startupReport);
+        var copyStartup=new SmoothButton{Name="copy-startup-diagnostics",Text="复制登录诊断",Height=36};
+        Row(loginContent,copyStartup);copyStartup.Click+=(_,_)=>Clipboard.SetText(LoginDiagnostics());
         Row(loginContent,_bootstrapRetry);_bootstrapRetry.Click+=async(_,_)=>{if(await ProvisionService())await StartReadyClient();};
         var loginCard=Card("login-card","",loginContent);loginCard.Dock=DockStyle.None;loginCard.AutoSize=true;loginCard.Padding=new Padding(28,24,28,24);_loginGate.Controls.Add(loginCard);
         void FitLogin(){int width=Math.Min(470,Math.Max(1,_loginGate.ClientSize.Width-40));loginCard.Width=width;loginCard.MaximumSize=new Size(width,0);loginCard.Left=Math.Max(0,(_loginGate.ClientSize.Width-width)/2);loginCard.Top=Math.Max(12,(_loginGate.ClientSize.Height-loginCard.Height)/2);}
@@ -374,7 +374,7 @@ internal sealed partial class MainForm : Form
             "CLIENT_PACKAGE_INCOMPLETE"=>"客户端文件不完整或版本不一致。请完整解压便携包，保留 runtime 文件夹，再重试初始化。\r\n诊断：CLIENT_PACKAGE_INCOMPLETE",
             "SERVICE_SETUP_CANCELLED"=>"已取消初始化。可以重试或关闭窗口。",
             "SETUP_RESULT_PENDING"=>"初始化尚未结束。可以关闭此窗口，后台维护将继续；结束后重新打开。",
-            _=>"系统服务尚未准备完成。可重试、复制初始化诊断或关闭窗口。"
+            _=>"系统服务尚未准备完成。可重试、复制登录诊断或关闭窗口。"
         };
     }
     private async Task<bool> ProvisionService()
@@ -631,6 +631,18 @@ internal sealed partial class MainForm : Form
         "UU_SIGNATURE_UNREADABLE"=>"没有可读取的数字签名",
         "UU_DIRECTORY_UNREADABLE"=>"安装目录不可读取或超出扫描限制",
         _=>"尚未通过检查"};
+    private string LoginDiagnostics()
+    {
+        var report = new System.Text.StringBuilder(_startupReport);
+        if (_diagnosticSnapshot is JsonObject state) {
+            report.Append("\r\n登录状态：" + state["error"]);
+            if (state["failure"] is JsonObject failure)
+                foreach (string key in new[] { "stage", "category", "socket_error", "http_error", "http_status", "at" })
+                    report.Append($"\r\n{key}: {failure[key]}");
+        }
+        return report.ToString();
+    }
+
     private static string BuildConnectionReport(JsonObject? state)
     {
         if(state is null)return "尚未读取系统服务。";
@@ -845,6 +857,6 @@ internal sealed partial class MainForm : Form
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",
         "LOGIN_SESSION_EXPIRED"=>"登录已过期，请重新登录。",
-        "ACCOUNT_API_UNREACHABLE"=>"暂时无法连接账号服务。已保存的登录会继续重试。",
+        "ACCOUNT_API_UNREACHABLE"=>"暂时无法连接账号服务。可重试登录，有效的已保存会话会自动重试。",
         "LOGIN_REQUIRED"=>"请先登录账号。", "DISCONNECT_BEFORE_LOGIN"=>"更换登录前请先断开。", _=>$"操作尚未完成：{code}。"};
 }

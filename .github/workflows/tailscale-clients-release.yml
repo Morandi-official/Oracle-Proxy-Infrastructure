@@ -276,10 +276,8 @@ jobs:
           cp windows/SHA256SUMS.txt SHA256SUMS-Windows.txt
           cp android/SHA256SUMS.txt SHA256SUMS-Android.txt
           tag="tailscale-v$VERSION"
-          target=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null || true)
-          if [[ -n "$target" && "$target" != "$GITHUB_SHA" ]]; then
-            echo 'The existing release tag points to another source revision' >&2
-            exit 1
+          if ref=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" 2>/dev/null); then
+            jq -e --arg sha "$GITHUB_SHA" '.object.type == "commit" and .object.sha == $sha' <<< "$ref" >/dev/null
           fi
           gh release create "$tag" \
             "windows/Proxy-$VERSION-win-x64.zip" "windows/Proxy-$VERSION-win-x64-setup.exe" \

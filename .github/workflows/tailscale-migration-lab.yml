@@ -41,7 +41,7 @@ jobs:
         run: ./ops/tailscale/lab/check-windows.ps1
   android-native-bridge:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 24
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,3 +77,15 @@ jobs:
           javac --release 17 -cp "$RUNNER_TEMP/tailscale-native-bridge.jar:$platform" \
             -d "$RUNNER_TEMP/tailscale-client-classes" clients/android/tailscale/*.java
           echo 'TAILSCALE_ANDROID_LOCAL_API_BINDING_COMPILED=PASS'
+      - name: Build a disposable Android application using only the new runtime
+        run: >-
+          upstream/tailscale-android/android/gradlew --no-daemon
+          -p ops/tailscale/lab/android-app
+          -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
+          assembleDebug
+      - name: Launch the native runtime in a real Android emulator
+        run: |
+          shopt -s nullglob
+          apks=(ops/tailscale/lab/android-app/build/outputs/apk/debug/*.apk)
+          test "${#apks[@]}" = 1
+          bash ops/tailscale/lab/check-android.sh "${apks[0]}"

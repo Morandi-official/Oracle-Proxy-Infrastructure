@@ -1,0 +1,30 @@
+plugins {
+    id 'com.android.application' version '8.13.2'
+}
+
+android {
+    namespace 'org.morandi.proxy.tailscale.fixture'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'org.morandi.proxy.tailscale.fixture'
+        minSdk 29
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0-lab.1'
+        ndk {
+            abiFilters 'x86_64'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets.main.java.srcDirs += ['../../../../clients/android/tailscale']
+}
+
+dependencies {
+    implementation files(providers.gradleProperty('tailscaleBridge').get())
+}

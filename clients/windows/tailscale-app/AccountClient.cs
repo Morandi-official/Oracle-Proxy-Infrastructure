@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace OracleProxy.Tailscale;
@@ -43,7 +42,10 @@ internal sealed class AccountClient : IDisposable
 
     private async Task<JsonDocument> Post(string action, string? token, object value, CancellationToken cancel)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, action) { Content = JsonContent.Create(value) };
+        // Give the WSGI account server a known body length on HTTP/1.1.
+        var content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(value));
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        using var request = new HttpRequestMessage(HttpMethod.Post, action) { Content = content };
         if (token is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         using var response = await _http.SendAsync(request, cancel);
         var body = await response.Content.ReadAsByteArrayAsync(cancel);

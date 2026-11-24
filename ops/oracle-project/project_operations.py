@@ -172,17 +172,22 @@ def preflight():
             value['tailscale_performance'] = json.loads(measured.stdout)
         except (OSError, ValueError, subprocess.SubprocessError):
             value['tailscale_performance'] = {'status': 'UNAVAILABLE_OR_DEADLINE'}
-    if diagnostic_request.get('operation') == 'preflight' and diagnostic_request.get('request_id') == 'tailscale-vm-origin-parallel':
+    origin_probe = {
+        'tailscale-vm-origin-parallel': ('vm_origin.py', 'tailscale_vm_origin'),
+        'tailscale-london-origin-baseline': ('london_baseline.py', 'tailscale_london_origin'),
+    }.get(diagnostic_request.get('request_id'))
+    if diagnostic_request.get('operation') == 'preflight' and origin_probe is not None:
+        script, report_key = origin_probe
         result = {'status': 'UNAVAILABLE_OR_DEADLINE'}
         try:
-            measured = subprocess.run([sys.executable, '-I', str(REPO / 'ops/tailscale/deploy/vm_origin.py')],
+            measured = subprocess.run([sys.executable, '-I', str(REPO / 'ops/tailscale/deploy' / script)],
                                       capture_output=True, text=True,
                                       check=True, timeout=115)
             if len(measured.stdout) <= 16384:
                 result = json.loads(measured.stdout)
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
-        value['tailscale_vm_origin'] = result
+        value[report_key] = result
     print(json.dumps(value, indent=2))
 
 

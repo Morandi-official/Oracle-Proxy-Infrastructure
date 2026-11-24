@@ -1,4 +1,4 @@
 {
-  "operation": "status",
-  "request_id": "tailscale-performance-complete"
+  "operation": "preflight",
+  "request_id": "tailscale-london-origin-baseline"
 }

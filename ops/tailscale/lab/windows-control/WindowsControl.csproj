@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../../../clients/windows/tailscale/LocalControl.cs" Link="LocalControl.cs" />
+    <Compile Include="../../../../clients/windows/tailscale/DaemonProcess.cs" Link="DaemonProcess.cs" />
   </ItemGroup>
 </Project>

@@ -36,7 +36,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
                 start.Environment.Remove(name);
         }
         start.Environment["TS_NO_LOGS_NO_SUPPORT"] = "true";
-        start.ArgumentList.Add(@"--socket=\.\pipe\" + LocalControl.PipePrefix + instance);
+        start.ArgumentList.Add(@"--socket=\\.\pipe\" + LocalControl.PipePrefix + instance);
         start.ArgumentList.Add("--state=" + Path.Combine(Path.GetFullPath(privateStateDirectory), "state"));
         start.ArgumentList.Add("--tun=" + adapter);
         start.ArgumentList.Add("--port=0");

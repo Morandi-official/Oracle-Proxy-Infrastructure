@@ -75,5 +75,5 @@ jobs:
           platform=$(find "$ANDROID_HOME/platforms" -maxdepth 2 -name android.jar | sort -V | tail -n 1)
           test -n "$platform"
           javac --release 17 -cp "$RUNNER_TEMP/tailscale-native-bridge.jar:$platform" \
-            -d "$RUNNER_TEMP/tailscale-client-classes" clients/android/tailscale/LocalControl.java
+            -d "$RUNNER_TEMP/tailscale-client-classes" clients/android/tailscale/*.java
           echo 'TAILSCALE_ANDROID_LOCAL_API_BINDING_COMPILED=PASS'

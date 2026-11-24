@@ -22,8 +22,9 @@ try {
     if ((& $cli version | Select-Object -First 1) -ne $version) { throw 'TAILSCALE_ENGINE_VERSION_MISMATCH' }
 
     $state = Join-Path $work 'state'
+    $engine = $engineFiles[0].FullName
     $null = New-Item -ItemType Directory $state
-    & dotnet run --project "$PSScriptRoot/windows-control/WindowsControl.csproj" -- $engineFiles[0].FullName $state
+    & dotnet run --project "$PSScriptRoot/windows-control/WindowsControl.csproj" -- $engine $state
     if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_DIRECT_PROTECTED_PIPE_FAILED' }
 }
 finally {

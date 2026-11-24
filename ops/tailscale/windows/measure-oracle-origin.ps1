@@ -28,7 +28,8 @@ if ($address.Count -ne 1 -or $route.Count -ne 1 -or
     throw 'DIRECT_ROUTE_UNVERIFIED'
 }
 $source = $address[0].IPAddress
-$curl = (Get-Command curl.exe -CommandType Application).Source
+$curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+if (!(Test-Path -LiteralPath $curl -PathType Leaf)) { throw 'SYSTEM_CURL_UNAVAILABLE' }
 $work = Join-Path $env:RUNNER_TEMP ('proxy-origin-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory $work
 $jobs = @()

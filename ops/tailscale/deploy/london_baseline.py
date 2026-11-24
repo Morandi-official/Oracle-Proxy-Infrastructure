@@ -23,6 +23,9 @@ IPERF_SAMPLE_LIMIT = 16 * 1024 * 1024
 HTTP_DOWNLOAD = 8 * 1024 * 1024
 HTTP_UPLOAD = 4 * 1024 * 1024
 STREAMS = 4
+CLOUVIDER_URLS = (ORIGIN + "/garbage.php?ckSize=8", ORIGIN + "/empty.php")
+CLOUDFLARE_URLS = ("https://speed.cloudflare.com/__down?bytes=" + str(HTTP_DOWNLOAD),
+                   "https://speed.cloudflare.com/__up")
 
 
 def utc():
@@ -80,15 +83,14 @@ def milliseconds(value, scale=1000):
     return round(value * scale, 2)
 
 
-def https_stream(args, upload, payload, base):
+def https_stream(args, upload, payload, base, urls):
     tail = ("--max-time", "13", "--write-out", "%{json}")
     if upload:
         tail += ("--max-filesize", "8192", "--header", "Expect:",
                  "--header", "Content-Type: application/octet-stream",
-                 "--data-binary", "@-", ORIGIN + "/empty.php")
+                 "--data-binary", "@-", urls[1])
     else:
-        tail += ("--max-filesize", str(HTTP_DOWNLOAD + 1),
-                 ORIGIN + "/garbage.php?ckSize=" + str(HTTP_DOWNLOAD // 2**20))
+        tail += ("--max-filesize", str(HTTP_DOWNLOAD + 1), urls[0])
     # Older curl releases only enforce --max-filesize when the response has
     # a length header. Bound the output file even for a chunked response.
     limit = 8193 if upload else HTTP_DOWNLOAD + 1
@@ -103,11 +105,11 @@ def https_stream(args, upload, payload, base):
     return milliseconds(data.get("time_connect")), milliseconds(data.get("time_starttransfer"))
 
 
-def https_wave(args, upload, payload, base):
+def https_wave(args, upload, payload, base, urls=CLOUVIDER_URLS):
     timestamp = utc()
     clock = monotonic()
     with ThreadPoolExecutor(STREAMS) as pool:
-        futures = [pool.submit(https_stream, args, upload, payload, base) for _ in range(STREAMS)]
+        futures = [pool.submit(https_stream, args, upload, payload, base, urls) for _ in range(STREAMS)]
         samples = [future.result() for future in futures]
     elapsed = max(monotonic() - clock, .001)
     total = STREAMS * (HTTP_UPLOAD if upload else HTTP_DOWNLOAD)
@@ -197,9 +199,58 @@ def observe(catalog_path, base):
             "families": families}
 
 
+def observe_shared_path(catalog_path, base, performance):
+    report = {"scope": "ORACLE_ORIGIN_PARALLEL_CLOUVIDER_AND_CLOUDFLARE_IPV4", "started_at": utc()}
+    try:
+        if os.geteuid() != 0 or not PRLIMIT.is_file():
+            raise base.ProbeFailure("LONDON_SHARED_PATH_RUNTIME_UNAVAILABLE")
+        (source, expected), _ = base.configured_addresses(catalog_path)
+        london = resolve(4, base)
+        cloudflare = base.resolve(4)
+        for destination in (london, cloudflare):
+            base.route_check(source, destination)
+        london_curl = curl_args(source, london)
+        cloudflare_curl = base.curl_base(source, cloudflare)
+        verify_address(london_curl, expected, base)
+        report["cloudflare_colo"] = base.trace(cloudflare_curl, expected)
+        device = performance.physical_interface()
+        report["queues"] = performance.queues(device)
+        report["filter_counts"] = {}
+        for direction in ("ingress", "egress"):
+            filters = performance.json_command("tc", "-j", "filter", "show", "dev", device, direction)
+            report["filter_counts"][direction] = len(filters) if isinstance(filters, list) else None
+        for name in ("download", "upload"):
+            upload = name == "upload"
+            payload = bytes(HTTP_UPLOAD) if upload else None
+            before = performance.load_snapshot(device)
+            start = monotonic()
+            with ThreadPoolExecutor(2) as pool:
+                cf = pool.submit(https_wave, cloudflare_curl, upload, payload, base, CLOUDFLARE_URLS)
+                lc = pool.submit(https_wave, london_curl, upload, payload, base, CLOUVIDER_URLS)
+                samples = {"cloudflare": cf.result(), "clouvider": lc.result()}
+            elapsed = max(monotonic() - start, .001)
+            observed = performance.load_interval(before, performance.load_snapshot(device))
+            report[name] = {"providers": samples, "aggregate_mbps": round(
+                8 * sum(value["bytes"] for value in samples.values()) / elapsed / 1e6, 2),
+                "elapsed_ms": round(elapsed * 1e3, 2),
+                "physical_counters": observed["network_counter_deltas"][device],
+                "cpu": observed["cpu"], "queue": observed["physical_queue"]}
+        return {**report, "status": "OBSERVED", "ended_at": utc()}
+    except base.ProbeFailure as error:
+        return {**report, "status": "UNAVAILABLE", "reason": str(error)}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {**report, "status": "UNAVAILABLE", "reason": "LONDON_SHARED_PATH_RESPONSE_UNVERIFIED"}
+
+
 if __name__ == "__main__":
     folder = Path(__file__).resolve().parent
     sys.path.insert(0, str(folder))
     import vm_origin
 
-    print(json.dumps(observe(folder.parents[2] / "ops/network/endpoints.json", vm_origin)))
+    catalog = folder.parents[2] / "ops/network/endpoints.json"
+    if sys.argv[1:] == ["--shared-path"]:
+        import performance
+
+        print(json.dumps(observe_shared_path(catalog, vm_origin, performance)))
+    else:
+        print(json.dumps(observe(catalog, vm_origin)))

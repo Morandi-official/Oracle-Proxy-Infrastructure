@@ -173,14 +173,15 @@ def preflight():
         except (OSError, ValueError, subprocess.SubprocessError):
             value['tailscale_performance'] = {'status': 'UNAVAILABLE_OR_DEADLINE'}
     origin_probe = {
-        'tailscale-vm-origin-parallel': ('vm_origin.py', 'tailscale_vm_origin'),
-        'tailscale-london-origin-baseline': ('london_baseline.py', 'tailscale_london_origin'),
+        'tailscale-vm-origin-parallel': ('vm_origin.py', 'tailscale_vm_origin', ()),
+        'tailscale-london-origin-baseline': ('london_baseline.py', 'tailscale_london_origin', ()),
+        'tailscale-london-origin-shared-path': ('london_baseline.py', 'tailscale_london_shared_path', ('--shared-path',)),
     }.get(diagnostic_request.get('request_id'))
     if diagnostic_request.get('operation') == 'preflight' and origin_probe is not None:
-        script, report_key = origin_probe
+        script, report_key, options = origin_probe
         result = {'status': 'UNAVAILABLE_OR_DEADLINE'}
         try:
-            measured = subprocess.run([sys.executable, '-I', str(REPO / 'ops/tailscale/deploy' / script)],
+            measured = subprocess.run([sys.executable, '-I', str(REPO / 'ops/tailscale/deploy' / script), *options],
                                       capture_output=True, text=True,
                                       check=True, timeout=115)
             if len(measured.stdout) <= 16384:

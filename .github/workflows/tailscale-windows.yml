@@ -37,6 +37,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       version: ${{ steps.request.outputs.version }}
+      experiment: ${{ steps.request.outputs.experiment }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,15 +51,25 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           $version = $env:INPUT_VERSION
+          $experiment = ''
           if ($env:TOP_LEVEL_PUSH -eq 'true') {
-            $version = (Get-Content -LiteralPath ./ops/tailscale/windows-acceptance.json -Raw | ConvertFrom-Json).version
+            $request = Get-Content -LiteralPath ./ops/tailscale/windows-acceptance.json -Raw | ConvertFrom-Json
+            $version = $request.version
+            if ($request.PSObject.Properties['experiment']) {
+              if ($request.experiment -cne 'retained-coordinator') { throw 'WINDOWS_EXPERIMENT_INVALID' }
+              $experiment = $request.experiment
+            }
           }
           if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw 'WINDOWS_VERSION_INVALID' }
           "version=$version" >> $env:GITHUB_OUTPUT
+          "experiment=$experiment" >> $env:GITHUB_OUTPUT
       - name: Build the Windows x64 portable and setup distributions
         env:
           VERSION: ${{ steps.request.outputs.version }}
-        run: ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows
+          EXPERIMENT: ${{ steps.request.outputs.experiment }}
+        run: |
+          $retain = $env:EXPERIMENT -ceq 'retained-coordinator'
+          ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows -RetentionExperiment:$retain
       - name: Verify the setup installs the exact portable payload
         if: '!inputs.live_acceptance && env.TOP_LEVEL_PUSH != ''true'''
         env:
@@ -66,7 +77,7 @@ jobs:
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
       - uses: actions/upload-artifact@v4
         with:
-          name: tailscale-windows-bundle
+          name: ${{ steps.request.outputs.experiment == 'retained-coordinator' && 'tailscale-windows-retained-coordinator-bundle' || 'tailscale-windows-bundle' }}
           path: dist/tailscale-windows/
           if-no-files-found: error
           retention-days: 3
@@ -86,17 +97,28 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: tailscale-windows-bundle
+          name: ${{ needs.build.outputs.experiment == 'retained-coordinator' && 'tailscale-windows-retained-coordinator-bundle' || 'tailscale-windows-bundle' }}
           path: dist/tailscale-windows
       - name: Measure the installed client's real Oracle route and recovery
         env:
           VERSION: ${{ needs.build.outputs.version }}
+          EXPERIMENT: ${{ needs.build.outputs.experiment }}
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
-        run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live
+        run: |
+          $retain = $env:EXPERIMENT -ceq 'retained-coordinator'
+          ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -RetentionExperiment:$retain
       - uses: actions/upload-artifact@v4
+        if: needs.build.outputs.experiment != 'retained-coordinator'
         with:
           name: tailscale-windows-client
           path: dist/tailscale-windows/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always() && needs.build.outputs.experiment == 'retained-coordinator' && hashFiles('dist/tailscale-windows/RETAINED_COORDINATOR.json') != ''
+        with:
+          name: tailscale-windows-retained-coordinator-report
+          path: dist/tailscale-windows/RETAINED_COORDINATOR.json
           if-no-files-found: error
           retention-days: 7

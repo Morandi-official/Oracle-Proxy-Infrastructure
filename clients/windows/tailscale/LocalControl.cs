@@ -152,6 +152,18 @@ internal sealed class LocalControl : IDisposable
     internal Task Stop(CancellationToken cancellation = default) =>
         Send(HttpMethod.Patch, "prefs", new { WantRunning = false, WantRunningSet = true }, cancellation);
 
+#if RETAINED_COORDINATOR_ACCEPTANCE
+    internal Task ClearExitForProbe(CancellationToken cancellation) =>
+        Send(HttpMethod.Patch, "prefs", new
+        {
+            ExitNodeID = "",
+            ExitNodeIDSet = true,
+            ExitNodeIPSet = true,
+            WantRunning = true,
+            WantRunningSet = true,
+        }, cancellation);
+#endif
+
     internal async Task<string> ReadExitTransport(long nodeId, CancellationToken cancellation)
     {
         using var response = await _client.GetAsync(Api + "status", cancellation);

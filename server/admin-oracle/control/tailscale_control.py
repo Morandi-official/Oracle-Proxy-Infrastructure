@@ -71,6 +71,8 @@ class HeadscaleControl:
         user_id = _positive_id(user_id)
         ticket_id = _positive_id(ticket_id)
         nodes = self._call("nodes", "list", "--user", username)
+        if nodes is None:
+            return None  # Headscale serializes an empty Go slice as null.
         if not isinstance(nodes, list):
             raise OSError("INVALID_HEADSCALE_NODE_LIST")
         matches = [

@@ -28,7 +28,7 @@ public final class MainActivity extends Activity {
     private static final String ACCOUNT = "client-account";
     private static final String DIRECT = "已断开 · 当前直连";
     private final AtomicInteger generation = new AtomicInteger();
-    private final AccountClient accounts = new AccountClient();
+    private AccountClient accounts;
     private TextView status;
     private EditText username;
     private EditText password;
@@ -97,6 +97,7 @@ public final class MainActivity extends Activity {
         });
         setContentView(scroll);
         networks = getSystemService(ConnectivityManager.class);
+        accounts = new AccountClient(networks);
         networks.registerDefaultNetworkCallback(networkChanges);
         login.setEnabled(false);
         EngineHost.CLIENT_ACTIONS.execute(this::restoreSession);

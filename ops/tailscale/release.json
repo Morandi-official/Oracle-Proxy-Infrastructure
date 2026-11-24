@@ -2,5 +2,5 @@
   "version": "0.1.1",
   "publish": false,
   "accepted_windows_run": 45395036477,
-  "request": "measure-android-owned-route-overlap"
+  "request": "measure-android-current-network-keepalive"
 }

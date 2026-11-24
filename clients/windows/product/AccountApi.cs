@@ -10,11 +10,17 @@ internal sealed class AccountApi : IDisposable
     private readonly HttpClient _http;
     private readonly CancellationTokenSource _stop=new();
     private static readonly object AddressGate=new();
-    private static string[] KnownAddresses=["152.67.154.225","150.230.113.158"];
+    internal const string BootstrapAddress="152.67.156.100";
+    private static string[] KnownAddresses=[];
+    internal static string[] ConnectionCandidates(IEnumerable<string> known)=>
+        known.Prepend(BootstrapAddress).Distinct(StringComparer.Ordinal).ToArray();
     private static readonly string AddressCache=Path.Combine(Platform.StateRoot,"api-addresses.json");
     private static void Remember(JsonObject state)
     {
-        var addresses=EndpointCatalog.Addresses(state);if(addresses.Length==0)return;
+        var addresses=EndpointCatalog.Addresses(state);
+        if(addresses.Length==0 && state["tunnel"]?["transport_address"] is JsonValue value && value.TryGetValue<string>(out var address))
+            addresses=[EndpointCatalog.Public(address)];
+        if(addresses.Length==0)return;
         lock(AddressGate){KnownAddresses=addresses;}
         try{if(Platform.IsSystem){Platform.VerifyProtected(Platform.StateRoot);if(File.Exists(AddressCache) && File.GetAttributes(AddressCache).HasFlag(FileAttributes.ReparsePoint))return;string temporary=AddressCache+".new";File.WriteAllText(temporary,new JsonArray(addresses.Select(a=>(JsonNode?)JsonValue.Create(a)).ToArray()).ToJsonString());File.Move(temporary,AddressCache,true);}}catch(IOException){}catch(UnauthorizedAccessException){}
     }
@@ -32,7 +38,7 @@ internal sealed class AccountApi : IDisposable
                     catch(Exception e) when(e is SocketException or OperationCanceledException or IOException){socket.Dispose();token.ThrowIfCancellationRequested();return null;}
                 }
                 string[] known;lock(AddressGate){known=KnownAddresses;}
-                foreach(string address in known){var stream=await Try(address);if(stream is not null)return stream;}
+                foreach(string address in ConnectionCandidates(known)){var stream=await Try(address);if(stream is not null)return stream;}
                 foreach(string address in await PhysicalDns.Resolve(physical,token)){var stream=await Try(address);if(stream is not null)return stream;}
                 throw new IOException("API_ENDPOINTS_UNAVAILABLE");
             }};
@@ -49,12 +55,18 @@ internal sealed class AccountApi : IDisposable
         request.Headers.Add("X-Oracle-Client-Capabilities","dual-stack-v1");
         if(token.Length>0)request.Headers.Authorization=new("Bearer",token);
         if(body is not null)request.Content=new StringContent(body.ToJsonString(),Encoding.UTF8,"application/json");
-        using var result=await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,deadline.Token);
+        using var result=await Send(request,deadline.Token);
         await using var stream=await result.Content.ReadAsStreamAsync(deadline.Token);using var memory=new MemoryStream();var buffer=new byte[4096];
         int n;while((n=await stream.ReadAsync(buffer,deadline.Token))!=0){if(memory.Length+n>65536)throw new IOException("API_RESPONSE_TOO_LARGE");memory.Write(buffer,0,n);}
         var value=JsonNode.Parse(memory.ToArray())?.AsObject() ?? throw new IOException("INVALID_API_RESPONSE");
         if(!result.IsSuccessStatusCode)throw new ApiException(value["error"]?.GetValue<string>() ?? "API_UNAVAILABLE");
         EndpointCatalog.Normalize(value);Remember(value);return value;
+    }
+    private async Task<HttpResponseMessage> Send(HttpRequestMessage request,CancellationToken cancel)
+    {
+        try{return await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel);}
+        catch(HttpRequestException error){throw new IOException("ACCOUNT_API_UNREACHABLE",error);}
+        catch(OperationCanceledException error)when(!_stop.IsCancellationRequested){throw new IOException("ACCOUNT_API_UNREACHABLE",error);}
     }
     internal void Cancel()=>_stop.Cancel();
     public void Dispose(){_stop.Cancel();_http.Dispose();_stop.Dispose();}

@@ -143,7 +143,10 @@ internal sealed partial class VpnRuntime : IDisposable
                     }
                     if(_refreshPending?.IsCompleted==true){
                         var pending=_refreshPending;_refreshPending=null;
-                        if(_refreshToken==_secret.Token){_state=await pending;_received=DateTimeOffset.UtcNow;}
+                        if(_refreshToken==_secret.Token){
+                            _state=await pending;_received=DateTimeOffset.UtcNow;
+                            if(_error=="ACCOUNT_API_UNREACHABLE"){_error="";_failure=null;}
+                        }
                         else{try{await pending;}catch{}}
                     }
                     if(_probePending?.IsCompleted==true)await CompleteEgressProbe();
@@ -282,7 +285,11 @@ internal sealed partial class VpnRuntime : IDisposable
             if(client is not null && command is "AttachClient" or "AttachConnect")Attach(client);
             if(Diagnosing && command is not ("Status" or "CancelUdpDiagnostics" or "Disconnect" or "Quit" or "Logout"))throw new IOException("DIAGNOSTIC_BUSY");
             switch(command){
-            case "AttachClient":if(SessionAuthorized && _state is null)await Refresh();break;
+            case "AttachClient":
+                // The pipe attachment has authenticated the local client.
+                // WAN recovery belongs to the background account refresh.
+                if(SessionAuthorized && _state is null && _refreshPending is null)_nextRefresh=default;
+                break;
             case "DeleteDevice":
                 if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
                 string deviceId=value["device_id"]?.GetValue<string>()??"";

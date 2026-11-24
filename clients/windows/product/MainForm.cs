@@ -296,7 +296,12 @@ internal sealed partial class MainForm : Form
         };
         _login.Click+=async(_,_)=>await Act(_rememberLogin.Checked?"LoginRemembered":"Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
         _password.KeyDown+=async(_,e)=>{if(e.KeyCode==Keys.Enter && _login.Enabled){e.SuppressKeyPress=true;await Act(_rememberLogin.Checked?"LoginRemembered":"Login");}};
-        _timer.Tick+=async(_,_)=>{if(!_busy && !_closing)await Act("Status");};
+        _timer.Tick+=async(_,_)=>{
+            if(_busy || _closing)return;
+            bool restoring=_diagnosticSnapshot?["login_authenticated"]?.GetValue<bool>()==true && !_hasAccount;
+            await Act("Status");
+            if(restoring && _hasAccount)await StartReadyClient();
+        };
         Shown+=async(_,_)=>{if(_realService){if(await ProvisionService())await StartReadyClient();}else{await Act("Status");await StartReadyClient();}};
         IEnumerable<Control> Descendants(Control parent){foreach(Control child in parent.Controls){yield return child;foreach(var nested in Descendants(child))yield return nested;}}
         foreach(var button in Descendants(_shell).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connect || button==_login);StyleButton(_emergencyRecovery);
@@ -758,8 +763,9 @@ internal sealed partial class MainForm : Form
             bool restoring=state["login_authenticated"]?.GetValue<bool>()==true && account is null;
             _startupGate.Controls[0].Text=restoring?"正在恢复已保存的登录…":"正在准备安全连接…";
             if(restoring)_timer.Interval=1000;
+            bool awaitingFirstRefresh=restoring && string.IsNullOrEmpty(state["error"]?.GetValue<string>());
             UpdateUdpAction();
-            RevealView(restoring?null:_authenticated);
+            RevealView(awaitingFirstRefresh?null:_authenticated);
 
     }
     internal string DownloadRate=>_download.Text;
@@ -839,5 +845,6 @@ internal sealed partial class MainForm : Form
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",
         "LOGIN_SESSION_EXPIRED"=>"登录已过期，请重新登录。",
+        "ACCOUNT_API_UNREACHABLE"=>"暂时无法连接账号服务。已保存的登录会继续重试。",
         "LOGIN_REQUIRED"=>"请先登录账号。", "DISCONNECT_BEFORE_LOGIN"=>"更换登录前请先断开。", _=>$"操作尚未完成：{code}。"};
 }

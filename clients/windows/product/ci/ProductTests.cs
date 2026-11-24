@@ -444,6 +444,10 @@ internal static class ProductTests
     }
     private static void UdpDiagnosticRegression()
     {
+        var stale = new[]{"152.67.154.225","150.230.113.158"};
+        UiAssert(AccountApi.ConnectionCandidates(stale).SequenceEqual(new[]{"152.67.156.100","152.67.154.225","150.230.113.158"}) &&
+            AccountApi.ConnectionCandidates(new[]{"152.67.156.100"}).SequenceEqual(new[]{"152.67.156.100"}),
+            "STALE_API_CACHE_CANNOT_HIDE_THE_CURRENT_BOOTSTRAP_ADDRESS");
         var catalog=JsonNode.Parse("""{"network_endpoints":{"schema":1,"revision":5,"primary":"143.47.230.196","backup":"150.230.115.65","egress_ipv4":["143.47.230.196"],"private_ipv4":{"143.47.230.196":"10.0.0.6"}},"tunnel":{}}""")!.AsObject();
         EndpointCatalog.Normalize(catalog);
         UiAssert(TransportPolicy.IngressAddress(catalog)=="143.47.230.196" && TransportPolicy.IngressAddress(EndpointCatalog.ForIngress(catalog,true))=="150.230.115.65" && EndpointCatalog.Egress(catalog).SequenceEqual(new[]{"143.47.230.196"}) && UdpDiagnosticTarget.ForState(catalog).Length==6,"ENDPOINT_CATALOG_REFRESHES_INGRESS_BACKUP_EGRESS_AND_DIAGNOSTICS_WITHOUT_BUILD");
@@ -791,6 +795,15 @@ internal static class ProductTests
         }
         waiting=false;var refreshed=form.Act("Status");UiPumpUntil(()=>refreshed.IsCompleted && shell.Visible,"REMEMBERED_STARTUP_DID_NOT_REVEAL_DASHBOARD");
         UiAssert(!startup.Visible && !login.Visible && loginFrames==0,"REMEMBERED_STARTUP_FLASHED_LOGIN_PAGE");
+        var unavailable=(JsonObject)restoring.DeepClone();
+        unavailable["error"]="ACCOUNT_API_UNREACHABLE";
+        form.Display(unavailable);
+        Application.DoEvents();
+        UiAssert(login.Visible && UiDescendants(login).OfType<Button>().Single(c=>c.Text=="登录").Enabled,
+            "REMEMBERED_ACCOUNT_OUTAGE_DISABLED_MANUAL_LOGIN");
+        form.Display((JsonObject)ready.DeepClone());
+        Application.DoEvents();
+        UiAssert(shell.Visible && !login.Visible,"BACKGROUND_ACCOUNT_RETRY_DID_NOT_RESTORE_DASHBOARD");
         form.ClientSize=new Size(1220,820);form.PerformLayout();Application.DoEvents();
         var viewport=UiDescendants(form).Single(c=>c.Name=="viewport");var area=viewport.RectangleToScreen(viewport.ClientRectangle);
         foreach(var card in UiDescendants(form).Where(c=>c.Name is "connectionSection" or "accountSection" or "toolsSection"))

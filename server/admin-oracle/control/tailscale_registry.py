@@ -45,6 +45,11 @@ class AdmissionRegistry:
                     coordinator_clean INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            # Keep the revocation record, and free address uniqueness only
+            # after the coordinator has finished removal. Headscale can reuse
+            # an address when it rebuilds its allocator on restart.
+            db.execute("""UPDATE tailscale_admission SET node=NULL, ipv4=NULL, ipv6=NULL
+                          WHERE revoked=1 AND coordinator_clean=1 AND node IS NOT NULL""")
 
     def _open(self):
         db = sqlite3.connect(self._path, isolation_level=None)
@@ -152,7 +157,9 @@ class AdmissionRegistry:
         if node:
             self._coordinator.revoke(node)
         with self._transaction() as db:
-            db.execute("UPDATE tailscale_admission SET coordinator_clean=1 WHERE device=?", (device,))
+            db.execute("""UPDATE tailscale_admission
+                          SET coordinator_clean=1, node=NULL, ipv4=NULL, ipv6=NULL
+                          WHERE device=?""", (device,))
 
 
 @dataclass(frozen=True)

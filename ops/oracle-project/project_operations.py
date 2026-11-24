@@ -718,6 +718,15 @@ def main(arguments):
                 raise
             print('CLOUD_UDP_IDENTITY='+json.dumps(result,sort_keys=True),flush=True)
             return
+        if request.get('request_id') == 'single-public-ip-preflight-20261124':
+            helper = Path(__file__).with_name('single_public_ip_inventory.py')
+            result = subprocess.run(
+                ['/opt/oracle-proxy-admin/current/.venv/bin/python', '-I', str(helper)],
+                capture_output=True, text=True, check=True, timeout=65)
+            if len(result.stdout) > 4096:
+                raise ValueError('PUBLIC_IP_INVENTORY_OUTPUT_LIMIT')
+            print('SINGLE_PUBLIC_IP_PREFLIGHT=' + json.dumps(json.loads(result.stdout), sort_keys=True), flush=True)
+            return
         if request.get('request_id') == 'udp-readback-0443-20261124':
             current = host.ROOT / 'current'
             command = """from datetime import datetime, timezone

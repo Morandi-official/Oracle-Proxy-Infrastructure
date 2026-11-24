@@ -492,6 +492,20 @@ def tailnet_deployment():
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
     if request.get('operation') == 'enable-https' and request.get('request_id') in (
+        'tailscale-gro-apply', 'tailscale-gro-rollback',
+    ):
+        gro_spec = importlib.util.spec_from_file_location('oracle_tailnet_gro', REPO / 'ops/tailscale/deploy/gro.py')
+        gro = importlib.util.module_from_spec(gro_spec)
+        gro_spec.loader.exec_module(gro)
+        try:
+            (gro.install if request['request_id'] == 'tailscale-gro-apply' else gro.uninstall)()
+        except ValueError as error:
+            code = str(error)
+            if re.fullmatch(r'TAILNET_GRO_[A-Z_]+', code):
+                print('PROJECT_TAILSCALE_GRO_ERROR=' + code, flush=True)
+            raise
+        return
+    if request.get('operation') == 'enable-https' and request.get('request_id') in (
         'tailscale-stage-apply', 'tailscale-stage-rollback',
     ):
         tailnet = tailnet_deployment()

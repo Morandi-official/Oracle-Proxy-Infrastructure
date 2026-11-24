@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/tailscale-migration-lab.yml
       - ops/tailscale/lab/**
+      - server/admin-oracle/control/tailscale_egress.py
   workflow_dispatch:
 
 permissions:

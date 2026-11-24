@@ -5,6 +5,7 @@ umask 077
 test "$(id -u)" -eq 0
 tools_dir=$(realpath "${1:?upstream binary directory required}")
 source_dir=$(dirname "$(realpath "$0")")
+policy_program=$(realpath "$source_dir/../../../server/admin-oracle/control/tailscale_egress.py")
 lab_dir=$(mktemp -d /tmp/proxy-ts.XXXXXX)
 bridge="pts$$"
 declare -A namespaces
@@ -26,6 +27,15 @@ cleanup() {
         if [[ ${namespaces[admitted]+yes} == yes ]]; then
             ip -n "${namespaces[admitted]}" route get 198.18.46.2 || true
             ip -n "${namespaces[admitted]}" -6 route get 2001:db8:46::2 || true
+        fi
+        if [[ ${namespaces[exit]+yes} == yes ]]; then
+            ip -n "${namespaces[exit]}" route show || true
+            ip netns exec "${namespaces[exit]}" iptables -vnL FORWARD || true
+            ip netns exec "${namespaces[exit]}" iptables -vnL ts-forward || true
+            ip netns exec "${namespaces[exit]}" iptables -t nat -vnL ts-postrouting || true
+        fi
+        if [[ -f "$lab_dir/forwarding.log" ]]; then
+            tail -n 20 "$lab_dir/forwarding.log"
         fi
     fi
     for child in "${children[@]}"; do
@@ -161,6 +171,7 @@ tailscale() {
 start_node() {
     local role=$1
     ip netns exec "${namespaces[$role]}" env TS_NO_LOGS_NO_SUPPORT=true \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$lab_dir/no-system-dbus" \
         "$tools_dir/tailscaled" --state "$lab_dir/$role.state" --socket "$lab_dir/$role.sock" \
         --tun tailscale0 --port 41641 > "$lab_dir/$role.log" 2>&1 &
     children+=("$!")
@@ -194,6 +205,14 @@ wait_for_origin() {
         sleep 0.5
     done
     return 1
+}
+
+apply_lease_policy() {
+    ip netns exec "${namespaces[exit]}" python3 "$policy_program" "$@"
+}
+
+origin_blocked() {
+    ! http_origin "$1" 4 && ! http_origin "$1" 6
 }
 
 stage=headscale-startup
@@ -230,6 +249,10 @@ fi
 test "$(headscale nodes list --user admitted -o json | jq 'length')" = 1
 echo 'TAILSCALE_SINGLE_USE_ADMISSION=PASS'
 
+stage=origin-reachable-from-exit
+test "$(http_origin exit 4)" = 198.18.46.1
+test "$(http_origin exit 6)" = 2001:db8:46::1
+
 stage=entry-route
 if http_origin admitted 4 || http_origin admitted 6; then
     echo 'Origin reachable before selecting an exit node' >&2
@@ -237,6 +260,12 @@ if http_origin admitted 4 || http_origin admitted 6; then
 fi
 exit_ipv4=$(tailscale exit ip -4)
 tailscale admitted set --exit-node "$exit_ipv4"
+if command -v tcpdump >/dev/null; then
+    ip netns exec "${namespaces[exit]}" timeout 28 tcpdump -nnl -i any -s 96 \
+        'tcp port 8081 and (host 198.18.46.2 or host 2001:db8:46::2)' \
+        > "$lab_dir/forwarding.log" 2>&1 &
+    children+=("$!")
+fi
 stage=isolated-ipv4-egress
 wait_for_origin 4 198.18.46.1
 stage=isolated-ipv6-egress
@@ -252,15 +281,33 @@ echo 'TAILSCALE_UDP_DNS_THROUGH_EXIT=PASS'
 
 stage=unauthorized-and-revoked-egress
 tailscale denied set --exit-node "$exit_ipv4" >/dev/null 2>&1 || true
-if http_origin denied 4 || http_origin denied 6; then
+if ! origin_blocked denied; then
     echo 'Unauthorized node used the exit' >&2
     exit 1
 fi
 echo 'TAILSCALE_UNAUTHORIZED_DEVICE_DENIED=PASS'
+
+stage=fail-closed-forwarding-lease
+apply_lease_policy install
+origin_blocked admitted
+admitted_ipv4=$(tailscale admitted ip -4)
+admitted_ipv6=$(tailscale admitted ip -6)
+apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
+wait_for_origin 4 198.18.46.1
+wait_for_origin 6 2001:db8:46::1
+apply_lease_policy replace --seconds 2 "$admitted_ipv4" "$admitted_ipv6"
+sleep 3
+origin_blocked admitted
+echo 'TAILSCALE_BOTH_FAMILIES_FAIL_CLOSED_ON_LEASE_EXPIRY=PASS'
+
+stage=revoked-node
+apply_lease_policy replace "$admitted_ipv4" "$admitted_ipv6"
+wait_for_origin 4 198.18.46.1
+wait_for_origin 6 2001:db8:46::1
 node_id=$(headscale nodes list --user admitted -o json | jq -er '.[0].id')
 headscale nodes delete --identifier "$node_id" --force > /dev/null
-for _ in {1..15}; do
-    if ! http_origin admitted 4 && ! http_origin admitted 6; then
+for _ in {1..3}; do
+    if origin_blocked admitted; then
         echo 'TAILSCALE_REVOKED_DEVICE_EGRESS_STOPPED=PASS'
         exit 0
     fi

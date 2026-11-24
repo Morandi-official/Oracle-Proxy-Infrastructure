@@ -8,6 +8,7 @@ source_dir=$(dirname "$(realpath "$0")")
 policy_program=$(realpath "$source_dir/../../../server/admin-oracle/control/tailscale_egress.py")
 lab_dir=$(mktemp -d /tmp/proxy-ts.XXXXXX)
 bridge="pts$$"
+readonly coordinator=https://headscale.test
 declare -A namespaces
 declare -a children
 
@@ -43,6 +44,10 @@ cleanup() {
     done
     for namespace in "${namespaces[@]}"; do
         ip netns delete "$namespace" 2>/dev/null || true
+        if [[ -f "/etc/netns/$namespace/hosts" ]]; then
+            rm -f -- "/etc/netns/$namespace/hosts"
+            rmdir -- "/etc/netns/$namespace"
+        fi
     done
     ip link delete "$bridge" 2>/dev/null || true
     rm -rf -- "$lab_dir"
@@ -55,6 +60,12 @@ create_namespace() {
     ip netns add "$namespace"
     namespaces[$role]=$namespace
     ip -n "$namespace" link set lo up
+}
+
+configure_test_dns() {
+    local directory="/etc/netns/${namespaces[$1]}"
+    mkdir -- "$directory"
+    printf '127.0.0.1 localhost\n192.0.2.1 headscale.test\n' > "$directory/hosts"
 }
 
 attach_peer() {
@@ -84,6 +95,9 @@ attach_peer exit 192.0.2.11
 attach_peer admitted 192.0.2.12
 attach_peer denied 192.0.2.13
 attach_peer replay 192.0.2.14
+for role in exit admitted denied replay; do
+    configure_test_dns "$role"
+done
 stage=private-link
 ip netns exec "${namespaces[admitted]}" ping -q -c 1 -W 2 192.0.2.11 > /dev/null
 ip link add "${bridge}wan" type veth peer name "${bridge}web"
@@ -105,6 +119,16 @@ ip netns exec "${namespaces[exit]}" sysctl -q -w net.ipv4.ip_forward=1 net.ipv6.
 
 ip netns exec "${namespaces[origin]}" python3 "$source_dir/origin.py" &
 children+=("$!")
+
+stage=fixture-tls
+openssl req -x509 -newkey rsa:2048 -days 1 -nodes -subj '/CN=Proxy test CA' \
+    -addext 'basicConstraints=critical,CA:TRUE' -keyout "$lab_dir/ca.key" -out "$lab_dir/ca.pem" \
+    > "$lab_dir/openssl.log" 2>&1
+openssl req -new -newkey rsa:2048 -nodes -subj '/CN=headscale.test' \
+    -keyout "$lab_dir/headscale-tls.key" -out "$lab_dir/headscale.csr" >> "$lab_dir/openssl.log" 2>&1
+printf '%s\n' 'subjectAltName=DNS:headscale.test' 'extendedKeyUsage=serverAuth' > "$lab_dir/leaf.ext"
+openssl x509 -req -days 1 -in "$lab_dir/headscale.csr" -CA "$lab_dir/ca.pem" -CAkey "$lab_dir/ca.key" \
+    -CAcreateserial -extfile "$lab_dir/leaf.ext" -out "$lab_dir/headscale.pem" >> "$lab_dir/openssl.log" 2>&1
 
 cat > "$lab_dir/derp.yaml" <<'EOF'
 regions:
@@ -131,8 +155,10 @@ cat > "$lab_dir/policy.json" <<'EOF'
 }
 EOF
 cat > "$lab_dir/headscale.yaml" <<EOF
-server_url: http://192.0.2.1:8080
-listen_addr: 192.0.2.1:8080
+server_url: $coordinator
+listen_addr: 192.0.2.1:443
+tls_cert_path: $lab_dir/headscale.pem
+tls_key_path: $lab_dir/headscale-tls.key
 metrics_listen_addr: ""
 grpc_listen_addr: 127.0.0.1:50443
 unix_socket: $lab_dir/headscale.sock
@@ -187,10 +213,10 @@ daemon_api() {
 
 login_via_daemon() {
     local role=$1 key_file=$2
-    jq -n --rawfile key "$key_file" '{
+    jq -n --arg coordinator "$coordinator" --rawfile key "$key_file" '{
         AuthKey: ($key | rtrimstr("\n")),
         UpdatePrefs: {
-            ControlURL: "http://192.0.2.1:8080",
+            ControlURL: $coordinator,
             WantRunning: true, ShieldsUp: true, CorpDNS: true, RouteAll: false
         }
     }' | daemon_api "$role" POST start > "$lab_dir/$role.login.log"
@@ -208,6 +234,7 @@ start_node() {
     local role=$1
     ip netns exec "${namespaces[$role]}" env TS_NO_LOGS_NO_SUPPORT=true \
         DBUS_SYSTEM_BUS_ADDRESS="unix:path=$lab_dir/no-system-dbus" \
+        SSL_CERT_FILE="$lab_dir/ca.pem" \
         "$tools_dir/tailscaled" --state "$lab_dir/$role.state" --socket "$lab_dir/$role.sock" \
         --tun tailscale0 --port 41641 > "$lab_dir/$role.log" 2>&1 &
     children+=("$!")
@@ -221,7 +248,7 @@ start_node() {
 login() {
     local role=$1 key_file=$2
     shift 2
-    tailscale "$role" up --login-server http://192.0.2.1:8080 --auth-key "file:$key_file" \
+    tailscale "$role" up --login-server "$coordinator" --auth-key "file:$key_file" \
         --accept-dns=false --accept-routes=false --hostname "$role" --timeout 15s "$@" \
         > "$lab_dir/$role.login.log" 2>&1
 }

@@ -1,0 +1,32 @@
+[Unit]
+Description=Oracle Proxy dedicated Tailscale exit
+Requires=oracle-proxy-tailnet-guard.service oracle-proxy-headscale.service
+Wants=network-online.target
+After=network-online.target caddy.service oracle-proxy-tailnet-guard.service oracle-proxy-headscale.service
+
+[Service]
+ExecStart=/usr/local/libexec/oracle-proxy-tailnet/tailscaled --state=/var/lib/oracle-proxy-tailnet-exit/tailscaled.state --socket=/run/oracle-proxy-tailnet-exit/tailscaled.sock --tun=tailscale0 --port=41641
+Environment=TS_NO_LOGS_NO_SUPPORT=true
+Environment=DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/oracle-proxy-tailnet-exit/no-system-dbus
+BindReadOnlyPaths=/etc/oracle-proxy-tailnet/exit-hosts:/etc/hosts
+RuntimeDirectory=oracle-proxy-tailnet-exit
+RuntimeDirectoryMode=0700
+StateDirectory=oracle-proxy-tailnet-exit
+StateDirectoryMode=0700
+ReadWritePaths=/run/xtables.lock
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

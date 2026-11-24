@@ -1,0 +1,79 @@
+name: Tailscale Windows packages and Oracle acceptance
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      live_acceptance:
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Windows client SemVer
+        default: '0.1.0'
+        required: true
+        type: string
+      live_acceptance:
+        description: Verify the installed client against the live Oracle exit
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+      - name: Build the Windows x64 portable and setup distributions
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows
+      - name: Verify the setup installs the exact portable payload
+        if: '!inputs.live_acceptance'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-windows-bundle
+          path: dist/tailscale-windows/
+          if-no-files-found: error
+          retention-days: 3
+
+  live:
+    if: inputs.live_acceptance && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 12
+    environment: windows-client-acceptance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-windows-bundle
+          path: dist/tailscale-windows
+      - name: Measure the installed client's real Oracle route and recovery
+        env:
+          VERSION: ${{ inputs.version }}
+          ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-windows-client
+          path: dist/tailscale-windows/
+          if-no-files-found: error
+          retention-days: 7

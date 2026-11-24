@@ -1,0 +1,62 @@
+plugins {
+    id 'com.android.application' version '8.13.2'
+}
+
+def releaseTest = providers.gradleProperty('proxyTestRelease').orNull == 'true'
+def signing = ['ANDROID_SIGNING_STORE_PATH', 'ANDROID_SIGNING_KEYSTORE_PASSWORD',
+               'ANDROID_SIGNING_KEY_ALIAS', 'ANDROID_SIGNING_KEY_PASSWORD']
+        .collect { providers.environmentVariable(it).orNull }
+def ownerSigned = signing.every { it != null && !it.isBlank() }
+if (releaseTest && !ownerSigned) {
+    throw new GradleException('Release acceptance requires owner signing.')
+}
+
+android {
+    namespace 'org.morandi.proxy.tailscale'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'org.morandi.proxy'
+        minSdk 29
+        targetSdk 36
+        versionCode 3
+        versionName '0.1.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets.main.java.srcDir('../tailscale')
+    def notices = providers.gradleProperty('proxyNoticeDirectory').orNull
+    if (notices != null) {
+        sourceSets.main.assets.srcDir(notices)
+    }
+
+    if (ownerSigned) {
+        signingConfigs {
+            production {
+                storeFile = file(signing[0])
+                storePassword = signing[1]
+                keyAlias = signing[2]
+                keyPassword = signing[3]
+            }
+        }
+        buildTypes.release.signingConfig = signingConfigs.production
+    }
+    if (releaseTest) {
+        testBuildType = 'release'
+    }
+}
+
+dependencies {
+    implementation files(providers.gradleProperty('tailscaleBridge').get())
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
+}

@@ -1,0 +1,31 @@
+[Unit]
+Description=Oracle Proxy private Tailscale coordinator
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=oracle-proxy-headscale
+Group=oracle-proxy-headscale
+ExecStart=/usr/local/libexec/oracle-proxy-tailnet/headscale --config /etc/oracle-proxy-tailnet/headscale.yaml serve
+StateDirectory=oracle-proxy-tailnet-headscale
+StateDirectoryMode=0700
+RuntimeDirectory=oracle-proxy-tailnet-headscale
+RuntimeDirectoryMode=0750
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

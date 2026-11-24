@@ -1,0 +1,129 @@
+name: Tailscale migration data-path lab
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/tailscale-migration-lab.yml
+      - .github/workflows/tailscale-windows.yml
+      - ops/tailscale/lab/**
+      - ops/tailscale/windows/**
+      - server/admin-oracle/control/tailscale_control.py
+      - server/admin-oracle/control/tailscale_egress.py
+      - server/admin-oracle/control/tailscale_registry.py
+      - server/admin-oracle/control/tailscale_gateway.py
+      - server/admin-oracle/console/tailscale_api.py
+      - clients/windows/tailscale/**
+      - clients/windows/tailscale-app/**
+      - clients/android/tailscale/**
+      - clients/android/tailscale-app/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-exit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch pinned upstream packages
+        run: bash ops/tailscale/lab/fetch-tools.sh "$RUNNER_TEMP/proxy-tailscale-tools"
+      - name: Verify device admission and isolated IPv4, IPv6 and DNS exit
+        run: sudo bash ops/tailscale/lab/check-exit.sh "$RUNNER_TEMP/proxy-tailscale-tools"
+  windows-local-control:
+    uses: ./.github/workflows/tailscale-windows.yml
+    with:
+      version: '0.1.0'
+  android-native-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out pinned Android engine source
+        uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale-android
+          ref: 62d1e58c2ecaf52914476ecb97239fbbf70298ea
+          path: upstream/tailscale-android
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: upstream/tailscale-android/go.mod
+          cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Build the Tailscale Android bridge for emulator and phone
+        working-directory: upstream/tailscale-android
+        run: |
+          make build-unstripped-aar
+          archive=android/libs/libtailscale_unstripped.aar
+          unzip -l "$archive" | awk '/jni\/arm64-v8a\/libgojni.so$/{phone=1} /jni\/x86_64\/libgojni.so$/{emulator=1} END{exit !(phone && emulator)}'
+          unzip -p "$archive" classes.jar > "$RUNNER_TEMP/tailscale-native-bridge.jar"
+          jar tf "$RUNNER_TEMP/tailscale-native-bridge.jar" | awk '/libtailscale\/IPNService.class$/{service=1} /libtailscale\/Application.class$/{app=1} END{exit !(service && app)}'
+          echo 'TAILSCALE_ANDROID_NATIVE_BRIDGE_BUILD=PASS'
+      - name: Build the Android client
+        run: >-
+          gradle --no-daemon
+          -p clients/android/tailscale-app
+          -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
+          assembleDebug assembleDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-android-lab-client
+          path: clients/android/tailscale-app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 3
+      - name: Build a disposable Android application using only the new runtime
+        run: >-
+          gradle --no-daemon
+          -p ops/tailscale/lab/android-app
+          -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
+          assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-runtime-emulator-fixture
+          path: ops/tailscale/lab/android-app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 1
+  android-vpn-service:
+    needs: android-native-bridge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-runtime-emulator-fixture
+          path: fixture
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-android-lab-client
+          path: client
+      - name: Launch the runtime and client on Android
+        run: |
+          shopt -s nullglob
+          fixture=(fixture/*.apk)
+          client=(client/*.apk)
+          test "${#fixture[@]}" = 1
+          test "${#client[@]}" = 1
+          bash ops/tailscale/lab/check-android.sh "${fixture[0]}" "${client[0]}"

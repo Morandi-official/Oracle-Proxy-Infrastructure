@@ -383,9 +383,11 @@ def install_control():
     lock.touch(exist_ok=True)
     previous = target.read_bytes() if target.exists() else None
     previous_unit = unit.read_bytes() if unit.exists() else None
-    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py','endpoint_switch.py')}
+    modules = ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py','endpoint_switch.py',
+               'tailscale_control.py','tailscale_egress.py','tailscale_gateway.py','tailscale_registry.py')
+    diagnostic_previous = {name:target.with_name(name).read_bytes() if target.with_name(name).exists() else None for name in modules}
     atomic(target.with_name('ipv6_addresses.py'), (SERVER/'control/ipv6_addresses.py').read_bytes(), 0o644)
-    for name in ('udp_capture.py','udp_diagnostics.py','billing.py','qos.py','ingress.py','endpoint_switch.py'):
+    for name in modules:
         atomic(target.with_name(name),(SERVER/'control'/name).read_bytes(),0o644)
     atomic(target,(SERVER/'control/agent.py').read_bytes(),0o644)
     ingress_unit=Path('/etc/systemd/system/proxy-ingress-routing.service')
@@ -471,8 +473,34 @@ def _retire_rc32_ci_device():
     module.apply()
 
 
+def tailnet_deployment():
+    spec = importlib.util.spec_from_file_location('oracle_tailnet_host', REPO / 'ops/tailscale/deploy/host.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def enable_https():
     request=json.loads(Path(__file__).with_name('request.json').read_text())
+    if request.get('operation') == 'enable-https' and request.get('request_id') in (
+        'tailscale-stage-apply', 'tailscale-stage-rollback',
+    ):
+        tailnet = tailnet_deployment()
+        operation = tailnet.apply if request['request_id'] == 'tailscale-stage-apply' else tailnet.rollback
+        try:
+            operation(CADDY_MAIN, CADDY_DIRECTORY / 'admin.caddy')
+        except ValueError as error:
+            code = str(error)
+            if re.fullmatch(r'TAILNET_[A-Z0-9_]{1,80}', code):
+                print('PROJECT_TAILSCALE_STAGE_ERROR=' + code, flush=True)
+            raise
+        except subprocess.SubprocessError as error:
+            details = getattr(error, 'cmd', ())
+            command_name = Path(details[0]).name if details else ''
+            if command_name in ('systemctl', 'caddy', 'curl', 'nft', 'tailscale', 'headscale', 'useradd'):
+                print('PROJECT_TAILSCALE_STAGE_COMMAND_FAILED=' + command_name, flush=True)
+            raise
+        return
     if request.get('request_id')=='retire-only-rc32-completed-ci-20261107':
         _retire_rc32_ci_device()
         return # One exact completed hosted CI peer; no mirror or deployment.
@@ -596,7 +624,11 @@ def enable_https():
     if previous_snippet is not None:
         atomic(backup_dir / 'previous-admin.caddy', previous_snippet, 0o600)
     updated = original if marker in original.splitlines() else original + b'\n' + marker + b'\n'
-    atomic(snippet, (SERVER / 'deploy/Caddyfile').read_bytes(), 0o644)
+    caddy_body = (SERVER / 'deploy/Caddyfile').read_bytes()
+    tailnet = tailnet_deployment()
+    if tailnet.enabled():
+        caddy_body = tailnet.render_caddy(caddy_body, True)
+    atomic(snippet, caddy_body, 0o644)
     candidate = main.parent / '.oracle-project-candidate'
     atomic(candidate, updated, 0o644)
     try:

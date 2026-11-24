@@ -49,6 +49,9 @@ public final class LocalControl {
         if (!ENROLLMENT_KEY.matcher(credential).matches()) {
             throw new IllegalArgumentException("INVALID_TAILSCALE_ENROLLMENT");
         }
+        if (readState().hasNodeKey()) {
+            throw new IOException("TAILSCALE_DEVICE_ALREADY_REGISTERED");
+        }
         try {
             JSONObject preferences = new JSONObject()
                     .put("ControlURL", "https://" + host)
@@ -57,6 +60,7 @@ public final class LocalControl {
                     .put("CorpDNS", true)
                     .put("RouteAll", false);
             request("POST", "start", new JSONObject().put("AuthKey", credential).put("UpdatePrefs", preferences));
+            request("POST", "login-interactive", null);
         } catch (JSONException error) {
             throw new IOException("INVALID_TAILSCALE_ENROLLMENT");
         }

@@ -194,6 +194,7 @@ login_via_daemon() {
             WantRunning: true, ShieldsUp: true, CorpDNS: true, RouteAll: false
         }
     }' | daemon_api "$role" POST start > "$lab_dir/$role.login.log"
+    daemon_api "$role" POST login-interactive </dev/null >> "$lab_dir/$role.login.log"
     for _ in {1..30}; do
         if tailscale "$role" status --json | jq -e '.BackendState == "Running" and .HaveNodeKey' >/dev/null; then
             return

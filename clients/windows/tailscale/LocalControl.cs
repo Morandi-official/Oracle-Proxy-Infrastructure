@@ -60,7 +60,7 @@ internal sealed class LocalControl : IDisposable
         return new DaemonState(state, hasNodeKey);
     }
 
-    internal Task Enroll(Uri coordinator, string credential, CancellationToken cancellation = default)
+    internal async Task Enroll(Uri coordinator, string credential, CancellationToken cancellation = default)
     {
         if (!coordinator.IsAbsoluteUri || coordinator.Scheme != Uri.UriSchemeHttps ||
             coordinator.HostNameType != UriHostNameType.Dns || !coordinator.IsDefaultPort ||
@@ -68,8 +68,10 @@ internal sealed class LocalControl : IDisposable
             throw new ArgumentException("INVALID_TAILSCALE_COORDINATOR", nameof(coordinator));
         if (!EnrollmentKey.IsMatch(credential))
             throw new ArgumentException("INVALID_TAILSCALE_ENROLLMENT", nameof(credential));
+        if ((await ReadState(cancellation)).HasNodeKey)
+            throw new IOException("TAILSCALE_DEVICE_ALREADY_REGISTERED");
 
-        return Send(HttpMethod.Post, "start", new
+        await Send(HttpMethod.Post, "start", new
         {
             AuthKey = credential,
             UpdatePrefs = new
@@ -81,6 +83,7 @@ internal sealed class LocalControl : IDisposable
                 RouteAll = false,
             },
         }, cancellation);
+        await Send(HttpMethod.Post, "login-interactive", null, cancellation);
     }
 
     internal Task SelectExitNode(long nodeId, CancellationToken cancellation = default)
@@ -102,9 +105,11 @@ internal sealed class LocalControl : IDisposable
     internal Task Stop(CancellationToken cancellation = default) =>
         Send(HttpMethod.Patch, "prefs", new { WantRunning = false, WantRunningSet = true }, cancellation);
 
-    private async Task Send(HttpMethod method, string action, object value, CancellationToken cancellation)
+    private async Task Send(HttpMethod method, string action, object? value, CancellationToken cancellation)
     {
-        using var request = new HttpRequestMessage(method, Api + action) { Content = JsonContent.Create(value) };
+        using var request = new HttpRequestMessage(method, Api + action);
+        if (value is not null)
+            request.Content = JsonContent.Create(value);
         using var response = await _client.SendAsync(request, cancellation);
         if (!response.IsSuccessStatusCode)
             throw new IOException("TAILSCALE_LOCAL_CONTROL_REJECTED");

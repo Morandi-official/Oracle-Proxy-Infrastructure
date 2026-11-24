@@ -103,7 +103,7 @@ def main():
             raise ValueError('PREEXISTING_TARGET_ROUTE_REFUSED')
 
     config=load('catalog',Path('ops/network/endpoint_catalog.py')).load()
-    roles=('primary','backup')
+    roles = tuple(role for role in ('primary', 'backup') if config[role]['public_ipv4'] is not None)
     targets={role:str(ipaddress.IPv4Address(config[role]['public_ipv4'])) for role in roles}
     headers=load('wire_headers',Path('server/admin-oracle/control/udp_capture.py'))
     os.umask(0o077)
@@ -145,7 +145,8 @@ def main():
         status = rpc('overview')
         print('CLOUD_UDP_ACTIVE_CATALOG='+json.dumps(status,sort_keys=True),flush=True)
         membership = [config['primary'], config['backup'], *config['legacy']]
-        if any(status[role] not in membership for role in roles) or status['primary'] == status['backup']:
+        runtime_roles = tuple(role for role in ('primary', 'backup') if status[role]['public_ipv4'] is not None)
+        if runtime_roles != roles or any(status[role] not in membership for role in roles) or status['primary'] == status['backup']:
             raise ValueError('RUNTIME_ENDPOINT_OUTSIDE_REGISTERED_CATALOG')
         targets = {role: status[role]['public_ipv4'] for role in roles}
         headers.ADDRESSES = {address: socket.inet_aton(address) for address in targets.values()}
@@ -154,12 +155,12 @@ def main():
         try:
             info=rpc('prepare')
             if not info.get('present') or not all(info.get('endpoint_public_keys',{}).get(role) for role in roles):
-                raise ValueError('DUAL_INGRESS_PROBE_IDENTITY_NOT_READY')
+                raise ValueError('INGRESS_PROBE_IDENTITY_NOT_READY')
             rpc('capture-start')
             capture_open=True
             # One known control, followed by the previously failing backup ports.
             ordered=[('primary',443),('backup',443),('backup',8443),('backup',51820),('primary',8443),('primary',51820)]
-            for role,port in ordered:
+            for role,port in (target for target in ordered if target[0] in roles):
                 row={'role':role,'address':targets[role],'port':port,'started_at':int(time.time())}
                 rpc('capture-begin',address=row['address'],port=port)
                 try:
@@ -192,7 +193,7 @@ def main():
                 if attempt==2:
                     raise RuntimeError('CLOUD_NATIVE_PROBE_CLEANUP_UNCONFIRMED')
                 time.sleep(2)
-        if len(rows)!=6 or not all(row.get('passed') for row in rows):
+        if len(rows) != len(roles) * len(PORTS) or not all(row.get('passed') for row in rows):
             raise RuntimeError('CLOUD_NATIVE_UDP_PORT_MATRIX_NOT_ALL_PASSED')
 
 

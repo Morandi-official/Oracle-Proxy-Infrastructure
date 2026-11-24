@@ -698,13 +698,18 @@ def main(arguments):
             retirement=importlib.util.module_from_spec(spec);spec.loader.exec_module(retirement)
             print('LEGACY_ENDPOINT_RETIREMENT='+json.dumps(retirement.apply(),sort_keys=True),flush=True)
             return # Exact old aliases/helper and one completed CI identity; no deployment or OCI deletion.
-        if request.get('request_id') in ('cloud-udp-current-ports-20261121','cloud-udp-current-ports-20261124'):
+        if request.get('request_id') in ('cloud-udp-current-ports-20261121','cloud-udp-current-ports-20261124','udp-flow-incident-20261124'):
             body=sys.stdin.buffer.read(4097)
             if len(body)>4096:raise ValueError('DIAGNOSTIC_INPUT_TOO_LARGE')
             diagnostic_spec=importlib.util.spec_from_file_location('cloud_udp_identity',Path(__file__).with_name('cloud_udp_identity.py'))
             diagnostic=importlib.util.module_from_spec(diagnostic_spec);diagnostic_spec.loader.exec_module(diagnostic)
             if not body.strip():
                 print('CLOUD_UDP_OVERVIEW='+json.dumps(diagnostic.overview(),sort_keys=True),flush=True)
+                if request.get('request_id')=='udp-flow-incident-20261124':
+                    helper=Path(__file__).with_name('udp_flow_readback.py')
+                    result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(helper),'--incident-20261124'],capture_output=True,text=True,check=True,timeout=65)
+                    if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')
+                    print('OCI_UDP_INCIDENT_READBACK='+json.dumps(json.loads(result.stdout),sort_keys=True),flush=True)
                 return
             try:result=diagnostic.execute(json.loads(body),paired=True)
             except Exception as error:
@@ -811,12 +816,6 @@ if row:
 print('UDP_SAVED_REPORT_READBACK='+json.dumps(data,sort_keys=True))
 """
             host.as_user(host.APP_USER,[current/'.venv/bin/python','manage.py','shell','-c',command],cwd=current,env=host.read_environment())
-            return
-        if request.get('request_id')=='udp-flow-incident-20261124':
-            helper=Path(__file__).with_name('udp_flow_readback.py')
-            result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(helper),'--incident-20261124'],capture_output=True,text=True,check=True,timeout=65)
-            if len(result.stdout)>16384:raise ValueError('OCI_FLOW_READBACK_OUTPUT_LIMIT')
-            print('OCI_UDP_INCIDENT_READBACK='+json.dumps(json.loads(result.stdout),sort_keys=True),flush=True)
             return
         if request.get('request_id')=='udp-flow-readback-20261121':
             result=subprocess.run(['/opt/oracle-proxy-admin/current/.venv/bin/python','-I',str(Path(__file__).with_name('udp_flow_readback.py'))],capture_output=True,text=True,check=True,timeout=65)

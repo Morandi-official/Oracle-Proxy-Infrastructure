@@ -49,25 +49,36 @@ public final class ProductionLifecycleTest {
 
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Context context = instrumentation.getTargetContext();
-        TunnelEngine engine = new TunnelEngine(context);
         AcceptanceApi api = new AcceptanceApi(context);
-        AppController controller = new AppController(context, api, engine);
-        AppController.installForTest(controller);
-        MainActivity activity = (MainActivity) instrumentation.startActivitySync(
-                new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        AppController enrollment = new AppController(context, api, new TunnelEngine(context));
+        AppController.installForTest(enrollment);
+        AppController active = enrollment;
+        MainActivity activity = null;
         try {
-            controller.login(username, password, false);
-            await("Production TLS authentication", () -> controller.snapshot().signedIn
-                    && !controller.snapshot().busy);
-            assertFalse("Release test requires a fresh emulator identity", controller.snapshot().registered);
-            controller.confirmDevice("Android CI " + run);
-            await("Production device enrollment", () -> controller.snapshot().registered
-                    && !controller.snapshot().busy);
+            enrollment.login(username, password, true);
+            await("Production TLS authentication", () -> enrollment.snapshot().signedIn
+                    && !enrollment.snapshot().busy);
+            assertFalse("Release test requires a fresh emulator identity", enrollment.snapshot().registered);
+            enrollment.confirmDevice("Android CI " + run);
+            await("Production device enrollment", () -> enrollment.snapshot().registered
+                    && !enrollment.snapshot().busy);
+            String device = enrollment.snapshot().deviceId;
 
+            TunnelEngine engine = new TunnelEngine(context);
+            AppController controller = new AppController(context, api, engine);
+            AppController.installForTest(controller);
+            active = controller;
+            await("Remembered session authorizes the same device after a cold restart",
+                    () -> controller.snapshot().registered && device.equals(controller.snapshot().deviceId));
+            System.out.println("ANDROID_COLD_REMEMBERED_LOGIN=PASS");
+
+            MainActivity screen = (MainActivity) instrumentation.startActivitySync(
+                    new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            activity = screen;
             sampleDownload(context.getSystemService(ConnectivityManager.class).getActiveNetwork(), "DIRECT");
             instrumentation.waitForIdleSync();
             instrumentation.runOnMainSync(() -> {
-                android.view.View connect = activity.findViewById(R.id.connect);
+                android.view.View connect = screen.findViewById(R.id.connect);
                 assertNotNull("Connect action is present", connect);
                 assertTrue("Connect action was accepted", connect.performClick());
             });
@@ -89,13 +100,15 @@ public final class ProductionLifecycleTest {
             controller.removeDevice(controller.snapshot().deviceId);
             await("Dedicated test device removed and signed out", () -> !controller.snapshot().signedIn);
         } finally {
-            controller.disconnect();
-            instrumentation.runOnMainSync(activity::finish);
+            active.disconnect();
+            if (activity != null) {
+                instrumentation.runOnMainSync(activity::finish);
+            }
             api.cleanUp();
         }
     }
 
-    private static void sampleDownload(Network network, String route) {
+    private static void sampleDownload(Network network, String route) throws IOException {
         int limit = 2 * 1024 * 1024;
         long start = SystemClock.elapsedRealtime();
         HttpsURLConnection connection = null;
@@ -123,10 +136,10 @@ public final class ProductionLifecycleTest {
             if (total != limit) {
                 throw new IOException();
             }
-            System.out.println("ANDROID_DOWNLOAD_" + route + "_BYTES=" + total
+            android.util.Log.i("ProxySpeedAcceptance", "ANDROID_DOWNLOAD_" + route + "_BYTES=" + total
                     + ";ELAPSED_MS=" + (SystemClock.elapsedRealtime() - start));
         } catch (IOException failure) {
-            System.out.println("ANDROID_DOWNLOAD_" + route + "=UNAVAILABLE");
+            throw new IOException("ANDROID_DOWNLOAD_" + route + "_FAILED", failure);
         } finally {
             if (connection != null) {
                 connection.disconnect();

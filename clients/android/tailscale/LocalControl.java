@@ -4,6 +4,9 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.regex.Pattern;
 import libtailscale.Application;
 import libtailscale.InputStream;
@@ -30,7 +33,14 @@ public final class LocalControl {
                 throw new IOException("INVALID_TAILSCALE_STATUS");
             }
             JSONObject state = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-            return new DaemonState(state.getString("BackendState"), state.optBoolean("HaveNodeKey"));
+            var addresses = new ArrayList<String>();
+            var raw = state.optJSONArray("TailscaleIPs");
+            if (raw != null) {
+                for (int index = 0; index < raw.length(); index++) addresses.add(raw.getString(index));
+            }
+            var exit = state.optJSONObject("ExitNodeStatus");
+            return new DaemonState(state.getString("BackendState"), state.optBoolean("HaveNodeKey"),
+                    exit == null ? "" : exit.optString("ID"), Collections.unmodifiableList(addresses));
         } catch (JSONException error) {
             throw new IOException("INVALID_TAILSCALE_STATUS");
         }
@@ -126,5 +136,5 @@ public final class LocalControl {
         }
     }
 
-    public record DaemonState(String state, boolean hasNodeKey) {}
+    public record DaemonState(String state, boolean hasNodeKey, String exitId, List<String> addresses) {}
 }

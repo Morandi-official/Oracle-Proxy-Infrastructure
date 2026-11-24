@@ -20,6 +20,7 @@ import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
+import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -60,6 +61,18 @@ final class EngineHost implements AppContext {
             host = new EngineHost(context);
         }
         return host;
+    }
+
+    synchronized String deviceId() throws Exception {
+        String value = decryptFromPref("client-device");
+        if (!value.isEmpty()) return value;
+        byte[] bytes = new byte[32];
+        new SecureRandom().nextBytes(bytes);
+        StringBuilder id = new StringBuilder(64);
+        for (byte b : bytes) id.append(Character.forDigit((b >>> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));
+        value = id.toString();
+        encryptToPref("client-device", value);
+        return value;
     }
 
     synchronized Application engine() throws IOException {

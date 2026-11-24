@@ -67,6 +67,16 @@ class HeadscaleControl:
             raise OSError("INVALID_HEADSCALE_CREDENTIAL")
         return Admission(user_id, _positive_id(value.get("id")), key)
 
+    def account_id(self, username):
+        if not isinstance(username, str) or not _USER_NAME.fullmatch(username):
+            raise ValueError("INVALID_HEADSCALE_USERNAME")
+        users = self._call("users", "list") or []
+        matches = [user for user in users if user.get("name") == username]
+        if len(matches) > 1:
+            raise OSError("AMBIGUOUS_HEADSCALE_ACCOUNT")
+        user = matches[0] if matches else self._call("users", "create", username)
+        return _positive_id(user.get("id"))
+
     def find_node(self, username, user_id, ticket_id):
         if not isinstance(username, str) or not _USER_NAME.fullmatch(username):
             raise ValueError("INVALID_HEADSCALE_USERNAME")

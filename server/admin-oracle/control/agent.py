@@ -26,7 +26,7 @@ MAX_BYTES = 10**16
 SYSTEM_OPERATIONS = {
     'system:account-sync': frozenset(('user.anchor',)),
     'system:health': frozenset(('state',)),
-    'system:client-api': frozenset(('state', 'peer.enroll', 'peer.delete-owned', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
+    'system:client-api': frozenset(('state', 'tailscale.profile', 'tailscale.confirm', 'peer.enroll', 'peer.delete-owned', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
 }
 _ipv6_spec = importlib.util.spec_from_file_location('oracle_ipv6_addresses', Path(__file__).with_name('ipv6_addresses.py'))
 ipv6_addresses = importlib.util.module_from_spec(_ipv6_spec)
@@ -247,6 +247,7 @@ class Engine:
         self.billing=billing.Ledger(self.db,now)
         self.driver = driver; self.now = now; self.observation = None; self.error = None
         self.last_sample = None; self.last_enforced = None
+        self.tailscale = None
         self.set_default('started_at', int(now())); self.set_default('nic_total', 0)
         self.set_default('accounting_gaps', 0)
         self.set_default('user_states', {})
@@ -456,9 +457,15 @@ class Engine:
                 self.db.execute('ROLLBACK'); raise
             self.observation = observation; self.last_sample = now
             self.enforce(); self.error = None
+            if self.tailscale is not None:
+                try: self.tailscale.refresh()
+                except Exception: pass  # The Tailscale gateway clears its own forwarding leases.
         except Exception as error:
             # Do not renew kernel leases on incomplete observation or accounting failure.
             self.driver.revoke()
+            if self.tailscale is not None:
+                try: self.tailscale.close()
+                except Exception: pass
             message=str(error)
             self.error = message if re.fullmatch(r'[A-Z_]{1,80}',message) else 'OBSERVATION_OR_ENFORCEMENT_FAILED'
             raise
@@ -591,6 +598,12 @@ class Engine:
         # an internal routing mistake promote them to administrator mutations.
         if actor in SYSTEM_OPERATIONS and operation not in SYSTEM_OPERATIONS[actor]:
             raise ValueError('ADMINISTRATOR_REQUIRED')
+        if operation in ('tailscale.profile', 'tailscale.confirm'):
+            if self.tailscale is None:
+                raise ValueError('TAILSCALE_SERVICE_UNAVAILABLE')
+            if set(data) != {'user_id', 'device'}:
+                raise ValueError('INVALID_FIELDS')
+            return self.tailscale.profile_for(identifier(data['user_id']), data['device'], operation.split('.')[1])
         if operation.startswith('udp-diagnostic.'):
             key=public_key(data.get('public_key'))
             self.tick()
@@ -790,6 +803,13 @@ def main():
     if os.geteuid() != 0: raise SystemExit('Root service required')
     os.umask(0o077); STATE.mkdir(mode=0o700, exist_ok=True)
     engine = Engine(STATE/'ledger.sqlite3', Driver())
+    tailnet_configuration = Path('/etc/oracle-proxy-control/tailscale.json')
+    if tailnet_configuration.exists():
+        # From the same sealed root-owned directory as this entrypoint.
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from tailscale_gateway import TailscaleGateway
+        engine.tailscale = TailscaleGateway.load(engine, STATE, tailnet_configuration)
     allowed_uid = pwd.getpwnam('oracle-proxy-admin').pw_uid
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     if Path(SOCKET).exists(): Path(SOCKET).unlink()

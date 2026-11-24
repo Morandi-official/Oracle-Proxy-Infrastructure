@@ -2,6 +2,8 @@ from django.urls import include, path
 from django.conf import settings
 from console import views, client_api, flclash, udp_diagnostics
 
+from console import tailscale_api
+
 urlpatterns = [
     path('privacy-check/',views.privacy_check),
     path('privacy-check.js',views.privacy_asset,{'name':'privacy.js'}),
@@ -10,6 +12,9 @@ urlpatterns = [
     path('login/', views.login_page, name='login'),
     path('logout/', views.logout_page, name='logout'),
     path('api/client/login', client_api.login),
+    path('api/tailscale/v1/login', tailscale_api.login),
+    path('api/tailscale/v1/profile', tailscale_api.profile),
+    path('api/tailscale/v1/confirm', tailscale_api.confirm),
     path('api/client/authenticate', client_api.authenticate),
     path('api/client/enroll', client_api.enroll),
     path('api/client/presence', client_api.presence),

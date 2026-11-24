@@ -32,14 +32,18 @@ add rule inet {TABLE} forward oifname "{INTERFACE}" ip6 daddr != @authorized6 dr
 
 
 def replace_rules(addresses, seconds):
-    if type(seconds) is not int or not 1 <= seconds <= MAX_LEASE_SECONDS:
-        raise ValueError("INVALID_TAILSCALE_LEASE")
-    by_family = {4: set(), 6: set()}
-    for address in addresses:
+    return renew_rules({address: seconds for address in addresses})
+
+
+def renew_rules(leases):
+    by_family = {4: {}, 6: {}}
+    for address, seconds in leases.items():
+        if type(seconds) is not int or not 1 <= seconds <= MAX_LEASE_SECONDS:
+            raise ValueError("INVALID_TAILSCALE_LEASE")
         parsed = ipaddress.ip_address(address)
         if getattr(parsed, "scope_id", None) is not None or parsed not in POOLS[parsed.version]:
             raise ValueError("INVALID_TAILNET_ADDRESS")
-        by_family[parsed.version].add(parsed)
+        by_family[parsed.version][parsed] = seconds
     if sum(map(len, by_family.values())) > MAX_ADDRESSES:
         raise ValueError("TOO_MANY_TAILNET_ADDRESSES")
 
@@ -48,7 +52,7 @@ def replace_rules(addresses, seconds):
         name = f"authorized{family}"
         commands.append(f"flush set inet {TABLE} {name}")
         if parsed:
-            elements = ", ".join(f"{address} timeout {seconds}s" for address in sorted(parsed))
+            elements = ", ".join(f"{address} timeout {parsed[address]}s" for address in sorted(parsed))
             commands.append(f"add element inet {TABLE} {name} {{ {elements} }}")
     return "\n".join(commands) + "\n"
 
@@ -69,15 +73,29 @@ def node_counters(status, node_id, addresses):
     """Read an exit-side byte sample for the coordinator-verified node."""
     if status.get("BackendState") != "Running":
         return None
+    return peer_counters(index_peers(status), node_id, addresses)
+
+
+def index_peers(status):
     peers = status.get("Peer") or {}
     if not isinstance(peers, dict):
         raise ValueError("INVALID_TAILSCALE_PEER_STATUS")
-    matches = [peer for peer in peers.values() if peer.get("ID") == str(node_id)]
-    if not matches:
+    result = {}
+    for peer in peers.values():
+        node_id = peer.get("ID")
+        if not isinstance(node_id, str) or node_id in result:
+            raise ValueError("INVALID_TAILSCALE_PEER_ID")
+        result[node_id] = peer
+    return result
+
+
+def peer_counters(peers, node_id, addresses):
+    peer = peers.get(str(node_id))
+    if peer is None:
         return None
-    if len(matches) != 1 or set(matches[0].get("TailscaleIPs") or []) != set(addresses):
+    if set(peer.get("TailscaleIPs") or []) != set(addresses):
         raise ValueError("TAILSCALE_PEER_IDENTITY_MISMATCH")
-    received, sent = (matches[0].get(name) for name in ("RxBytes", "TxBytes"))
+    received, sent = (peer.get(name) for name in ("RxBytes", "TxBytes"))
     if any(type(value) is not int or not 0 <= value <= MAX_COUNTER_BYTES for value in (received, sent)):
         raise ValueError("INVALID_TAILSCALE_TRAFFIC_COUNTER")
     return received, sent

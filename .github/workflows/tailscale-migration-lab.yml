@@ -8,8 +8,12 @@ on:
       - server/admin-oracle/control/tailscale_control.py
       - server/admin-oracle/control/tailscale_egress.py
       - server/admin-oracle/control/tailscale_registry.py
+      - server/admin-oracle/control/tailscale_gateway.py
+      - server/admin-oracle/console/tailscale_api.py
       - clients/windows/tailscale/**
+      - clients/windows/tailscale-app/**
       - clients/android/tailscale/**
+      - clients/android/tailscale-app/**
   workflow_dispatch:
 
 permissions:
@@ -37,6 +41,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
+      - name: Build the Windows client
+        run: dotnet build clients/windows/tailscale-app/Proxy.Tailscale.csproj --configuration Release
       - name: Probe the Windows Tailscale engine on a separate protected pipe
         run: ./ops/tailscale/lab/check-windows.ps1
   android-native-bridge:
@@ -73,13 +79,12 @@ jobs:
           unzip -p "$archive" classes.jar > "$RUNNER_TEMP/tailscale-native-bridge.jar"
           jar tf "$RUNNER_TEMP/tailscale-native-bridge.jar" | awk '/libtailscale\/IPNService.class$/{service=1} /libtailscale\/Application.class$/{app=1} END{exit !(service && app)}'
           echo 'TAILSCALE_ANDROID_NATIVE_BRIDGE_BUILD=PASS'
-      - name: Compile the Android client binding against the built bridge
-        run: |
-          platform=$(find "$ANDROID_HOME/platforms" -maxdepth 2 -name android.jar | sort -V | tail -n 1)
-          test -n "$platform"
-          javac --release 17 -cp "$RUNNER_TEMP/tailscale-native-bridge.jar:$platform" \
-            -d "$RUNNER_TEMP/tailscale-client-classes" clients/android/tailscale/*.java
-          echo 'TAILSCALE_ANDROID_LOCAL_API_BINDING_COMPILED=PASS'
+      - name: Build the Android client
+        run: >-
+          gradle --no-daemon
+          -p clients/android/tailscale-app
+          -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
+          assembleDebug
       - name: Build a disposable Android application using only the new runtime
         run: >-
           gradle --no-daemon

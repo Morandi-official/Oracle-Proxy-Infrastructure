@@ -57,7 +57,9 @@ internal sealed class LocalControl : IDisposable
         var state = root.GetProperty("BackendState").GetString()
             ?? throw new IOException("INVALID_TAILSCALE_BACKEND_STATE");
         bool hasNodeKey = root.TryGetProperty("HaveNodeKey", out var key) && key.GetBoolean();
-        return new DaemonState(state, hasNodeKey);
+        var exit = root.TryGetProperty("ExitNodeStatus", out var selected) && selected.ValueKind == JsonValueKind.Object
+            && selected.TryGetProperty("ID", out var id) ? id.GetString() ?? "" : "";
+        return new DaemonState(state, hasNodeKey, exit);
     }
 
     internal async Task Enroll(Uri coordinator, string credential, CancellationToken cancellation = default)
@@ -118,4 +120,4 @@ internal sealed class LocalControl : IDisposable
     public void Dispose() => _client.Dispose();
 }
 
-internal readonly record struct DaemonState(string State, bool HasNodeKey);
+internal readonly record struct DaemonState(string State, bool HasNodeKey, string ExitId);

@@ -113,6 +113,31 @@ class AdmissionRegistry:
                 )
             return node
 
+    def cached(self, account, device):
+        with closing(self._open()) as db:
+            row = self._record(db, account, device)
+            if not row:
+                return None
+            if row["revoked"]:
+                raise PermissionError("TAILSCALE_DEVICE_REVOKED")
+            return BoundIdentity(row["account"], row["node"], row["ipv4"], row["ipv6"])
+
+    def device_count(self, account, excluding):
+        with closing(self._open()) as db:
+            return db.execute(
+                """SELECT count(*) FROM tailscale_admission WHERE account=? AND device<>? AND revoked=0
+                   AND (node IS NOT NULL OR issued_at>?)""",
+                (account.account_id, excluding, int(self._now()) - self._coordinator.ticket_lifetime_seconds),
+            ).fetchone()[0]
+
+    def bindings(self):
+        with closing(self._open()) as db:
+            return [
+                BoundIdentity(*row) for row in db.execute(
+                    "SELECT account, node, ipv4, ipv6 FROM tailscale_admission WHERE revoked=0 AND node IS NOT NULL"
+                )
+            ]
+
     def revoke(self, account, device):
         with self._transaction() as db:
             row = self._record(db, account, device)
@@ -128,3 +153,15 @@ class AdmissionRegistry:
             self._coordinator.revoke(node)
         with self._transaction() as db:
             db.execute("UPDATE tailscale_admission SET coordinator_clean=1 WHERE device=?", (device,))
+
+
+@dataclass(frozen=True)
+class BoundIdentity:
+    account_id: str
+    node_id: int
+    ipv4: str
+    ipv6: str
+
+    @property
+    def addresses(self):
+        return self.ipv4, self.ipv6

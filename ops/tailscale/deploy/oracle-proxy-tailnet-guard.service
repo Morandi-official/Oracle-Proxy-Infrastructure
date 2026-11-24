@@ -1,0 +1,16 @@
+[Unit]
+Description=Oracle Proxy Tailscale exit admission firewall
+After=netfilter-persistent.service
+Before=oracle-proxy-tailnet-exit.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/oracle-proxy-tailnet/guard.nft
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

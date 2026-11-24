@@ -21,6 +21,7 @@ import libtailscale.VPNServiceBuilder;
 
 /** Owns the Android VPN interface requested by the Tailscale engine. */
 public final class BridgeVpnService extends VpnService implements IPNService {
+    static final String START = "org.morandi.proxy.action.START_TAILSCALE";
     private static final String CHANNEL = "tailscale_vpn";
     private static final int NOTIFICATION = 7721;
     private final String identifier = UUID.randomUUID().toString();
@@ -30,7 +31,7 @@ public final class BridgeVpnService extends VpnService implements IPNService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (prepare(this) != null) {
+        if (intent == null || !START.equals(intent.getAction()) || prepare(this) != null) {
             stopSelf(startId);
             return START_NOT_STICKY;
         }
@@ -99,7 +100,7 @@ public final class BridgeVpnService extends VpnService implements IPNService {
     @Override
     public void onRevoke() {
         detach();
-        super.onRevoke();
+        stopSelf();
     }
 
     @Override

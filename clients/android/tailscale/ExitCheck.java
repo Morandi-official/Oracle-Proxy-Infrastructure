@@ -27,7 +27,7 @@ final class ExitCheck {
         networks = context.getSystemService(ConnectivityManager.class);
     }
 
-    void verify(LocalControl control, AccountClient.Profile profile, BooleanSupplier cancelled) throws Exception {
+    Network verify(LocalControl control, AccountClient.Profile profile, BooleanSupplier cancelled) throws Exception {
         long deadline = SystemClock.elapsedRealtime() + 10_000;
         var workers = Executors.newFixedThreadPool(2);
         try {
@@ -39,7 +39,7 @@ final class ExitCheck {
                     var second = workers.submit(() -> matches(vpn, V6, profile.ipv6()));
                     boolean v4 = first.get(4, TimeUnit.SECONDS);
                     boolean v6 = second.get(4, TimeUnit.SECONDS);
-                    if (v4 && v6 && vpn.equals(vpnFor(state.addresses())) && !cancelled.getAsBoolean()) return;
+                    if (v4 && v6 && vpn.equals(vpnFor(state.addresses())) && !cancelled.getAsBoolean()) return vpn;
                 }
                 Thread.sleep(125);
             }
@@ -50,6 +50,7 @@ final class ExitCheck {
     }
 
     private Network vpnFor(List<String> addresses) {
+        if (addresses.isEmpty()) return null;
         var active = networks.getActiveNetwork();
         var details = active == null ? null : networks.getNetworkCapabilities(active);
         if (details == null || !details.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return null;

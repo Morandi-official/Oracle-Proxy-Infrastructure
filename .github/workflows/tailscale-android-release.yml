@@ -1,0 +1,128 @@
+name: Tailscale Android release acceptance
+
+on:
+  workflow_call:
+    outputs:
+      package-artifact:
+        value: ${{ jobs.build-signed.outputs.artifact }}
+      metrics-artifact:
+        value: ${{ jobs.production-acceptance.outputs.artifact }}
+      version:
+        value: ${{ jobs.build-signed.outputs.version }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-signed:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 28
+    environment: android-release
+    outputs:
+      artifact: ${{ steps.package.outputs.artifact }}
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale-android
+          ref: 62d1e58c2ecaf52914476ecb97239fbbf70298ea
+          path: upstream/tailscale-android
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: upstream/tailscale-android/go.mod
+          cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Build pinned Android engine and bundle its notices
+        working-directory: upstream/tailscale-android
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'
+          make build-unstripped-aar
+          notices="$RUNNER_TEMP/proxy-notices/licenses"
+          mkdir -p "$notices"
+          core=$(go list -m -f '{{.Dir}}' tailscale.com)
+          test -n "$core"
+          cp LICENSE "$notices/tailscale-android.txt"
+          cp "$core/LICENSE" "$notices/tailscale.txt"
+          cp "$core/licenses/android.md" "$notices/android.md"
+          cp "$core/licenses/tailscale.md" "$notices/tailscale.md"
+      - name: Build the owner-signed application and matching instrumentation
+        id: package
+        env:
+          ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
+          ANDROID_SIGNING_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEYSTORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+        run: bash clients/android/tailscale-app/ci/sign-release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-android-signed
+          path: ${{ runner.temp }}/tailscale-android-signed/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-android-test
+          path: clients/android/tailscale-app/build/outputs/apk/androidTest/release/*-release-androidTest.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  production-acceptance:
+    needs: build-signed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: windows-client-acceptance
+    outputs:
+      artifact: ${{ steps.metrics.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-android-signed
+          path: application
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-android-test
+          path: instrumentation
+      - name: Accept the signed application through the Oracle exit
+        id: metrics
+        env:
+          ANDROID_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ANDROID_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          (cd application && sha256sum --check SHA256SUMS.txt)
+          shopt -s nullglob
+          tests=(instrumentation/*.apk)
+          test "${#tests[@]}" -eq 1
+          bash clients/android/tailscale-app/ci/production-test.sh \
+            application/Proxy-Android.apk "${tests[0]}" "$RUNNER_TEMP/android-performance.json"
+          echo 'artifact=tailscale-android-performance' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-android-performance
+          path: ${{ runner.temp }}/android-performance.json
+          if-no-files-found: error
+          retention-days: 14

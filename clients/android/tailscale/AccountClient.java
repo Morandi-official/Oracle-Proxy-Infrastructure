@@ -6,12 +6,14 @@ import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 final class AccountClient {
     private static final URI BASE = URI.create("https://vpn-admin.morandi.dpdns.org/api/tailscale/v1/");
     private static final int MAX_RESPONSE_BYTES = 16_384;
+    private final AtomicReference<HttpURLConnection> request = new AtomicReference<>();
 
     String login(String username, String password, String device) throws IOException, JSONException {
         var body = new JSONObject().put("username", username).put("password", password).put("device", device);
@@ -25,8 +27,20 @@ final class AccountClient {
                 value.isNull("enrollment_key") ? null : value.getString("enrollment_key"));
     }
 
+    void release(String token) throws IOException, JSONException {
+        if (!post("release", token, new JSONObject()).optBoolean("released")) {
+            throw new IOException("DEVICE_RELEASE_UNCONFIRMED");
+        }
+    }
+
+    void cancelCurrentRequest() {
+        var current = request.get();
+        if (current != null) current.disconnect();
+    }
+
     private JSONObject post(String action, String token, JSONObject body) throws IOException, JSONException {
         HttpURLConnection connection = (HttpURLConnection) BASE.resolve(action).toURL().openConnection(Proxy.NO_PROXY);
+        request.set(connection);
         try {
             connection.setInstanceFollowRedirects(false);
             connection.setConnectTimeout(5_000);
@@ -55,6 +69,7 @@ final class AccountClient {
                 return value;
             }
         } finally {
+            request.compareAndSet(connection, null);
             connection.disconnect();
         }
     }

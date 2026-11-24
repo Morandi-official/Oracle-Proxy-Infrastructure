@@ -41,6 +41,7 @@ final class EngineHost implements AppContext {
     private static final String CIPHER = "AES/GCM/NoPadding";
     private static final int NONCE_BYTES = 12;
     static final Executor WORKER = Executors.newSingleThreadExecutor();
+    static final Executor CLIENT_ACTIONS = Executors.newSingleThreadExecutor();
     private static EngineHost host;
 
     private final Context context;

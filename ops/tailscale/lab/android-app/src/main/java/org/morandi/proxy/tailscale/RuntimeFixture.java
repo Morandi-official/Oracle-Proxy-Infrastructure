@@ -16,7 +16,7 @@ public final class RuntimeFixture extends Activity {
             finish();
             return;
         }
-        startForegroundService(new Intent(this, BridgeVpnService.class));
+        startForegroundService(new Intent(this, BridgeVpnService.class).setAction(BridgeVpnService.START));
         EngineHost.WORKER.execute(() -> {
             try {
                 var control = new LocalControl(EngineHost.from(this).engine());

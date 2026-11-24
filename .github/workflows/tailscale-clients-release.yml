@@ -1,0 +1,121 @@
+name: Tailscale production client release
+
+on:
+  push:
+    branches: [main]
+    paths: [ops/tailscale/release.json]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tailscale-production-client-release
+  cancel-in-progress: false
+
+jobs:
+  ready:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: release
+        name: Read the requested release version
+        run: |
+          requested=$(jq -er '.version | strings | select(test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))' ops/tailscale/release.json)
+          echo "version=$requested" >> "$GITHUB_OUTPUT"
+      - name: Wait for the Oracle account gateway and Headscale coordinator
+        run: |
+          host=https://vpn-admin.morandi.dpdns.org
+          for attempt in {1..36}; do
+            if curl -fsS --max-time 8 "$host/api/tailscale/v1/ready" | jq -e '.ready == true' >/dev/null &&
+               curl -fsS --max-time 8 "$host/key?v=148" | jq -e '.publicKey | startswith("mkey:")' >/dev/null; then
+              echo 'ORACLE_TAILSCALE_READY=PASS'
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'Oracle Tailscale gateway or coordination endpoint unavailable' >&2
+          exit 1
+
+  windows:
+    needs: ready
+    uses: ./.github/workflows/tailscale-windows.yml
+    with:
+      version: ${{ needs.ready.outputs.version }}
+      live_acceptance: true
+
+  android:
+    needs: ready
+    uses: ./.github/workflows/tailscale-android-release.yml
+
+  publish:
+    needs: [ready, windows, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-windows-client
+          path: windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.android.outputs.package-artifact }}
+          path: android
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.android.outputs.metrics-artifact }}
+          path: android-metrics
+      - name: Publish the accepted Windows and Android clients together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.ready.outputs.version }}
+          ANDROID_VERSION: ${{ needs.android.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$VERSION" = "$ANDROID_VERSION"
+          jq -e '.accepted == true' windows/ACCEPTANCE.json >/dev/null
+          jq -e '.continuous_egress_probes == 10 and
+                 (.reconnect_to_verified_ms | length == 3) and
+                 (.disconnect_to_direct_ms | length == 4) and
+                 .baseline.down_mbps_median > 0 and .baseline.up_mbps_median > 0 and
+                 .vpn.down_mbps_median > 0 and .vpn.up_mbps_median > 0' \
+            android-metrics/android-performance.json >/dev/null
+          test -s "windows/Proxy-$VERSION-win-x64.zip"
+          test -s "windows/Proxy-$VERSION-win-x64-setup.exe"
+          test -s android/Proxy-Android.apk
+          (cd windows && sha256sum --strict -c SHA256SUMS.txt)
+          (cd android && sha256sum --strict -c SHA256SUMS.txt)
+          cp windows/SHA256SUMS.txt SHA256SUMS-Windows.txt
+          cp android/SHA256SUMS.txt SHA256SUMS-Android.txt
+          tag="tailscale-v$VERSION"
+          target=$(gh api "repos/$GH_REPO/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null || true)
+          if [[ -z "$target" ]]; then
+            gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" >/dev/null
+          fi
+          gh api "repos/$GH_REPO/git/ref/tags/$tag" |
+            jq -e --arg sha "$GITHUB_SHA" '.object.type == "commit" and .object.sha == $sha' >/dev/null
+          if gh release view "$tag" --json isDraft,assets > "$RUNNER_TEMP/tailscale-release.json" 2>/dev/null; then
+            if jq -e '.isDraft == false' "$RUNNER_TEMP/tailscale-release.json" >/dev/null; then
+              jq -e --arg portable "Proxy-$VERSION-win-x64.zip" --arg setup "Proxy-$VERSION-win-x64-setup.exe" \
+                '[.assets[].name] | contains([$portable, $setup, "Proxy-Android.apk", "SHA256SUMS-Windows.txt", "SHA256SUMS-Android.txt"])' \
+                "$RUNNER_TEMP/tailscale-release.json" >/dev/null
+              exit 0
+            fi
+          else
+            gh release create "$tag" --draft --verify-tag --title "Proxy Tailscale $VERSION" \
+              --notes "Windows (x64) installer and portable package, and signed Android APK. Both clients passed production exit and performance acceptance in workflow $GITHUB_RUN_ID."
+          fi
+          gh release upload "$tag" --clobber \
+            "windows/Proxy-$VERSION-win-x64.zip" "windows/Proxy-$VERSION-win-x64-setup.exe" \
+            android/Proxy-Android.apk SHA256SUMS-Windows.txt SHA256SUMS-Android.txt
+          gh release edit "$tag" --draft=false --latest
+          gh release view "$tag" --json url,assets --jq '.url, (.assets[].url)'

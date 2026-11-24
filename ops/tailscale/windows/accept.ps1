@@ -7,6 +7,11 @@ $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
     -not [Environment]::Is64BitProcess) { throw 'HOSTED_WINDOWS_ACCEPTANCE_REQUIRED' }
 if ($Live -and $env:GITHUB_REF -ne 'refs/heads/main') { throw 'MAIN_ONLY_ORACLE_ACCEPTANCE_REQUIRED' }
+$credentials = @{}
+foreach ($name in @('ORACLE_CLIENT_ACCEPTANCE_USERNAME', 'ORACLE_CLIENT_ACCEPTANCE_PASSWORD')) {
+    $credentials[$name] = [Environment]::GetEnvironmentVariable($name)
+    [Environment]::SetEnvironmentVariable($name, $null)
+}
 
 function Invoke-BoundedProcess([string]$File, [string[]]$Arguments, [int]$Milliseconds) {
     $process = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru
@@ -64,7 +69,11 @@ try {
 
     if ($Live) {
         $report = Join-Path $work 'ACCEPTANCE.json'
-        $status = Invoke-BoundedProcess (Join-Path $desktop 'Proxy.exe') @('--acceptance', ('"' + $report + '"')) 270000
+        foreach ($name in $credentials.Keys) { [Environment]::SetEnvironmentVariable($name, $credentials[$name]) }
+        try {
+            $status = Invoke-BoundedProcess (Join-Path $desktop 'Proxy.exe') @('--acceptance', ('"' + $report + '"')) 270000
+        }
+        finally { Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD -ErrorAction SilentlyContinue }
         if (!(Test-Path -LiteralPath $report -PathType Leaf)) { throw 'WINDOWS_LIVE_REPORT_MISSING' }
         $evidence = Get-Content -LiteralPath $report -Raw
         $summary = $evidence | ConvertFrom-Json
@@ -74,7 +83,6 @@ try {
     }
 }
 finally {
-    Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD -ErrorAction SilentlyContinue
     try {
         $uninstaller = Join-Path $desktop 'unins000.exe'
         if ($installAttempted -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {

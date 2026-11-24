@@ -46,6 +46,29 @@ public final class LocalControl {
         }
     }
 
+    String exitPath() throws IOException {
+        try {
+            byte[] bytes = request("GET", "status", null);
+            if (bytes == null || bytes.length > MAX_STATUS_BYTES) throw new IOException("INVALID_TAILSCALE_STATUS");
+            var status = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+            var exit = status.optJSONObject("ExitNodeStatus");
+            var peers = status.optJSONObject("Peer");
+            if (exit != null && peers != null) {
+                String id = exit.getString("ID");
+                for (var iterator = peers.keys(); iterator.hasNext();) {
+                    var peer = peers.getJSONObject(iterator.next());
+                    if (!id.equals(peer.optString("ID"))) continue;
+                    if (!peer.optString("CurAddr").isEmpty()) return "direct";
+                    if (!peer.optString("PeerRelay").isEmpty()) return "peer-relay";
+                    if (!peer.optString("Relay").isEmpty()) return "derp";
+                }
+            }
+            return "unobserved";
+        } catch (JSONException failure) {
+            throw new IOException("INVALID_TAILSCALE_STATUS");
+        }
+    }
+
     public void enroll(URI coordinator, String credential) throws IOException {
         String path = coordinator.getRawPath();
         String host = coordinator.getHost();

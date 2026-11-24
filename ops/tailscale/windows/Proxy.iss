@@ -49,7 +49,7 @@ Name: "{group}\Oracle Proxy"; Filename: "{app}\Proxy.exe"
 Name: "{autodesktop}\Oracle Proxy"; Filename: "{app}\Proxy.exe"; Tasks: desktopicon
 
 [Code]
-function GetFileAttributes(const Name: String): LongWord;
+function GetWindowsFileAttributes(const Name: String): LongWord;
   external 'GetFileAttributesW@kernel32.dll stdcall';
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -63,7 +63,7 @@ begin
     Result := 'The protected default installation directory is required.';
     Exit;
   end;
-  Attributes := GetFileAttributes(Target);
+  Attributes := GetWindowsFileAttributes(Target);
   if (Attributes <> $FFFFFFFF) and ((Attributes and $400) <> 0) then
     Result := 'A linked installation directory cannot be used.';
 end;

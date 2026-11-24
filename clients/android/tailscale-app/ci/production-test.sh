@@ -57,7 +57,7 @@ import sys
 
 log, destination = map(Path, sys.argv[1:])
 prefix = "INSTRUMENTATION_STATUS: proxyMetrics="
-reports = [json.loads(line[len(prefix):]) for line in log.read_text().splitlines() if line.startswith(prefix)]
+reports = [json.loads(line.split(prefix, 1)[1]) for line in log.read_text().splitlines() if prefix in line]
 if len(reports) != 1:
     raise SystemExit("Expected one Oracle Android acceptance report")
 destination.write_text(json.dumps(reports[0], indent=2, sort_keys=True, allow_nan=False) + "\n")

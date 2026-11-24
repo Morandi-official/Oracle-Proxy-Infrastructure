@@ -49,20 +49,64 @@ def handshake_counts(sock, parser, address, port):
     return sorted(indices)[:16], len(indices & responses)
 
 
+SPEED_HOST = 'speed.cloudflare.com'
+SPEED_BYTES = 2 * 1024 * 1024
+
+
+def speed_targets():
+    addresses = {}
+    try:
+        resolved = socket.getaddrinfo(SPEED_HOST, 443, type=socket.SOCK_STREAM)
+    except OSError:
+        return addresses
+    for _, _, _, _, (address, *_) in resolved:
+        ip = ipaddress.ip_address(address)
+        if ip.is_global:
+            addresses.setdefault(ip.version, ip)
+    return addresses
+
+
+def download(ip, route):
+    options = ['--interface', INTERFACE] if route == 'wireguard' else []
+    literal = f'[{ip}]' if ip.version == 6 else str(ip)
+    result = subprocess.run(
+        ['curl', '--noproxy', '*', '--http1.1', '--silent', '--show-error', '--fail',
+         '--connect-timeout', '5', '--max-time', '12', '--output', '/dev/null',
+         '--write-out', '%{json}', '--resolve', f'{SPEED_HOST}:443:{literal}', *options,
+         '-H', 'Accept-Encoding: identity', f'https://{SPEED_HOST}/__down?bytes={SPEED_BYTES}'],
+        capture_output=True, text=True, timeout=14)
+    metrics = json.loads(result.stdout)
+    print('CLOUD_BULK_DOWNLOAD=' + json.dumps({
+        'route': route, 'family': ip.version, 'curl_exit': result.returncode,
+        'http': metrics['http_code'], 'bytes': metrics['size_download'],
+        'first_byte_ms': round(metrics['time_starttransfer'] * 1000),
+        'total_ms': round(metrics['time_total'] * 1000),
+    }, sort_keys=True), flush=True)
+
+
 def trial(row, info, secret, wire_headers):
     address, port = row['address'], row['port']
     nic = json.loads(run(['ip','-j','-4','route','get',address]))[0]['dev']
     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,32}',nic) or nic in ('lo',INTERFACE):
         raise ValueError('PHYSICAL_ROUTE_NOT_VERIFIED')
+    speeds = speed_targets() if row['role'] == 'primary' and port == 443 else {}
+    for ip in speeds.values():
+        if not run(['ip', f'-{ip.version}', 'route', 'show', 'exact', f'{ip}/{ip.max_prefixlen}']):
+            download(ip, 'direct')
+        else:
+            raise ValueError('PREEXISTING_SPEED_TARGET_ROUTE_REFUSED')
     with socket.socket(socket.AF_PACKET,socket.SOCK_DGRAM,0) as sniffer:
         sniffer.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,262144)
         wire_headers.attach(sniffer)
         sniffer.bind((nic,0x0003))
         run(['ip','link','add',INTERFACE,'type','wireguard'])
         try:
-            run(['wg','set',INTERFACE,'private-key',str(secret),'peer',info['endpoint_public_keys'][row['role']],
-                 'allowed-ips','1.1.1.1/32,2606:4700:4700::1111/128','endpoint',f'{address}:{port}'])
             families = {ipaddress.ip_interface(v).version for v in info['allowed_ips']}
+            speed_ips = [ip for version, ip in speeds.items() if version in families]
+            allowed = ['1.1.1.1/32', '2606:4700:4700::1111/128']
+            allowed.extend(f'{ip}/{ip.max_prefixlen}' for ip in speed_ips)
+            run(['wg','set',INTERFACE,'private-key',str(secret),'peer',info['endpoint_public_keys'][row['role']],
+                 'allowed-ips',','.join(allowed),'endpoint',f'{address}:{port}'])
             for value in info['allowed_ips']:
                 run(['ip','address','add',value,'dev',INTERFACE])
             run(['ip','link','set','dev',INTERFACE,'mtu','1280','up'])
@@ -84,6 +128,9 @@ def trial(row, info, secret, wire_headers):
             indices,responses=handshake_counts(sniffer,wire_headers.parse,address,port)
             row.update(client_tx_initiations=len(indices),client_rx_responses=responses)
             row['passed']=row['kernel_handshake'] and row['requested_endpoint_retained'] and all(row.get(family,{}).get('expected_exit',False) for family,_,_ in targets)
+            for ip in speed_ips:
+                run(['ip', f'-{ip.version}', 'route', 'add', f'{ip}/{ip.max_prefixlen}', 'dev', INTERFACE])
+                download(ip, 'wireguard')
             return indices
         finally:
             run(['ip','link','delete',INTERFACE])

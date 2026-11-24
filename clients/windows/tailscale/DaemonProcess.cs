@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net.NetworkInformation;
+using Microsoft.Win32.SafeHandles;
 
 namespace OracleProxy.Tailscale;
 
@@ -6,12 +8,14 @@ namespace OracleProxy.Tailscale;
 internal sealed class DaemonProcess : IAsyncDisposable
 {
     private readonly Process _process;
+    private readonly SafeFileHandle _job;
     internal LocalControl Control { get; }
     internal string AdapterName { get; }
 
-    private DaemonProcess(Process process, LocalControl control, string adapterName)
+    private DaemonProcess(Process process, SafeFileHandle job, LocalControl control, string adapterName)
     {
         _process = process;
+        _job = job;
         Control = control;
         AdapterName = adapterName;
     }
@@ -31,6 +35,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
         {
             if (name.StartsWith("TS_", StringComparison.OrdinalIgnoreCase) ||
                 name.StartsWith("TAILSCALE_", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("ORACLE_CLIENT_ACCEPTANCE_", StringComparison.OrdinalIgnoreCase) ||
                 name.EndsWith("_PROXY", StringComparison.OrdinalIgnoreCase))
                 start.Environment.Remove(name);
         }
@@ -41,10 +46,11 @@ internal sealed class DaemonProcess : IAsyncDisposable
         start.ArgumentList.Add("--port=0");
 
         Process? process = null;
+        SafeFileHandle? job = null;
         try
         {
             cancellation.ThrowIfCancellationRequested();
-            process = DaemonConsole.Start(start);
+            (process, job) = DaemonConsole.Start(start);
             using var readiness = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             readiness.CancelAfter(TimeSpan.FromSeconds(12));
             while (true)
@@ -60,7 +66,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
                 catch (OperationCanceledException) when (!readiness.IsCancellationRequested) { }
                 await Task.Delay(125, readiness.Token);
             }
-            return new DaemonProcess(process, control, adapter);
+            return new DaemonProcess(process, job, control, adapter);
         }
         catch
         {
@@ -68,7 +74,11 @@ internal sealed class DaemonProcess : IAsyncDisposable
             if (process is not null)
             {
                 try { await EndProcess(process); }
-                finally { process.Dispose(); }
+                finally
+                {
+                    job?.Dispose();
+                    process.Dispose();
+                }
             }
             throw;
         }
@@ -105,7 +115,21 @@ internal sealed class DaemonProcess : IAsyncDisposable
         {
             Control.Dispose();
             try { await EndProcess(_process); }
-            finally { _process.Dispose(); }
+            finally
+            {
+                _job.Dispose();
+                _process.Dispose();
+            }
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            try
+            {
+                while (NetworkInterface.GetAllNetworkInterfaces().Any(value => value.Name == AdapterName))
+                    await Task.Delay(125, timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new IOException("TAILSCALE_ADAPTER_STILL_PRESENT");
+            }
         }
     }
 }

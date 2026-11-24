@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - .github/workflows/tailscale-migration-lab.yml
+      - .github/workflows/tailscale-windows.yml
       - ops/tailscale/lab/**
+      - ops/tailscale/windows/**
       - server/admin-oracle/control/tailscale_control.py
       - server/admin-oracle/control/tailscale_egress.py
       - server/admin-oracle/control/tailscale_registry.py
@@ -32,23 +34,9 @@ jobs:
       - name: Verify device admission and isolated IPv4, IPv6 and DNS exit
         run: sudo bash ops/tailscale/lab/check-exit.sh "$RUNNER_TEMP/proxy-tailscale-tools"
   windows-local-control:
-    runs-on: windows-2025
-    timeout-minutes: 7
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.403
-      - name: Check the Windows engine and package the self-contained client
-        run: ./ops/tailscale/lab/check-windows.ps1 -ClientArtifact "$env:RUNNER_TEMP/Proxy-Windows-lab.zip"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tailscale-windows-lab-client
-          path: ${{ runner.temp }}/Proxy-Windows-lab.zip
-          if-no-files-found: error
-          retention-days: 3
+    uses: ./.github/workflows/tailscale-windows.yml
+    with:
+      version: '0.1.0'
   android-native-bridge:
     runs-on: ubuntu-24.04
     timeout-minutes: 24
@@ -88,7 +76,7 @@ jobs:
           gradle --no-daemon
           -p clients/android/tailscale-app
           -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
-          assembleDebug
+          assembleDebug assembleDebugAndroidTest
       - uses: actions/upload-artifact@v4
         with:
           name: tailscale-android-lab-client

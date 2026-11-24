@@ -1,4 +1,4 @@
-param([string]$ClientArtifact)
+param([string]$ClientArtifact, [string]$BundleDir)
 
 $ErrorActionPreference = 'Stop'
 $version = '1.104.7'
@@ -29,17 +29,38 @@ try {
     & dotnet run --project "$PSScriptRoot/windows-control/WindowsControl.csproj" -- $engine $state
     if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_DIRECT_PROTECTED_PIPE_FAILED' }
 
-    if ($ClientArtifact) {
-        $client = Join-Path $work 'client'
+    if ($ClientArtifact -or $BundleDir) {
+        $client = if ($BundleDir) { [IO.Path]::GetFullPath($BundleDir) } else { Join-Path $work 'client' }
+        if (Test-Path -LiteralPath $client) { throw 'TAILSCALE_BUNDLE_MUST_BE_NEW' }
         & dotnet publish "$PSScriptRoot/../../../clients/windows/tailscale-app/Proxy.Tailscale.csproj" `
-            --configuration Release --runtime win-x64 --self-contained true --output $client
+            --configuration Release --runtime win-x64 --self-contained true -p:DebugType=None --output $client
         if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_CANDIDATE_BUILD_FAILED' }
         $runtime = Join-Path $client 'engine'
         $null = New-Item -ItemType Directory $runtime
         Copy-Item -LiteralPath $engine -Destination $runtime
         $dll = Join-Path (Split-Path -Parent $engine) 'wintun.dll'
         if (Test-Path -LiteralPath $dll -PathType Leaf) { Copy-Item -LiteralPath $dll -Destination $runtime }
-        Compress-Archive -Path "$client/*" -DestinationPath $ClientArtifact
+        if ($BundleDir) {
+            $licenses = Join-Path $client 'licenses'
+            $null = New-Item -ItemType Directory $licenses
+            Invoke-WebRequest "https://raw.githubusercontent.com/tailscale/tailscale/v$version/LICENSE" `
+                -OutFile (Join-Path $licenses 'Tailscale-LICENSE.txt') -TimeoutSec 45
+            & $cli licenses | Set-Content -LiteralPath (Join-Path $licenses 'Tailscale-dependencies.txt') -Encoding utf8
+            if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_LICENSE_NOTICE_UNAVAILABLE' }
+            $dotnetRoot = Split-Path -Parent (Get-Command dotnet -CommandType Application).Source
+            $dotnetLicense = Join-Path $dotnetRoot 'LICENSE.txt'
+            $dotnetNotices = Join-Path $dotnetRoot 'ThirdPartyNotices.txt'
+            Copy-Item -LiteralPath $dotnetLicense -Destination (Join-Path $licenses 'DotNet-LICENSE.txt')
+            Copy-Item -LiteralPath $dotnetNotices -Destination (Join-Path $licenses 'DotNet-ThirdPartyNotices.txt')
+            Copy-Item -LiteralPath "$PSScriptRoot/../../../clients/windows/product/COPYING" `
+                -Destination (Join-Path $licenses 'OracleProxy-GPL-3.0.txt')
+            @(
+                "Oracle Proxy source: https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/tree/$env:GITHUB_SHA/clients/windows"
+                "Tailscale engine $version source: https://github.com/tailscale/tailscale/tree/v$version"
+                'Upstream Windows engine distribution: https://pkgs.tailscale.com/stable/'
+            ) | Set-Content -LiteralPath (Join-Path $licenses 'Source.txt') -Encoding utf8
+        }
+        if ($ClientArtifact) { Compress-Archive -Path "$client/*" -DestinationPath $ClientArtifact }
     }
 }
 finally {

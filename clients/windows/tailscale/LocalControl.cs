@@ -107,6 +107,28 @@ internal sealed class LocalControl : IDisposable
     internal Task Stop(CancellationToken cancellation = default) =>
         Send(HttpMethod.Patch, "prefs", new { WantRunning = false, WantRunningSet = true }, cancellation);
 
+    internal async Task<string> ReadExitTransport(long nodeId, CancellationToken cancellation)
+    {
+        using var response = await _client.GetAsync(Api + "status", cancellation);
+        response.EnsureSuccessStatusCode();
+        using var body = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellation));
+        if (body.RootElement.TryGetProperty("Peer", out var peers) && peers.ValueKind == JsonValueKind.Object)
+        {
+            string id = nodeId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            foreach (var candidate in peers.EnumerateObject())
+            {
+                var peer = candidate.Value;
+                if (!peer.TryGetProperty("ID", out var value) || value.GetString() != id)
+                    continue;
+                if (peer.TryGetProperty("CurAddr", out var address) && !string.IsNullOrEmpty(address.GetString()))
+                    return "direct";
+                if (peer.TryGetProperty("Relay", out var relay) && !string.IsNullOrEmpty(relay.GetString()))
+                    return "relay";
+            }
+        }
+        return "unknown";
+    }
+
     private async Task Send(HttpMethod method, string action, object? value, CancellationToken cancellation)
     {
         using var request = new HttpRequestMessage(method, Api + action);

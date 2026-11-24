@@ -36,6 +36,11 @@ internal sealed class AccountClient : IDisposable
             data.GetProperty("enrollment_key").GetString());
     }
 
+    internal async Task Release(string token, CancellationToken cancel)
+    {
+        using var response = await Post("release", token, new { }, cancel);
+    }
+
     private async Task<JsonDocument> Post(string action, string? token, object value, CancellationToken cancel)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, action) { Content = JsonContent.Create(value) };

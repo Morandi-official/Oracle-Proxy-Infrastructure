@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 
 namespace OracleProxy.Tailscale;
 
@@ -12,12 +11,13 @@ internal sealed class MainForm : Form
     private readonly Button _login = new() { Text = "登录", AutoSize = true };
     private readonly Button _connect = new() { Text = "连接", Enabled = false, AutoSize = true };
     private readonly Button _disconnect = new() { Text = "断开并恢复直连", Enabled = false, AutoSize = true };
-    private readonly string _state = Path.Combine(
+    private readonly string _stateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Morandi", "ProxyTailscale");
     private readonly CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _connecting;
     private Task? _connectTask;
     private string? _session;
+    private string? _state;
     private DaemonProcess? _daemon;
     private bool _closing;
     private bool _closeApproved;
@@ -50,25 +50,15 @@ internal sealed class MainForm : Form
         FormClosing += CloseRequested;
     }
 
-    private string Device()
-    {
-        Directory.CreateDirectory(_state);
-        string file = Path.Combine(_state, "device");
-        if (!File.Exists(file))
-            File.WriteAllText(file, Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)));
-        string identity = File.ReadAllText(file);
-        if (identity.Length != 64 || !identity.All(char.IsAsciiHexDigitLower))
-            throw new IOException("INVALID_PROXY_DEVICE_ID");
-        return identity;
-    }
-
     private async Task Login()
     {
         _login.Enabled = false;
         _status.Text = "正在登录";
         try
         {
-            _session = await _account.Login(_user.Text.Trim(), _password.Text, Device(), _lifetime.Token);
+            string username = _user.Text.Trim();
+            _state = ClientConnection.StateFor(_stateRoot, username);
+            _session = await _account.Login(username, _password.Text, ClientConnection.Device(_state), _lifetime.Token);
             _password.Clear();
             _user.Hide();
             _password.Hide();
@@ -87,60 +77,23 @@ internal sealed class MainForm : Form
 
     private async Task Connect()
     {
-        if (_session is null || _connecting is not null || _daemon is not null) return;
+        if (_session is null || _state is null || _connecting is not null || _daemon is not null) return;
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _connecting = attempt;
         _connect.Enabled = false;
         _disconnect.Enabled = true;
         _status.Text = "正在连接";
         var elapsed = Stopwatch.StartNew();
-        bool profileFailed = false;
         try
         {
-            // Prepare the dedicated adapter in parallel with account authorization.
-            var daemonTask = DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
-                _state, attempt.Token);
-            ExitProfile profile;
-            try { profile = await _account.Profile(_session, false, attempt.Token); }
-            catch
-            {
-                profileFailed = !attempt.Token.IsCancellationRequested;
-                await attempt.CancelAsync();
-                try { await (await daemonTask).DisposeAsync(); } catch { }
-                throw;
-            }
-            var daemon = await daemonTask;
-            _daemon = daemon;
-            if (profile.Key is not null)
-            {
-                await daemon.Control.Enroll(profile.Coordinator, profile.Key, attempt.Token);
-                using var registration = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
-                registration.CancelAfter(TimeSpan.FromSeconds(10));
-                while (!(await daemon.Control.ReadState(registration.Token)).HasNodeKey)
-                    await Task.Delay(125, registration.Token);
-                while (true)
-                {
-                    try
-                    {
-                        await _account.Profile(_session, true, registration.Token);
-                        break;
-                    }
-                    catch (IOException error) when (error.Message == "TAILSCALE_ENROLLMENT_PENDING")
-                    {
-                        await Task.Delay(125, registration.Token);
-                    }
-                }
-            }
-            await daemon.Control.SelectExitNode(profile.NodeId, attempt.Token);
-            await ExitCheck.Verify(daemon, profile, attempt.Token);
-            attempt.Token.ThrowIfCancellationRequested();
+            (_daemon, _) = await ClientConnection.Open(_account, _session, _state, attempt.Token);
             _status.Text = $"已连接 · {elapsed.ElapsedMilliseconds} ms";
         }
         catch (Exception failure)
         {
             try { await StopDaemon(); }
             catch (Exception cleanup) { failure = cleanup; }
-            if (!_closing && (profileFailed || !attempt.IsCancellationRequested))
+            if (!_closing && !attempt.IsCancellationRequested)
             {
                 _status.Text = Message(failure);
                 if (failure.Message == "LOGIN_REQUIRED")

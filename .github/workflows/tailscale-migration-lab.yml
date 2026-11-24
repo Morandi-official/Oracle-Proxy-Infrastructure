@@ -41,10 +41,14 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
-      - name: Build the Windows client
-        run: dotnet build clients/windows/tailscale-app/Proxy.Tailscale.csproj --configuration Release
-      - name: Probe the Windows Tailscale engine on a separate protected pipe
-        run: ./ops/tailscale/lab/check-windows.ps1
+      - name: Check the Windows engine and package the self-contained client
+        run: ./ops/tailscale/lab/check-windows.ps1 -ClientArtifact "$env:RUNNER_TEMP/Proxy-Windows-lab.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-windows-lab-client
+          path: ${{ runner.temp }}/Proxy-Windows-lab.zip
+          if-no-files-found: error
+          retention-days: 3
   android-native-bridge:
     runs-on: ubuntu-24.04
     timeout-minutes: 24
@@ -85,6 +89,12 @@ jobs:
           -p clients/android/tailscale-app
           -PtailscaleBridge="$GITHUB_WORKSPACE/upstream/tailscale-android/android/libs/libtailscale_unstripped.aar"
           assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailscale-android-lab-client
+          path: clients/android/tailscale-app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 3
       - name: Build a disposable Android application using only the new runtime
         run: >-
           gradle --no-daemon
@@ -117,9 +127,15 @@ jobs:
         with:
           name: tailscale-runtime-emulator-fixture
           path: fixture
-      - name: Launch the native runtime in a real Android emulator
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-android-lab-client
+          path: client
+      - name: Launch the runtime and client on Android
         run: |
           shopt -s nullglob
-          apks=(fixture/*.apk)
-          test "${#apks[@]}" = 1
-          bash ops/tailscale/lab/check-android.sh "${apks[0]}"
+          fixture=(fixture/*.apk)
+          client=(client/*.apk)
+          test "${#fixture[@]}" = 1
+          test "${#client[@]}" = 1
+          bash ops/tailscale/lab/check-android.sh "${fixture[0]}" "${client[0]}"

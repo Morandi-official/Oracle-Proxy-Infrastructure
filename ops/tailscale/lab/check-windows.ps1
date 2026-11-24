@@ -1,3 +1,5 @@
+param([string]$ClientArtifact)
+
 $ErrorActionPreference = 'Stop'
 $version = '1.104.7'
 $work = Join-Path $env:RUNNER_TEMP ('proxy-tailscale-' + [guid]::NewGuid().ToString('N'))
@@ -26,6 +28,19 @@ try {
     $null = New-Item -ItemType Directory $state
     & dotnet run --project "$PSScriptRoot/windows-control/WindowsControl.csproj" -- $engine $state
     if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_DIRECT_PROTECTED_PIPE_FAILED' }
+
+    if ($ClientArtifact) {
+        $client = Join-Path $work 'client'
+        & dotnet publish "$PSScriptRoot/../../../clients/windows/tailscale-app/Proxy.Tailscale.csproj" `
+            --configuration Release --runtime win-x64 --self-contained true --output $client
+        if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_WINDOWS_CANDIDATE_BUILD_FAILED' }
+        $runtime = Join-Path $client 'engine'
+        $null = New-Item -ItemType Directory $runtime
+        Copy-Item -LiteralPath $engine -Destination $runtime
+        $dll = Join-Path (Split-Path -Parent $engine) 'wintun.dll'
+        if (Test-Path -LiteralPath $dll -PathType Leaf) { Copy-Item -LiteralPath $dll -Destination $runtime }
+        Compress-Archive -Path "$client/*" -DestinationPath $ClientArtifact
+    }
 }
 finally {
     # Console-host and antivirus handles can outlive the daemon briefly.

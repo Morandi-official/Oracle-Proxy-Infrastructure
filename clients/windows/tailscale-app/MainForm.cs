@@ -118,7 +118,18 @@ internal sealed class MainForm : Form
                 registration.CancelAfter(TimeSpan.FromSeconds(10));
                 while (!(await daemon.Control.ReadState(registration.Token)).HasNodeKey)
                     await Task.Delay(125, registration.Token);
-                await _account.Profile(_session, true, attempt.Token);
+                while (true)
+                {
+                    try
+                    {
+                        await _account.Profile(_session, true, registration.Token);
+                        break;
+                    }
+                    catch (IOException error) when (error.Message == "TAILSCALE_ENROLLMENT_PENDING")
+                    {
+                        await Task.Delay(125, registration.Token);
+                    }
+                }
             }
             await daemon.Control.SelectExitNode(profile.NodeId, attempt.Token);
             await ExitCheck.Verify(daemon, profile, attempt.Token);
@@ -129,14 +140,26 @@ internal sealed class MainForm : Form
         {
             try { await StopDaemon(); }
             catch (Exception cleanup) { failure = cleanup; }
-            if (!_closing && (profileFailed || !attempt.IsCancellationRequested)) _status.Text = Message(failure);
+            if (!_closing && (profileFailed || !attempt.IsCancellationRequested))
+            {
+                _status.Text = Message(failure);
+                if (failure.Message == "LOGIN_REQUIRED")
+                {
+                    _session = null;
+                    _user.Show();
+                    _password.Show();
+                    _login.Show();
+                    _login.Enabled = true;
+                    AcceptButton = _login;
+                }
+            }
         }
         finally
         {
             _connecting = null;
             if (!_closing)
             {
-                _connect.Enabled = _daemon is null;
+                _connect.Enabled = _daemon is null && _session is not null;
                 _disconnect.Enabled = _daemon is not null;
             }
         }

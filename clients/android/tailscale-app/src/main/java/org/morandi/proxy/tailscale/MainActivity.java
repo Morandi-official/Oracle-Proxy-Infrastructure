@@ -116,6 +116,7 @@ public final class MainActivity extends Activity {
         worker.execute(() -> {
             try {
                 var profile = accounts.profile(session, false);
+                checkPending(attempt, Long.MAX_VALUE);
                 var engine = new LocalControl(EngineHost.from(this).engine());
                 control = engine;
                 if (profile.key() != null) {
@@ -125,7 +126,16 @@ public final class MainActivity extends Activity {
                         checkPending(attempt, deadline);
                         Thread.sleep(125);
                     }
-                    accounts.profile(session, true);
+                    while (true) {
+                        checkPending(attempt, deadline);
+                        try {
+                            accounts.profile(session, true);
+                            break;
+                        } catch (IOException failure) {
+                            if (!"TAILSCALE_ENROLLMENT_PENDING".equals(failure.getMessage())) throw failure;
+                            Thread.sleep(125);
+                        }
+                    }
                 }
                 checkPending(attempt, Long.MAX_VALUE);
                 engine.selectExitNode(profile.exitId());
@@ -139,7 +149,12 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (generation.get() != attempt) return;
                     stopService(new Intent(this, BridgeVpnService.class));
-                    connect.setEnabled(true);
+                    if ("LOGIN_REQUIRED".equals(failure.getMessage())) {
+                        token = null;
+                        for (View item : new View[] { username, password, login }) item.setVisibility(View.VISIBLE);
+                        login.setEnabled(true);
+                    }
+                    connect.setEnabled(token != null);
                     disconnect.setEnabled(false);
                     status.setText(message(failure));
                 });
@@ -168,6 +183,14 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> status.setText(message(failure)));
             }
         });
+    }
+
+    @Override
+    protected void onDestroy() {
+        generation.incrementAndGet();
+        stopService(new Intent(this, BridgeVpnService.class));
+        worker.shutdownNow();
+        super.onDestroy();
     }
 
     private static String message(Exception error) {

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 apk=${1:?fixture APK required}
+client_apk=${2:?client APK required}
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 package=org.morandi.proxy.tailscale.fixture
 image='system-images;android-36;google_apis;x86_64'
@@ -49,6 +50,10 @@ for _ in {1..40}; do
     if [[ "$log" == *TAILSCALE_ANDROID_RUNTIME_LOCAL_CONTROL=PASS* ]]; then
         echo 'TAILSCALE_ANDROID_RUNTIME_LOCAL_CONTROL=PASS'
         adb shell am force-stop "$package"
+        adb install "$client_apk"
+        adb shell am start -W -n org.morandi.proxy/org.morandi.proxy.tailscale.MainActivity
+        adb shell pidof org.morandi.proxy >/dev/null
+        echo 'TAILSCALE_ANDROID_CLIENT_LAUNCH=PASS'
         exit 0
     fi
     if [[ "$log" == *MISSING* || "$log" == *FAILED* ]]; then

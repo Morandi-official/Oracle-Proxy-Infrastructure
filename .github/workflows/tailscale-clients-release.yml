@@ -27,6 +27,7 @@ jobs:
       android_run: ${{ steps.release.outputs.android_run }}
       windows_run: ${{ steps.release.outputs.windows_run }}
       recheck_android: ${{ steps.release.outputs.recheck_android }}
+      android_only: ${{ steps.release.outputs.android_only }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,8 +43,12 @@ jobs:
           android_run=$(jq -er '.accepted_android_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
           windows_run=$(jq -er '.accepted_windows_run // "" | tostring | select(test("^([1-9][0-9]*|)$"))' ops/tailscale/release.json)
           recheck_android=$(jq -er 'if has("recheck_android") then .recheck_android else false end | select(type == "boolean") | tostring' ops/tailscale/release.json)
+          android_only=$(jq -er 'if has("android_only") then .android_only else false end | select(type == "boolean") | tostring' ops/tailscale/release.json)
           if [[ "$recheck_android" == true ]]; then
             [[ "$publish" == false && -n "$android_run" && -z "$windows_run" ]]
+          fi
+          if [[ "$android_only" == true ]]; then
+            [[ "$publish" == false && -z "$android_run" && -z "$windows_run" ]]
           fi
           if [[ -n "$android_run" ]]; then
             run_api="repos/$GITHUB_REPOSITORY/actions/runs/$android_run"
@@ -68,6 +73,7 @@ jobs:
           echo "android_run=$android_run" >> "$GITHUB_OUTPUT"
           echo "windows_run=$windows_run" >> "$GITHUB_OUTPUT"
           echo "recheck_android=$recheck_android" >> "$GITHUB_OUTPUT"
+          echo "android_only=$android_only" >> "$GITHUB_OUTPUT"
       - name: Wait for the Oracle account gateway and Headscale coordinator
         run: |
           host=https://vpn-admin.morandi.dpdns.org
@@ -84,7 +90,7 @@ jobs:
 
   windows-package:
     needs: ready
-    if: needs.ready.outputs.windows_run == '' && needs.ready.outputs.recheck_android != 'true'
+    if: needs.ready.outputs.windows_run == '' && needs.ready.outputs.recheck_android != 'true' && needs.ready.outputs.android_only != 'true'
     uses: ./.github/workflows/tailscale-windows.yml
     with:
       version: ${{ needs.ready.outputs.version }}

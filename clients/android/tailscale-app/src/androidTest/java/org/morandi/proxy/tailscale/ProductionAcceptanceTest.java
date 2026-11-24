@@ -185,7 +185,10 @@ public final class ProductionAcceptanceTest {
                 .put("ipv4_exit_verified", timing.ipv4VerifiedMs())
                 .put("ipv6_exit_verified", timing.ipv6VerifiedMs())
                 .put("ipv4_exit_transport", timing.ipv4Transport())
-                .put("ipv6_exit_transport", timing.ipv6Transport());
+                .put("ipv6_exit_transport", timing.ipv6Transport())
+                .put("exit_peer_mapped_ms", timing.exitPeerMappedMs())
+                .put("exit_peer_probe_started_ms", timing.peerProbeStartedMs())
+                .put("exit_peer_probe_reply_ms", timing.peerProbeReplyMs());
     }
 
     private boolean hasVpn() {

@@ -54,13 +54,14 @@ internal sealed class AccountClient : IDisposable
         public void Dispose() => Http.Dispose();
     }
 
-    internal Task PrepareLogin(CancellationToken cancel)
+    internal async Task<string?> PrepareLogin(CancellationToken cancel)
     {
-        if (_preparation is not null)
-            return _preparation;
-
-        _preparationStarted = Stopwatch.GetTimestamp();
-        return _preparation = FindLoginRoute(cancel);
+        if (_preparation is null)
+        {
+            _preparationStarted = Stopwatch.GetTimestamp();
+            _preparation = FindLoginRoute(cancel);
+        }
+        return (await _preparation)?.Kind;
     }
 
     internal async Task<string> Login(string username, string password, string device, CancellationToken cancel,

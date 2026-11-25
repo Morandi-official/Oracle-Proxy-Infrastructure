@@ -8,8 +8,11 @@ on:
   workflow_call:
     inputs:
       version:
-        required: true
+        default: ''
         type: string
+      network_smoke:
+        default: false
+        type: boolean
       live_acceptance:
         default: false
         type: boolean
@@ -66,6 +69,10 @@ jobs:
               $experiment = $request.experiment
             }
           }
+          if (-not $version) {
+            [xml]$project = Get-Content -LiteralPath ./clients/windows/tailscale-app/Proxy.Tailscale.csproj -Raw
+            $version = $project.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+          }
           if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw 'WINDOWS_VERSION_INVALID' }
           "version=$version" >> $env:GITHUB_OUTPUT
           if ($dnsFault -and $experiment) { throw 'WINDOWS_DNS_FAULT_REQUIRES_PRODUCT_ACCEPTANCE' }
@@ -83,6 +90,11 @@ jobs:
         env:
           VERSION: ${{ steps.request.outputs.version }}
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
+      - name: Verify Windows login and engine DNS recovery without credentials
+        if: ${{ inputs.network_smoke && github.event_name == 'pull_request' }}
+        env:
+          VERSION: ${{ steps.request.outputs.version }}
+        run: ./ops/tailscale/lab/check-windows-dns-recovery.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.request.outputs.experiment == 'retained-coordinator' && 'tailscale-windows-retained-coordinator-bundle' || 'tailscale-windows-bundle' }}

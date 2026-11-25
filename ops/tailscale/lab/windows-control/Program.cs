@@ -1,6 +1,8 @@
 using System.Net.NetworkInformation;
 using OracleProxy.Tailscale;
 
+if (args.Length == 3 && args[2] == "--dns-recovery")
+    return await DnsRecoveryAcceptance.Run(args[0], args[1]);
 if (args.Length != 2) return 2;
 string adapter;
 await using (var daemon = await DaemonProcess.Start(args[0], args[1], CancellationToken.None))

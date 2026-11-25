@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../../../clients/windows/tailscale-app/AccountClient.cs" Link="AccountClient.cs" />
     <Compile Include="../../../../clients/windows/tailscale/LocalControl.cs" Link="LocalControl.cs" />
     <Compile Include="../../../../clients/windows/tailscale/DaemonProcess.cs" Link="DaemonProcess.cs" />
     <Compile Include="../../../../clients/windows/tailscale/DaemonConsole.cs" Link="DaemonConsole.cs" />

@@ -1,4 +1,4 @@
 {
   "operation": "preflight",
-  "request_id": "tailscale-admission-readiness"
+  "request_id": "tailscale-admission-observation-complete"
 }

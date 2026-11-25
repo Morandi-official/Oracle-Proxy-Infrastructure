@@ -1,7 +1,7 @@
 {
-  "version": "0.1.1",
-  "publish": true,
-  "accepted_windows_run": 45539025400,
-  "accepted_android_run": 45537543155,
-  "request": "publish-cloud-accepted-unified-connect-toggle"
+  "version": "0.1.2",
+  "publish": false,
+  "android_only": true,
+  "android_latency_only": true,
+  "request": "measure-android-detached-coordinator-reconnect"
 }

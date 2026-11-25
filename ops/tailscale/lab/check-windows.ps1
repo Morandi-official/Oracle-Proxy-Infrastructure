@@ -48,12 +48,17 @@ try {
         $engine = Join-Path $patched 'tailscaled.exe'
         Copy-Item -LiteralPath $dll -Destination $patched
 
-        $patch = (Resolve-Path -LiteralPath "$PSScriptRoot/../windows/coordinator-tls-timeout.patch").Path
+        $patch = Join-Path $work 'coordinator-tls-timeout.patch'
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        $originalPatch = (Resolve-Path -LiteralPath "$PSScriptRoot/../windows/coordinator-tls-timeout.patch").Path
+        $dnsCacheSource = Join-Path $source 'net/dnscache/dnscache.go'
+        [IO.File]::WriteAllText($patch, [IO.File]::ReadAllText($originalPatch).Replace("`r`n", "`n"), $utf8)
+        [IO.File]::WriteAllText($dnsCacheSource, [IO.File]::ReadAllText($dnsCacheSource).Replace("`r`n", "`n"), $utf8)
         Push-Location $source
         try {
-            & git apply --check $patch
+            & git -c core.autocrlf=false apply --check $patch
             if ($LASTEXITCODE -ne 0) { throw 'COORDINATOR_TLS_PATCH_MISMATCH' }
-            & git apply $patch
+            & git -c core.autocrlf=false apply $patch
             if ($LASTEXITCODE -ne 0) { throw 'COORDINATOR_TLS_PATCH_FAILED' }
             $env:CGO_ENABLED = '0'
             & go build -trimpath -buildvcs=false -ldflags "-s -w -X tailscale.com/version.shortStamp=$version -X tailscale.com/version.longStamp=$version-proxy.$($sourceCommit.Substring(0, 10))" -o $engine ./cmd/tailscaled

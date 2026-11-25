@@ -820,7 +820,8 @@ internal static class ProductTests
         ready["mode"]="connected";ready["guard"]=true;ready["intent"]=true;ready["transport"]="wireguard-udp";
         ready["verified_exit_ip"]="152.67.156.100";ready["verified_exit_ipv6"]="2603:c020:c015:8100::10";
         bool waiting=true;
-        using var form=new MainForm((_,_,_)=>waiting?initial.Task:Task.FromResult((JsonObject)ready.DeepClone()));
+        var current=ready;
+        using var form=new MainForm((_,_,_)=>waiting?initial.Task:Task.FromResult((JsonObject)current.DeepClone()));
         UiShow(form);
         var startup=UiDescendants(form).Single(c=>c.Name=="startup-gate");var login=UiDescendants(form).Single(c=>c.Name=="login-gate");var shell=UiDescendants(form).Single(c=>c.Name=="dashboard");
         UiAssert(startup.Visible && !login.Visible && !shell.Visible,"REMEMBERED_STARTUP_EXPOSED_LOGIN_OR_PARTIAL_DASHBOARD");
@@ -835,10 +836,12 @@ internal static class ProductTests
         UiAssert(!startup.Visible && !login.Visible && loginFrames==0,"REMEMBERED_STARTUP_FLASHED_LOGIN_PAGE");
         var unavailable=(JsonObject)restoring.DeepClone();
         unavailable["error"]="ACCOUNT_API_UNREACHABLE";
+        current=unavailable;
         form.Display(unavailable);
         Application.DoEvents();
         UiAssert(login.Visible && UiDescendants(login).OfType<Button>().Single(c=>c.Text=="登录").Enabled,
             "REMEMBERED_ACCOUNT_OUTAGE_DISABLED_MANUAL_LOGIN");
+        current=ready;
         form.Display((JsonObject)ready.DeepClone());
         Application.DoEvents();
         UiAssert(shell.Visible && !login.Visible,"BACKGROUND_ACCOUNT_RETRY_DID_NOT_RESTORE_DASHBOARD");

@@ -153,7 +153,13 @@ public final class ProductionAcceptanceTest {
         long started = SystemClock.elapsedRealtime();
         assertEquals("断开", connectionButtonLabel(activity));
         click(activity, R.id.connect);
-        await("User disconnection removed the Android tunnel", () -> !hasVpn() && status(activity).equals(DIRECT));
+        try {
+            await("User disconnection removed the Android tunnel", () -> !hasVpn() && status(activity).equals(DIRECT));
+        } catch (AssertionError timeout) {
+            throw new AssertionError("Direct state after disconnection: android_vpn=" + hasVpn()
+                    + ", native_attachment=" + EngineHost.from(context).hasAttachedVpn()
+                    + ", direct_label=" + status(activity).equals(DIRECT), timeout);
+        }
         assertEquals("连接", connectionButtonLabel(activity));
         return SystemClock.elapsedRealtime() - started;
     }

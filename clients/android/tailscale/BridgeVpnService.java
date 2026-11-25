@@ -94,7 +94,10 @@ public final class BridgeVpnService extends VpnService implements IPNService {
 
     @Override
     public void disconnectVPN() {
-        main.post(this::stopSelf);
+        main.post(() -> {
+            detach();
+            stopSelf();
+        });
     }
 
     @Override

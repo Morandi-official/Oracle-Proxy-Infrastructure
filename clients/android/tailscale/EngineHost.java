@@ -203,6 +203,11 @@ final class EngineHost implements AppContext {
         return vpn != null;
     }
 
+    void closeAttachedVpn() {
+        BridgeVpnService attached = vpn;
+        if (attached != null) attached.disconnectVPN();
+    }
+
     private void scheduleNetworkUpdate() {
         WORKER.execute(this::publishNetwork);
     }

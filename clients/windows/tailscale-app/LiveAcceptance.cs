@@ -218,7 +218,10 @@ internal static partial class LiveAcceptance
                     if (run != persistedRestart - 1 && run < connectionAttempts - 1)
                     {
                         if (await ClientConnection.TryRestoreDirect(daemon, timeout.Token, reason => directFallback = reason))
+                        {
                             retained = daemon;
+                            _ = account.WarmActiveRoute(timeout.Token);
+                        }
                         else
                         {
                             report["direct_route_restore_failure"] = directFallback;

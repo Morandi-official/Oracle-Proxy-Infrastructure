@@ -108,7 +108,8 @@ try {
                 $addresses = @($records | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique)
                 $ready = Join-Path $work 'coordinator-proxy.port'
                 $script = Join-Path $PSScriptRoot 'coordinator_proxy.py'
-                $relay = Start-Process -FilePath (Get-Command python -CommandType Application).Source -PassThru `
+                $python = Get-Command python.exe -CommandType Application | Select-Object -First 1 -ExpandProperty Path
+                $relay = Start-Process -FilePath $python -PassThru `
                     -ArgumentList @(('"' + $script + '"'), $origin, ('"' + $ready + '"'))
                 $deadline = [DateTime]::UtcNow.AddSeconds(8)
                 while (!(Test-Path -LiteralPath $ready) -and !$relay.HasExited -and [DateTime]::UtcNow -lt $deadline) {

@@ -27,7 +27,7 @@ internal static class ExitCheck
                 var status = await daemon.Control.ReadState(limit.Token);
                 if (status.State == "Running" && status.ExitId == exit && Adapter(daemon.AdapterName) is not null)
                     break;
-                await Task.Delay(waiting.ElapsedMilliseconds < 1000 ? 50 : 125, limit.Token);
+                await Task.Delay(waiting.ElapsedMilliseconds < 1000 ? 25 : 125, limit.Token);
             }
             timing?.Invoke("exit_map_ready");
             mapReady = true;
@@ -75,7 +75,7 @@ internal static class ExitCheck
                     return;
                 }
             }
-            await Task.Delay(probes < 2 ? 50 : 125, cancel);
+            await Task.Delay(probes < 2 ? 25 : 125, cancel);
         }
     }
 

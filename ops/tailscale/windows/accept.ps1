@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$BundleDirectory,
     [switch]$Live,
     [switch]$RetentionExperiment,
-    [switch]$BlockSystemDns
+    [switch]$BlockSystemDns,
+    [switch]$CoordinatorProxyOnly
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or
@@ -14,6 +15,9 @@ if ($RetentionExperiment -and (!$Live -or $env:TOP_LEVEL_PUSH -ne 'true')) {
 }
 if ($BlockSystemDns -and (!$Live -or $RetentionExperiment -or $env:TOP_LEVEL_PUSH -ne 'true')) {
     throw 'WINDOWS_DNS_FAULT_REQUIRES_FOCUSED_MAIN_WORKFLOW'
+}
+if ($CoordinatorProxyOnly -and (!$Live -or $RetentionExperiment -or $BlockSystemDns -or $env:TOP_LEVEL_PUSH -ne 'true')) {
+    throw 'WINDOWS_PROXY_FAULT_REQUIRES_FOCUSED_MAIN_WORKFLOW'
 }
 $credentials = @{}
 foreach ($name in @('ORACLE_CLIENT_ACCEPTANCE_USERNAME', 'ORACLE_CLIENT_ACCEPTANCE_PASSWORD')) {
@@ -76,14 +80,19 @@ try {
     Write-Output 'WINDOWS_SETUP_AND_PORTABLE_PAYLOAD_ACCEPTED'
 
     if ($Live) {
-        $reportName = if ($RetentionExperiment) { 'RETAINED_COORDINATOR.json' } else { 'ACCEPTANCE.json' }
+        $reportName = if ($RetentionExperiment) { 'RETAINED_COORDINATOR.json' }
+            elseif ($CoordinatorProxyOnly) { 'PROXY_COORDINATOR_ACCEPTANCE.json' }
+            else { 'ACCEPTANCE.json' }
         $argument = if ($RetentionExperiment) { '--acceptance-retained-coordinator' } else { '--acceptance' }
         $report = Join-Path $work $reportName
-        foreach ($name in $credentials.Keys) { [Environment]::SetEnvironmentVariable($name, $credentials[$name]) }
         $dnsRule = $null
+        $firewall = @()
+        $relay = $null
+        $savedProxy = $env:HTTPS_PROXY
+        $savedNoProxy = $env:NO_PROXY
+        $coordinator = 'vpn-admin.morandi.dpdns.org'
         try {
             if ($BlockSystemDns) {
-                $coordinator = 'vpn-admin.morandi.dpdns.org'
                 $dnsRule = Add-DnsClientNrptRule -Namespace $coordinator -NameServers '127.0.0.1' `
                     -Comment "Disposable Proxy acceptance $($env:GITHUB_RUN_ID)" -PassThru
                 Clear-DnsClientCache
@@ -92,6 +101,37 @@ try {
                 $env:ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS = 'true'
                 Write-Output 'WINDOWS_COORDINATOR_SYSTEM_DNS_BLOCKED'
             }
+            if ($CoordinatorProxyOnly) {
+                $records = @(Resolve-DnsName -Name $coordinator -Type A_AAAA -DnsOnly)
+                $origin = $records | Where-Object Type -eq 'A' | Select-Object -First 1 -ExpandProperty IPAddress
+                if (!$origin) { throw 'WINDOWS_PROXY_TEST_ORIGIN_UNAVAILABLE' }
+                $addresses = @($records | Where-Object IPAddress | Select-Object -ExpandProperty IPAddress -Unique)
+                $ready = Join-Path $work 'coordinator-proxy.port'
+                $script = Join-Path $PSScriptRoot 'coordinator_proxy.py'
+                $relay = Start-Process -FilePath (Get-Command python -CommandType Application).Source -PassThru `
+                    -ArgumentList @(('"' + $script + '"'), $origin, ('"' + $ready + '"'))
+                $deadline = [DateTime]::UtcNow.AddSeconds(8)
+                while (!(Test-Path -LiteralPath $ready) -and !$relay.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+                    Start-Sleep -Milliseconds 50
+                }
+                if (!(Test-Path -LiteralPath $ready) -or $relay.HasExited) { throw 'WINDOWS_PROXY_TEST_RELAY_UNAVAILABLE' }
+                $port = Get-Content -LiteralPath $ready -Raw
+                if ($port -cnotmatch '^[1-9][0-9]{0,4}$') { throw 'WINDOWS_PROXY_TEST_PORT_INVALID' }
+                foreach ($relative in @('Proxy.exe', 'engine/tailscaled.exe')) {
+                    foreach ($protocol in @('TCP', 'UDP')) {
+                        $program = [IO.Path]::GetFullPath((Join-Path $desktop $relative))
+                        $rule = New-NetFirewallRule -Name ('ProxyAcceptance-' + [guid]::NewGuid().ToString('N')) `
+                            -DisplayName 'Disposable coordinator route acceptance' -Program $program `
+                            -Direction Outbound -Action Block -RemoteAddress $addresses -RemotePort 443 -Protocol $protocol
+                        $firewall += $rule
+                    }
+                }
+                $env:HTTPS_PROXY = "http://127.0.0.1:$port"
+                $env:NO_PROXY = ''
+                $env:ORACLE_CLIENT_ACCEPTANCE_PROXY_ONLY = 'true'
+                Write-Output 'WINDOWS_DIRECT_COORDINATOR_TRANSPORT_BLOCKED'
+            }
+            foreach ($name in $credentials.Keys) { [Environment]::SetEnvironmentVariable($name, $credentials[$name]) }
             $status = Invoke-BoundedProcess (Join-Path $desktop 'Proxy.exe') @($argument, ('"' + $report + '"')) 270000
         }
         finally {
@@ -100,9 +140,18 @@ try {
                     Remove-DnsClientNrptRule -Name $dnsRule.Name -Force
                     Clear-DnsClientCache
                 }
+                foreach ($rule in $firewall) {
+                    Remove-NetFirewallRule -Name $rule.Name
+                }
             }
             finally {
-                Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD,Env:ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS -ErrorAction SilentlyContinue
+                if ($relay) {
+                    if (!$relay.HasExited) { $relay.Kill() }
+                    $relay.Dispose()
+                }
+                [Environment]::SetEnvironmentVariable('HTTPS_PROXY', $savedProxy)
+                [Environment]::SetEnvironmentVariable('NO_PROXY', $savedNoProxy)
+                Remove-Item Env:ORACLE_CLIENT_ACCEPTANCE_USERNAME,Env:ORACLE_CLIENT_ACCEPTANCE_PASSWORD,Env:ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS,Env:ORACLE_CLIENT_ACCEPTANCE_PROXY_ONLY -ErrorAction SilentlyContinue
             }
         }
         if (!(Test-Path -LiteralPath $report -PathType Leaf)) { throw 'WINDOWS_LIVE_REPORT_MISSING' }

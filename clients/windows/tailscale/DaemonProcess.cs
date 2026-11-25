@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Net;
-using System.Text.Json;
 using System.Net.NetworkInformation;
 using Microsoft.Win32.SafeHandles;
 
@@ -25,7 +24,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
     internal static async Task<DaemonProcess> Start(
         string trustedExecutable, string privateStateDirectory, CancellationToken cancellation,
         Action<string>? timing = null, Task? authorization = null,
-        string coordinatorTlsHost = "vpn-admin.morandi.dpdns.org")
+        CoordinatorRouteHint? coordinator = null)
     {
         var instance = Guid.NewGuid().ToString("N");
         var adapter = "ProxyTail-" + instance[..12];
@@ -46,7 +45,21 @@ internal sealed class DaemonProcess : IAsyncDisposable
         start.Environment["TS_NO_LOGS_NO_SUPPORT"] = "true";
         // The Oracle coordinator exposes Noise upgrades only on HTTPS.
         start.Environment["TS_FORCE_NOISE_443"] = "true";
-        start.Environment["TS_ORACLE_PROXY_TLS_HOST"] = coordinatorTlsHost;
+        if (coordinator is not null)
+        {
+            start.Environment["TS_ORACLE_PROXY_TLS_HOST"] = coordinator.Host;
+            if (coordinator.Address is not null)
+                start.Environment["TS_ORACLE_PROXY_COORDINATOR_IP"] = coordinator.Address.ToString();
+            if (coordinator.Proxy is not null)
+            {
+                start.Environment["TS_ORACLE_PROXY_COORDINATOR_ROUTE"] = "proxy";
+                start.Environment["TS_ORACLE_PROXY_COORDINATOR_PROXY"] = coordinator.Proxy.AbsoluteUri;
+            }
+            else if (coordinator.Direct)
+            {
+                start.Environment["TS_ORACLE_PROXY_COORDINATOR_ROUTE"] = "direct";
+            }
+        }
         start.ArgumentList.Add(@"--socket=\\.\pipe\" + LocalControl.PipePrefix + instance);
         start.ArgumentList.Add("--state=" + Path.Combine(Path.GetFullPath(privateStateDirectory), "state"));
         start.ArgumentList.Add("--statedir=" + Path.GetFullPath(privateStateDirectory));
@@ -117,33 +130,6 @@ internal sealed class DaemonProcess : IAsyncDisposable
         }
     }
 
-    internal static async Task CacheVerifiedCoordinatorAddress(
-        string state, Uri coordinator, IPAddress address, CancellationToken cancellation)
-    {
-        string host = coordinator.IdnHost.ToLowerInvariant();
-        if (host.Length == 0 || host.Split('.').Any(label => label.Length == 0 ||
-            label.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')))
-            throw new IOException("INVALID_TAILSCALE_COORDINATOR");
-
-        // Match the private DNS cache format of the pinned Tailscale build.
-        // The caller supplies an address already authenticated by the account exchange.
-        string directory = Path.Combine(state, "dns-cache");
-        var entry = Directory.CreateDirectory(directory);
-        if ((entry.Attributes & FileAttributes.ReparsePoint) != 0 ||
-            (entry.Parent!.Attributes & FileAttributes.ReparsePoint) != 0)
-            throw new IOException("TAILSCALE_DNS_CACHE_PATH_INVALID");
-
-        string path = Path.Combine(directory, "dns-" + host + ".json");
-        string temporary = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".tmp");
-        try
-        {
-            byte[] contents = JsonSerializer.SerializeToUtf8Bytes(new { Resolver = "fallback", A = new[] { address.ToString() } });
-            await File.WriteAllBytesAsync(temporary, contents, cancellation);
-            File.Move(temporary, path, overwrite: true);
-        }
-        finally { File.Delete(temporary); }
-    }
-
     private static async Task ObserveAdapter(string adapter, Action<string> timing, CancellationToken cancellation)
     {
         try
@@ -205,3 +191,5 @@ internal sealed class DaemonProcess : IAsyncDisposable
         }
     }
 }
+
+internal sealed record CoordinatorRouteHint(string Host, IPAddress? Address, Uri? Proxy, bool Direct);

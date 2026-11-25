@@ -73,13 +73,13 @@ internal static class DnsRecoveryAcceptance
             Console.WriteLine("INSTALLING_DISPOSABLE_TEST_TLS_ROOT");
             trust.Add(publicRoot);
             Console.WriteLine("DISPOSABLE_TEST_TLS_ROOT_READY");
-            await DaemonProcess.CacheVerifiedCoordinatorAddress(state, coordinator, IPAddress.Loopback, limit.Token);
-            await using var daemon = await DaemonProcess.Start(trustedEngine, state, limit.Token, coordinatorTlsHost: host);
+            var route = new CoordinatorRouteHint(host, IPAddress.Loopback, null, Direct: true);
+            await using var daemon = await DaemonProcess.Start(trustedEngine, state, limit.Token, coordinator: route);
             var observe = ObserveDelayedRequest(listener, host, keyPair, publicRoot, limit.Token);
             var credential = "hskey-auth-" + new string('a', 12) + "-" + new string('b', 64);
             await daemon.Control.Enroll(coordinator, credential, limit.Token);
             await observe;
-            Console.WriteLine("ENGINE_DNS_CACHE_AND_DELAYED_VERIFIED_TLS=PASS");
+            Console.WriteLine("ENGINE_VERIFIED_ADDRESS_AND_DELAYED_TLS=PASS");
             return 0;
         }
         finally

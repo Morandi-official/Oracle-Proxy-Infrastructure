@@ -30,12 +30,13 @@ internal sealed class AccountClient : IDisposable
     internal string? LoginRoute => _active?.Kind;
 
     private sealed class AccountRoute(string kind, IWebProxy? proxy, Version version, HttpVersionPolicy policy,
-        IPAddress? address = null) : IDisposable
+        IPAddress? address = null, Uri? coordinatorProxy = null) : IDisposable
     {
         internal string Kind { get; } = kind;
         internal Version Version { get; } = version;
         internal HttpVersionPolicy Policy { get; } = policy;
         internal IPAddress? AddressProof { get; } = address;
+        internal Uri? CoordinatorProxy { get; } = coordinatorProxy;
 
         internal HttpClient Http { get; } = new(new SocketsHttpHandler
         {
@@ -118,37 +119,32 @@ internal sealed class AccountClient : IDisposable
     private static bool CanTryAnotherRoute(IOException error) => error.Message is
         "ACCOUNT_DNS_FAILED" or "ACCOUNT_CONNECT_FAILED" or "ACCOUNT_TIMEOUT" or "ACCOUNT_HTTP_FAILED" or "ACCOUNT_PROXY_FAILED";
 
-    internal IPAddress? CoordinatorAddressProof(Uri coordinator) =>
-        coordinator.IsAbsoluteUri && coordinator.Scheme == Uri.UriSchemeHttps &&
-        coordinator.Port == 443 && coordinator.IdnHost.Equals(Address.IdnHost, StringComparison.OrdinalIgnoreCase)
-            ? _active?.AddressProof : null;
+    internal CoordinatorRouteHint CoordinatorRoute => _active switch
+    {
+        { Kind: "system-proxy", CoordinatorProxy: { } proxy } =>
+            new(Address.IdnHost, null, proxy, Direct: false),
+        { Kind: "system-proxy" } or null =>
+            new(Address.IdnHost, null, null, Direct: false),
+        var route => new(Address.IdnHost, route.AddressProof, null, Direct: true),
+    };
 
     private async Task<AccountRoute?> FindLoginRoute(CancellationToken cancel)
     {
         var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         limit.CancelAfter(AlternateDeadline);
-        var ordinary = TryRoute(new("direct", null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower),
-            limit.Token);
-        var pending = new List<Task<AccountRoute?>> { ordinary };
+        var addresses = TryResolveAccountAddress(limit.Token);
+        var pending = new List<Task<AccountRoute?>>
+        {
+            TryRoute(new("direct", null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower), limit.Token),
+            TryEncryptedDns(addresses, http3: false, limit.Token),
+            TryWindowsProxy(limit.Token),
+            TryRoute(new("http1", null, HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact), limit.Token),
+        };
+        if (System.Net.Quic.QuicConnection.IsSupported)
+            pending.Add(TryEncryptedDns(addresses, http3: true, limit.Token));
         AccountRoute? selected = null;
         try
         {
-            await Task.WhenAny(ordinary, Task.Delay(150, limit.Token));
-            if (ordinary.IsCompleted)
-            {
-                pending.Remove(ordinary);
-                selected = await ordinary;
-            }
-            if (selected is null && !limit.IsCancellationRequested)
-            {
-                var addresses = TryResolveAccountAddress(limit.Token);
-                pending.Add(TryEncryptedDns(addresses, http3: false, limit.Token));
-                if (System.Net.Quic.QuicConnection.IsSupported)
-                    pending.Add(TryEncryptedDns(addresses, http3: true, limit.Token));
-                pending.Add(TryWindowsProxy(limit.Token));
-                pending.Add(TryRoute(new("http1", null, HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact),
-                    limit.Token));
-            }
             while (pending.Count > 0 && selected is null)
             {
                 var next = await Task.WhenAny(pending);
@@ -182,10 +178,14 @@ internal sealed class AccountClient : IDisposable
         try
         {
             var proxy = HttpClient.DefaultProxy;
-            var bypass = await Task.Run(() => proxy.IsBypassed(Address), cancel)
+            var endpoint = await Task.Run(() => proxy.IsBypassed(Address) ? null : proxy.GetProxy(Address), cancel)
                 .WaitAsync(TimeSpan.FromSeconds(3), cancel);
-            return bypass ? null : await TryRoute(
-                new("system-proxy", proxy, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower), cancel);
+            if (endpoint is null || endpoint == Address) return null;
+            var coordinatorProxy = endpoint.Scheme is "http" or "https" && endpoint.UserInfo.Length == 0 &&
+                endpoint.PathAndQuery == "/" && endpoint.Fragment.Length == 0 && proxy.Credentials is null
+                ? endpoint : null;
+            return await TryRoute(new("system-proxy", proxy, HttpVersion.Version20,
+                HttpVersionPolicy.RequestVersionOrLower, coordinatorProxy: coordinatorProxy), cancel);
         }
         catch (Exception error) when (error is TimeoutException or OperationCanceledException or HttpRequestException or IOException)
         {

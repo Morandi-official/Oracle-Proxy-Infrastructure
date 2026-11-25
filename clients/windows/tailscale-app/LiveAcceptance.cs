@@ -24,6 +24,8 @@ internal static partial class LiveAcceptance
         Environment.SetEnvironmentVariable(Password, null);
         bool systemDnsBlocked = Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS") == "true";
         Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS", null);
+        bool proxyOnly = Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PROXY_ONLY") == "true";
+        Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PROXY_ONLY", null);
         string phase = "START";
         var report = new Dictionary<string, object?>();
         using var account = new AccountClient();
@@ -65,8 +67,11 @@ internal static partial class LiveAcceptance
             report["account_login_http"] = account.ResponseVersion?.ToString();
             report["account_login_route"] = account.LoginRoute;
             report["coordinator_system_dns_blocked"] = systemDnsBlocked;
+            report["coordinator_proxy_only"] = proxyOnly;
             if (systemDnsBlocked && account.LoginRoute?.StartsWith("encrypted-dns-", StringComparison.Ordinal) != true)
                 throw new IOException("ACCOUNT_DNS_FALLBACK_NOT_USED");
+            if (proxyOnly && account.LoginRoute != "system-proxy")
+                throw new IOException("ACCOUNT_PROXY_FALLBACK_NOT_USED");
             phase = "LOGIN_ERROR_RESPONSE";
             using (var rejected = new AccountClient())
             {
@@ -77,14 +82,17 @@ internal static partial class LiveAcceptance
                 }
                 catch (IOException error) when (error.Message == "INVALID_CREDENTIALS") { }
             }
-            phase = "ENCRYPTED_DNS_LOGIN";
-            await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
-            report["account_encrypted_dns_login_verified"] = true;
-            phase = "ENCRYPTED_DNS_HTTP3_LOGIN";
-            if (System.Net.Quic.QuicConnection.IsSupported)
+            if (!proxyOnly)
             {
-                await account.VerifyEncryptedDnsHttp3Login(username, password, device, timeout.Token);
-                report["account_encrypted_dns_http3_login_verified"] = true;
+                phase = "ENCRYPTED_DNS_LOGIN";
+                await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
+                report["account_encrypted_dns_login_verified"] = true;
+                phase = "ENCRYPTED_DNS_HTTP3_LOGIN";
+                if (System.Net.Quic.QuicConnection.IsSupported)
+                {
+                    await account.VerifyEncryptedDnsHttp3Login(username, password, device, timeout.Token);
+                    report["account_encrypted_dns_http3_login_verified"] = true;
+                }
             }
             password = null;
 
@@ -132,6 +140,10 @@ internal static partial class LiveAcceptance
                         report["coordinator_dns_hint_ready"] = dnsHintReady;
                         if (systemDnsBlocked && !dnsHintReady)
                             throw new IOException("COORDINATOR_DNS_HINT_NOT_USED");
+                        bool proxyHintReady = timing.ContainsKey("coordinator_proxy_hint_ready");
+                        report["coordinator_proxy_hint_ready"] = proxyHintReady;
+                        if (proxyOnly && !proxyHintReady)
+                            throw new IOException("COORDINATOR_PROXY_HINT_NOT_USED");
                     }
                     phase = "VERIFY_SYSTEM_ROUTE";
                     // The caller uses ordinary system routing. The product has

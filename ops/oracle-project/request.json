@@ -1,4 +1,4 @@
 {
   "operation": "preflight",
-  "request_id": "tailscale-london-capacity-diagnostics-complete"
+  "request_id": "tailscale-admission-readiness"
 }

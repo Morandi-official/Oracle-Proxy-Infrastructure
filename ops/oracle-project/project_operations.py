@@ -156,6 +156,16 @@ def preflight():
             if len(measured.stdout)>65536:raise ValueError('PERFORMANCE_RESULT_LIMIT')
             value['performance_controls']=json.loads(measured.stdout)
         except (OSError,ValueError,subprocess.SubprocessError):value['performance_controls']={'status':'UNAVAILABLE_OR_DEADLINE'}
+    if diagnostic_request.get('operation') == 'preflight' and diagnostic_request.get('request_id') == 'tailscale-admission-readiness':
+        result = {'status': 'UNAVAILABLE'}
+        try:
+            measured = subprocess.run([sys.executable, '-I', str(REPO / 'ops/tailscale/deploy/admission_status.py')],
+                                      capture_output=True, text=True, check=True, timeout=8)
+            if len(measured.stdout) <= 2048:
+                result = json.loads(measured.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        value['tailscale_admission'] = result
     if diagnostic_request.get('operation') == 'preflight' and diagnostic_request.get('request_id') in (
         'tailscale-performance-observe', 'tailscale-performance-during-load',
     ):

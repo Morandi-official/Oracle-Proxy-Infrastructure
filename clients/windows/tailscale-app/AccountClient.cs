@@ -26,10 +26,11 @@ internal sealed class AccountClient : IDisposable
     internal Version? ResponseVersion { get; private set; }
 
     private sealed class AccountRoute(IWebProxy? proxy, Version version, HttpVersionPolicy policy,
-        bool encryptedDns = false) : IDisposable
+        bool encryptedDns = false, IPAddress? http3Address = null) : IDisposable
     {
         internal Version Version { get; } = version;
         internal HttpVersionPolicy Policy { get; } = policy;
+        internal bool UseOriginalHost { get; } = http3Address is not null;
 
         internal HttpClient Http { get; } = new(new SocketsHttpHandler
         {
@@ -41,7 +42,7 @@ internal sealed class AccountClient : IDisposable
             ConnectTimeout = TimeSpan.FromSeconds(5),
         })
         {
-            BaseAddress = Address,
+            BaseAddress = http3Address is null ? Address : new UriBuilder(Address) { Host = http3Address.ToString() }.Uri,
             Timeout = TimeSpan.FromSeconds(12),
             MaxResponseContentBufferSize = 16_384,
         };
@@ -90,6 +91,8 @@ internal sealed class AccountClient : IDisposable
             TryWindowsProxy(limit.Token),
             TryRoute(CreateEncryptedDnsRoute(), limit.Token),
         };
+        if (System.Net.Quic.QuicConnection.IsSupported)
+            pending.Add(TryEncryptedDnsHttp3(limit.Token));
         AccountRoute? selected = null;
         try
         {
@@ -169,6 +172,36 @@ internal sealed class AccountClient : IDisposable
         _ = ReadToken(response);
     }
 
+    private async Task<AccountRoute?> TryEncryptedDnsHttp3(CancellationToken cancel)
+    {
+        try
+        {
+            var addresses = await ResolveAccountAddress(cancel);
+            foreach (var ip in addresses)
+            {
+                var route = await TryRoute(new(null, HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact,
+                    http3Address: ip), cancel);
+                if (route is not null) return route;
+            }
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException)
+        {
+            return null;
+        }
+        return null;
+    }
+
+    internal async Task VerifyEncryptedDnsHttp3Login(string username, string password, string device, CancellationToken cancel)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        limit.CancelAfter(TimeSpan.FromSeconds(10));
+        using var route = await TryEncryptedDnsHttp3(limit.Token)
+            ?? throw new IOException("ENCRYPTED_DNS_HTTP3_LOGIN_ROUTE_UNAVAILABLE");
+        using var response = await Post("login", null, new { username, password, device }, limit.Token, route,
+            recordProtocol: false);
+        _ = ReadToken(response);
+    }
+
     private static async ValueTask<Stream> ConnectThroughEncryptedDns(
         SocketsHttpConnectionContext context, CancellationToken cancel)
     {
@@ -176,25 +209,8 @@ internal sealed class AccountClient : IDisposable
             !string.Equals(context.DnsEndPoint.Host, Address.IdnHost, StringComparison.OrdinalIgnoreCase))
             throw new IOException("UNEXPECTED_ACCOUNT_HOST");
 
-        // The literal resolver address avoids depending on the Windows DNS path.
-        // The account request retains its original host and performs normal TLS validation.
-        using var query = new HttpRequestMessage(HttpMethod.Get,
-            "https://1.1.1.1/dns-query?type=A&name=" + Uri.EscapeDataString(Address.IdnHost));
-        query.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
-        using var reply = await EncryptedDns.SendAsync(query, cancel);
-        reply.EnsureSuccessStatusCode();
-        using var result = JsonDocument.Parse(await reply.Content.ReadAsByteArrayAsync(cancel));
-        if (!result.RootElement.TryGetProperty("Status", out var status) || status.GetInt32() != 0 ||
-            !result.RootElement.TryGetProperty("Answer", out var answers) || answers.ValueKind != JsonValueKind.Array)
-            throw new IOException("ACCOUNT_ENCRYPTED_DNS_FAILED");
-
-        foreach (var answer in answers.EnumerateArray().Take(8))
+        foreach (var ip in await ResolveAccountAddress(cancel))
         {
-            if (!answer.TryGetProperty("type", out var type) || type.GetInt32() != 1 ||
-                !answer.TryGetProperty("data", out var value) || !IPAddress.TryParse(value.GetString(), out var ip) ||
-                ip.AddressFamily != AddressFamily.InterNetwork || !IsPublicAddress(ip))
-                continue;
-
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try
             {
@@ -205,6 +221,31 @@ internal sealed class AccountClient : IDisposable
             catch { socket.Dispose(); throw; }
         }
         throw new IOException("ACCOUNT_ENCRYPTED_DNS_FAILED");
+    }
+
+    private static async Task<List<IPAddress>> ResolveAccountAddress(CancellationToken cancel)
+    {
+        // Only the fixed account hostname is sent to an authenticated resolver.
+        using var query = new HttpRequestMessage(HttpMethod.Get,
+            "https://1.1.1.1/dns-query?type=A&name=" + Uri.EscapeDataString(Address.IdnHost));
+        query.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
+        using var reply = await EncryptedDns.SendAsync(query, cancel);
+        reply.EnsureSuccessStatusCode();
+        using var result = JsonDocument.Parse(await reply.Content.ReadAsByteArrayAsync(cancel));
+        if (!result.RootElement.TryGetProperty("Status", out var status) || !status.TryGetInt32(out int code) || code != 0 ||
+            !result.RootElement.TryGetProperty("Answer", out var answers) || answers.ValueKind != JsonValueKind.Array)
+            throw new IOException("ACCOUNT_ENCRYPTED_DNS_FAILED");
+
+        var addresses = new List<IPAddress>();
+        foreach (var answer in answers.EnumerateArray().Take(8))
+        {
+            if (answer.TryGetProperty("type", out var type) && type.TryGetInt32(out int kind) && kind == 1 &&
+                answer.TryGetProperty("data", out var value) && value.ValueKind == JsonValueKind.String &&
+                IPAddress.TryParse(value.GetString(), out var ip) && ip.AddressFamily == AddressFamily.InterNetwork &&
+                IsPublicAddress(ip))
+                addresses.Add(ip);
+        }
+        return addresses;
     }
 
     private static bool IsPublicAddress(IPAddress ip)
@@ -251,6 +292,9 @@ internal sealed class AccountClient : IDisposable
         {
             Content = content, Version = route.Version, VersionPolicy = route.Policy,
         };
+        // HttpClient uses the Host header for both HTTP authority and TLS SNI
+        // when the HTTP/3 request URI uses an already resolved IP.
+        if (route.UseOriginalHost) request.Headers.Host = Address.IdnHost;
         if (token is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         try
         {

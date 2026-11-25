@@ -64,6 +64,12 @@ internal static partial class LiveAcceptance
             phase = "ENCRYPTED_DNS_LOGIN";
             await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
             report["account_encrypted_dns_login_verified"] = true;
+            phase = "ENCRYPTED_DNS_HTTP3_LOGIN";
+            if (System.Net.Quic.QuicConnection.IsSupported)
+            {
+                await account.VerifyEncryptedDnsHttp3Login(username, password, device, timeout.Token);
+                report["account_encrypted_dns_http3_login_verified"] = true;
+            }
             password = null;
 
             var connections = new List<object>();

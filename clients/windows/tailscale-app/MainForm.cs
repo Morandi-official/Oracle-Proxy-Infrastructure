@@ -4,12 +4,26 @@ namespace OracleProxy.Tailscale;
 
 internal sealed class MainForm : Form
 {
+    private static readonly Color Canvas = Color.FromArgb(232, 239, 245);
+    private static readonly Color Surface = Color.FromArgb(248, 250, 253);
+    private static readonly Color Ink = Color.FromArgb(29, 47, 66);
+    private static readonly Color Muted = Color.FromArgb(66, 87, 108);
+    private static readonly Color Accent = Color.FromArgb(52, 81, 111);
+    private static readonly Color Alert = Color.FromArgb(148, 44, 38);
+    private static readonly Color Connected = Color.FromArgb(19, 106, 80);
+
     private readonly AccountClient _account = new();
-    private readonly TextBox _user = new() { PlaceholderText = "账号", Dock = DockStyle.Top };
-    private readonly TextBox _password = new() { PlaceholderText = "密码", UseSystemPasswordChar = true, Dock = DockStyle.Top };
-    private readonly Label _status = new() { Text = "请登录", AutoSize = true, Padding = new Padding(0, 12, 0, 12) };
-    private readonly Button _login = new() { Text = "登录", AutoSize = true };
-    private readonly Button _connect = new() { Text = "连接", Enabled = false, AutoSize = true };
+    private readonly TextBox _user = new() { PlaceholderText = "输入账号", AccessibleName = "账号", MaxLength = 64 };
+    private readonly TextBox _password = new()
+    {
+        PlaceholderText = "输入密码", AccessibleName = "密码", UseSystemPasswordChar = true, MaxLength = 128,
+    };
+    private readonly Label _heading = new() { Text = "登录账号", AutoSize = true };
+    private readonly Label _identity = new() { AutoSize = true, Visible = false, UseMnemonic = false };
+    private readonly Label _status = new() { AutoSize = true, UseMnemonic = false, AccessibleName = "连接状态" };
+    private readonly SmoothButton _login = new() { Text = "登录", Name = "account-login" };
+    private readonly SmoothButton _connect = new() { Text = "连接", Enabled = false, Visible = false };
+    private readonly TableLayoutPanel _fields = new() { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 1 };
     private readonly string _stateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Morandi", "ProxyTailscale");
     private readonly CancellationTokenSource _lifetime = new();
@@ -27,20 +41,67 @@ internal sealed class MainForm : Form
     internal MainForm()
     {
         Text = "Proxy";
-        MinimumSize = new Size(420, 305);
-        ClientSize = new Size(490, 310);
+        Font = new Font("Microsoft YaHei UI", 10);
+        MinimumSize = new Size(400, 440);
+        ClientSize = new Size(500, 418);
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, Padding = new Padding(22) };
+        BackColor = Canvas;
+        ForeColor = Ink;
+        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, Padding = new Padding(26, 22, 26, 22),
+        };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.Controls.Add(new Label { Text = "Proxy", Font = new Font(Font.FontFamily, 22, FontStyle.Bold), AutoSize = true });
-        layout.Controls.Add(_status);
-        layout.Controls.Add(_user);
-        layout.Controls.Add(_password);
-        var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
-        actions.Controls.AddRange([_login, _connect]);
-        layout.Controls.Add(actions);
-        Controls.Add(layout);
+        var header = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top, AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 14),
+        };
+        header.Controls.Add(new Label
+        {
+            Text = "Proxy", Font = new Font("Segoe UI", 25, FontStyle.Bold), AutoSize = true, Margin = Padding.Empty,
+        });
+        header.Controls.Add(new Label
+        {
+            Text = "v" + typeof(MainForm).Assembly.GetName().Version?.ToString(3), ForeColor = Muted,
+            Font = new Font("Segoe UI", 9), AutoSize = true, Margin = new Padding(12, 16, 0, 0),
+        });
+        layout.Controls.Add(header);
+        var card = new SmoothSurface
+        {
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Dock = DockStyle.Top,
+            BackColor = Surface, Padding = new Padding(22, 18, 22, 20), Margin = Padding.Empty,
+        };
+        var content = new TableLayoutPanel
+        {
+            AutoSize = true, Dock = DockStyle.Top, ColumnCount = 1, Margin = Padding.Empty,
+        };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _heading.Font = new Font(Font.FontFamily, 16, FontStyle.Bold);
+        _heading.Margin = new Padding(0, 0, 0, 10);
+        _identity.ForeColor = Muted;
+        _identity.Margin = new Padding(0, 0, 0, 12);
+        content.Controls.Add(_heading);
+        content.Controls.Add(_identity);
+        _fields.Margin = Padding.Empty;
+        _fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        AddField("账号", _user);
+        AddField("密码", _password);
+        content.Controls.Add(_fields);
+        StyleAction(_login);
+        StyleAction(_connect);
+        content.Controls.Add(_login);
+        content.Controls.Add(_connect);
+        _status.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        _status.Margin = new Padding(0, 12, 0, 0);
+        content.SizeChanged += (_, _) =>
+            _status.MaximumSize = new Size(Math.Max(1, content.ClientSize.Width), 0);
+        content.Controls.Add(_status);
+        card.Controls.Add(content);
+        layout.Controls.Add(card);
+        scroll.Controls.Add(layout);
+        Controls.Add(scroll);
         AcceptButton = _login;
         _login.Click += async (_, _) => await Login();
         _connect.Click += async (_, _) =>
@@ -59,26 +120,75 @@ internal sealed class MainForm : Form
         FormClosing += CloseRequested;
     }
 
+    private void AddField(string label, TextBox input)
+    {
+        _fields.Controls.Add(new Label { Text = label, AutoSize = true, Margin = new Padding(0, 0, 0, 5) });
+        _fields.Controls.Add(new SmoothInputFrame(input)
+        {
+            Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 12),
+        });
+    }
+
+    private static void StyleAction(SmoothButton button)
+    {
+        button.Dock = DockStyle.Top;
+        button.Height = 42;
+        button.Margin = Padding.Empty;
+        button.Primary = true;
+        button.BackColor = Accent;
+        button.ForeColor = Color.White;
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(44, 71, 100);
+        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(36, 60, 85);
+    }
+
+    private void SetStatus(string message, Color? color = null)
+    {
+        _status.Text = message;
+        _status.ForeColor = color ?? Muted;
+        _status.Visible = message.Length != 0;
+    }
+
+    private void ShowSession(bool loggedIn)
+    {
+        _heading.Text = loggedIn ? "当前连接" : "登录账号";
+        _identity.Visible = loggedIn;
+        _fields.Visible = !loggedIn;
+        _login.Visible = !loggedIn;
+        _login.Enabled = !loggedIn;
+        _connect.Visible = loggedIn;
+        _connect.Enabled = loggedIn;
+        AcceptButton = loggedIn ? _connect : _login;
+    }
+
     private async Task Login()
     {
+        string username = _user.Text.Trim().ToLowerInvariant();
+        if (username.Length == 0 || _password.TextLength == 0)
+        {
+            SetStatus("请输入账号和密码。", Alert);
+            (username.Length == 0 ? _user : _password).Focus();
+            return;
+        }
         _login.Enabled = false;
-        _status.Text = "正在登录";
+        SetStatus("正在连接账号服务…");
         try
         {
-            string username = _user.Text.Trim();
             _state = ClientConnection.StateFor(_stateRoot, username);
-            _session = await _account.Login(username, _password.Text, ClientConnection.Device(_state), _lifetime.Token);
+            string device;
+            try { device = ClientConnection.Device(_state); }
+            catch (IOException error) when (error.Message != "INVALID_PROXY_DEVICE_ID")
+            {
+                throw new IOException("DEVICE_FILE_UNAVAILABLE", error);
+            }
+            _session = await _account.Login(username, _password.Text, device, _lifetime.Token);
             _password.Clear();
-            _user.Hide();
-            _password.Hide();
-            _login.Hide();
-            _connect.Enabled = true;
-            AcceptButton = _connect;
-            _status.Text = "已断开 · 当前直连";
+            _identity.Text = username;
+            ShowSession(loggedIn: true);
+            SetStatus("已断开 · 当前直连");
         }
         catch (Exception exception) when (!_closing)
         {
-            _status.Text = Message(exception);
+            SetStatus(Message(exception), Alert);
             _login.Enabled = true;
         }
         catch (Exception) when (_closing) { }
@@ -90,7 +200,7 @@ internal sealed class MainForm : Form
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _connecting = attempt;
         _connect.Text = "取消连接";
-        _status.Text = "正在连接";
+        SetStatus("正在连接…");
         var elapsed = Stopwatch.StartNew();
         try
         {
@@ -99,7 +209,7 @@ internal sealed class MainForm : Form
             (_daemon, _profile) = await ClientConnection.Open(_account, _session, _state, attempt.Token,
                 retained: retained, previous: _profile);
             _connected = true;
-            _status.Text = $"已连接 · {elapsed.ElapsedMilliseconds} ms";
+            SetStatus($"已连接 · {elapsed.ElapsedMilliseconds} ms", Connected);
         }
         catch (Exception failure)
         {
@@ -107,15 +217,11 @@ internal sealed class MainForm : Form
             catch (Exception cleanup) { failure = cleanup; }
             if (!_closing && !attempt.IsCancellationRequested)
             {
-                _status.Text = Message(failure);
+                SetStatus(Message(failure), Alert);
                 if (failure.Message == "LOGIN_REQUIRED")
                 {
                     _session = null;
-                    _user.Show();
-                    _password.Show();
-                    _login.Show();
-                    _login.Enabled = true;
-                    AcceptButton = _login;
+                    ShowSession(loggedIn: false);
                 }
             }
         }
@@ -133,7 +239,7 @@ internal sealed class MainForm : Form
     private async Task Disconnect(bool keepCoordinator)
     {
         _connect.Enabled = false;
-        _status.Text = "正在恢复直连";
+        SetStatus("正在恢复直连…");
         try
         {
             if (_connecting is not null) await _connecting.CancelAsync();
@@ -142,13 +248,13 @@ internal sealed class MainForm : Form
                 _profile is null || !await ClientConnection.TryRestoreDirect(_daemon, _profile, _lifetime.Token))
                 await StopDaemon();
             _connected = false;
-            _status.Text = "已断开 · 当前直连";
+            SetStatus("已断开 · 当前直连");
             _connect.Text = "连接";
             _connect.Enabled = _session is not null && !_closing;
         }
         catch (Exception failure)
         {
-            _status.Text = Message(failure);
+            SetStatus(Message(failure), Alert);
             _connect.Text = "断开";
             _connect.Enabled = !_closing;
         }
@@ -184,9 +290,26 @@ internal sealed class MainForm : Form
         base.Dispose(disposing);
     }
 
-    private static string Message(Exception error) => error.Message switch
+    private static string Message(Exception error) => error switch
     {
-        "INVALID_CREDENTIALS" => "账号或密码有误",
+        UnauthorizedAccessException => "无法访问本机的 Proxy 设备文件。",
+        IOException { Message: "INVALID_PROXY_DEVICE_ID" } => "本机设备文件格式异常，请联系管理员。",
+        _ => MessageForCode(error.Message),
+    };
+
+    private static string MessageForCode(string code) => code switch
+    {
+        "DEVICE_FILE_UNAVAILABLE" => "无法读取或建立本机的 Proxy 设备文件。",
+        "INVALID_CREDENTIALS" => "账号或密码有误。",
+        "RATE_LIMITED" => "登录尝试过多，请等待一分钟后重试。",
+        "ACCOUNT_DNS_FAILED" => "无法解析账号服务地址，请检查 DNS 或网络。",
+        "ACCOUNT_CONNECT_FAILED" => "无法访问账号服务，请检查当前网络。",
+        "ACCOUNT_PROXY_FAILED" => "Windows 系统代理无法连接账号服务。",
+        "ACCOUNT_TLS_FAILED" => "无法验证账号服务的 HTTPS 连接，请检查系统日期和时间。",
+        "ACCOUNT_TIMEOUT" => "账号服务连接超时，请重试。",
+        "ACCOUNT_SERVICE_UNAVAILABLE" or "TAILSCALE_SERVICE_UNAVAILABLE" or "CONTROL_UNAVAILABLE"
+            => "账号服务暂不可用，请稍后重试。",
+        "ACCOUNT_RESPONSE_INVALID" or "INVALID_REQUEST" => "账号服务响应异常，请稍后重试。",
         "TAILSCALE_ACCOUNT_NOT_ACTIVE" => "账号当前不可连接",
         "DEVICE_LIMIT_EXCEEDED" => "已达到设备上限",
         "LOGIN_REQUIRED" => "登录已过期",

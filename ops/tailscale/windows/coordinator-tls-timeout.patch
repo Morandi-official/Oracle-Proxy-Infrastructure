@@ -9,7 +9,7 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
  	"sync/atomic"
  	"time"
  
-@@ -55,6 +56,157 @@
+@@ -55,6 +56,179 @@
  
  var stdDialer net.Dialer
  
@@ -21,8 +21,17 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
 +
 +// ProxyAppCoordinatorRoute describes one HTTPS path to the same coordinator.
 +type ProxyAppCoordinatorRoute struct {
++	kind    string
 +	address netip.Addr
 +	proxy   func(*http.Request) (*url.URL, error)
++}
++
++// ProxyAppCoordinatorTransport can reuse a verified public-key request's
++// HTTPS connection for the first Noise upgrade to the same origin.
++type ProxyAppCoordinatorTransport struct {
++	*http.Transport
++	origin string
++	kind   string
 +}
 +
 +// ProxyAppCoordinatorRoutes starts with the account's route when available.
@@ -32,27 +41,27 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
 +	mode := envknob.String("TS_ORACLE_PROXY_COORDINATOR_ROUTE")
 +	if mode == "proxy" {
 +		if selected := proxyAppExplicitProxy("TS_ORACLE_PROXY_COORDINATOR_PROXY"); selected != nil {
-+			return []ProxyAppCoordinatorRoute{{proxy: selected}, {}}
++			return []ProxyAppCoordinatorRoute{{kind: "configured-proxy", proxy: selected}, {kind: "direct"}}
 +		}
 +	}
 +	if mode == "direct" {
 +		if address, err := netip.ParseAddr(envknob.String("TS_ORACLE_PROXY_COORDINATOR_IP")); err == nil {
-+			routes = append(routes, ProxyAppCoordinatorRoute{address: address})
++			routes = append(routes, ProxyAppCoordinatorRoute{kind: "pinned-direct", address: address})
 +		}
 +	}
 +	pinned := len(routes) > 0
 +	if !pinned {
-+		routes = append(routes, ProxyAppCoordinatorRoute{})
++		routes = append(routes, ProxyAppCoordinatorRoute{kind: "direct"})
 +	}
 +	if fallback := proxyAppExplicitProxy("TS_ORACLE_PROXY_COORDINATOR_FALLBACK_PROXY"); fallback != nil {
-+		routes = append(routes, ProxyAppCoordinatorRoute{proxy: fallback})
++		routes = append(routes, ProxyAppCoordinatorRoute{kind: "configured-proxy", proxy: fallback})
 +		systemProxy = nil // the user-session lookup already supplied this route
 +	}
 +	if pinned {
-+		routes = append(routes, ProxyAppCoordinatorRoute{})
++		routes = append(routes, ProxyAppCoordinatorRoute{kind: "direct"})
 +	}
 +	if systemProxy != nil {
-+		routes = append(routes, ProxyAppCoordinatorRoute{proxy: func(req *http.Request) (*url.URL, error) {
++		routes = append(routes, ProxyAppCoordinatorRoute{kind: "system-proxy", proxy: func(req *http.Request) (*url.URL, error) {
 +			endpoint, err := systemProxy(req)
 +			if err == nil && endpoint == nil {
 +				return nil, errors.New("no system proxy for coordinator")
@@ -86,10 +95,15 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
 +}
 +
 +// Configure sets up one HTTPS coordinator attempt on an independent transport.
-+func (route ProxyAppCoordinatorRoute) Configure(tr *http.Transport, host string) {
++func (route ProxyAppCoordinatorRoute) Configure(tr *http.Transport, target *url.URL) *ProxyAppCoordinatorTransport {
++	origin := proxyAppHTTPSOrigin(target)
 +	tr.TLSHandshakeTimeout = 22 * time.Second
++	// The initial public-key request and the protocol upgrade must both use
++	// HTTP/1.1 to share the same TLS (and, if proxied, CONNECT) connection.
++	tr.Protocols = new(http.Protocols)
++	tr.Protocols.SetHTTP1(true)
 +	tr.Proxy = func(req *http.Request) (*url.URL, error) {
-+		if req.URL.Scheme != "https" || !strings.EqualFold(req.URL.Hostname(), host) {
++		if origin == "" || proxyAppHTTPSOrigin(req.URL) != origin {
 +			return nil, errors.New("unexpected coordinator target")
 +		}
 +		if route.proxy == nil {
@@ -97,6 +111,14 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
 +		}
 +		return route.proxy(req)
 +	}
++	return &ProxyAppCoordinatorTransport{Transport: tr, origin: origin, kind: route.kind}
++}
++
++func proxyAppHTTPSOrigin(u *url.URL) string {
++	if u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
++		return ""
++	}
++	return net.JoinHostPort(strings.ToLower(u.Hostname()), cmp.Or(u.Port(), "443"))
 +}
 +
 +// RaceProxyAppCoordinatorRoutes starts alternates after a short head start for
@@ -167,17 +189,29 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
  // Dial connects to the HTTP server at this Dialer's Host:HTTPPort, requests to
  // switch to the Tailscale control protocol, and returns an established control
  // protocol connection.
-@@ -68,7 +220,31 @@
+@@ -65,10 +239,54 @@
+ // The provided ctx is only used for the initial connection, until
+ // Dial returns. It does not affect the connection once established.
+ func (a *Dialer) Dial(ctx context.Context) (*ClientConn, error) {
++	return a.DialWithProxyAppCoordinatorTransport(ctx, nil)
++}
++
++// DialWithProxyAppCoordinatorTransport can try an already authenticated HTTPS
++// route for the first Noise upgrade. It always verifies the Noise peer.
++func (a *Dialer) DialWithProxyAppCoordinatorTransport(ctx context.Context, prepared *ProxyAppCoordinatorTransport) (*ClientConn, error) {
++	if prepared != nil {
++		defer prepared.CloseIdleConnections()
++	}
  	if a.Hostname == "" {
  		return nil, errors.New("required Dialer.Hostname empty")
  	}
 +	if IsProxyAppCoordinator(a.Hostname) {
-+		return a.dialProxyAppCoordinator(ctx)
++		return a.dialProxyAppCoordinator(ctx, prepared)
 +	}
  	return a.dial(ctx)
 +}
 +
-+func (a *Dialer) dialProxyAppCoordinator(ctx context.Context) (*ClientConn, error) {
++func (a *Dialer) dialProxyAppCoordinator(ctx context.Context, prepared *ProxyAppCoordinatorTransport) (*ClientConn, error) {
 +	if a.HTTPSPort == NoPort {
 +		return nil, errors.New("coordinator requires HTTPS")
 +	}
@@ -188,9 +222,20 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
 +		Path:   serverUpgradePath,
 +	}
 +	var attempts []func(context.Context) (*ClientConn, error)
-+	for _, route := range ProxyAppCoordinatorRoutes(a.getProxyFunc()) {
++	if prepared != nil && prepared.origin != proxyAppHTTPSOrigin(u) {
++		prepared = nil
++	}
++	if prepared != nil {
 +		attempts = append(attempts, func(ctx context.Context) (*ClientConn, error) {
-+			return a.dialURL(ctx, u, netip.Addr{}, "", &route)
++			return a.dialURL(ctx, u, netip.Addr{}, "", nil, prepared)
++		})
++	}
++	for _, route := range ProxyAppCoordinatorRoutes(a.getProxyFunc()) {
++		if prepared != nil && route.kind == prepared.kind {
++			continue
++		}
++		attempts = append(attempts, func(ctx context.Context) (*ClientConn, error) {
++			return a.dialURL(ctx, u, netip.Addr{}, "", &route, nil)
 +		})
 +	}
 +	// Each candidate authenticates Noise before it can win. The caller only
@@ -199,32 +244,37 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
  }
  
  func (a *Dialer) logf(format string, args ...any) {
-@@ -272,7 +448,7 @@
+@@ -272,7 +490,7 @@
  		if debugNoiseDial() {
  			a.logf("trying noise dial (%v, %v) ...", u, cmp.Or(optACEHost, optAddr.String()))
  		}
 -		cbConn, err := a.dialURL(ctx, u, optAddr, optACEHost)
-+		cbConn, err := a.dialURL(ctx, u, optAddr, optACEHost, nil)
++		cbConn, err := a.dialURL(ctx, u, optAddr, optACEHost, nil, nil)
  		if debugNoiseDial() {
  			a.logf("noise dial (%v, %v) = (%v, %v)", u, cmp.Or(optACEHost, optAddr.String()), cbConn, err)
  		}
-@@ -343,16 +519,25 @@
+@@ -343,16 +561,30 @@
  //
  // If optAddr is valid, then no DNS is used and the connection will be made to the
  // provided address.
 -func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string) (*ClientConn, error) {
-+func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string, route *ProxyAppCoordinatorRoute) (*ClientConn, error) {
++func (a *Dialer) dialURL(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string, route *ProxyAppCoordinatorRoute, prepared *ProxyAppCoordinatorTransport) (*ClientConn, error) {
  	init, cont, err := controlbase.ClientDeferred(a.MachineKey, a.ControlKey, a.ProtocolVersion)
  	if err != nil {
  		return nil, err
  	}
 -	netConn, err := a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init)
-+	netConn, err := a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init, route)
++	var netConn net.Conn
++	if prepared == nil {
++		netConn, err = a.tryURLUpgrade(ctx, u, optAddr, optACEHost, init, route)
++	} else {
++		netConn, err = upgradeControlConnection(ctx, prepared.Transport, u, init)
++	}
  	if err != nil {
  		return nil, err
  	}
 +	var stop func() bool
-+	if route != nil {
++	if route != nil || prepared != nil {
 +		// The upstream handshake can wait until its read deadline even when
 +		// another route has already won. Close this socket on cancellation.
 +		stop = context.AfterFunc(ctx, func() { netConn.Close() })
@@ -236,7 +286,7 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
  	if err != nil {
  		netConn.Close()
  		return nil, err
-@@ -402,7 +587,7 @@
+@@ -402,7 +634,7 @@
  // the provided address.
  //
  // Only the provided ctx is used, not a.ctx.
@@ -245,7 +295,7 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
  	var dns *dnscache.Resolver
  
  	// If we were provided an address to dial, then create a resolver that just
-@@ -415,6 +600,9 @@
+@@ -415,6 +647,9 @@
  		}
  	} else {
  		dns = a.resolver()
@@ -255,7 +305,7 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
  	}
  
  	var dialer netx.DialFunc
-@@ -482,23 +670,28 @@
+@@ -482,28 +717,36 @@
  	if a.ExtraRootCAs != nil {
  		tr.TLSClientConfig.RootCAs = a.ExtraRootCAs
  	}
@@ -280,7 +330,7 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
 +		// The dedicated coordinator verifies the TLS certificate as well as
 +		// the Noise peer on every route, including behind a CONNECT proxy.
 +		tr.TLSClientConfig = &tls.Config{RootCAs: a.ExtraRootCAs}
-+		route.Configure(tr, u.Hostname())
++		route.Configure(tr, u)
 +	} else {
 +		tr.TLSClientConfig = tlsdial.Config(a.HealthTracker, tr.TLSClientConfig)
 +		if !tr.TLSClientConfig.InsecureSkipVerify {
@@ -301,7 +351,16 @@ diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
  	}
  
  	tr.DialTLSContext = dnscache.TLSDialer(dialer, dns, tr.TLSClientConfig)
-@@ -553,6 +746,7 @@
+ 	tr.DisableCompression = true
+-
++	return upgradeControlConnection(ctx, tr, u, init)
++}
++
++func upgradeControlConnection(ctx context.Context, tr *http.Transport, u *url.URL, init []byte) (net.Conn, error) {
+ 	// (mis)use httptrace to extract the underlying net.Conn from the
+ 	// transport. The transport handles 101 Switching Protocols correctly,
+ 	// such that the Conn will not be reused or kept alive by the transport
+@@ -553,6 +796,7 @@
  	}
  
  	if resp.StatusCode != http.StatusSwitchingProtocols {
@@ -332,19 +391,37 @@ diff --git a/control/controlclient/direct.go b/control/controlclient/direct.go
  // Direct is the client that connects to a tailcontrol server for a node.
  type Direct struct {
  	httpc             *http.Client // HTTP client used to do TLS requests to control (just https://controlplane.tailscale.com/key?v=123)
-+	coordinatorKeys   []*http.Client
++	coordinatorKeys   []*controlhttp.ProxyAppCoordinatorTransport
  	interceptedDial   *atomic.Bool // if non-nil, pointer to bool whether ScreenTime intercepted our dial
  	dialer            *tsdial.Dialer
  	dnsCache          *dnscache.Resolver
-@@ -338,6 +341,7 @@
+@@ -99,11 +102,12 @@
+ 
+ 	dialPlan ControlDialPlanner // can be nil
+ 
+-	mu              syncs.Mutex       // mutex guards the following fields
+-	serverLegacyKey key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
+-	serverNoiseKey  key.MachinePublic
+-	discoPubKey     key.DiscoPublic // protected by mu; can be updated via [SetDiscoPublicKey]
+-	ipForwardBroken bool            // protected by mu; can be updated via [SetIPForwardingBroken]
++	mu                   syncs.Mutex       // mutex guards the following fields
++	serverLegacyKey      key.MachinePublic // original ("legacy") nacl crypto_box-based public key; only used for signRegisterRequest on Windows now
++	serverNoiseKey       key.MachinePublic
++	coordinatorTransport *controlhttp.ProxyAppCoordinatorTransport
++	discoPubKey          key.DiscoPublic // protected by mu; can be updated via [SetDiscoPublicKey]
++	ipForwardBroken      bool            // protected by mu; can be updated via [SetIPForwardingBroken]
+ 
+ 	sfGroup     singleflight.Group[struct{}, *ts2021.Client] // protects noiseClient creation.
+ 	noiseClient *ts2021.Client                               // also protected by mu
+@@ -338,6 +342,7 @@
  		httpc = http.DefaultClient
  	}
  	var interceptedDial *atomic.Bool
-+	var coordinatorKeys []*http.Client
++	var coordinatorKeys []*controlhttp.ProxyAppCoordinatorTransport
  	if httpc == nil {
  		tr := netutil.NewDefaultTransport()
  		if buildfeatures.HasUseProxy {
-@@ -352,9 +356,27 @@
+@@ -352,9 +357,21 @@
  			}
  			tr.TLSClientConfig.RootCAs = opts.ExtraRootCAs
  		}
@@ -356,24 +433,18 @@ diff --git a/control/controlclient/direct.go b/control/controlclient/direct.go
 +			for _, route := range controlhttp.ProxyAppCoordinatorRoutes(tr.Proxy) {
 +				keyTransport := tr.Clone()
 +				keyTransport.TLSClientConfig = &tls.Config{RootCAs: opts.ExtraRootCAs}
-+				route.Configure(keyTransport, server.Hostname())
++				transport := route.Configure(keyTransport, server)
 +				resolver := route.Resolver(server.Hostname(), dnsCache)
 +				keyTransport.DialContext = dnscache.Dialer(dialFunc, resolver)
 +				keyTransport.DialTLSContext = dnscache.TLSDialer(dialFunc, resolver, keyTransport.TLSClientConfig)
-+				keyTransport.ForceAttemptHTTP2 = true
-+				coordinatorKeys = append(coordinatorKeys, &http.Client{
-+					Transport: keyTransport,
-+					CheckRedirect: func(*http.Request, []*http.Request) error {
-+						return http.ErrUseLastResponse
-+					},
-+				})
++				coordinatorKeys = append(coordinatorKeys, transport)
 +			}
 +		}
 +		tr.TLSClientConfig = tlsdial.Config(opts.HealthTracker, tr.TLSClientConfig)
  		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
  		tr.DialTLSContext = dnscache.TLSDialer(dialFunc, dnsCache, tr.TLSClientConfig)
  		tr.ForceAttemptHTTP2 = true
-@@ -368,6 +390,7 @@
+@@ -368,6 +385,7 @@
  
  	c := &Direct{
  		httpc:             httpc,
@@ -381,9 +452,11 @@ diff --git a/control/controlclient/direct.go b/control/controlclient/direct.go
  		interceptedDial:   interceptedDial,
  		controlKnobs:      opts.ControlKnobs,
  		getMachinePrivKey: opts.GetMachinePrivateKey,
-@@ -433,6 +456,9 @@
+@@ -432,7 +450,11 @@
+ 		}
  	}
  	c.noiseClient = nil
++	c.coordinatorTransport = nil
  	c.httpc.CloseIdleConnections()
 +	for _, httpc := range c.coordinatorKeys {
 +		httpc.CloseIdleConnections()
@@ -391,47 +464,202 @@ diff --git a/control/controlclient/direct.go b/control/controlclient/direct.go
  	return nil
  }
  
-@@ -673,7 +699,7 @@
+@@ -673,7 +695,7 @@
  
  	c.logf("doLogin(regen=%v, hasUrl=%v)", regen, opt.URL != "")
  	if serverKey.IsZero() {
 -		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
-+		keys, err := c.loadServerPubKeys(ctx)
++		keys, transport, err := c.loadServerPubKeys(ctx)
  		if err != nil && c.interceptedDial != nil && c.interceptedDial.Load() {
  			c.health.SetUnhealthy(macOSScreenTime, nil)
  		} else {
-@@ -1532,6 +1558,27 @@
+@@ -687,13 +709,20 @@
+ 		c.mu.Lock()
+ 		c.serverLegacyKey = keys.LegacyPublicKey
+ 		c.serverNoiseKey = keys.PublicKey
++		if c.noiseClient == nil && c.closedCtx.Err() == nil {
++			if c.coordinatorTransport != nil && c.coordinatorTransport != transport {
++				c.coordinatorTransport.CloseIdleConnections()
++			}
++			c.coordinatorTransport = transport
++		} else if transport != nil {
++			transport.CloseIdleConnections()
++		}
+ 		c.mu.Unlock()
+ 		serverKey = keys.LegacyPublicKey
+ 		serverNoiseKey = keys.PublicKey
+ 
+-		// Proactively shut down our TLS TCP connection.
+-		// We're not going to need it and it's nicer to the
+-		// server.
++		// The scoped coordinator transport stays available for the first
++		// Noise upgrade. Close the ordinary HTTP client's idle connections.
+ 		c.httpc.CloseIdleConnections()
+ 	}
+ 
+@@ -1532,6 +1561,44 @@
  	return b, nil
  }
  
-+func (c *Direct) loadServerPubKeys(ctx context.Context) (*tailcfg.OverTLSPublicKeyResponse, error) {
++func (c *Direct) loadServerPubKeys(ctx context.Context) (*tailcfg.OverTLSPublicKeyResponse, *controlhttp.ProxyAppCoordinatorTransport, error) {
 +	if len(c.coordinatorKeys) == 0 {
-+		return loadServerPubKeys(ctx, c.httpc, c.serverURL)
++		keys, err := loadServerPubKeys(ctx, c.httpc, c.serverURL)
++		return keys, nil, err
 +	}
 +	ctx, cancel := context.WithTimeout(ctx, 26*time.Second)
 +	defer cancel()
 +
-+	var attempts []func(context.Context) (*tailcfg.OverTLSPublicKeyResponse, error)
-+	for _, httpc := range c.coordinatorKeys {
-+		attempts = append(attempts, func(ctx context.Context) (*tailcfg.OverTLSPublicKeyResponse, error) {
-+			defer httpc.CloseIdleConnections()
++	type result struct {
++		keys      *tailcfg.OverTLSPublicKeyResponse
++		transport *controlhttp.ProxyAppCoordinatorTransport
++	}
++	var attempts []func(context.Context) (result, error)
++	for _, transport := range c.coordinatorKeys {
++		attempts = append(attempts, func(ctx context.Context) (result, error) {
++			httpc := &http.Client{
++				Transport: transport,
++				CheckRedirect: func(*http.Request, []*http.Request) error {
++					return http.ErrUseLastResponse
++				},
++			}
 +			keys, err := loadServerPubKeys(ctx, httpc, c.serverURL)
 +			if err == nil && keys.PublicKey.IsZero() {
-+				return nil, errors.New("coordinator did not supply a Noise key")
++				err = errors.New("coordinator did not supply a Noise key")
 +			}
-+			return keys, err
++			if err != nil {
++				transport.CloseIdleConnections()
++				return result{}, err
++			}
++			return result{keys, transport}, nil
 +		})
 +	}
-+	return controlhttp.RaceProxyAppCoordinatorRoutes(ctx, attempts, nil)
++	winner, err := controlhttp.RaceProxyAppCoordinatorRoutes(ctx, attempts, func(loser result) {
++		loser.transport.CloseIdleConnections()
++	})
++	return winner.keys, winner.transport, err
 +}
 +
  func loadServerPubKeys(ctx context.Context, httpc *http.Client, serverURL string) (*tailcfg.OverTLSPublicKeyResponse, error) {
  	keyURL := fmt.Sprintf("%v/key?v=%d", serverURL, tailcfg.CurrentCapabilityVersion)
  	req, err := http.NewRequestWithContext(ctx, "GET", keyURL, nil)
+@@ -1726,24 +1793,41 @@
+ 		if err != nil {
+ 			return nil, err
+ 		}
++		c.mu.Lock()
++		if existing := c.noiseClient; existing != nil {
++			c.mu.Unlock()
++			return existing, nil
++		}
++		serverNoiseKey := c.serverNoiseKey
++		transport := c.coordinatorTransport
++		c.coordinatorTransport = nil
++		c.mu.Unlock()
+ 		c.logf("[v1] creating new noise client")
+ 		nc, err := ts2021.NewClient(ts2021.ClientOpts{
+-			PrivKey:       k,
+-			ServerPubKey:  serverNoiseKey,
+-			ServerURL:     c.serverURL,
+-			Dialer:        c.dialer,
+-			DNSCache:      c.dnsCache,
+-			Logf:          c.logf,
+-			NetMon:        c.netMon,
+-			HealthTracker: c.health,
+-			ExtraRootCAs:  c.extraRootCAs,
+-			DialPlan:      dp,
++			PrivKey:              k,
++			ServerPubKey:         serverNoiseKey,
++			ServerURL:            c.serverURL,
++			Dialer:               c.dialer,
++			DNSCache:             c.dnsCache,
++			Logf:                 c.logf,
++			NetMon:               c.netMon,
++			HealthTracker:        c.health,
++			ExtraRootCAs:         c.extraRootCAs,
++			DialPlan:             dp,
++			CoordinatorTransport: transport,
+ 		})
+ 		if err != nil {
++			if transport != nil {
++				transport.CloseIdleConnections()
++			}
+ 			return nil, err
+ 		}
+ 		c.mu.Lock()
+ 		defer c.mu.Unlock()
++		if c.closedCtx.Err() != nil {
++			nc.Close()
++			return nil, errors.New("control client closed")
++		}
+ 		c.noiseClient = nc
+ 		return nc, nil
+ 	})
 diff --git a/control/ts2021/client.go b/control/ts2021/client.go
 --- a/control/ts2021/client.go
 +++ b/control/ts2021/client.go
-@@ -231,6 +231,10 @@
+@@ -48,9 +48,10 @@
+ 	httpsPort string // the fallback Noise-over-https port or empty if none
+ 
+ 	// mu protects the following
+-	mu       sync.Mutex
+-	closed   bool
+-	connPool set.HandleSet[*Conn] // all live connections
++	mu                   sync.Mutex
++	closed               bool
++	connPool             set.HandleSet[*Conn] // all live connections
++	coordinatorTransport *controlhttp.ProxyAppCoordinatorTransport
+ }
+ 
+ // ClientOpts contains options for the [NewClient] function. All fields are
+@@ -90,6 +91,10 @@
+ 
+ 	// ExtraRootCAs, if non-nil, specifies additional trusted root CAs for TLS.
+ 	ExtraRootCAs *x509.CertPool
++
++	// CoordinatorTransport, if present, may carry the first Noise upgrade
++	// on the same verified HTTPS connection as the public-key request.
++	CoordinatorTransport *controlhttp.ProxyAppCoordinatorTransport
+ 
+ 	// DialPlan, if set, is a function that should return an explicit plan
+ 	// on how to connect to the server.
+@@ -156,12 +161,14 @@
+ 	}
+ 
+ 	np := &Client{
+-		opts:      opts,
+-		host:      u.Hostname(),
+-		httpPort:  httpPort,
+-		httpsPort: httpsPort,
+-		logf:      logf,
+-	}
++		opts:                 opts,
++		host:                 u.Hostname(),
++		httpPort:             httpPort,
++		httpsPort:            httpsPort,
++		logf:                 logf,
++		coordinatorTransport: opts.CoordinatorTransport,
++	}
++	np.opts.CoordinatorTransport = nil
+ 
+ 	tr := &http.Transport{
+ 		Protocols:       new(http.Protocols),
+@@ -184,10 +191,15 @@
+ func (nc *Client) Close() error {
+ 	nc.mu.Lock()
+ 	live := nc.connPool
++	coordinatorTransport := nc.coordinatorTransport
++	nc.coordinatorTransport = nil
+ 	nc.closed = true
+ 	nc.connPool = nil // stop noteConnClosed from mutating it as we loop over it (in live) below
+ 	nc.mu.Unlock()
+ 
++	if coordinatorTransport != nil {
++		coordinatorTransport.CloseIdleConnections()
++	}
+ 	for _, c := range live {
+ 		c.Close()
+ 	}
+@@ -231,6 +243,10 @@
  	// of 1000ms, give ourselves an extra 5 seconds to complete the
  	// handshake.
  	timeoutSec += 5
@@ -442,6 +670,19 @@ diff --git a/control/ts2021/client.go b/control/ts2021/client.go
  
  	// Be extremely defensive and ensure that the timeout is in the range
  	// [5, 60] seconds (e.g. if we accidentally get a negative number).
+@@ -260,7 +276,11 @@
+ 		ExtraRootCAs:    nc.opts.ExtraRootCAs,
+ 		Clock:           tstime.StdClock{},
+ 	}
+-	clientConn, err := chd.Dial(ctx)
++	nc.mu.Lock()
++	coordinatorTransport := nc.coordinatorTransport
++	nc.coordinatorTransport = nil
++	nc.mu.Unlock()
++	clientConn, err := chd.DialWithProxyAppCoordinatorTransport(ctx, coordinatorTransport)
+ 	if err != nil {
+ 		return nil, err
+ 	}
 diff --git a/net/dnscache/dnscache.go b/net/dnscache/dnscache.go
 --- a/net/dnscache/dnscache.go
 +++ b/net/dnscache/dnscache.go

@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>Proxy</AssemblyName>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <PropertyGroup Condition="'$(RetainedCoordinatorProbe)' == 'true'">

@@ -1,6 +1,6 @@
 {
-  "version": "0.1.7",
+  "version": "0.1.8",
   "system_dns_fault": true,
   "coordinator_proxy_fault": true,
-  "request": "verify-reconnect-with-transport-keepalive-and-recent-exit-probe"
+  "request": "verify-coordinator-transport-reuse-and-common-https-latency-target"
 }

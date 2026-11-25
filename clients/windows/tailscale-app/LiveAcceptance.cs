@@ -15,6 +15,7 @@ internal static partial class LiveAcceptance
     private const string Trace = "https://1.1.1.1/cdn-cgi/trace";
     private const string PlainIPv4Trace = "https://api.ipify.org/";
     private const string Speed = "https://speed.cloudflare.com/";
+    private const string LatencyTarget = Speed + "__down?bytes=1";
     private const int TransferBytes = 10 * 1024 * 1024;
     private const int ParallelStreams = 4;
 
@@ -218,10 +219,7 @@ internal static partial class LiveAcceptance
                     if (run != persistedRestart - 1 && run < connectionAttempts - 1)
                     {
                         if (await ClientConnection.TryRestoreDirect(daemon, timeout.Token, reason => directFallback = reason))
-                        {
                             retained = daemon;
-                            _ = account.WarmActiveRoute(timeout.Token);
-                        }
                         else
                         {
                             report["direct_route_restore_failure"] = directFallback;
@@ -316,14 +314,21 @@ internal static partial class LiveAcceptance
 
     private static async Task<object> Performance(HttpClient web, IPAddress expected, CancellationToken cancel, string trace)
     {
-        var latencies = new List<double>();
-        for (int i = 0; i < 10; i++)
+        const int latencySamples = 20;
+        await RequireIPv4(web, expected, cancel, trace);
+        var latencies = new double[latencySamples];
+        for (int i = 0; i < latencies.Length; i++)
         {
+            using var request = new HttpRequestMessage(HttpMethod.Get, LatencyTarget);
+            request.Headers.ConnectionClose = true;
             var sample = Stopwatch.StartNew();
-            await RequireIPv4(web, expected, cancel, trace);
-            latencies.Add(sample.Elapsed.TotalMilliseconds);
+            using var response = await web.SendAsync(request, cancel);
+            response.EnsureSuccessStatusCode();
+            if ((await response.Content.ReadAsByteArrayAsync(cancel)).Length != 1)
+                throw new IOException("LATENCY_PROBE_RESPONSE_INVALID");
+            latencies[i] = sample.Elapsed.TotalMilliseconds;
         }
-        latencies.Sort();
+        var orderedLatencies = latencies.Order().ToArray();
         using var single = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         single.CancelAfter(TimeSpan.FromSeconds(30));
         var downloadStartedAt = DateTimeOffset.UtcNow;
@@ -351,8 +356,12 @@ internal static partial class LiveAcceptance
             upload_mbps = upload,
             upload_started_at = uploadStartedAt,
             upload_ended_at = uploadEndedAt,
-            https_p50_ms = Math.Round((latencies[4] + latencies[5]) / 2, 2),
-            https_p95_ms = Math.Round(latencies[9], 2),
+            https_probe = LatencyTarget,
+            https_connection = "fresh",
+            https_samples_ms = latencies.Select(ms => Math.Round(ms, 2)).ToArray(),
+            https_p50_ms = Math.Round((orderedLatencies[latencySamples / 2 - 1] + orderedLatencies[latencySamples / 2]) / 2, 2),
+            https_p95_ms = Math.Round(orderedLatencies[(int)Math.Ceiling(latencySamples * 0.95) - 1], 2),
+            https_max_ms = Math.Round(orderedLatencies[^1], 2),
             aggregate = new { parallel_streams = ParallelStreams, download = multiDownload, upload = multiUpload },
         };
     }

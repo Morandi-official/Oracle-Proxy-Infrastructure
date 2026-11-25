@@ -67,6 +67,9 @@ try {
             Copy-Item -LiteralPath "$PSScriptRoot/../windows/coordinator-noise_test.go" -Destination 'control/ts2021/proxy_coordinator_test.go'
             & go test -v -count=1 -timeout=90s -run '^TestProxyAppCoordinatorDelayedNoise$' ./control/ts2021
             if ($LASTEXITCODE -ne 0) { throw 'COORDINATOR_DELAYED_NOISE_TEST_FAILED' }
+            Copy-Item -LiteralPath "$PSScriptRoot/../windows/coordinator-key-noise_test.go" -Destination 'control/controlclient/proxy_coordinator_test.go'
+            & go test -v -count=1 -timeout=90s -run '^TestProxyAppCoordinatorKeyNoiseReuse$' ./control/controlclient
+            if ($LASTEXITCODE -ne 0) { throw 'COORDINATOR_KEY_NOISE_REUSE_TEST_FAILED' }
             & go build -trimpath -buildvcs=false -ldflags "-s -w -X tailscale.com/version.shortStamp=$version -X tailscale.com/version.longStamp=$version-proxy.$($sourceCommit.Substring(0, 10))" -o $engine ./cmd/tailscaled
             if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_PINNED_SOURCE_BUILD_FAILED' }
         }

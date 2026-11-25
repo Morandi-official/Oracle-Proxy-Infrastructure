@@ -40,7 +40,6 @@ internal sealed class AccountClient : IDisposable
         internal HttpVersionPolicy Policy { get; } = policy;
         internal IPAddress? AddressProof { get; } = address;
         internal Uri? CoordinatorProxy { get; } = coordinatorProxy;
-        internal long LastResponse = Stopwatch.GetTimestamp();
 
         internal HttpClient Http { get; } = new(new SocketsHttpHandler
         {
@@ -353,30 +352,6 @@ internal sealed class AccountClient : IDisposable
         token.GetString() is { Length: > 0 and <= 2041 } value
             ? value : throw new IOException("ACCOUNT_RESPONSE_INVALID");
 
-    internal async Task WarmActiveRoute(CancellationToken cancel)
-    {
-        var route = _active;
-        if (route is null || Stopwatch.GetElapsedTime(Interlocked.Read(ref route.LastResponse)) < TimeSpan.FromSeconds(15))
-            return;
-
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        limit.CancelAfter(TimeSpan.FromSeconds(3));
-        using var probe = new HttpRequestMessage(HttpMethod.Get, "ready")
-        {
-            Version = route.Version, VersionPolicy = route.Policy,
-        };
-        if (route.AddressProof is not null) probe.Headers.Host = Address.IdnHost;
-        try
-        {
-            using var response = await route.Http.SendAsync(probe, limit.Token);
-            Interlocked.Exchange(ref route.LastResponse, Stopwatch.GetTimestamp());
-        }
-        catch (Exception error) when (error is HttpRequestException or OperationCanceledException or ObjectDisposedException)
-        {
-            // A failed warm-up cannot replace the authenticated route or its recovery policy.
-        }
-    }
-
     internal Task<ExitProfile> Profile(string token, bool confirm, CancellationToken cancel) =>
         ReadProfile(confirm ? "confirm" : "profile", token, cancel);
 
@@ -438,7 +413,6 @@ internal sealed class AccountClient : IDisposable
         try
         {
             using var response = await route.Http.SendAsync(request, cancel);
-            Interlocked.Exchange(ref route.LastResponse, Stopwatch.GetTimestamp());
             if (recordProtocol) ResponseVersion = response.Version;
             var body = await response.Content.ReadAsByteArrayAsync(cancel);
             JsonDocument data;

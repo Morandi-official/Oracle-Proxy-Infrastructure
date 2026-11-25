@@ -238,6 +238,7 @@ internal sealed class MainForm : Form
         "coordinator_proxy_hint_ready" or "coordinator_fallback_proxy_hint_ready" or "daemon_spawned" or
         "daemon_ready" or "enrollment_started" or "ipv4_backup_verified" or "ipv6_backup_verified" or
         "ipv4_backup_first" or "ipv6_backup_first" or
+        "ipv4_route_ready" or "ipv6_route_ready" or
         "node_key_ready" or "account_confirmed" or "persisted_node_key_ready" or "exit_selected" or "exit_map_ready";
 
     private void ShowSession(bool loggedIn)
@@ -371,8 +372,6 @@ internal sealed class MainForm : Form
             if (!keepCoordinator || !_connected || _daemon is null ||
                 !await ClientConnection.TryRestoreDirect(_daemon, _lifetime.Token))
                 await StopDaemon();
-            else
-                _ = _account.WarmActiveRoute(_lifetime.Token);
             _connected = false;
             SetStatus("已断开 · 当前直连");
             _connect.Text = "连接";

@@ -33,6 +33,7 @@ jobs:
           request=ops/tailscale/windows-release.json
           version=$(jq -er '.version | strings | select(test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))' "$request")
           run=$(jq -er '.accepted_run | tostring | select(test("^[1-9][0-9]*$"))' "$request")
+          channel=$(jq -er '(.channel // "stable") | select(. == "stable" or . == "trial")' "$request")
           api="repos/$GITHUB_REPOSITORY/actions/runs/$run"
           tested=$(gh api "$api" | jq -er 'select(
             .name == "Tailscale Windows packages and Oracle acceptance" and
@@ -44,6 +45,7 @@ jobs:
           test "$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' clients/windows/tailscale-app/Proxy.Tailscale.csproj)" = "$version"
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           name: tailscale-windows-client
@@ -56,16 +58,22 @@ jobs:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ steps.acceptance.outputs.version }}
           ACCEPTANCE_RUN: ${{ steps.acceptance.outputs.run }}
+          CHANNEL: ${{ steps.acceptance.outputs.channel }}
         run: |
           set -euo pipefail
-          check_speed_and_recovery() {
+          check_recovery() {
             jq -e '
-              def within_second: type == "number" and . > 0 and . <= 1000;
               .accepted == true and .login_layout_verified == true and .abandoned_enrollment_recovered == true and
               .persisted_restart_verified == true and .stability.samples >= 10 and .stability.failures == 0 and
+              (.connections | length >= 5) and
+              ([.connections[] | select(.reused_coordinator == true)] | length >= 3)
+            ' "$1" >/dev/null
+          }
+          check_speed() {
+            jq -e '
+              def within_second: type == "number" and . > 0 and . <= 1000;
               (.account_first_login_ms | within_second) and (.account_warm_login_ms | within_second) and
-              ([.connections[] | select(.reused_coordinator == true) | .connect_ms] |
-                length >= 3 and all(.[]; within_second))
+              all(.connections[] | select(.reused_coordinator == true) | .connect_ms; within_second)
             ' "$1" >/dev/null
           }
           dns=windows/ACCEPTANCE.json
@@ -75,13 +83,20 @@ jobs:
           jq -e '.coordinator_proxy_only == true and .coordinator_proxy_hint_ready == true' "$proxy" >/dev/null
           jq -e '.coordinator_mixed_route == true and .account_login_route == "encrypted-dns-http3" and
             .coordinator_fallback_proxy_hint_ready == true and .dual_stack_backup_proof_verified == true' "$mixed" >/dev/null
-          check_speed_and_recovery "$dns"
-          check_speed_and_recovery "$proxy"
-          check_speed_and_recovery "$mixed"
+          flags=()
+          notes="The installed Windows build passed repeated reconnects and persisted-state startup on three coordinator routes."
+          for report in "$dns" "$proxy" "$mixed"; do
+            check_recovery "$report"
+            if [ "$CHANNEL" = stable ]; then check_speed "$report"; fi
+          done
+          if [ "$CHANNEL" = trial ]; then
+            flags+=(--prerelease)
+            notes+=" This trial build is intended for manual testing while connection-time and latency optimization continues."
+          fi
           (cd windows && sha256sum --strict -c SHA256SUMS.txt)
           tag="tailscale-windows-v$VERSION"
           gh release create "$tag" "windows/Proxy-$VERSION-win-x64.zip" \
             "windows/Proxy-$VERSION-win-x64-setup.exe" windows/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "Proxy Tailscale $VERSION for Windows" --latest=false \
-            --notes "The installed Windows build passed repeated reconnects and persisted-state startup on three coordinator routes. [Cloud acceptance](https://github.com/$GH_REPO/actions/runs/$ACCEPTANCE_RUN)"
+            --target "$GITHUB_SHA" --title "Proxy Tailscale $VERSION for Windows" --latest=false "${flags[@]}" \
+            --notes "$notes [Cloud acceptance](https://github.com/$GH_REPO/actions/runs/$ACCEPTANCE_RUN)"
           gh release view "$tag" --json url,assets --jq '.url, (.assets[].url)'

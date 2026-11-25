@@ -115,7 +115,7 @@ internal static class ClientConnection
             try
             {
                 progress?.Invoke("RETAINED_ACCOUNT_PROFILE");
-                var profile = await account.Profile(session, false, cancel);
+                var profile = await account.AuthorizeConnection(session, cancel);
                 if (profile.Key is null && previous?.Coordinator == profile.Coordinator)
                 {
                     try
@@ -168,7 +168,7 @@ internal static class ClientConnection
         }
 
         progress?.Invoke("ACCOUNT_PROFILE");
-        var profileTask = Record(account.Profile(session, false, attempt.Token), "account_ready");
+        var profileTask = Record(account.AuthorizeConnection(session, attempt.Token), "account_ready");
         var coordinatorTask = PrepareCoordinator(profileTask);
         var daemonTask = Record(DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
             state, attempt.Token, timing is null ? null : Mark, authorization: coordinatorTask), "daemon_ready");

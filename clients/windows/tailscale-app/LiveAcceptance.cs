@@ -84,6 +84,17 @@ internal static partial class LiveAcceptance
             }
             password = null;
 
+            phase = "ABANDONED_ENROLLMENT";
+            var abandoned = await account.Profile(session, false, timeout.Token);
+            if (abandoned.Key is null) throw new IOException("FRESH_DEVICE_ENROLLMENT_KEY_REQUIRED");
+            await Task.Delay(TimeSpan.FromSeconds(13), timeout.Token);
+            try
+            {
+                await account.Profile(session, false, timeout.Token);
+                throw new IOException("ABANDONED_ENROLLMENT_NOT_REPRODUCED");
+            }
+            catch (IOException error) when (error.Message == "TAILSCALE_ENROLLMENT_PENDING") { }
+
             var connections = new List<object>();
             report["connections"] = connections;
             int warmReconnects = 0;
@@ -111,6 +122,7 @@ internal static partial class LiveAcceptance
                 {
                     if (run == 0)
                     {
+                        report["abandoned_enrollment_recovered"] = true;
                         report["account_rate_limited"] = profile.RateLimited;
                         bool dnsHintReady = timing.ContainsKey("coordinator_dns_hint_ready");
                         report["coordinator_dns_hint_ready"] = dnsHintReady;

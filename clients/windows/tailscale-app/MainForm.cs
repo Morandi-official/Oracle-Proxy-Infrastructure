@@ -306,7 +306,8 @@ internal sealed class MainForm : Form
         "ACCOUNT_CONNECT_FAILED" => "无法访问账号服务，请检查当前网络。",
         "ACCOUNT_PROXY_FAILED" => "Windows 系统代理无法连接账号服务。",
         "ACCOUNT_TLS_FAILED" => "无法验证账号服务的 HTTPS 连接，请检查系统日期和时间。",
-        "ACCOUNT_TIMEOUT" => "账号服务连接超时，请重试。",
+        "ACCOUNT_TIMEOUT" => "提交账号请求超时，请重试。",
+        "ACCOUNT_HTTP_FAILED" => "账号 HTTPS 请求中断，请重试。",
         "ACCOUNT_SERVICE_UNAVAILABLE" or "TAILSCALE_SERVICE_UNAVAILABLE" or "CONTROL_UNAVAILABLE"
             => "账号服务暂不可用，请稍后重试。",
         "ACCOUNT_RESPONSE_INVALID" or "INVALID_REQUEST" => "账号服务响应异常，请稍后重试。",

@@ -336,26 +336,23 @@ public final class MainActivity extends Activity {
         stoppingNetwork = formerVpn;
         verifiedNetwork = null;
         accounts.cancelCurrentRequest();
+        var host = EngineHost.from(this);
+        host.closeAttachedVpn();
         stopService(new Intent(this, BridgeVpnService.class));
         connect.setEnabled(false);
         status.setText("正在恢复直连");
         EngineHost.CLIENT_ACTIONS.execute(() -> {
-            var host = EngineHost.from(this);
             boolean canRetain = formerVpn != null && foreground && control != null;
-            if (!canRetain) stopEngine();
-            long deadline = SystemClock.elapsedRealtime() + 5_000;
-            while (formerVpn != null && (networks.getNetworkCapabilities(formerVpn) != null || host.hasAttachedVpn()) &&
-                    generation.get() == attempt && SystemClock.elapsedRealtime() < deadline) {
-                SystemClock.sleep(25);
-            }
-            boolean closed = formerVpn == null || networks.getNetworkCapabilities(formerVpn) == null;
-            if (canRetain && closed && foreground && !host.hasAttachedVpn() && generation.get() == attempt) {
+            if (canRetain && waitForVpnRemoval(host, formerVpn, attempt, 1_500) && foreground) {
                 try {
                     control.clearExit();
                     coordinatorRetained = coordinatorRunningWithoutExit(control);
                 } catch (IOException ignored) { }
             }
             if (!coordinatorRetained) stopEngine();
+            // Stopping the engine can itself remove a VPN whose service
+            // teardown stalled. Confirm network removal after that fallback.
+            boolean closed = waitForVpnRemoval(host, formerVpn, attempt, 8_000);
             runOnUiThread(() -> {
                 if (generation.get() != attempt) return;
                 status.setText(closed ? DIRECT : "VPN 正在停止，请稍候");
@@ -365,6 +362,17 @@ public final class MainActivity extends Activity {
                 if (closed) stoppingNetwork = null;
             });
         });
+    }
+
+    private boolean waitForVpnRemoval(EngineHost host, Network previous, int attempt, long timeout) {
+        long end = SystemClock.elapsedRealtime() + timeout;
+        while (generation.get() == attempt) {
+            if (!host.hasAttachedVpn() && (previous == null || networks.getNetworkCapabilities(previous) == null))
+                return true;
+            if (SystemClock.elapsedRealtime() >= end) break;
+            SystemClock.sleep(25);
+        }
+        return false;
     }
 
     @Override

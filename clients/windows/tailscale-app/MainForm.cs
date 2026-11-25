@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
+using System.Runtime.InteropServices;
 
 namespace OracleProxy.Tailscale;
 
@@ -11,6 +14,7 @@ internal sealed class MainForm : Form
     private static readonly Color Accent = Color.FromArgb(52, 81, 111);
     private static readonly Color Alert = Color.FromArgb(148, 44, 38);
     private static readonly Color Connected = Color.FromArgb(19, 106, 80);
+    private static readonly string AppVersion = typeof(MainForm).Assembly.GetName().Version?.ToString(3) ?? "unknown";
 
     private readonly AccountClient _account = new();
     private readonly TextBox _user = new() { PlaceholderText = "输入账号", AccessibleName = "账号", MaxLength = 64 };
@@ -23,6 +27,12 @@ internal sealed class MainForm : Form
     private readonly Label _status = new() { AutoSize = true, UseMnemonic = false, AccessibleName = "连接状态" };
     private readonly SmoothButton _login = new() { Text = "登录", Name = "account-login" };
     private readonly SmoothButton _connect = new() { Text = "连接", Enabled = false, Visible = false };
+    private readonly SmoothButton _copyDiagnostic = new()
+    {
+        Text = "复制连接诊断", Name = "copy-connection-diagnostic", Visible = false,
+        Anchor = AnchorStyles.Left, Size = new Size(146, 34), Margin = new Padding(0, 10, 0, 0),
+        BackColor = Surface, ForeColor = Accent,
+    };
     private readonly TableLayoutPanel _fields = new() { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 1 };
     private readonly string _stateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Morandi", "ProxyTailscale");
@@ -37,6 +47,8 @@ internal sealed class MainForm : Form
     private Task? _disconnectTask;
     private bool _closing;
     private bool _closeApproved;
+    private long? _lastLoginMilliseconds;
+    private string? _diagnosticText;
 
     internal MainForm()
     {
@@ -64,7 +76,7 @@ internal sealed class MainForm : Form
         });
         header.Controls.Add(new Label
         {
-            Text = "v" + typeof(MainForm).Assembly.GetName().Version?.ToString(3), ForeColor = Muted,
+            Text = "v" + AppVersion, ForeColor = Muted,
             Font = new Font("Segoe UI", 9), AutoSize = true, Margin = new Padding(12, 16, 0, 0),
         });
         layout.Controls.Add(header);
@@ -98,11 +110,15 @@ internal sealed class MainForm : Form
         content.SizeChanged += (_, _) =>
             _status.MaximumSize = new Size(Math.Max(1, content.ClientSize.Width), 0);
         content.Controls.Add(_status);
+        _copyDiagnostic.FlatAppearance.MouseOverBackColor = Color.FromArgb(239, 245, 250);
+        _copyDiagnostic.FlatAppearance.MouseDownBackColor = Canvas;
+        content.Controls.Add(_copyDiagnostic);
         card.Controls.Add(content);
         layout.Controls.Add(card);
         scroll.Controls.Add(layout);
         Controls.Add(scroll);
         AcceptButton = _login;
+        _copyDiagnostic.Click += (_, _) => CopyDiagnostic();
         _login.Click += async (_, _) => await Login();
         _connect.Click += async (_, _) =>
         {
@@ -118,6 +134,8 @@ internal sealed class MainForm : Form
             }
         };
         Shown += PrepareLogin;
+        _user.Enter += PrepareLogin;
+        _password.Enter += PrepareLogin;
         FormClosing += CloseRequested;
     }
 
@@ -149,6 +167,77 @@ internal sealed class MainForm : Form
         _status.Visible = message.Length != 0;
     }
 
+    private void ClearDiagnostic()
+    {
+        _diagnosticText = null;
+        _copyDiagnostic.Text = "复制连接诊断";
+        _copyDiagnostic.Visible = false;
+    }
+
+    private void ShowDiagnostic(Exception error, string phase, long? connectionMilliseconds = null,
+        ConcurrentDictionary<string, long>? milestones = null)
+    {
+        var route = phase == "DEVICE_FILE" ? null : _account.LoginRoute;
+        var lines = new List<string>
+        {
+            "Proxy 连接诊断",
+            $"version: {AppVersion}",
+            "account_route: " + (route is "direct" or "http1" or "encrypted-dns-tcp" or "encrypted-dns-http3" or "system-proxy"
+                ? route : "unavailable"),
+            "login_ms: " + (_lastLoginMilliseconds?.ToString(CultureInfo.InvariantCulture) ?? "not_measured"),
+            "connection_ms: " + (connectionMilliseconds?.ToString(CultureInfo.InvariantCulture) ?? "not_measured"),
+            "phase: " + DiagnosticPhase(phase),
+            "error: " + DiagnosticError(error),
+        };
+        if (milestones is not null)
+        {
+            foreach (var step in milestones.OrderBy(value => value.Value).ThenBy(value => value.Key, StringComparer.Ordinal))
+                lines.Add("connection." + step.Key + "_ms: " + step.Value.ToString(CultureInfo.InvariantCulture));
+        }
+        _diagnosticText = string.Join(Environment.NewLine, lines);
+        _copyDiagnostic.Visible = true;
+    }
+
+    private void CopyDiagnostic()
+    {
+        if (_diagnosticText is null) return;
+        try
+        {
+            var data = new DataObject();
+            data.SetText(_diagnosticText);
+            Clipboard.SetDataObject(data, true, 5, 50);
+            _copyDiagnostic.Text = "已复制诊断";
+        }
+        catch (ExternalException)
+        {
+            _copyDiagnostic.Text = "复制失败 · 重试";
+        }
+    }
+
+    private static string DiagnosticPhase(string phase) => phase switch
+    {
+        "DEVICE_FILE" or "ACCOUNT_LOGIN" or "ACCOUNT_ROUTE" or "RESTORE_DIRECT" => phase,
+        _ when PhaseStatus(phase) is not null => phase,
+        _ => "CONNECT",
+    };
+
+    private static string DiagnosticError(Exception error) => error switch
+    {
+        UnauthorizedAccessException => "DEVICE_FILE_ACCESS_DENIED",
+        OperationCanceledException => "OPERATION_TIMED_OUT",
+        IOException { Message: "INVALID_PROXY_DEVICE_ID" or "TAILSCALE_DAEMON_CLEANUP_FAILED" or
+            "TAILSCALE_ADAPTER_STILL_PRESENT" or "INVALID_TAILSCALE_BACKEND_STATE" } => error.Message,
+        IOException when MessageForCode(error.Message) != GenericFailure => error.Message,
+        IOException => "IO_FAILURE",
+        HttpRequestException => "HTTP_REQUEST_FAILED",
+        _ => "UNEXPECTED_FAILURE",
+    };
+
+    private static bool KnownMilestone(string step) => step is
+        "account_ready" or "retained_account_ready" or "retained_exit_selected" or "coordinator_dns_hint_ready" or
+        "coordinator_proxy_hint_ready" or "daemon_spawned" or "daemon_ready" or "enrollment_started" or
+        "node_key_ready" or "account_confirmed" or "persisted_node_key_ready" or "exit_selected" or "exit_map_ready";
+
     private void ShowSession(bool loggedIn)
     {
         _heading.Text = loggedIn ? "当前连接" : "登录账号";
@@ -163,12 +252,14 @@ internal sealed class MainForm : Form
 
     private async void PrepareLogin(object? sender, EventArgs e)
     {
+        if (_closing || _session is not null || !_login.Enabled) return;
         try { await _account.PrepareLogin(_lifetime.Token); }
         catch (Exception error) when (error is IOException or HttpRequestException or OperationCanceledException) { }
     }
 
     private async Task Login()
     {
+        ClearDiagnostic();
         string username = _user.Text.Trim().ToLowerInvariant();
         if (username.Length == 0 || _password.TextLength == 0)
         {
@@ -178,6 +269,8 @@ internal sealed class MainForm : Form
         }
         _login.Enabled = false;
         SetStatus("正在连接账号服务…");
+        var elapsed = Stopwatch.StartNew();
+        string phase = "DEVICE_FILE";
         try
         {
             _state = ClientConnection.StateFor(_stateRoot, username);
@@ -187,8 +280,14 @@ internal sealed class MainForm : Form
             {
                 throw new IOException("DEVICE_FILE_UNAVAILABLE", error);
             }
+            phase = "ACCOUNT_LOGIN";
             _session = await _account.Login(username, _password.Text, device, _lifetime.Token,
-                () => { if (!_closing) SetStatus("正在尝试备用登录路径…"); });
+                () =>
+                {
+                    phase = "ACCOUNT_ROUTE";
+                    if (!_closing) SetStatus("正在验证账号服务连接…");
+                });
+            _lastLoginMilliseconds = elapsed.ElapsedMilliseconds;
             _password.Clear();
             _identity.Text = username;
             ShowSession(loggedIn: true);
@@ -196,7 +295,9 @@ internal sealed class MainForm : Form
         }
         catch (Exception exception) when (!_closing)
         {
+            _lastLoginMilliseconds = elapsed.ElapsedMilliseconds;
             SetStatus(Message(exception), Alert);
+            ShowDiagnostic(exception, phase);
             _login.Enabled = true;
         }
         catch (Exception) when (_closing) { }
@@ -205,11 +306,13 @@ internal sealed class MainForm : Form
     private async Task Connect()
     {
         if (_session is null || _state is null || _connecting is not null) return;
+        ClearDiagnostic();
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _connecting = attempt;
         _connect.Text = "取消连接";
         SetStatus("正在连接…");
         var elapsed = Stopwatch.StartNew();
+        var milestones = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
         string phase = "ACCOUNT_PROFILE";
         try
         {
@@ -219,18 +322,23 @@ internal sealed class MainForm : Form
             {
                 phase = stage;
                 if (!_closing && !attempt.IsCancellationRequested)
-                    SetStatus(PhaseStatus(stage));
+                    SetStatus(PhaseStatus(stage) ?? "正在连接…");
+            }, timing: (step, milliseconds) =>
+            {
+                if (KnownMilestone(step)) milestones[step] = milliseconds;
             }, retained: retained, previous: _profile);
             _connected = true;
             SetStatus($"已连接 · {elapsed.ElapsedMilliseconds} ms", Connected);
         }
         catch (Exception failure)
         {
+            var failureMilliseconds = elapsed.ElapsedMilliseconds;
             try { await StopDaemon(); }
             catch (Exception cleanup) { failure = cleanup; }
             if (!_closing && !attempt.IsCancellationRequested)
             {
                 SetStatus(ConnectFailure(failure, phase), Alert);
+                ShowDiagnostic(failure, phase, failureMilliseconds, milestones);
                 if (failure.Message == "LOGIN_REQUIRED")
                 {
                     _session = null;
@@ -251,6 +359,7 @@ internal sealed class MainForm : Form
 
     private async Task Disconnect(bool keepCoordinator)
     {
+        ClearDiagnostic();
         _connect.Enabled = false;
         SetStatus("正在恢复直连…");
         try
@@ -258,7 +367,7 @@ internal sealed class MainForm : Form
             if (_connecting is not null) await _connecting.CancelAsync();
             if (_connectTask is not null) await _connectTask;
             if (!keepCoordinator || !_connected || _daemon is null ||
-                _profile is null || !await ClientConnection.TryRestoreDirect(_daemon, _profile, _lifetime.Token))
+                !await ClientConnection.TryRestoreDirect(_daemon, _lifetime.Token))
                 await StopDaemon();
             _connected = false;
             SetStatus("已断开 · 当前直连");
@@ -268,6 +377,7 @@ internal sealed class MainForm : Form
         catch (Exception failure)
         {
             SetStatus(Message(failure), Alert);
+            if (!_closing) ShowDiagnostic(failure, "RESTORE_DIRECT");
             _connect.Text = "断开";
             _connect.Enabled = !_closing;
         }
@@ -303,7 +413,7 @@ internal sealed class MainForm : Form
         base.Dispose(disposing);
     }
 
-    private static string PhaseStatus(string phase) => phase switch
+    private static string? PhaseStatus(string phase) => phase switch
     {
         "ACCOUNT_PROFILE" or "RETAINED_ACCOUNT_PROFILE" => "正在检查账号与设备授权…",
         "DAEMON_PROFILE" => "正在启动本机连接引擎…",
@@ -311,7 +421,7 @@ internal sealed class MainForm : Form
         "ACCOUNT_CONFIRM" => "正在确认设备登记…",
         "SELECT_EXIT" or "RETAINED_SELECT_EXIT" => "正在设置代理出口…",
         "VERIFY_EXIT" => "正在验证 IPv4 和 IPv6 出口…",
-        _ => "正在连接…",
+        _ => null,
     };
 
     private static string ConnectFailure(Exception error, string phase)
@@ -358,6 +468,9 @@ internal sealed class MainForm : Form
         "TAILSCALE_DEVICE_REVOKED" => "此设备的连接授权已撤销，请联系管理员。",
         "TAILSCALE_DEVICE_OWNER_MISMATCH" => "此设备的登记信息与当前账号不一致，请联系管理员。",
         "TAILSCALE_DEVICE_ALREADY_REGISTERED" => "本机已有登记记录，请在后台核对设备状态。",
+        "TAILSCALE_LOCAL_REGISTRATION_MISSING" => "本机缺少设备登记信息，请联系管理员核对设备授权。",
+        "TAILSCALE_USER_PROFILE_WATCH_ENDED" or "TAILSCALE_USER_PROFILE_WATCH_REJECTED"
+            => "本机连接引擎未能读取设备状态，请重试。",
         "TAILSCALE_LOCAL_CONTROL_REJECTED" => "本机连接引擎拒绝了当前操作。",
         "ACCOUNT_HTTP_FAILED" => "账号 HTTPS 请求中断，请重试。",
         "ACCOUNT_SERVICE_UNAVAILABLE" or "TAILSCALE_SERVICE_UNAVAILABLE" or "CONTROL_UNAVAILABLE"

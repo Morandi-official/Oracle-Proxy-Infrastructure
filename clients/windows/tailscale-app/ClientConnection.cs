@@ -9,7 +9,8 @@ namespace OracleProxy.Tailscale;
 
 internal static class ClientConnection
 {
-    private static readonly IPAddress PublicV4 = IPAddress.Parse("1.1.1.1");
+    private static readonly IPAddress PublicV4Lower = IPAddress.Parse("1.1.1.1");
+    private static readonly IPAddress PublicV4Upper = IPAddress.Parse("208.67.222.222");
     private static readonly IPAddress PublicV6 = IPAddress.Parse("2606:4700:4700::1111");
 
     private static bool UsesOrdinaryRoute(IPAddress destination, IPInterfaceProperties owned)
@@ -34,15 +35,11 @@ internal static class ClientConnection
         owned.DnsAddresses.Any(value => value.ToString().Split('%', 2)[0] is not
             ("fec0:0:0:ffff::1" or "fec0:0:0:ffff::2" or "fec0:0:0:ffff::3"));
 
-    internal static async Task<bool> TryRestoreDirect(DaemonProcess daemon, ExitProfile profile, CancellationToken cancel, Action<string>? fallback = null)
+    internal static async Task<bool> TryRestoreDirect(DaemonProcess daemon, CancellationToken cancel,
+        Action<string>? fallback = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         deadline.CancelAfter(TimeSpan.FromSeconds(6));
-        using var web = new HttpClient(new SocketsHttpHandler
-        {
-            UseProxy = false, AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromMilliseconds(550),
-        }) { Timeout = TimeSpan.FromMilliseconds(900), MaxResponseContentBufferSize = 8192 };
-        web.DefaultRequestHeaders.ConnectionClose = true;
         string waitingFor = "clear_exit";
         try
         {
@@ -58,25 +55,17 @@ internal static class ClientConnection
                     waitingFor = "owned_adapter";
                 else if (HasConfiguredDns(adapter))
                     waitingFor = "owned_dns";
-                else if (!UsesOrdinaryRoute(PublicV4, adapter))
+                else if (!UsesOrdinaryRoute(PublicV4Lower, adapter) || !UsesOrdinaryRoute(PublicV4Upper, adapter))
                     waitingFor = "ipv4_route";
                 else if (!UsesOrdinaryRoute(PublicV6, adapter))
                     waitingFor = "ipv6_route";
-                else
+                else if (daemon.HasExited)
                 {
-                    waitingFor = "direct_https";
-                    try
-                    {
-                        string trace = await web.GetStringAsync("https://1.1.1.1/cdn-cgi/trace", deadline.Token);
-                        string? address = trace.Split('\n').FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal));
-                        if (address is not null && IPAddress.TryParse(address[3..].Trim(), out var observed) &&
-                            observed.AddressFamily == AddressFamily.InterNetwork &&
-                            !observed.Equals(IPAddress.Parse(profile.IPv4)))
-                            return true;
-                    }
-                    catch (HttpRequestException) { }
-                    catch (OperationCanceledException) when (!deadline.IsCancellationRequested) { }
+                    fallback?.Invoke("daemon_exited");
+                    return false;
                 }
+                else
+                    return true;
                 await Task.Delay(50, deadline.Token);
             }
         }
@@ -112,64 +101,52 @@ internal static class ClientConnection
         var startedAt = Stopwatch.GetTimestamp();
         void Mark(string stage) => timing?.Invoke(stage, (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
 
-        async Task<T> Record<T>(Task<T> task, string stage)
+        ExitProfile profile;
+        bool reused = false;
+        try
         {
-            T result = await task.ConfigureAwait(false);
-            Mark(stage);
-            return result;
+            progress?.Invoke(retained is null ? "ACCOUNT_PROFILE" : "RETAINED_ACCOUNT_PROFILE");
+            profile = await account.AuthorizeConnection(session, cancel);
+            Mark(retained is null ? "account_ready" : "retained_account_ready");
+            if (retained is not null && profile.Key is null && previous?.Coordinator == profile.Coordinator)
+            {
+                try
+                {
+                    var stateBefore = await retained.Control.ReadState(cancel);
+                    if (stateBefore is { State: "Running", HasNodeKey: true, ExitId: "" })
+                    {
+                        progress?.Invoke("RETAINED_SELECT_EXIT");
+                        await retained.Control.SelectExitNode(profile.NodeId, cancel);
+                        Mark("retained_exit_selected");
+                        await ExitCheck.Verify(retained, profile, cancel, timing is null ? null : Mark);
+                        cancel.ThrowIfCancellationRequested();
+                        reused = true;
+                        return (retained, profile);
+                    }
+                }
+                catch (Exception error) when (IsRecoverable(error, cancel)) { }
+            }
+        }
+        finally
+        {
+            if (retained is not null && !reused) await retained.DisposeAsync();
         }
 
-        if (retained is not null)
-        {
-            bool reused = false;
-            try
-            {
-                progress?.Invoke("RETAINED_ACCOUNT_PROFILE");
-                var profile = await Record(account.AuthorizeConnection(session, cancel), "retained_account_ready");
-                if (profile.Key is null && previous?.Coordinator == profile.Coordinator)
-                {
-                    try
-                    {
-                        var stateBefore = await retained.Control.ReadState(cancel);
-                        if (stateBefore is { State: "Running", HasNodeKey: true, ExitId: "" })
-                        {
-                            progress?.Invoke("RETAINED_SELECT_EXIT");
-                            await retained.Control.SelectExitNode(profile.NodeId, cancel);
-                            Mark("retained_exit_selected");
-                            await ExitCheck.Verify(retained, profile, cancel, timing is null ? null : Mark);
-                            cancel.ThrowIfCancellationRequested();
-                            reused = true;
-                            return (retained, profile);
-                        }
-                    }
-                    catch (Exception error) when (IsRecoverable(error, cancel)) { }
-                }
-            }
-            finally
-            {
-                if (!reused) await retained.DisposeAsync();
-            }
-        }
-        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        progress?.Invoke("ACCOUNT_PROFILE");
-        var profileTask = Record(account.AuthorizeConnection(session, attempt.Token), "account_ready");
         var coordinator = account.CoordinatorRoute;
         if (coordinator.Address is not null) Mark("coordinator_dns_hint_ready");
         if (coordinator.Proxy is not null) Mark("coordinator_proxy_hint_ready");
-        var daemonTask = Record(DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
-            state, attempt.Token, timing is null ? null : Mark, authorization: profileTask, coordinator: coordinator),
-            "daemon_ready");
+        progress?.Invoke("DAEMON_PROFILE");
+        var daemon = await DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
+            state, cancel, timing is null ? null : Mark, coordinator: coordinator);
+        Mark("daemon_ready");
         try
         {
-            var profile = await profileTask;
-            progress?.Invoke("DAEMON_PROFILE");
-            var daemon = await daemonTask;
             if (profile.Key is not null)
             {
                 progress?.Invoke("ENROLLMENT_START");
-                await daemon.Control.Enroll(profile.Coordinator, profile.Key, attempt.Token);
+                await daemon.Control.Enroll(profile.Coordinator, profile.Key, cancel);
                 Mark("enrollment_started");
-                using var registration = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
+                using var registration = CancellationTokenSource.CreateLinkedTokenSource(cancel);
                 registration.CancelAfter(TimeSpan.FromSeconds(55));
                 bool nodeKeyReady = false;
                 try
@@ -193,31 +170,31 @@ internal static class ClientConnection
                         }
                     }
                     Mark("account_confirmed");
+                    profile = profile with { Key = null };
                 }
-                catch (OperationCanceledException error) when (!attempt.IsCancellationRequested)
+                catch (OperationCanceledException error) when (!cancel.IsCancellationRequested)
                 {
                     throw new IOException(nodeKeyReady ? "TAILSCALE_ENROLLMENT_TIMEOUT" : "TAILSCALE_COORDINATOR_TIMEOUT", error);
                 }
             }
+            else
+            {
+                if (!(await daemon.Control.ReadState(cancel)).HasNodeKey)
+                    throw new IOException("TAILSCALE_LOCAL_REGISTRATION_MISSING");
+                Mark("persisted_node_key_ready");
+            }
             progress?.Invoke("SELECT_EXIT");
-            await daemon.Control.SelectExitNode(profile.NodeId, attempt.Token);
+            await daemon.Control.SelectExitNode(profile.NodeId, cancel);
             Mark("exit_selected");
             progress?.Invoke("VERIFY_EXIT");
-            await ExitCheck.Verify(daemon, profile, attempt.Token, timing is null ? null : Mark, slowCoordinator: true);
-            attempt.Token.ThrowIfCancellationRequested();
+            await ExitCheck.Verify(daemon, profile, cancel, timing is null ? null : Mark, slowCoordinator: true);
+            cancel.ThrowIfCancellationRequested();
             return (daemon, profile);
         }
         catch
         {
-            await attempt.CancelAsync();
-            DaemonProcess? started = null;
-            try { started = await daemonTask; }
-            catch { } // The original startup or account failure is preserved.
-            if (started is not null)
-            {
-                try { await started.DisposeAsync(); }
-                catch (Exception cleanup) { throw new IOException("TAILSCALE_DAEMON_CLEANUP_FAILED", cleanup); }
-            }
+            try { await daemon.DisposeAsync(); }
+            catch (Exception cleanup) { throw new IOException("TAILSCALE_DAEMON_CLEANUP_FAILED", cleanup); }
             throw;
         }
     }

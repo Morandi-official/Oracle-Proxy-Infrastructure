@@ -62,21 +62,26 @@ jobs:
             jq -e '
               def within_second: type == "number" and . > 0 and . <= 1000;
               .accepted == true and .login_layout_verified == true and .abandoned_enrollment_recovered == true and
+              .persisted_restart_verified == true and .stability.samples >= 10 and .stability.failures == 0 and
               (.account_first_login_ms | within_second) and (.account_warm_login_ms | within_second) and
               ([.connections[] | select(.reused_coordinator == true) | .connect_ms] |
-                length >= 2 and all(.[]; within_second))
+                length >= 3 and all(.[]; within_second))
             ' "$1" >/dev/null
           }
           dns=windows/ACCEPTANCE.json
           proxy=windows/PROXY_COORDINATOR_ACCEPTANCE.json
+          mixed=windows/MIXED_COORDINATOR_ACCEPTANCE.json
           jq -e '.coordinator_system_dns_blocked == true and .coordinator_dns_hint_ready == true' "$dns" >/dev/null
           jq -e '.coordinator_proxy_only == true and .coordinator_proxy_hint_ready == true' "$proxy" >/dev/null
+          jq -e '.coordinator_mixed_route == true and .account_login_route == "encrypted-dns-http3" and
+            .coordinator_fallback_proxy_hint_ready == true' "$mixed" >/dev/null
           check_speed_and_recovery "$dns"
           check_speed_and_recovery "$proxy"
+          check_speed_and_recovery "$mixed"
           (cd windows && sha256sum --strict -c SHA256SUMS.txt)
           tag="tailscale-windows-v$VERSION"
           gh release create "$tag" "windows/Proxy-$VERSION-win-x64.zip" \
             "windows/Proxy-$VERSION-win-x64-setup.exe" windows/SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "Proxy Tailscale $VERSION for Windows" --latest=false \
-            --notes "The installed Windows build passed the DNS fallback and alternate coordinator route tests. [Cloud acceptance](https://github.com/$GH_REPO/actions/runs/$ACCEPTANCE_RUN)"
+            --notes "The installed Windows build passed repeated reconnects and persisted-state startup on three coordinator routes. [Cloud acceptance](https://github.com/$GH_REPO/actions/runs/$ACCEPTANCE_RUN)"
           gh release view "$tag" --json url,assets --jq '.url, (.assets[].url)'

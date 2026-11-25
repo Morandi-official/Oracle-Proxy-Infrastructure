@@ -26,6 +26,8 @@ internal static partial class LiveAcceptance
         Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS", null);
         bool proxyOnly = Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PROXY_ONLY") == "true";
         Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PROXY_ONLY", null);
+        bool mixedCoordinatorRoute = Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_MIXED_COORDINATOR_ROUTE") == "true";
+        Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_MIXED_COORDINATOR_ROUTE", null);
         string phase = "START";
         var report = new Dictionary<string, object?>();
         using var account = new AccountClient();
@@ -68,10 +70,13 @@ internal static partial class LiveAcceptance
             report["account_login_route"] = account.LoginRoute;
             report["coordinator_system_dns_blocked"] = systemDnsBlocked;
             report["coordinator_proxy_only"] = proxyOnly;
+            report["coordinator_mixed_route"] = mixedCoordinatorRoute;
             if (systemDnsBlocked && account.LoginRoute?.StartsWith("encrypted-dns-", StringComparison.Ordinal) != true)
                 throw new IOException("ACCOUNT_DNS_FALLBACK_NOT_USED");
             if (proxyOnly && account.LoginRoute != "system-proxy")
                 throw new IOException("ACCOUNT_PROXY_FALLBACK_NOT_USED");
+            if (mixedCoordinatorRoute && account.LoginRoute != "encrypted-dns-http3")
+                throw new IOException("ACCOUNT_MIXED_ROUTE_HTTP3_NOT_USED");
             phase = "LOGIN_ERROR_RESPONSE";
             using (var rejected = new AccountClient())
             {
@@ -84,9 +89,12 @@ internal static partial class LiveAcceptance
             }
             if (!proxyOnly)
             {
-                phase = "ENCRYPTED_DNS_LOGIN";
-                await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
-                report["account_encrypted_dns_login_verified"] = true;
+                if (!mixedCoordinatorRoute)
+                {
+                    phase = "ENCRYPTED_DNS_LOGIN";
+                    await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
+                    report["account_encrypted_dns_login_verified"] = true;
+                }
                 phase = "ENCRYPTED_DNS_HTTP3_LOGIN";
                 if (System.Net.Quic.QuicConnection.IsSupported)
                 {
@@ -109,10 +117,17 @@ internal static partial class LiveAcceptance
 
             var connections = new List<object>();
             report["connections"] = connections;
+            const int persistedRestart = 2;
+            const int connectionAttempts = 5;
             int warmReconnects = 0;
-            for (int run = 0; run < 3; run++)
+            for (int run = 0; run < connectionAttempts; run++)
             {
-                phase = run == 0 ? "FIRST_CONNECT" : "RECONNECT";
+                phase = run switch
+                {
+                    0 => "FIRST_CONNECT",
+                    persistedRestart => "PERSISTED_RESTART",
+                    _ => "RECONNECT",
+                };
                 var startedAt = DateTimeOffset.UtcNow;
                 var timer = Stopwatch.StartNew();
                 string attempt = phase;
@@ -132,6 +147,17 @@ internal static partial class LiveAcceptance
                 string transport;
                 try
                 {
+                    if (run == persistedRestart)
+                    {
+                        if (supplied is not null || reused || !timing.ContainsKey("persisted_node_key_ready") ||
+                            timing.ContainsKey("enrollment_started"))
+                            throw new IOException("WINDOWS_PERSISTED_REGISTRATION_NOT_REUSED");
+                        report["persisted_restart_verified"] = true;
+                    }
+                    else if (run != 0 && !reused)
+                    {
+                        throw new IOException("WINDOWS_RETAINED_COORDINATOR_NOT_REUSED");
+                    }
                     if (run == 0)
                     {
                         report["abandoned_enrollment_recovered"] = true;
@@ -144,6 +170,13 @@ internal static partial class LiveAcceptance
                         report["coordinator_proxy_hint_ready"] = proxyHintReady;
                         if (proxyOnly && !proxyHintReady)
                             throw new IOException("COORDINATOR_PROXY_HINT_NOT_USED");
+                        if (mixedCoordinatorRoute)
+                        {
+                            bool fallbackProxyReady = account.CoordinatorRoute.FallbackProxy is not null;
+                            report["coordinator_fallback_proxy_hint_ready"] = fallbackProxyReady;
+                            if (!fallbackProxyReady)
+                                throw new IOException("COORDINATOR_FALLBACK_PROXY_HINT_NOT_USED");
+                        }
                     }
                     phase = "VERIFY_SYSTEM_ROUTE";
                     // The caller uses ordinary system routing. The product has
@@ -174,8 +207,16 @@ internal static partial class LiveAcceptance
                     transport = await daemon.Control.ReadExitTransport(profile.NodeId, timeout.Token);
                     phase = "DISCONNECT";
                     var directTimer = Stopwatch.StartNew();
-                    if (run < 2 && await ClientConnection.TryRestoreDirect(daemon, profile, timeout.Token, reason => directFallback = reason))
-                        retained = daemon;
+                    if (run != persistedRestart - 1 && run < connectionAttempts - 1)
+                    {
+                        if (await ClientConnection.TryRestoreDirect(daemon, timeout.Token, reason => directFallback = reason))
+                            retained = daemon;
+                        else
+                        {
+                            report["direct_route_restore_failure"] = directFallback;
+                            throw new IOException("WINDOWS_RETAINED_DIRECT_ROUTE_NOT_RESTORED");
+                        }
+                    }
                     timing["direct_verification_duration"] = directTimer.ElapsedMilliseconds;
                 }
                 finally
@@ -198,13 +239,11 @@ internal static partial class LiveAcceptance
                 connections.Add(new
                 {
                     started_at = startedAt,
-                    connect_ms = connectedMs, reused_coordinator = reused, initial_transport = initialTransport, transport,
-                    direct_fallback = directFallback, milestones_ms = timing,
+                    connect_ms = connectedMs, reused_coordinator = reused, persisted_restart = run == persistedRestart,
+                    initial_transport = initialTransport, transport, milestones_ms = timing,
                     direct_route_confirmation_ms = restoring.ElapsedMilliseconds,
                 });
             }
-            phase = "VERIFY_FAST_RECONNECT";
-            if (warmReconnects == 0) throw new IOException("WARM_RECONNECT_NOT_OBSERVED");
             report["warm_reconnects"] = warmReconnects;
             report.Remove("last_connection_milestones_ms");
             result = 0;

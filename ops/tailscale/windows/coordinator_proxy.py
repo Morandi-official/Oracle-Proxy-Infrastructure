@@ -16,7 +16,7 @@ async def copy(reader, writer):
         await writer.drain()
 
 
-async def handle(client, response, address):
+async def handle(client, response, address, connect_delay):
     upstream = None
     try:
         header = await asyncio.wait_for(client.readuntil(b"\r\n\r\n"), 5)
@@ -26,6 +26,8 @@ async def handle(client, response, address):
             await response.drain()
             return
         reader, upstream = await asyncio.wait_for(asyncio.open_connection(address, 443), 8)
+        if connect_delay:
+            await asyncio.sleep(connect_delay)
         response.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await response.drain()
         tasks = [asyncio.create_task(copy(client, upstream)), asyncio.create_task(copy(reader, response))]
@@ -43,9 +45,9 @@ async def handle(client, response, address):
         response.close()
 
 
-async def main(address, ready):
+async def main(address, ready, connect_delay):
     socket = await asyncio.start_server(
-        lambda client, response: handle(client, response, address),
+        lambda client, response: handle(client, response, address, connect_delay),
         "127.0.0.1", 0, limit=8192,
     )
     async with socket:
@@ -60,4 +62,5 @@ if __name__ == "__main__":
             os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or
             os.environ.get("GITHUB_REF") != "refs/heads/main"):
         raise SystemExit("A disposable main-branch acceptance runner is required")
-    asyncio.run(main(str(ipaddress.IPv4Address(sys.argv[1])), Path(sys.argv[2])))
+    delay = {"proxy-only": 0, "mixed": 1.5}[sys.argv[3]]
+    asyncio.run(main(str(ipaddress.IPv4Address(sys.argv[1])), Path(sys.argv[2]), delay))

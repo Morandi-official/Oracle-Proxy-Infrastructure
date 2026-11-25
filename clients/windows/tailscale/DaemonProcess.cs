@@ -12,6 +12,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
     private readonly SafeFileHandle _job;
     internal LocalControl Control { get; }
     internal string AdapterName { get; }
+    internal bool HasExited => _process.HasExited;
 
     private DaemonProcess(Process process, SafeFileHandle job, LocalControl control, string adapterName)
     {
@@ -23,8 +24,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
 
     internal static async Task<DaemonProcess> Start(
         string trustedExecutable, string privateStateDirectory, CancellationToken cancellation,
-        Action<string>? timing = null, Task? authorization = null,
-        CoordinatorRouteHint? coordinator = null)
+        Action<string>? timing = null, CoordinatorRouteHint? coordinator = null)
     {
         var instance = Guid.NewGuid().ToString("N");
         var adapter = "ProxyTail-" + instance[..12];
@@ -58,6 +58,8 @@ internal sealed class DaemonProcess : IAsyncDisposable
             else if (coordinator.Direct)
             {
                 start.Environment["TS_ORACLE_PROXY_COORDINATOR_ROUTE"] = "direct";
+                if (coordinator.FallbackProxy is not null)
+                    start.Environment["TS_ORACLE_PROXY_COORDINATOR_FALLBACK_PROXY"] = coordinator.FallbackProxy.AbsoluteUri;
             }
         }
         start.ArgumentList.Add(@"--socket=\\.\pipe\" + LocalControl.PipePrefix + instance);
@@ -79,12 +81,6 @@ internal sealed class DaemonProcess : IAsyncDisposable
             var adapterObservation = observation is null ? Task.CompletedTask : ObserveAdapter(adapter, timing!, observation.Token);
             try
             {
-                // Opening LocalAPI selects the Windows user and can resume its
-                // persisted profile. Allow process and interface initialization
-                // in parallel, but hold off selecting any profile until the
-                // account service authorizes this connection.
-                if (authorization is not null)
-                    await authorization.WaitAsync(cancellation);
                 using var readiness = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
                 readiness.CancelAfter(TimeSpan.FromSeconds(12));
                 while (true)
@@ -192,4 +188,5 @@ internal sealed class DaemonProcess : IAsyncDisposable
     }
 }
 
-internal sealed record CoordinatorRouteHint(string Host, IPAddress? Address, Uri? Proxy, bool Direct);
+internal sealed record CoordinatorRouteHint(string Host, IPAddress? Address, Uri? Proxy, bool Direct,
+    Uri? FallbackProxy = null);

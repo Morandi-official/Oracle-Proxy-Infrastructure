@@ -1,6 +1,6 @@
 {
-  "version": "0.1.6",
+  "version": "0.1.7",
   "system_dns_fault": true,
   "coordinator_proxy_fault": true,
-  "request": "repeat-installed-windows-acceptance-with-a-pinned-test-relay"
+  "request": "verify-repeated-warm-and-cold-connects-with-mixed-coordinator-transport"
 }

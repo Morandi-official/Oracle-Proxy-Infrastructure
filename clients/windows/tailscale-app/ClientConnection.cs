@@ -151,21 +151,19 @@ internal static class ClientConnection
         }
 
         // Let the account TLS request run while Windows starts the native engine.
-        async Task<bool> PrepareCoordinator(Task<ExitProfile> pending)
+        async Task PrepareCoordinator(Task<ExitProfile> pending)
         {
             var authorized = await pending.ConfigureAwait(false);
             var address = account.CoordinatorAddressProof(authorized.Coordinator);
-            if (address is null) return false;
+            if (address is null) return;
             try
             {
                 await DaemonProcess.CacheVerifiedCoordinatorAddress(state, authorized.Coordinator, address, attempt.Token);
                 Mark("coordinator_dns_hint_ready");
-                return true;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
                 Mark("coordinator_dns_hint_unavailable");
-                return false;
             }
         }
 
@@ -179,14 +177,14 @@ internal static class ClientConnection
             var profile = await profileTask;
             progress?.Invoke("DAEMON_PROFILE");
             var daemon = await daemonTask;
-            bool usedDnsHint = await coordinatorTask;
+            await coordinatorTask;
             if (profile.Key is not null)
             {
                 progress?.Invoke("ENROLLMENT_START");
                 await daemon.Control.Enroll(profile.Coordinator, profile.Key, attempt.Token);
                 Mark("enrollment_started");
                 using var registration = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
-                registration.CancelAfter(TimeSpan.FromSeconds(usedDnsHint ? 45 : 15));
+                registration.CancelAfter(TimeSpan.FromSeconds(45));
                 bool nodeKeyReady = false;
                 try
                 {
@@ -219,7 +217,7 @@ internal static class ClientConnection
             await daemon.Control.SelectExitNode(profile.NodeId, attempt.Token);
             Mark("exit_selected");
             progress?.Invoke("VERIFY_EXIT");
-            await ExitCheck.Verify(daemon, profile, attempt.Token, timing is null ? null : Mark, slowCoordinator: usedDnsHint);
+            await ExitCheck.Verify(daemon, profile, attempt.Token, timing is null ? null : Mark, slowCoordinator: true);
             attempt.Token.ThrowIfCancellationRequested();
             return (daemon, profile);
         }

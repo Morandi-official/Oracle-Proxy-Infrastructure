@@ -349,7 +349,7 @@ internal sealed class MainForm : Form
         "ACCOUNT_PROXY_FAILED" => "Windows 系统代理无法连接账号服务。",
         "ACCOUNT_TLS_FAILED" => "无法验证账号服务的 HTTPS 连接，请检查系统日期和时间。",
         "ACCOUNT_TIMEOUT" => "提交账号请求超时，请重试。",
-        "ACCOUNT_ROUTE_TIMEOUT" => "账号服务各登录路径均超时，请检查网络。",
+        "ACCOUNT_ROUTE_TIMEOUT" => "未能验证账号服务的登录路径，请检查网络。",
         "TAILSCALE_ENGINE_START_TIMEOUT" => "本机连接引擎启动超时。",
         "TAILSCALE_DAEMON_EXITED" => "本机连接引擎意外退出。",
         "TAILSCALE_COORDINATOR_TIMEOUT" => "已登录账号，但等待 Tailscale 协调服务超时。",

@@ -101,6 +101,7 @@ jobs:
           VERSION: ${{ steps.request.outputs.version }}
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
       - name: Verify Windows login and engine DNS recovery without credentials
+        timeout-minutes: 4
         if: ${{ inputs.network_smoke && github.event_name == 'pull_request' }}
         env:
           VERSION: ${{ steps.request.outputs.version }}

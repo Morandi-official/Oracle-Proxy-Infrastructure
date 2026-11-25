@@ -60,15 +60,19 @@ internal static class DnsRecoveryAcceptance
         serverRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
             new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, true));
         using var leaf = serverRequest.Create(root, now.AddMinutes(-1), now.AddMinutes(8), RandomNumberGenerator.GetBytes(16));
-        using var keyPair = leaf.CopyWithPrivateKey(serverKey);
-        using var trust = new X509Store(StoreName.Root, StoreLocation.CurrentUser);
+        using var generated = leaf.CopyWithPrivateKey(serverKey);
+        using var keyPair = X509CertificateLoader.LoadPkcs12(generated.Export(X509ContentType.Pfx),
+            (string?)null, X509KeyStorageFlags.UserKeySet);
+        using var trust = new X509Store(StoreName.Root, StoreLocation.LocalMachine);
         trust.Open(OpenFlags.ReadWrite);
 
         var listener = new TcpListener(IPAddress.Loopback, 443);
         listener.Start();
         try
         {
+            Console.WriteLine("INSTALLING_DISPOSABLE_TEST_TLS_ROOT");
             trust.Add(publicRoot);
+            Console.WriteLine("DISPOSABLE_TEST_TLS_ROOT_READY");
             await DaemonProcess.CacheVerifiedCoordinatorAddress(state, coordinator, IPAddress.Loopback, limit.Token);
             await using var daemon = await DaemonProcess.Start(trustedEngine, state, limit.Token);
             var observe = ObserveDelayedRequest(listener, host, keyPair, publicRoot, limit.Token);

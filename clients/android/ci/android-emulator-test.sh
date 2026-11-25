@@ -98,7 +98,13 @@ if ! timeout 25 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:18081/key
     exit 1
 fi
 
-adb install -t "$app"
+if [[ -n "${ANDROID_UPGRADE_FROM_APK:-}" ]]; then
+    adb install -t "$ANDROID_UPGRADE_FROM_APK"
+    adb install -r -t "$app"
+    echo 'The owner-signed WireGuard APK installed over the previous Android release.'
+else
+    adb install -t "$app"
+fi
 adb install -t "$test_apk"
 adb shell am instrument -w org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
     | tee "$working_dir/instrumentation.txt"

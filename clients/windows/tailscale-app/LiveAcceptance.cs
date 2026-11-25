@@ -61,7 +61,9 @@ internal static partial class LiveAcceptance
             phase = "LOGIN";
             session = await account.Login(username, password, device, timeout.Token);
             report["account_login_http"] = account.ResponseVersion?.ToString();
-            report["account_http3_post_verified"] = await account.VerifyHttp3LoginRoute(timeout.Token);
+            phase = "ENCRYPTED_DNS_LOGIN";
+            await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
+            report["account_encrypted_dns_login_verified"] = true;
             password = null;
 
             var connections = new List<object>();

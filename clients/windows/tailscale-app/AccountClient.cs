@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace OracleProxy.Tailscale;
@@ -8,12 +9,24 @@ namespace OracleProxy.Tailscale;
 internal sealed class AccountClient : IDisposable
 {
     private static readonly Uri Address = new("https://vpn-admin.morandi.dpdns.org/api/tailscale/v1/");
+    private static readonly HttpClient EncryptedDns = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        UseProxy = false,
+        ConnectTimeout = TimeSpan.FromSeconds(3),
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(4),
+        MaxResponseContentBufferSize = 8192,
+    };
     private readonly AccountRoute _direct = new(null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower);
     private AccountRoute? _alternate;
 
     internal Version? ResponseVersion { get; private set; }
 
-    private sealed class AccountRoute(IWebProxy? proxy, Version version, HttpVersionPolicy policy) : IDisposable
+    private sealed class AccountRoute(IWebProxy? proxy, Version version, HttpVersionPolicy policy,
+        bool encryptedDns = false) : IDisposable
     {
         internal Version Version { get; } = version;
         internal HttpVersionPolicy Policy { get; } = policy;
@@ -24,6 +37,7 @@ internal sealed class AccountClient : IDisposable
             UseCookies = false,
             UseProxy = proxy is not null,
             Proxy = proxy,
+            ConnectCallback = encryptedDns ? ConnectThroughEncryptedDns : null,
             ConnectTimeout = TimeSpan.FromSeconds(5),
         })
         {
@@ -74,9 +88,8 @@ internal sealed class AccountClient : IDisposable
         {
             TryRoute(new(null, HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact), limit.Token),
             TryWindowsProxy(limit.Token),
+            TryRoute(CreateEncryptedDnsRoute(), limit.Token),
         };
-        if (System.Net.Quic.QuicConnection.IsSupported)
-            pending.Add(TryRoute(new(null, HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact), limit.Token));
         AccountRoute? selected = null;
         try
         {
@@ -121,14 +134,15 @@ internal sealed class AccountClient : IDisposable
     private async Task<AccountRoute?> TryRoute(AccountRoute route, CancellationToken cancel)
     {
         // Check the POST endpoint, without credentials or a bearer token. An
-        // empty object is rejected before the server counts login attempts.
+        // empty password is rejected before the server counts login attempts.
         bool verified = false;
         try
         {
-            using var response = await Post("login", null, new { }, cancel, route, recordProtocol: false);
+            var probe = new { username = "proxy-route-check", password = "", device = new string('0', 64) };
+            using var response = await Post("login", null, probe, cancel, route, recordProtocol: false);
             return null;
         }
-        catch (IOException error) when (error.Message == "INVALID_REQUEST")
+        catch (IOException error) when (error.Message == "INVALID_CREDENTIALS")
         {
             verified = true;
             return route;
@@ -143,13 +157,65 @@ internal sealed class AccountClient : IDisposable
         }
     }
 
-    internal async Task<bool> VerifyHttp3LoginRoute(CancellationToken cancel)
+    private static AccountRoute CreateEncryptedDnsRoute() =>
+        new(null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower, encryptedDns: true);
+
+    internal async Task VerifyEncryptedDnsLogin(string username, string password, string device, CancellationToken cancel)
     {
-        if (!System.Net.Quic.QuicConnection.IsSupported) return false;
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        limit.CancelAfter(TimeSpan.FromSeconds(5));
-        using var verified = await TryRoute(new(null, HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact), limit.Token);
-        return verified is not null;
+        using var route = await TryRoute(CreateEncryptedDnsRoute(), cancel)
+            ?? throw new IOException("ENCRYPTED_DNS_LOGIN_ROUTE_UNAVAILABLE");
+        using var response = await Post("login", null, new { username, password, device }, cancel, route,
+            recordProtocol: false);
+        _ = ReadToken(response);
+    }
+
+    private static async ValueTask<Stream> ConnectThroughEncryptedDns(
+        SocketsHttpConnectionContext context, CancellationToken cancel)
+    {
+        if (context.DnsEndPoint.Port != 443 ||
+            !string.Equals(context.DnsEndPoint.Host, Address.IdnHost, StringComparison.OrdinalIgnoreCase))
+            throw new IOException("UNEXPECTED_ACCOUNT_HOST");
+
+        // The literal resolver address avoids depending on the Windows DNS path.
+        // The account request retains its original host and performs normal TLS validation.
+        using var query = new HttpRequestMessage(HttpMethod.Get,
+            "https://1.1.1.1/dns-query?type=A&name=" + Uri.EscapeDataString(Address.IdnHost));
+        query.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
+        using var reply = await EncryptedDns.SendAsync(query, cancel);
+        reply.EnsureSuccessStatusCode();
+        using var result = JsonDocument.Parse(await reply.Content.ReadAsByteArrayAsync(cancel));
+        if (!result.RootElement.TryGetProperty("Status", out var status) || status.GetInt32() != 0 ||
+            !result.RootElement.TryGetProperty("Answer", out var answers) || answers.ValueKind != JsonValueKind.Array)
+            throw new IOException("ACCOUNT_ENCRYPTED_DNS_FAILED");
+
+        foreach (var answer in answers.EnumerateArray().Take(8))
+        {
+            if (!answer.TryGetProperty("type", out var type) || type.GetInt32() != 1 ||
+                !answer.TryGetProperty("data", out var value) || !IPAddress.TryParse(value.GetString(), out var ip) ||
+                ip.AddressFamily != AddressFamily.InterNetwork || !IsPublicAddress(ip))
+                continue;
+
+            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            try
+            {
+                await socket.ConnectAsync(new IPEndPoint(ip, 443), cancel);
+                return new NetworkStream(socket, ownsSocket: true);
+            }
+            catch (SocketException) when (!cancel.IsCancellationRequested) { socket.Dispose(); }
+            catch { socket.Dispose(); throw; }
+        }
+        throw new IOException("ACCOUNT_ENCRYPTED_DNS_FAILED");
+    }
+
+    private static bool IsPublicAddress(IPAddress ip)
+    {
+        byte[] address = ip.GetAddressBytes();
+        return address[0] is not (0 or 10 or 127 or >= 224) &&
+            !(address[0] == 100 && address[1] is >= 64 and <= 127) &&
+            !(address[0] == 169 && address[1] == 254) &&
+            !(address[0] == 172 && address[1] is >= 16 and <= 31) &&
+            !(address[0] == 192 && address[1] == 168) &&
+            !(address[0] == 198 && address[1] is 18 or 19);
     }
 
     private static string ReadToken(JsonDocument response) =>

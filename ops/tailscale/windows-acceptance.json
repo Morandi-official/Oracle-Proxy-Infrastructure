@@ -1,4 +1,4 @@
 {
   "version": "0.1.3",
-  "request": "verify-windows-account-login-http-and-route-recovery"
+  "request": "verify-windows-login-when-system-dns-is-unavailable"
 }

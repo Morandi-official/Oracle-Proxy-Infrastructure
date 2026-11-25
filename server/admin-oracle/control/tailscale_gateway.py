@@ -139,14 +139,14 @@ class TailscaleGateway:
                 node = self.registry.find(account, device)
                 if node is None or node.node_id not in self.refresh():
                     raise ValueError("TAILSCALE_ENROLLMENT_PENDING")
-            elif operation == "profile":
+            elif operation in ("profile", "retry_profile"):
                 if not stored or stored.node_id is None:
                     if stored and self.registry.find(account, device):
                         self.refresh()
                     elif self.registry.device_count(account, excluding=device) >= self.engine.device_limit(user_id):
                         raise ValueError("DEVICE_LIMIT_EXCEEDED")
                     else:
-                        key = self.registry.issue(account, device)
+                        key = self.registry.issue(account, device, retry_pending=operation == "retry_profile")
             else:
                 raise ValueError("INVALID_OPERATION")
         except PermissionError as error:

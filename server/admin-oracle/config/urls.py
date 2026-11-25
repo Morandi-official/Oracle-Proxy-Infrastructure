@@ -14,6 +14,7 @@ urlpatterns = [
     path('api/client/login', client_api.login),
     path('api/tailscale/v1/login', tailscale_api.login),
     path('api/tailscale/v1/profile', tailscale_api.profile),
+    path('api/tailscale/v1/retry-profile', tailscale_api.retry_profile),
     path('api/tailscale/v1/confirm', tailscale_api.confirm),
     path('api/tailscale/v1/release', tailscale_api.release),
     path('api/tailscale/v1/ready', tailscale_api.ready),

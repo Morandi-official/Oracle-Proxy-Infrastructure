@@ -37,7 +37,7 @@ env:
 jobs:
   build:
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 25
     outputs:
       version: ${{ steps.request.outputs.version }}
       experiment: ${{ steps.request.outputs.experiment }}
@@ -49,6 +49,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
+      - uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale
+          ref: cbc74fe48ef1b1649f69a4d9a602319427e25102
+          path: upstream/tailscale
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: upstream/tailscale/go.mod
+          cache: false
       - name: Read the requested version
         id: request
         env:
@@ -84,7 +94,7 @@ jobs:
           EXPERIMENT: ${{ steps.request.outputs.experiment }}
         run: |
           $retain = $env:EXPERIMENT -ceq 'retained-coordinator'
-          ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows -RetentionExperiment:$retain
+          ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows -EngineSource ./upstream/tailscale -RetentionExperiment:$retain
       - name: Verify the setup installs the exact portable payload
         if: '!inputs.live_acceptance && env.TOP_LEVEL_PUSH != ''true'''
         env:

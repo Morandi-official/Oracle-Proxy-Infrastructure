@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory)][string]$OutputDirectory,
+    [string]$EngineSource,
     [switch]$RetentionExperiment
 )
 $ErrorActionPreference = 'Stop'
@@ -23,7 +24,7 @@ $work = Join-Path $env:RUNNER_TEMP ('proxy-release-' + [guid]::NewGuid().ToStrin
 $null = New-Item -ItemType Directory $work
 try {
     $payload = Join-Path $work 'payload'
-    & "$PSScriptRoot/../lab/check-windows.ps1" -BundleDir $payload -RetentionExperiment:$RetentionExperiment
+    & "$PSScriptRoot/../lab/check-windows.ps1" -BundleDir $payload -EngineSource $EngineSource -RetentionExperiment:$RetentionExperiment
     if (!(Test-Path -LiteralPath (Join-Path $payload 'Proxy.exe'))) { throw 'WINDOWS_CLIENT_MISSING' }
 
     $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'

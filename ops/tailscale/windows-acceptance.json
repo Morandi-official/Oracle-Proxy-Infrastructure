@@ -1,5 +1,5 @@
 {
   "version": "0.1.4",
   "system_dns_fault": true,
-  "request": "validate-warm-login-and-real-tailscale-with-broken-coordinator-dns"
+  "request": "validate-warm-login-and-slow-tls-with-broken-coordinator-dns"
 }

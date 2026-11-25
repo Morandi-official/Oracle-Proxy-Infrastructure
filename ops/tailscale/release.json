@@ -1,5 +1,7 @@
 {
   "version": "0.1.1",
-  "publish": false,
-  "request": "accept-unified-connect-toggle-and-automatic-reconnect"
+  "publish": true,
+  "accepted_windows_run": 45539025400,
+  "accepted_android_run": 45537543155,
+  "request": "publish-cloud-accepted-unified-connect-toggle"
 }

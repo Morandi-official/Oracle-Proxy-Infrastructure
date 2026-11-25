@@ -22,6 +22,8 @@ internal static partial class LiveAcceptance
         string? password = Environment.GetEnvironmentVariable(Password);
         Environment.SetEnvironmentVariable(Username, null);
         Environment.SetEnvironmentVariable(Password, null);
+        bool systemDnsBlocked = Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS") == "true";
+        Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_BLOCK_SYSTEM_DNS", null);
         string phase = "START";
         var report = new Dictionary<string, object?>();
         using var account = new AccountClient();
@@ -58,9 +60,19 @@ internal static partial class LiveAcceptance
                 throw new IOException("EMPTY_LOGIN_UNEXPECTEDLY_SUCCEEDED");
             }
             catch (IOException error) when (error.Message == "INVALID_CREDENTIALS") { }
+            phase = "PREPARE_LOGIN";
+            var warmup = Stopwatch.StartNew();
+            await account.PrepareLogin(timeout.Token);
+            report["account_preparation_ms"] = warmup.ElapsedMilliseconds;
             phase = "LOGIN";
+            var loginTime = Stopwatch.StartNew();
             session = await account.Login(username, password, device, timeout.Token);
+            report["account_warm_login_ms"] = loginTime.ElapsedMilliseconds;
             report["account_login_http"] = account.ResponseVersion?.ToString();
+            report["account_login_route"] = account.LoginRoute;
+            report["coordinator_system_dns_blocked"] = systemDnsBlocked;
+            if (systemDnsBlocked && account.LoginRoute?.StartsWith("encrypted-dns-", StringComparison.Ordinal) != true)
+                throw new IOException("ACCOUNT_DNS_FALLBACK_NOT_USED");
             phase = "ENCRYPTED_DNS_LOGIN";
             await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
             report["account_encrypted_dns_login_verified"] = true;
@@ -97,7 +109,14 @@ internal static partial class LiveAcceptance
                 string transport;
                 try
                 {
-                    if (run == 0) report["account_rate_limited"] = profile.RateLimited;
+                    if (run == 0)
+                    {
+                        report["account_rate_limited"] = profile.RateLimited;
+                        bool dnsHintReady = timing.ContainsKey("coordinator_dns_hint_ready");
+                        report["coordinator_dns_hint_ready"] = dnsHintReady;
+                        if (systemDnsBlocked && !dnsHintReady)
+                            throw new IOException("COORDINATOR_DNS_HINT_NOT_USED");
+                    }
                     phase = "VERIFY_SYSTEM_ROUTE";
                     // The caller uses ordinary system routing. The product has
                     // also verified both IP families through its own adapter.

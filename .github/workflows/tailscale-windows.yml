@@ -38,6 +38,7 @@ jobs:
     outputs:
       version: ${{ steps.request.outputs.version }}
       experiment: ${{ steps.request.outputs.experiment }}
+      system_dns_fault: ${{ steps.request.outputs.system_dns_fault }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,9 +53,14 @@ jobs:
         run: |
           $version = $env:INPUT_VERSION
           $experiment = ''
+          $dnsFault = $false
           if ($env:TOP_LEVEL_PUSH -eq 'true') {
             $request = Get-Content -LiteralPath ./ops/tailscale/windows-acceptance.json -Raw | ConvertFrom-Json
             $version = $request.version
+            if ($request.PSObject.Properties['system_dns_fault']) {
+              if ($request.system_dns_fault -isnot [bool]) { throw 'WINDOWS_DNS_FAULT_INVALID' }
+              $dnsFault = $request.system_dns_fault
+            }
             if ($request.PSObject.Properties['experiment']) {
               if ($request.experiment -cne 'retained-coordinator') { throw 'WINDOWS_EXPERIMENT_INVALID' }
               $experiment = $request.experiment
@@ -62,7 +68,9 @@ jobs:
           }
           if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw 'WINDOWS_VERSION_INVALID' }
           "version=$version" >> $env:GITHUB_OUTPUT
+          if ($dnsFault -and $experiment) { throw 'WINDOWS_DNS_FAULT_REQUIRES_PRODUCT_ACCEPTANCE' }
           "experiment=$experiment" >> $env:GITHUB_OUTPUT
+          "system_dns_fault=$($dnsFault.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - name: Build the Windows x64 portable and setup distributions
         env:
           VERSION: ${{ steps.request.outputs.version }}
@@ -103,11 +111,13 @@ jobs:
         env:
           VERSION: ${{ needs.build.outputs.version }}
           EXPERIMENT: ${{ needs.build.outputs.experiment }}
+          SYSTEM_DNS_FAULT: ${{ needs.build.outputs.system_dns_fault }}
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
         run: |
           $retain = $env:EXPERIMENT -ceq 'retained-coordinator'
-          ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -RetentionExperiment:$retain
+          $blocked = $env:SYSTEM_DNS_FAULT -ceq 'true'
+          ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -RetentionExperiment:$retain -BlockSystemDns:$blocked
       - uses: actions/upload-artifact@v4
         if: needs.build.outputs.experiment != 'retained-coordinator'
         with:

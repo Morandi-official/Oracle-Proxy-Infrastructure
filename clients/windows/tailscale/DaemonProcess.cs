@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Text.Json;
 using System.Net.NetworkInformation;
 using Microsoft.Win32.SafeHandles;
 
@@ -45,6 +47,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
         start.Environment["TS_FORCE_NOISE_443"] = "true";
         start.ArgumentList.Add(@"--socket=\\.\pipe\" + LocalControl.PipePrefix + instance);
         start.ArgumentList.Add("--state=" + Path.Combine(Path.GetFullPath(privateStateDirectory), "state"));
+        start.ArgumentList.Add("--statedir=" + Path.GetFullPath(privateStateDirectory));
         start.ArgumentList.Add("--tun=" + adapter);
         // Keep the upstream Windows preferred port across reconnects.
         // Magicsock still chooses an available port if this one is occupied.
@@ -57,9 +60,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
             cancellation.ThrowIfCancellationRequested();
             (process, job) = DaemonConsole.Start(start);
             timing?.Invoke("daemon_spawned");
-            using var readiness = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            readiness.CancelAfter(TimeSpan.FromSeconds(12));
-            using var observation = timing is null ? null : CancellationTokenSource.CreateLinkedTokenSource(readiness.Token);
+            using var observation = timing is null ? null : CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             var adapterObservation = observation is null ? Task.CompletedTask : ObserveAdapter(adapter, timing!, observation.Token);
             try
             {
@@ -68,7 +69,9 @@ internal sealed class DaemonProcess : IAsyncDisposable
                 // in parallel, but hold off selecting any profile until the
                 // account service authorizes this connection.
                 if (authorization is not null)
-                    await authorization.WaitAsync(readiness.Token);
+                    await authorization.WaitAsync(cancellation);
+                using var readiness = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                readiness.CancelAfter(TimeSpan.FromSeconds(12));
                 while (true)
                 {
                     if (process.HasExited)
@@ -84,6 +87,10 @@ internal sealed class DaemonProcess : IAsyncDisposable
                     catch (OperationCanceledException) when (!readiness.IsCancellationRequested) { }
                     await Task.Delay(50, readiness.Token);
                 }
+            }
+            catch (OperationCanceledException error) when (!cancellation.IsCancellationRequested)
+            {
+                throw new IOException("TAILSCALE_ENGINE_START_TIMEOUT", error);
             }
             finally
             {
@@ -106,6 +113,33 @@ internal sealed class DaemonProcess : IAsyncDisposable
             }
             throw;
         }
+    }
+
+    internal static async Task CacheVerifiedCoordinatorAddress(
+        string state, Uri coordinator, IPAddress address, CancellationToken cancellation)
+    {
+        string host = coordinator.IdnHost.ToLowerInvariant();
+        if (host.Length == 0 || host.Split('.').Any(label => label.Length == 0 ||
+            label.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-')))
+            throw new IOException("INVALID_TAILSCALE_COORDINATOR");
+
+        // Match the private DNS cache format of the pinned Tailscale build.
+        // The caller supplies an address already authenticated by the account exchange.
+        string directory = Path.Combine(state, "dns-cache");
+        var entry = Directory.CreateDirectory(directory);
+        if ((entry.Attributes & FileAttributes.ReparsePoint) != 0 ||
+            (entry.Parent!.Attributes & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("TAILSCALE_DNS_CACHE_PATH_INVALID");
+
+        string path = Path.Combine(directory, "dns-" + host + ".json");
+        string temporary = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            byte[] contents = JsonSerializer.SerializeToUtf8Bytes(new { Resolver = "fallback", A = new[] { address.ToString() } });
+            await File.WriteAllBytesAsync(temporary, contents, cancellation);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { File.Delete(temporary); }
     }
 
     private static async Task ObserveAdapter(string adapter, Action<string> timing, CancellationToken cancellation)

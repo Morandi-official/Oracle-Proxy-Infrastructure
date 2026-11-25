@@ -12,10 +12,11 @@ internal static class ExitCheck
     private static readonly Uri V6 = new("https://[2606:4700:4700::1111]/cdn-cgi/trace");
 
     internal static async Task Verify(DaemonProcess daemon, ExitProfile profile, CancellationToken cancel,
-        Action<string>? timing = null)
+        Action<string>? timing = null, bool slowCoordinator = false)
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        limit.CancelAfter(TimeSpan.FromSeconds(10));
+        limit.CancelAfter(TimeSpan.FromSeconds(slowCoordinator ? 35 : 10));
+        bool mapReady = false;
 
         try
         {
@@ -29,6 +30,8 @@ internal static class ExitCheck
                 await Task.Delay(waiting.ElapsedMilliseconds < 1000 ? 50 : 125, limit.Token);
             }
             timing?.Invoke("exit_map_ready");
+            mapReady = true;
+            limit.CancelAfter(TimeSpan.FromSeconds(10));
 
             // Start fresh sockets once the selected exit is present. An earlier
             // attempt can retain a pending connect across the route change.
@@ -41,9 +44,9 @@ internal static class ExitCheck
             if (verified.State != "Running" || verified.ExitId != exit)
                 throw new IOException("EXIT_NOT_VERIFIED");
         }
-        catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+        catch (OperationCanceledException error) when (!cancel.IsCancellationRequested)
         {
-            throw new IOException("EXIT_NOT_VERIFIED");
+            throw new IOException(mapReady ? "EXIT_NOT_VERIFIED" : "TAILSCALE_COORDINATOR_TIMEOUT", error);
         }
     }
 

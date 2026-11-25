@@ -182,7 +182,8 @@ internal sealed class AccountClient : IDisposable
                 .WaitAsync(TimeSpan.FromSeconds(3), cancel);
             if (endpoint is null || endpoint == Address) return null;
             var coordinatorProxy = endpoint.Scheme is "http" or "https" && endpoint.UserInfo.Length == 0 &&
-                endpoint.PathAndQuery == "/" && endpoint.Fragment.Length == 0 ? endpoint : null;
+                endpoint.PathAndQuery == "/" && endpoint.Fragment.Length == 0 && proxy.Credentials is null
+                ? endpoint : null;
             return await TryRoute(new("system-proxy", proxy, HttpVersion.Version20,
                 HttpVersionPolicy.RequestVersionOrLower, coordinatorProxy: coordinatorProxy), cancel);
         }

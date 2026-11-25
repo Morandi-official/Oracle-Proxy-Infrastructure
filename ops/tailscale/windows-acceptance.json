@@ -1,5 +1,6 @@
 {
-  "version": "0.1.5",
+  "version": "0.1.6",
   "system_dns_fault": true,
-  "request": "validate-login-route-race-and-recovery-from-abandoned-enrollment"
+  "coordinator_proxy_fault": true,
+  "request": "verify-windows-auth-and-coordinator-over-alternate-paths"
 }

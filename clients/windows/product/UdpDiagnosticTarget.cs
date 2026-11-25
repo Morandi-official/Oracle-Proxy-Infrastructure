@@ -10,7 +10,7 @@ internal sealed record UdpDiagnosticTarget
         if(port is not (443 or 8443 or 51820))throw new IOException("INVALID_UDP_DIAGNOSTIC_TARGET");
         Address=EndpointCatalog.Public(address);Port=port;
     }
-    internal static UdpDiagnosticTarget[] All=>[new("152.67.154.225",443),new("152.67.154.225",8443),new("152.67.154.225",51820),new("150.230.113.158",443),new("150.230.113.158",8443),new("150.230.113.158",51820)];
+    internal static UdpDiagnosticTarget[] All=>[new(AccountApi.BootstrapAddress,443),new(AccountApi.BootstrapAddress,8443),new(AccountApi.BootstrapAddress,51820)];
     internal static UdpDiagnosticTarget[] ForState(JsonObject state)
     {
         var addresses=state["tunnel"]?["server_public_keys"] is JsonObject keys?keys.Select(p=>EndpointCatalog.Public(p.Key)).ToArray():EndpointCatalog.Addresses(state);

@@ -489,8 +489,8 @@ internal static class ProductTests
         foreach(string invalid in new[]{"127.0.0.1","10.0.0.6","100.64.0.1","192.0.2.1","203.0.113.1","::1","152.67.154.225:443"}){
             bool rejected=false;try{EndpointCatalog.Public(invalid);}catch(IOException){rejected=true;}UiAssert(rejected,"CATALOG_REJECTS_NONPUBLIC_OR_NONCANONICAL_ADDRESS");
         }
-        UiAssert(UdpDiagnosticTarget.All.Select(t=>$"{t.Address}:{t.Port}").Distinct().Count()==6,"UDP_SIX_FIXED_UNIQUE_TARGETS");
-        UiAssert(UdpDiagnosticTarget.All.Select(t=>t.Address).Distinct().ToHashSet().SetEquals(new[]{"152.67.154.225","150.230.113.158"}),"UDP_SELECTED_PRIMARY_BACKUP_TARGETS");
+        UiAssert(UdpDiagnosticTarget.All.Select(t=>t.Port).SequenceEqual(new[]{443,8443,51820}),"UDP_DEFAULT_TARGET_PORTS");
+        UiAssert(UdpDiagnosticTarget.All.All(t=>t.Address==AccountApi.BootstrapAddress),"UDP_DEFAULT_TARGET_IS_CURRENT_INGRESS");
         foreach(var target in UdpDiagnosticTarget.All){
             var config=new JsonObject{["outbounds"]=new JsonArray(new JsonObject{["type"]="oracle-native-udp",["address"]="141.147.78.44",["ports"]=new JsonArray(443,8443)})};
             target.Apply(config);
@@ -506,7 +506,7 @@ internal static class ProductTests
         UiAssert(evidence.Snapshot()["443"]!["sender_indices"]!.AsArray().Count==16,"UDP_INDEX_BOUNDED");
         UiAssert(!evidence.Record("NATIVE_UDP_443_INIT_INDEX_4294967296") && !evidence.Record("NATIVE_UDP_443_INIT_INDEX_12 SYNTHETIC_SECRET") && !evidence.Record("NATIVE_UDP_22_INIT_INDEX_12"),"UDP_INDEX_STRICT_NUMERIC_ONLY");
         using var runner=new UdpDiagnosticRunner();runner.Cancel();runner.Dispose();runner.Dispose();
-        Console.WriteLine("UDP_SIX_TARGETS_NO_FALLBACK_BOUNDED_PUBLIC_INDICES_AND_IDLE_CANCEL=PASS");
+        Console.WriteLine("UDP_TARGETS_NO_FALLBACK_BOUNDED_PUBLIC_INDICES_AND_IDLE_CANCEL=PASS");
     }
     private static void BundleLeaseRegression()
     {
@@ -581,7 +581,10 @@ internal static class ProductTests
         form.Display(snapshot);
         var udpReport=(string)typeof(MainForm).GetField("_udpReport",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!.GetValue(form)!;
         var udpTable=Descendants(form).OfType<DataGridView>().Single(c=>c.Name=="udp-six-results");
-        UiAssert(udpTable.Rows.Count==6 && udpReport.Contains("152.67.154.225:51820") && !udpReport.Contains("SYNTHETIC_UDP_SECRET"),"UDP_SIX_RESULTS_COPY_ALLOWLIST");
+        UiAssert(udpTable.Rows.Count==3 && udpReport.Contains(AccountApi.BootstrapAddress+":51820") &&
+            !udpReport.Contains("SYNTHETIC_UDP_SECRET"),"UDP_CURRENT_RESULTS_AND_COPY_ALLOWLIST");
+        snapshot["udp_diagnostic"]!["trials"]!.AsArray().RemoveAt(2);form.Display(snapshot);
+        UiAssert(udpTable.Rows.Count==2,"UDP_DIAGNOSTIC_REMOVES_ROWS_MISSING_FROM_CURRENT_RESULT");
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-start").Enabled,"UDP_DIAGNOSTIC_BLOCKED_WHILE_PROTECTED");
         snapshot.Remove("udp_diagnostic");form.Display(snapshot);
         UiAssert(!Descendants(form).Single(c=>c.Name=="udp-six-copy").Enabled,"UDP_REPORT_CLEARED_ON_SESSION_RESET");

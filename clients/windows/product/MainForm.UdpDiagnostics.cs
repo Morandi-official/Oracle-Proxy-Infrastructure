@@ -28,7 +28,6 @@ internal sealed partial class MainForm
         foreach(var (name,title,weight) in new[]{("address","入口",180f),("port","端口",65f),("client","本机握手 发 / 收",130f),("server","服务端握手 收 / 发",145f),("result","结果",235f)})
             _udpGrid.Columns.Add(new DataGridViewTextBoxColumn{Name=name,HeaderText=title,FillWeight=weight,SortMode=DataGridViewColumnSortMode.NotSortable});
         _udpGrid.RowTemplate.Height=28;
-        foreach(var target in UdpDiagnosticTarget.All)_udpGrid.Rows.Add(target.Address,target.Port,"—","—","待测试");
         Row(content,_udpHeading);Row(content,_udpGrid);
     }
     private static string UdpText(JsonNode? node)=>node is JsonValue value && value.TryGetValue<string>(out var text)?text:"";
@@ -64,10 +63,10 @@ internal sealed partial class MainForm
         text.AppendLine(UdpFlag(report["ipv6_requested"])?"出口验证包含 IPv4 与 IPv6。":"本轮仅验证已提供的 IPv4 出口。");
         text.AppendLine("客户端收包层：UDP 套接字；物理网卡层未采集。计数不能确定具体中间网络节点。\r\n");
         text.AppendLine("服务端报文头计数用于配对，不等同于认证成功；内核握手与出口验证分别记录。\r\n");
+        int visibleRows=0;
         if(report["trials"] is JsonArray trials)for(int i=0;i<6 && i<trials.Count;i++){
             var trial=trials[i];UdpDiagnosticTarget target;
             try{target=new UdpDiagnosticTarget(UdpText(trial?["address"]),(int)(UdpNumber(trial?["port"])??0));}catch(IOException){continue;}
-            _udpGrid.Rows[i].Cells[0].Value=target.Address;_udpGrid.Rows[i].Cells[1].Value=target.Port;
             if(UdpText(trial?["address"])!=target.Address || UdpNumber(trial?["port"])!=target.Port)continue;
             string pending=UdpText(trial?["phase"]);
             string result=UdpResults.TryGetValue(UdpText(trial?["verdict"]),out var known)?known:
@@ -75,13 +74,15 @@ internal sealed partial class MainForm
             var counters=trial?["client"]?["counters"];var captured=trial?["server"]?["capture"];
             string local=$"{UdpNumber(counters?["tx_initiations"])?.ToString()??"—"} / {UdpNumber(counters?["rx_responses"])?.ToString()??"—"}";
             string remote=$"{UdpNumber(captured?["rx_initiations"])?.ToString()??"—"} / {UdpNumber(captured?["tx_responses"])?.ToString()??"—"}";
-            _udpGrid.Rows[i].SetValues(target.Address,target.Port,local,remote,result);
+            if(_udpGrid.Rows.Count==visibleRows)_udpGrid.Rows.Add();
+            _udpGrid.Rows[visibleRows++].SetValues(target.Address,target.Port,local,remote,result);
             text.AppendLine($"{target.Address}:{target.Port} · {result}");
             text.AppendLine($"  本机握手 发/收：{local}；服务端握手 收/发：{remote}");
             foreach(string key in new[]{"read_errors","write_errors","last_read_error","last_write_error"})if(UdpNumber(counters?[key]) is long n)text.AppendLine($"  client.{key}: {n}");
             text.AppendLine($"  服务器观察完整：{UdpFlag(captured?["complete_observation"])}；内核握手更新：{UdpFlag(trial?["server"]?["kernel_handshake_advanced"])}");
             text.AppendLine();
         }
+        while(_udpGrid.Rows.Count>visibleRows)_udpGrid.Rows.RemoveAt(_udpGrid.Rows.Count-1);
         if(phase is "failed")text.AppendLine("诊断流程未完成，请保留本报告；这不等同于所有获准端口不可用。");
         if(!_udpDiagnosing && !UdpFlag(report["server_capture_closed"]))text.AppendLine("服务器结束确认不可用，采集任务有自动到期限制。");
         _udpReport=text.ToString();_udpCopy.Enabled=true;

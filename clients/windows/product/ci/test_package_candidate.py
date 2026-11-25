@@ -96,12 +96,12 @@ class PackageBoundaryTests(unittest.TestCase):
         self.assertEqual(len((out / 'SHA256SUMS.txt').read_text().splitlines()), 2)
 
     def test_archive_and_metadata_follow_the_compiled_project_version(self):
-        self.put('clients/windows/product/OracleProxy.Product.csproj', '<Project><PropertyGroup><Version>0.3.0-rc21</Version></PropertyGroup></Project>')
+        self.put('clients/windows/product/OracleProxy.Product.csproj', '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup></Project>')
         self.invoke()
         bundle=next(p for p in (self.root/'dist/candidate').glob('*.zip') if not p.name.endswith('-source.zip'))
-        self.assertTrue(bundle.name.startswith('Proxy-0.3.0-rc21-win-x64-'))
+        self.assertTrue(bundle.name.startswith('Proxy-0.1.0-win-x64-'))
         with zipfile.ZipFile(bundle) as archive:
-            self.assertEqual(json.loads(archive.read('BUILD.json'))['version'],'0.3.0-rc21')
+            self.assertEqual(json.loads(archive.read('BUILD.json'))['version'],'0.1.0')
 
     def test_shared_runtime_and_wrong_bundled_patch_are_rejected(self):
         config_path = 'clients/windows/product/bin/Release/net10.0-windows/win-x64/Proxy.runtimeconfig.json'

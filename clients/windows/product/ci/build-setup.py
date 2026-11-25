@@ -76,6 +76,16 @@ def compiler_identity(compiler):
     return identity
 
 
+def windows_version_numbers(version):
+    match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?', version, re.ASCII)
+    if not match:
+        raise ValueError('UNSIGNED_CANDIDATE_METADATA_REQUIRED')
+    parts = match.groups(default='0')
+    if any(len(part) > 5 or int(part) > 65535 for part in parts):
+        raise ValueError('INSTALLER_WINDOWS_VERSION_OUT_OF_RANGE')
+    return '.'.join(parts)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--iscc', required=True, type=Path)
@@ -93,10 +103,10 @@ def main():
     metadata_file = out / 'BUILD.json'
     metadata = json.loads(metadata_file.read_text())
     version = metadata.get('version', '')
-    match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)-rc(\d+)', version)
     revision = metadata.get('source_revision', '')
-    if not match or not re.fullmatch('[a-f0-9]{40}', revision) or metadata.get('publisher_signed') is not False:
+    if not isinstance(version, str) or not re.fullmatch('[a-f0-9]{40}', revision) or metadata.get('publisher_signed') is not False:
         raise ValueError('UNSIGNED_CANDIDATE_METADATA_REQUIRED')
+    version_numbers = windows_version_numbers(version)
     stem = 'Proxy-' + version + '-win-x64-' + revision[:12]
     portable = out / (stem + '.zip')
     sums = dict(line.split('  ', 1)[::-1] for line in (out / 'SHA256SUMS.txt').read_text().splitlines())
@@ -120,7 +130,7 @@ def main():
             'Compiler SHA256: ' + compiler_hash + '\n', encoding='utf-8')
         subprocess.run([str(compiler), '/Qp', '/DPayloadDir=' + str(stage),
                         '/DOutputDir=' + str(out.resolve()), '/DProductVersion=' + version,
-                        '/DVersionNumbers=' + '.'.join(match.groups()), '/DArtifactStem=' + stem,
+                        '/DVersionNumbers=' + version_numbers, '/DArtifactStem=' + stem,
                         str(script)], check=True)
     if not target.is_file() or target.stat().st_size < 100000 or target.open('rb').read(2) != b'MZ':
         raise ValueError('INSTALLER_PE_OUTPUT_REQUIRED')

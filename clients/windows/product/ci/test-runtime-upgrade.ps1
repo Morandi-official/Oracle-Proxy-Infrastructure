@@ -7,6 +7,9 @@ $fixture=Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Co
 if((Get-Service OracleProxyService,OracleProxyRecovery -ErrorAction SilentlyContinue) -or (Test-Path $serviceRoot) -or (Test-Path $stateRoot) -or (Test-Path $fixture) -or (Get-NetAdapter -Name OracleProxy -ErrorAction SilentlyContinue)){throw 'PREEXISTING_PRODUCT_OR_FIXTURE_REFUSED'}
 $new=(Resolve-Path './dist/product/Proxy.exe').Path
 $newHash=(Get-FileHash $new -Algorithm SHA256).Hash
+$version=([xml](Get-Content -Raw './clients/windows/product/OracleProxy.Product.csproj')).SelectSingleNode('/Project/PropertyGroup/Version')
+if(-not $version -or [string]::IsNullOrWhiteSpace($version.InnerText)){throw 'RUNTIME_UPGRADE_PROJECT_VERSION_REQUIRED'}
+$newVersion=$version.InnerText+'+'
 $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $oldRevision='fc988d72983906b74aeb629163a8110bc36ee8ab'
 $oldArchiveHash='6f8a133fd2f297b9479affe954d95f5988f4ae44fc747c7df30ba958f6c6f78f'
@@ -141,15 +144,15 @@ try {
  Invoke-RuntimeProduct $new @('--install',$owner)
  $newPid=Get-VerifiedProductService $newHash
  if($newPid -eq $oldPid){throw 'CROSS_RUNTIME_UPGRADE_DID_NOT_REPLACE_PROCESS'}
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc48+' ''
+ Assert-RuntimeStatus $newPid 'Status' $newVersion ''
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -ne $cipherBefore){throw 'CROSS_RUNTIME_UPGRADE_REWROTE_EXISTING_DPAPI_STATE'}
  Invoke-RuntimeWitness 'VerifyUdp'
- Assert-RuntimeStatus $newPid 'PreferUdp443' '0.3.0-rc48+' '' 443
+ Assert-RuntimeStatus $newPid 'PreferUdp443' $newVersion '' 443
  if((Get-FileHash (Join-Path $stateRoot 'state.dpapi') -Algorithm SHA256).Hash -eq $cipherBefore){throw 'NET10_SERVICE_DID_NOT_SAVE_SYNTHETIC_PREFERENCE'}
  Invoke-RuntimeWitness 'VerifyPort'
  Restart-Service OracleProxyService
  $newPid=Get-VerifiedProductService $newHash
- Assert-RuntimeStatus $newPid 'Status' '0.3.0-rc48+' '' 443
+ Assert-RuntimeStatus $newPid 'Status' $newVersion '' 443
  Invoke-RuntimeWitness 'VerifyPort'
  Write-Host 'REAL_NET8_TO_NET10_SYSTEM_DPAPI_OWNER_PUBLIC_PRIVATE_KEY_AND_SCM_PIPE_UPGRADE=PASS'
  Invoke-RuntimeProduct $new @('--uninstall')

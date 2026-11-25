@@ -16,6 +16,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.io.IOException;
+import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
@@ -35,6 +36,10 @@ public final class MainActivity extends Activity {
     private Button login;
     private Button connect;
     private boolean connectionRequested;
+    private volatile boolean foreground;
+    // The coordinator state is mutated only by CLIENT_ACTIONS.
+    private boolean coordinatorRetained;
+    private URI coordinator;
     private String token;
     private volatile LocalControl control;
     private volatile Network verifiedNetwork;
@@ -166,6 +171,7 @@ public final class MainActivity extends Activity {
         connect.setText("连接");
         connect.setEnabled(session != null);
         status.setText(label);
+        if (session != null) ExitQuicProbe.prepare(this);
     }
 
     private void requestVpn() {
@@ -214,7 +220,12 @@ public final class MainActivity extends Activity {
                 var prepared = preparation.get(8, TimeUnit.SECONDS);
                 var engine = prepared.control();
                 control = engine;
-                beginVpnService(attempt);
+                boolean reuseCoordinator = coordinatorRetained && profile.key() == null &&
+                        profile.coordinator().equals(coordinator) && !host.hasAttachedVpn() &&
+                        coordinatorRunningWithoutExit(engine);
+                if (coordinatorRetained && !reuseCoordinator) engine.stop();
+                coordinatorRetained = false;
+                if (!reuseCoordinator) beginVpnService(attempt);
                 if (profile.key() != null) {
                     engine.enroll(profile.coordinator(), profile.key());
                     long deadline = SystemClock.elapsedRealtime() + 10_000;
@@ -237,12 +248,16 @@ public final class MainActivity extends Activity {
                 checkPending(attempt, Long.MAX_VALUE);
                 engine.selectExitNode(profile.exitId());
                 long routeRequested = SystemClock.elapsedRealtime() - start;
+                // Attach only after the final exit route has been selected on an
+                // already authorized, detached coordinator.
+                if (reuseCoordinator) beginVpnService(attempt);
                 var proof = new ExitCheck(this).verify(engine, profile, start, () -> generation.get() != attempt);
                 var verified = proof.network();
                 long elapsed = SystemClock.elapsedRealtime() - start;
                 var timing = new ConnectTiming(profileReady, prepared.readyMs(), enrollmentReady, routeRequested,
                         proof.routeReadyMs(), proof.ipv4VerifiedMs(), proof.ipv6VerifiedMs(),
-                        proof.ipv4Transport(), proof.ipv6Transport());
+                        proof.ipv4Transport(), proof.ipv6Transport(), reuseCoordinator);
+                coordinator = profile.coordinator();
                 runOnUiThread(() -> {
                     if (generation.get() != attempt) return;
                     verifiedNetwork = verified;
@@ -272,7 +287,7 @@ public final class MainActivity extends Activity {
 
     record ConnectTiming(long profileReadyMs, long engineReadyMs, long enrollmentReadyMs,
                          long routeRequestedMs, long routeReadyMs, long ipv4VerifiedMs, long ipv6VerifiedMs,
-                         String ipv4Transport, String ipv6Transport) { }
+                         String ipv4Transport, String ipv6Transport, boolean reusedCoordinator) { }
 
     private record PreparedEngine(LocalControl control, long readyMs) { }
 
@@ -290,7 +305,14 @@ public final class MainActivity extends Activity {
         started.get(5, TimeUnit.SECONDS);
     }
 
+    private static boolean coordinatorRunningWithoutExit(LocalControl engine) throws IOException {
+        var state = engine.readState();
+        return "Running".equals(state.state()) && state.hasNodeKey() && state.exitId().isEmpty();
+    }
+
     private void stopEngine() {
+        coordinatorRetained = false;
+        coordinator = null;
         if (control != null) {
             try { control.stop(); } catch (IOException ignored) { }
             control = null;
@@ -318,13 +340,22 @@ public final class MainActivity extends Activity {
         connect.setEnabled(false);
         status.setText("正在恢复直连");
         EngineHost.CLIENT_ACTIONS.execute(() -> {
-            stopEngine();
+            var host = EngineHost.from(this);
+            boolean canRetain = formerVpn != null && foreground && control != null;
+            if (!canRetain) stopEngine();
             long deadline = SystemClock.elapsedRealtime() + 5_000;
-            while (formerVpn != null && networks.getNetworkCapabilities(formerVpn) != null &&
+            while (formerVpn != null && (networks.getNetworkCapabilities(formerVpn) != null || host.hasAttachedVpn()) &&
                     generation.get() == attempt && SystemClock.elapsedRealtime() < deadline) {
-                SystemClock.sleep(40);
+                SystemClock.sleep(25);
             }
             boolean closed = formerVpn == null || networks.getNetworkCapabilities(formerVpn) == null;
+            if (canRetain && closed && foreground && !host.hasAttachedVpn() && generation.get() == attempt) {
+                try {
+                    control.clearExit();
+                    coordinatorRetained = coordinatorRunningWithoutExit(control);
+                } catch (IOException ignored) { }
+            }
+            if (!coordinatorRetained) stopEngine();
             runOnUiThread(() -> {
                 if (generation.get() != attempt) return;
                 status.setText(closed ? DIRECT : "VPN 正在停止，请稍候");
@@ -334,6 +365,21 @@ public final class MainActivity extends Activity {
                 if (closed) stoppingNetwork = null;
             });
         });
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        foreground = true;
+    }
+
+    @Override
+    protected void onStop() {
+        foreground = false;
+        EngineHost.CLIENT_ACTIONS.execute(() -> {
+            if (!foreground && coordinatorRetained) stopEngine();
+        });
+        super.onStop();
     }
 
     @Override

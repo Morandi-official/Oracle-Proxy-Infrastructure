@@ -26,6 +26,15 @@ final class ExitQuicProbe implements AutoCloseable {
     private final CompletableFuture<Long> result = new CompletableFuture<>();
     private Runnable cancel;
 
+    static void prepare(Context context) {
+        if (Build.VERSION.SDK_INT < 34) return;
+        try {
+            Platform.prepare(context.getApplicationContext());
+        } catch (RuntimeException | LinkageError unavailable) {
+            // The TCP proof remains available.
+        }
+    }
+
     static ExitQuicProbe start(Context context, Network network, URI target, String expected, long start) {
         if (Build.VERSION.SDK_INT < 34) return null;
         var probe = new ExitQuicProbe();
@@ -64,17 +73,28 @@ final class ExitQuicProbe implements AutoCloseable {
         private static final Executor WORKER = Executors.newSingleThreadExecutor();
         private static HttpEngine engine;
 
+        private static HttpEngine engine(Context application) {
+            if (engine == null) {
+                engine = new HttpEngine.Builder(application).setEnableQuic(true)
+                        .addQuicHint(ExitCheck.V4.getHost(), 443, 443)
+                        .addQuicHint(ExitCheck.V6.getHost(), 443, 443).build();
+            }
+            return engine;
+        }
+
+        static void prepare(Context application) {
+            WORKER.execute(() -> {
+                try { engine(application); }
+                catch (RuntimeException | LinkageError unavailable) { }
+            });
+        }
+
         static void start(ExitQuicProbe probe, Context context, Network network, URI target, String expected, long start) {
             var application = context.getApplicationContext();
             WORKER.execute(() -> {
                 if (probe.result.isDone()) return;
                 try {
-                    if (engine == null) {
-                        engine = new HttpEngine.Builder(application).setEnableQuic(true)
-                                .addQuicHint(ExitCheck.V4.getHost(), 443, 443)
-                                .addQuicHint(ExitCheck.V6.getHost(), 443, 443).build();
-                    }
-                    var request = engine.newUrlRequestBuilder(target.toASCIIString(), WORKER,
+                    var request = engine(application).newUrlRequestBuilder(target.toASCIIString(), WORKER,
                                     callback(probe, expected, start))
                             .bindToNetwork(network).setCacheDisabled(true).build();
                     probe.launch(request::start, request::cancel);

@@ -110,10 +110,22 @@ public final class LocalControl {
                     .put("ExitNodeIPSet", true)
                     .put("ExitNodeAllowLANAccess", false)
                     .put("ExitNodeAllowLANAccessSet", true)
+                    .put("CorpDNS", true).put("CorpDNSSet", true)
                     .put("WantRunning", true)
                     .put("WantRunningSet", true));
         } catch (JSONException error) {
             throw new IOException("INVALID_TAILSCALE_EXIT_NODE");
+        }
+    }
+
+    void clearExit() throws IOException {
+        try {
+            request("PATCH", "prefs", new JSONObject()
+                    .put("ExitNodeID", "").put("ExitNodeIDSet", true).put("ExitNodeIPSet", true)
+                    .put("WantRunning", true).put("WantRunningSet", true)
+                    .put("CorpDNS", false).put("CorpDNSSet", true));
+        } catch (JSONException error) {
+            throw new IOException("INVALID_TAILSCALE_PREFERENCES");
         }
     }
 

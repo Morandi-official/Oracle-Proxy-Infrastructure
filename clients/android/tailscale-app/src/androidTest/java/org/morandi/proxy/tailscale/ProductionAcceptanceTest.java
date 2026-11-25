@@ -21,7 +21,9 @@ import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URI;
@@ -73,6 +75,7 @@ public final class ProductionAcceptanceTest {
                 report.put("baseline", measurePath(false));
             }
 
+            String directIp = observePublicIpv4();
             await("Login controls are available", () -> enabled(activity, R.id.login));
             instrumentation.runOnMainSync(() -> {
                 activity.<EditText>findViewById(R.id.username).setText(loginUser);
@@ -106,12 +109,17 @@ public final class ProductionAcceptanceTest {
             var reconnectStages = new JSONArray();
             for (int attempt = 0; attempt < 3; attempt++) {
                 disconnect.add(disconnect(activity));
+                assertTrue("Disconnect restores the same ordinary IPv4 exit", directIp.equals(observePublicIpv4()));
                 click(activity, R.id.connect);
                 reconnect.add(awaitVerified(activity));
                 reconnectStages.put(connectionStages(activity));
             }
             disconnect.add(disconnect(activity));
-            assertTrue("Direct HTTPS after tunnel shutdown", probeLatency() > 0);
+            assertTrue("Direct HTTPS after tunnel shutdown", directIp.equals(observePublicIpv4()));
+            UiDevice.getInstance(instrumentation).pressHome();
+            await("Retained coordinator stops when the disconnected app leaves the foreground",
+                    () -> coordinatorStopped(control));
+            report.put("retained_coordinator_stopped_on_background", true);
             report.put("reconnect_to_verified_ms", new JSONArray(reconnect));
             report.put("reconnect_stages_ms", reconnectStages);
             report.put("disconnect_to_direct_ms", new JSONArray(disconnect));
@@ -194,7 +202,8 @@ public final class ProductionAcceptanceTest {
                 .put("ipv4_exit_verified", timing.ipv4VerifiedMs())
                 .put("ipv6_exit_verified", timing.ipv6VerifiedMs())
                 .put("ipv4_exit_transport", timing.ipv4Transport())
-                .put("ipv6_exit_transport", timing.ipv6Transport());
+                .put("ipv6_exit_transport", timing.ipv6Transport())
+                .put("reused_coordinator", timing.reusedCoordinator());
     }
 
     private boolean hasVpn() {
@@ -263,6 +272,30 @@ public final class ProductionAcceptanceTest {
         connection.setRequestProperty("Connection", "close");
         connection.setRequestProperty("Cache-Control", "no-cache");
         return connection;
+    }
+
+    private static boolean coordinatorStopped(LocalControl control) {
+        try { return "Stopped".equals(control.readState().state()); }
+        catch (IOException failure) { return false; }
+    }
+
+    private static String observePublicIpv4() throws IOException {
+        var connection = (HttpURLConnection) ExitCheck.V4.toURL().openConnection(Proxy.NO_PROXY);
+        connection.setInstanceFollowRedirects(false);
+        connection.setConnectTimeout(5_000);
+        connection.setReadTimeout(5_000);
+        connection.setRequestProperty("Connection", "close");
+        try {
+            requireOk(connection);
+            try (var reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+                for (int index = 0; index < 40; index++) {
+                    String line = reader.readLine();
+                    if (line == null || line.length() > 512) break;
+                    if (line.startsWith("ip=")) return line.substring(3);
+                }
+            }
+            throw new IOException("DIRECT_IPV4_UNAVAILABLE");
+        } finally { connection.disconnect(); }
     }
 
     private static long probeLatency() throws IOException {

@@ -49,7 +49,7 @@ final class EngineHost implements AppContext {
     private final ConnectivityManager networks;
     private Application engine;
     private NetworkSnapshot publishedNetwork;
-    private BridgeVpnService vpn;
+    private volatile BridgeVpnService vpn;
 
     private EngineHost(Context context) {
         this.context = context.getApplicationContext();
@@ -193,10 +193,14 @@ final class EngineHost implements AppContext {
     }
 
     void detach(BridgeVpnService service) {
+        Libtailscale.serviceDisconnect(service);
         if (vpn == service) {
             vpn = null;
         }
-        Libtailscale.serviceDisconnect(service);
+    }
+
+    boolean hasAttachedVpn() {
+        return vpn != null;
     }
 
     private void scheduleNetworkUpdate() {

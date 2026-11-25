@@ -35,17 +35,23 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
       - id: release-request
-        name: Detect the Android version bump on main
+        name: Detect a WireGuard Android release on main
         env:
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           publish=false
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main &&
-            "$BEFORE" =~ ^[0-9a-f]{40}$ ]] &&
-            [[ "$(git show "$BEFORE:clients/android/app/build.gradle" | sed -n "s/^[[:space:]]*versionName = '\([0-9.]*\)'/\1/p")" == 0.1.0 ]] &&
-            grep -Eq "^[[:space:]]*versionName = '0[.]1[.]1'$" app/build.gradle; then
-            publish=true
+            "$BEFORE" =~ ^[0-9a-f]{40}$ && "$BEFORE" != 0000000000000000000000000000000000000000 ]]; then
+            previous=$(git show "$BEFORE:clients/android/app/build.gradle")
+            previous_code=$(awk '$1 == "versionCode" && $2 == "=" { print $3 }' <<< "$previous")
+            current_code=$(awk '$1 == "versionCode" && $2 == "=" { print $3 }' app/build.gradle)
+            previous_name=$(awk '$1 == "versionName" && $2 == "=" { print $3 }' <<< "$previous")
+            current_name=$(awk '$1 == "versionName" && $2 == "=" { print $3 }' app/build.gradle)
+            if [[ "$previous_code" =~ ^[1-9][0-9]{0,8}$ && "$current_code" =~ ^[1-9][0-9]{0,8}$ &&
+              "$current_code" -gt "$previous_code" && "$current_name" != "$previous_name" ]]; then
+              publish=true
+            fi
           fi
           printf 'publish=%s\n' "$publish" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
@@ -193,7 +199,19 @@ jobs:
         with:
           name: owner-signed-instrumentation
           path: owner-signed-instrumentation
-      - name: Validate the exact APK being released
+      - name: Download and verify the previous signed Android release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir previous-android
+          gh release download tailscale-v0.1.1 --pattern Proxy-Android.apk --dir previous-android
+          printf '%s  %s\n' f205dce12415bf0805fb663fce6e6a16cd56878448585fd6fed932e7d4e52e57 \
+            previous-android/Proxy-Android.apk | sha256sum -c -
+      - name: Validate the exact APK after an in-place upgrade
+        env:
+          ANDROID_UPGRADE_FROM_APK: previous-android/Proxy-Android.apk
         run: |
           (cd owner-signed-android && sha256sum -c SHA256SUMS.txt)
           bash clients/android/ci/android-emulator-test.sh ${{ matrix.api }} \
@@ -254,6 +272,6 @@ jobs:
           sha256sum -c SHA256SUMS.txt
           version=$(cat version.txt)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          gh release create "android-v$version" Proxy-Android.apk SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "Proxy Android $version" --latest=false \
-            --notes 'Restores remembered sessions promptly after account-server interruptions. The signed APK passed API 29 and 36 VPN tests, production remembered login, WireGuard egress and bounded direct/VPN download checks. Requires Android 10 or later.'
+          gh release create "wireguard-android-v$version" Proxy-Android.apk SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "Proxy WireGuard Android $version" --latest=false \
+            --notes 'The owner-signed APK passed in-place upgrade and WireGuard tunnel tests on Android API 29 and 36. A fresh installation passed production remembered login, WireGuard egress and bounded direct/VPN download checks. Requires Android 10 or later.'

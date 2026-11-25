@@ -71,6 +71,7 @@ internal static partial class LiveAcceptance
                 if (reused) warmReconnects++;
                 previous = profile;
                 long connectedMs = timer.ElapsedMilliseconds;
+                string? directFallback = null;
                 string initialTransport;
                 string transport;
                 try
@@ -104,7 +105,7 @@ internal static partial class LiveAcceptance
                     }
                     transport = await daemon.Control.ReadExitTransport(profile.NodeId, timeout.Token);
                     phase = "DISCONNECT";
-                    if (run < 2 && await ClientConnection.TryRestoreDirect(daemon, timeout.Token))
+                    if (run < 2 && await ClientConnection.TryRestoreDirect(daemon, timeout.Token, reason => directFallback = reason))
                         retained = daemon;
                 }
                 finally
@@ -127,7 +128,7 @@ internal static partial class LiveAcceptance
                 {
                     started_at = startedAt,
                     connect_ms = connectedMs, reused_coordinator = reused, initial_transport = initialTransport, transport,
-                    milestones_ms = timing,
+                    direct_fallback = directFallback, milestones_ms = timing,
                     direct_route_confirmation_ms = restoring.ElapsedMilliseconds,
                 });
             }

@@ -333,9 +333,10 @@ headscale users list -o json > /dev/null
 admitted=$(headscale users create admitted -o json | jq -er '.id')
 denied=$(headscale users create denied -o json | jq -er '.id')
 headscale preauthkeys create --tags tag:oracle-exit --expiration 5m > "$lab_dir/exit.key"
-headscale_admission issue "$admitted" > "$lab_dir/admitted.key"
+headscale_admission issue "$admitted" > "$lab_dir/abandoned.key"
 headscale_admission absent "$admitted"
 headscale_admission pending "$admitted"
+headscale_admission retry "$admitted" > "$lab_dir/admitted.key"
 headscale preauthkeys create --user "$denied" --expiration 5m > "$lab_dir/denied.key"
 
 stage=start-nodes
@@ -351,6 +352,10 @@ echo 'TAILSCALE_CLIENT_LOCAL_API_ENROLLMENT=PASS'
 stage=register-unauthorized-device
 login denied "$lab_dir/denied.key"
 stage=reject-replayed-registration
+if login replay "$lab_dir/abandoned.key"; then
+    echo 'The abandoned enrollment key remained valid after retry' >&2
+    exit 1
+fi
 if login replay "$lab_dir/admitted.key"; then
     echo 'A second node reused a consumed enrollment key' >&2
     exit 1

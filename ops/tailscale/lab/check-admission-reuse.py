@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "server/admin-oracle/control"))
 from tailscale_control import Admission, BoundNode
-from tailscale_registry import AdmissionRegistry, CoordinatorAccount
+from tailscale_registry import AdmissionRegistry, CoordinatorAccount, RETRY_PENDING_AFTER_SECONDS
 
 
 class Coordinator:
@@ -18,6 +18,7 @@ class Coordinator:
         self.nodes = {}
         self.next_ticket = 0
         self.fail_revocation = False
+        self.expired_tickets = []
 
     def issue(self, user_id):
         self.next_ticket += 1
@@ -27,7 +28,7 @@ class Coordinator:
         return self.nodes.get(ticket_id)
 
     def expire_ticket(self, ticket_id):
-        pass
+        self.expired_tickets.append(ticket_id)
 
     def revoke(self, node):
         if self.fail_revocation:
@@ -86,7 +87,48 @@ def check_reuse(database):
     assert {binding.node_id for binding in registry.bindings()} == {5, 6}
 
 
+def check_pending_retry(database):
+    coordinator = Coordinator()
+    account = CoordinatorAccount("fixture", "proxy-fixture", 1)
+    other = CoordinatorAccount("other", "proxy-other", 2)
+    device = hashlib.sha256(b"interrupted enrollment").hexdigest()
+    now = 1000
+    registry = AdmissionRegistry(database, coordinator, lambda: now)
+    registry.issue(account, device)
+    original = coordinator.next_ticket
+
+    def rejects(owner, expected, *, retry_pending=True):
+        try:
+            registry.issue(owner, device, retry_pending=retry_pending)
+        except (ValueError, PermissionError) as error:
+            assert str(error) == expected, error
+        else:
+            raise AssertionError("unexpected enrollment")
+
+    now += RETRY_PENDING_AFTER_SECONDS - 1
+    rejects(account, "TAILSCALE_ENROLLMENT_PENDING")
+    now += 1
+    rejects(account, "TAILSCALE_ENROLLMENT_PENDING", retry_pending=False)
+    rejects(other, "TAILSCALE_DEVICE_OWNER_MISMATCH")
+    assert not coordinator.expired_tickets
+    registry.issue(account, device, retry_pending=True)
+    assert coordinator.expired_tickets == [original]
+    assert coordinator.next_ticket == original + 1
+
+    # A coordinator node registered immediately before retry keeps its identity.
+    node = BoundNode(7, ("100.100.46.2", "fd7a:115c:a1e0:46::2"))
+    coordinator.nodes[coordinator.next_ticket] = node
+    now += coordinator.ticket_lifetime_seconds
+    rejects(account, "TAILSCALE_DEVICE_ALREADY_REGISTERED")
+    assert registry.find(account, device) == node
+    assert coordinator.expired_tickets == [original]
+    registry.revoke(account, device)
+    rejects(account, "TAILSCALE_DEVICE_REVOKED")
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="proxy-admission-reuse-") as directory:
         check_reuse(Path(directory) / "admission.sqlite")
+        check_pending_retry(Path(directory) / "retry.sqlite")
     print("TAILSCALE_COMPLETED_REVOCATION_ADDRESS_REUSE=PASS")
+    print("TAILSCALE_ABANDONED_ENROLLMENT_RETRY=PASS")

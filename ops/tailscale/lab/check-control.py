@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "server/admin-oracle/control"))
 from tailscale_control import HeadscaleControl
 from tailscale_egress import node_counters
-from tailscale_registry import AdmissionRegistry, CoordinatorAccount
+from tailscale_registry import AdmissionRegistry, CoordinatorAccount, RETRY_PENDING_AFTER_SECONDS
 
 DEVICE = hashlib.sha256(b"isolated-proxy-account-device").hexdigest()
 
@@ -19,7 +19,8 @@ def main():
     parser.add_argument("binary")
     parser.add_argument("config")
     parser.add_argument("database")
-    parser.add_argument("operation", choices=("issue", "find", "revoke", "absent", "traffic", "deny-owner", "pending"))
+    parser.add_argument("operation", choices=("issue", "retry", "find", "revoke", "absent",
+                                               "traffic", "deny-owner", "pending"))
     parser.add_argument("user_id", type=int)
     parser.add_argument("--username", default="admitted")
     args = parser.parse_args()
@@ -28,6 +29,14 @@ def main():
     account = CoordinatorAccount(args.username, args.username, args.user_id)
     if args.operation == "issue":
         print(registry.issue(account, DEVICE))
+        return
+    if args.operation == "retry":
+        # Move only the fixture's admission clock, so the real coordinator
+        # has to expire a credential that is still valid on its own clock.
+        import time
+        retry_registry = AdmissionRegistry(args.database, control,
+                                           lambda: time.time() + RETRY_PENDING_AFTER_SECONDS)
+        print(retry_registry.issue(account, DEVICE, retry_pending=True))
         return
     if args.operation == "deny-owner":
         try:

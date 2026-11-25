@@ -7,6 +7,9 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 
 
+RETRY_PENDING_AFTER_SECONDS = 12
+
+
 @dataclass(frozen=True)
 class CoordinatorAccount:
     account_id: str
@@ -81,7 +84,7 @@ class AdmissionRegistry:
             raise OSError("TAILSCALE_NODE_BINDING_CHANGED")
         return node
 
-    def issue(self, account, device):
+    def issue(self, account, device, *, retry_pending=False):
         with self._transaction() as db:
             row = self._record(db, account, device)
             now = int(self._now())
@@ -90,7 +93,9 @@ class AdmissionRegistry:
                     raise PermissionError("TAILSCALE_DEVICE_REVOKED")
                 if row["node"] is not None or self._node_for(row) is not None:
                     raise ValueError("TAILSCALE_DEVICE_ALREADY_REGISTERED")
-                if now - row["issued_at"] < self._coordinator.ticket_lifetime_seconds:
+                minimum_age = (RETRY_PENDING_AFTER_SECONDS if retry_pending
+                               else self._coordinator.ticket_lifetime_seconds)
+                if now - row["issued_at"] < minimum_age:
                     raise ValueError("TAILSCALE_ENROLLMENT_PENDING")
                 self._coordinator.expire_ticket(row["ticket"])
                 if self._node_for(row) is not None:

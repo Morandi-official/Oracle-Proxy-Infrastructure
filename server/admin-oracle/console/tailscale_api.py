@@ -77,6 +77,12 @@ def profile(request):
 
 @csrf_exempt
 @require_POST
+def retry_profile(request):
+    return profile_request(request, "retry_profile")
+
+
+@csrf_exempt
+@require_POST
 def confirm(request):
     return profile_request(request, "confirm")
 

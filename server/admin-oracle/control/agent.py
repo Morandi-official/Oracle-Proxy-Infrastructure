@@ -26,7 +26,7 @@ MAX_BYTES = 10**16
 SYSTEM_OPERATIONS = {
     'system:account-sync': frozenset(('user.anchor',)),
     'system:health': frozenset(('state', 'tailscale.ready')),
-    'system:client-api': frozenset(('state', 'tailscale.profile', 'tailscale.confirm', 'tailscale.release', 'peer.enroll', 'peer.delete-owned', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
+    'system:client-api': frozenset(('state', 'tailscale.profile', 'tailscale.retry_profile', 'tailscale.confirm', 'tailscale.release', 'peer.enroll', 'peer.delete-owned', 'udp-diagnostic.start', 'udp-diagnostic.begin', 'udp-diagnostic.sample', 'udp-diagnostic.finish')),
 }
 _ipv6_spec = importlib.util.spec_from_file_location('oracle_ipv6_addresses', Path(__file__).with_name('ipv6_addresses.py'))
 ipv6_addresses = importlib.util.module_from_spec(_ipv6_spec)
@@ -602,7 +602,7 @@ class Engine:
             if data:
                 raise ValueError('INVALID_FIELDS')
             return {'ready': bool(self.tailscale is not None and self.tailscale.ready())}
-        if operation in ('tailscale.profile', 'tailscale.confirm', 'tailscale.release'):
+        if operation in ('tailscale.profile', 'tailscale.retry_profile', 'tailscale.confirm', 'tailscale.release'):
             if self.tailscale is None:
                 raise ValueError('TAILSCALE_SERVICE_UNAVAILABLE')
             if set(data) != {'user_id', 'device'}:

@@ -109,13 +109,23 @@ internal static class ClientConnection
         CancellationToken cancel, Action<string>? progress = null, Action<string, long>? timing = null,
         DaemonProcess? retained = null, ExitProfile? previous = null)
     {
+        var startedAt = Stopwatch.GetTimestamp();
+        void Mark(string stage) => timing?.Invoke(stage, (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+
+        async Task<T> Record<T>(Task<T> task, string stage)
+        {
+            T result = await task.ConfigureAwait(false);
+            Mark(stage);
+            return result;
+        }
+
         if (retained is not null)
         {
             bool reused = false;
             try
             {
                 progress?.Invoke("RETAINED_ACCOUNT_PROFILE");
-                var profile = await account.AuthorizeConnection(session, cancel);
+                var profile = await Record(account.AuthorizeConnection(session, cancel), "retained_account_ready");
                 if (profile.Key is null && previous?.Coordinator == profile.Coordinator)
                 {
                     try
@@ -125,7 +135,8 @@ internal static class ClientConnection
                         {
                             progress?.Invoke("RETAINED_SELECT_EXIT");
                             await retained.Control.SelectExitNode(profile.NodeId, cancel);
-                            await ExitCheck.Verify(retained, profile, cancel);
+                            Mark("retained_exit_selected");
+                            await ExitCheck.Verify(retained, profile, cancel, timing is null ? null : Mark);
                             cancel.ThrowIfCancellationRequested();
                             reused = true;
                             return (retained, profile);
@@ -140,16 +151,6 @@ internal static class ClientConnection
             }
         }
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        var startedAt = Stopwatch.GetTimestamp();
-        void Mark(string stage) => timing?.Invoke(stage, (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
-
-        async Task<T> Record<T>(Task<T> task, string stage)
-        {
-            T result = await task.ConfigureAwait(false);
-            Mark(stage);
-            return result;
-        }
-
         progress?.Invoke("ACCOUNT_PROFILE");
         var profileTask = Record(account.AuthorizeConnection(session, attempt.Token), "account_ready");
         var coordinator = account.CoordinatorRoute;

@@ -2,5 +2,5 @@
   "version": "0.1.6",
   "system_dns_fault": true,
   "coordinator_proxy_fault": true,
-  "request": "verify-windows-auth-and-coordinator-over-alternate-paths"
+  "request": "repeat-installed-windows-acceptance-with-a-pinned-test-relay"
 }

@@ -149,6 +149,10 @@ jobs:
           $retain = $env:EXPERIMENT -ceq 'retained-coordinator'
           $blocked = $env:SYSTEM_DNS_FAULT -ceq 'true'
           ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -RetentionExperiment:$retain -BlockSystemDns:$blocked
+      - uses: actions/setup-python@v5
+        if: needs.build.outputs.coordinator_proxy_fault == 'true'
+        with:
+          python-version: '3.12'
       - name: Verify installed login and real exit with only the alternate coordinator route
         if: needs.build.outputs.coordinator_proxy_fault == 'true'
         env:

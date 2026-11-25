@@ -1,7 +1,7 @@
 {
   "version": "0.1.2",
   "publish": false,
-  "android_only": true,
-  "android_latency_only": true,
-  "request": "verify-android-native-detach-and-reconnect"
+  "accepted_android_run": 45583771375,
+  "recheck_android": true,
+  "request": "recheck-android-0-1-2-signed-lifecycle-and-latency"
 }

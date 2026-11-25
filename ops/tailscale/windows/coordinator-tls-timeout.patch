@@ -1,0 +1,19 @@
+diff --git a/net/dnscache/dnscache.go b/net/dnscache/dnscache.go
+--- a/net/dnscache/dnscache.go
++++ b/net/dnscache/dnscache.go
+@@ -673,7 +673,14 @@
+ 		}
+ 		tlsConn := tls.Client(tcpConn, cfg)
+ 
+-		handshakeCtx, handshakeTimeoutCancel := context.WithTimeout(ctx, 5*time.Second)
++		// Allow the configured Proxy coordinator to finish TLS on a slow path.
++		// Keep the upstream deadline for every other host and never change verification.
++		handshakeTimeout := 5 * time.Second
++		if host != "" && host == envknob.String("TS_ORACLE_PROXY_TLS_HOST") {
++			handshakeTimeout = 22 * time.Second
++		}
++
++		handshakeCtx, handshakeTimeoutCancel := context.WithTimeout(ctx, handshakeTimeout)
+ 		defer handshakeTimeoutCancel()
+ 		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+ 			tcpConn.Close()

@@ -8,8 +8,11 @@ on:
   workflow_call:
     inputs:
       version:
-        required: true
+        default: ''
         type: string
+      network_smoke:
+        default: false
+        type: boolean
       live_acceptance:
         default: false
         type: boolean
@@ -34,10 +37,11 @@ env:
 jobs:
   build:
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 25
     outputs:
       version: ${{ steps.request.outputs.version }}
       experiment: ${{ steps.request.outputs.experiment }}
+      system_dns_fault: ${{ steps.request.outputs.system_dns_fault }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +49,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.403
+      - uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale
+          ref: cbc74fe48ef1b1649f69a4d9a602319427e25102
+          path: upstream/tailscale
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: upstream/tailscale/go.mod
+          cache: false
       - name: Read the requested version
         id: request
         env:
@@ -52,29 +66,46 @@ jobs:
         run: |
           $version = $env:INPUT_VERSION
           $experiment = ''
+          $dnsFault = $false
           if ($env:TOP_LEVEL_PUSH -eq 'true') {
             $request = Get-Content -LiteralPath ./ops/tailscale/windows-acceptance.json -Raw | ConvertFrom-Json
             $version = $request.version
+            if ($request.PSObject.Properties['system_dns_fault']) {
+              if ($request.system_dns_fault -isnot [bool]) { throw 'WINDOWS_DNS_FAULT_INVALID' }
+              $dnsFault = $request.system_dns_fault
+            }
             if ($request.PSObject.Properties['experiment']) {
               if ($request.experiment -cne 'retained-coordinator') { throw 'WINDOWS_EXPERIMENT_INVALID' }
               $experiment = $request.experiment
             }
           }
+          if (-not $version) {
+            [xml]$project = Get-Content -LiteralPath ./clients/windows/tailscale-app/Proxy.Tailscale.csproj -Raw
+            $version = $project.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+          }
           if ($version -cnotmatch '^\d+\.\d+\.\d+$') { throw 'WINDOWS_VERSION_INVALID' }
           "version=$version" >> $env:GITHUB_OUTPUT
+          if ($dnsFault -and $experiment) { throw 'WINDOWS_DNS_FAULT_REQUIRES_PRODUCT_ACCEPTANCE' }
           "experiment=$experiment" >> $env:GITHUB_OUTPUT
+          "system_dns_fault=$($dnsFault.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - name: Build the Windows x64 portable and setup distributions
         env:
           VERSION: ${{ steps.request.outputs.version }}
           EXPERIMENT: ${{ steps.request.outputs.experiment }}
         run: |
           $retain = $env:EXPERIMENT -ceq 'retained-coordinator'
-          ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows -RetentionExperiment:$retain
+          ./ops/tailscale/windows/build.ps1 -Version $env:VERSION -OutputDirectory ./dist/tailscale-windows -EngineSource ./upstream/tailscale -RetentionExperiment:$retain
       - name: Verify the setup installs the exact portable payload
         if: '!inputs.live_acceptance && env.TOP_LEVEL_PUSH != ''true'''
         env:
           VERSION: ${{ steps.request.outputs.version }}
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
+      - name: Verify Windows login and engine DNS recovery without credentials
+        timeout-minutes: 4
+        if: ${{ inputs.network_smoke && github.event_name == 'pull_request' }}
+        env:
+          VERSION: ${{ steps.request.outputs.version }}
+        run: ./ops/tailscale/lab/check-windows-dns-recovery.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.request.outputs.experiment == 'retained-coordinator' && 'tailscale-windows-retained-coordinator-bundle' || 'tailscale-windows-bundle' }}
@@ -103,11 +134,13 @@ jobs:
         env:
           VERSION: ${{ needs.build.outputs.version }}
           EXPERIMENT: ${{ needs.build.outputs.experiment }}
+          SYSTEM_DNS_FAULT: ${{ needs.build.outputs.system_dns_fault }}
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
         run: |
           $retain = $env:EXPERIMENT -ceq 'retained-coordinator'
-          ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -RetentionExperiment:$retain
+          $blocked = $env:SYSTEM_DNS_FAULT -ceq 'true'
+          ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -RetentionExperiment:$retain -BlockSystemDns:$blocked
       - uses: actions/upload-artifact@v4
         if: needs.build.outputs.experiment != 'retained-coordinator'
         with:

@@ -117,6 +117,7 @@ internal sealed class MainForm : Form
                 await _connectTask;
             }
         };
+        Shown += PrepareLogin;
         FormClosing += CloseRequested;
     }
 
@@ -158,6 +159,12 @@ internal sealed class MainForm : Form
         _connect.Visible = loggedIn;
         _connect.Enabled = loggedIn;
         AcceptButton = loggedIn ? _connect : _login;
+    }
+
+    private async void PrepareLogin(object? sender, EventArgs e)
+    {
+        try { await _account.PrepareLogin(_lifetime.Token); }
+        catch (Exception error) when (error is IOException or HttpRequestException or OperationCanceledException) { }
     }
 
     private async Task Login()
@@ -203,12 +210,17 @@ internal sealed class MainForm : Form
         _connect.Text = "取消连接";
         SetStatus("正在连接…");
         var elapsed = Stopwatch.StartNew();
+        string phase = "ACCOUNT_PROFILE";
         try
         {
             var retained = _daemon;
             _daemon = null;
-            (_daemon, _profile) = await ClientConnection.Open(_account, _session, _state, attempt.Token,
-                retained: retained, previous: _profile);
+            (_daemon, _profile) = await ClientConnection.Open(_account, _session, _state, attempt.Token, stage =>
+            {
+                phase = stage;
+                if (!_closing && !attempt.IsCancellationRequested)
+                    SetStatus(PhaseStatus(stage));
+            }, retained: retained, previous: _profile);
             _connected = true;
             SetStatus($"已连接 · {elapsed.ElapsedMilliseconds} ms", Connected);
         }
@@ -218,7 +230,7 @@ internal sealed class MainForm : Form
             catch (Exception cleanup) { failure = cleanup; }
             if (!_closing && !attempt.IsCancellationRequested)
             {
-                SetStatus(Message(failure), Alert);
+                SetStatus(ConnectFailure(failure, phase), Alert);
                 if (failure.Message == "LOGIN_REQUIRED")
                 {
                     _session = null;
@@ -291,6 +303,35 @@ internal sealed class MainForm : Form
         base.Dispose(disposing);
     }
 
+    private static string PhaseStatus(string phase) => phase switch
+    {
+        "ACCOUNT_PROFILE" or "RETAINED_ACCOUNT_PROFILE" => "正在检查账号与设备授权…",
+        "DAEMON_PROFILE" => "正在启动本机连接引擎…",
+        "ENROLLMENT_START" or "COORDINATOR_NODE_KEY" => "正在联系 Tailscale 协调服务…",
+        "ACCOUNT_CONFIRM" => "正在确认设备登记…",
+        "SELECT_EXIT" or "RETAINED_SELECT_EXIT" => "正在设置代理出口…",
+        "VERIFY_EXIT" => "正在验证 IPv4 和 IPv6 出口…",
+        _ => "正在连接…",
+    };
+
+    private static string ConnectFailure(Exception error, string phase)
+    {
+        string message = Message(error);
+        if (message != GenericFailure) return message;
+        return phase switch
+        {
+            "ACCOUNT_PROFILE" or "RETAINED_ACCOUNT_PROFILE" => "无法获取连接授权，请重试。",
+            "DAEMON_PROFILE" => "本机连接引擎启动失败，请重试。",
+            "ENROLLMENT_START" or "COORDINATOR_NODE_KEY" => "未能与 Tailscale 协调服务建立连接。",
+            "ACCOUNT_CONFIRM" => "服务器暂未确认设备登记，请重试。",
+            "SELECT_EXIT" or "RETAINED_SELECT_EXIT" => "无法设置代理出口，请重试。",
+            "VERIFY_EXIT" => "无法验证代理出口，请重试。",
+            _ => GenericFailure,
+        };
+    }
+
+    private const string GenericFailure = "暂时无法连接，请重试";
+
     private static string Message(Exception error) => error switch
     {
         UnauthorizedAccessException => "无法访问本机的 Proxy 设备文件。",
@@ -308,6 +349,13 @@ internal sealed class MainForm : Form
         "ACCOUNT_PROXY_FAILED" => "Windows 系统代理无法连接账号服务。",
         "ACCOUNT_TLS_FAILED" => "无法验证账号服务的 HTTPS 连接，请检查系统日期和时间。",
         "ACCOUNT_TIMEOUT" => "提交账号请求超时，请重试。",
+        "ACCOUNT_ROUTE_TIMEOUT" => "未能验证账号服务的登录路径，请检查网络。",
+        "TAILSCALE_ENGINE_START_TIMEOUT" => "本机连接引擎启动超时。",
+        "TAILSCALE_DAEMON_EXITED" => "本机连接引擎意外退出。",
+        "TAILSCALE_COORDINATOR_TIMEOUT" => "已登录账号，但等待 Tailscale 协调服务超时。",
+        "TAILSCALE_ENROLLMENT_TIMEOUT" => "设备已向协调服务登记，但服务器确认超时。",
+        "TAILSCALE_DEVICE_ALREADY_REGISTERED" => "本机已有登记记录，请在后台核对设备状态。",
+        "TAILSCALE_LOCAL_CONTROL_REJECTED" => "本机连接引擎拒绝了当前操作。",
         "ACCOUNT_HTTP_FAILED" => "账号 HTTPS 请求中断，请重试。",
         "ACCOUNT_SERVICE_UNAVAILABLE" or "TAILSCALE_SERVICE_UNAVAILABLE" or "CONTROL_UNAVAILABLE"
             => "账号服务暂不可用，请稍后重试。",
@@ -316,6 +364,6 @@ internal sealed class MainForm : Form
         "DEVICE_LIMIT_EXCEEDED" => "已达到设备上限",
         "LOGIN_REQUIRED" => "登录已过期",
         "EXIT_NOT_VERIFIED" => "暂时无法验证代理出口",
-        _ => "暂时无法连接，请重试",
+        _ => GenericFailure,
     };
 }

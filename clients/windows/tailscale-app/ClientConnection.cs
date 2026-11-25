@@ -151,46 +151,73 @@ internal static class ClientConnection
         }
 
         // Let the account TLS request run while Windows starts the native engine.
+        async Task PrepareCoordinator(Task<ExitProfile> pending)
+        {
+            var authorized = await pending.ConfigureAwait(false);
+            var address = account.CoordinatorAddressProof(authorized.Coordinator);
+            if (address is null) return;
+            try
+            {
+                await DaemonProcess.CacheVerifiedCoordinatorAddress(state, authorized.Coordinator, address, attempt.Token);
+                Mark("coordinator_dns_hint_ready");
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                Mark("coordinator_dns_hint_unavailable");
+            }
+        }
+
         progress?.Invoke("ACCOUNT_PROFILE");
         var profileTask = Record(account.Profile(session, false, attempt.Token), "account_ready");
+        var coordinatorTask = PrepareCoordinator(profileTask);
         var daemonTask = Record(DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
-            state, attempt.Token, timing is null ? null : Mark, authorization: profileTask), "daemon_ready");
+            state, attempt.Token, timing is null ? null : Mark, authorization: coordinatorTask), "daemon_ready");
         try
         {
             var profile = await profileTask;
             progress?.Invoke("DAEMON_PROFILE");
             var daemon = await daemonTask;
+            await coordinatorTask;
             if (profile.Key is not null)
             {
                 progress?.Invoke("ENROLLMENT_START");
                 await daemon.Control.Enroll(profile.Coordinator, profile.Key, attempt.Token);
                 Mark("enrollment_started");
                 using var registration = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
-                registration.CancelAfter(TimeSpan.FromSeconds(10));
-                progress?.Invoke("COORDINATOR_NODE_KEY");
-                while (!(await daemon.Control.ReadState(registration.Token)).HasNodeKey)
-                    await Task.Delay(125, registration.Token);
-                Mark("node_key_ready");
-                progress?.Invoke("ACCOUNT_CONFIRM");
-                while (true)
+                registration.CancelAfter(TimeSpan.FromSeconds(45));
+                bool nodeKeyReady = false;
+                try
                 {
-                    try
-                    {
-                        await account.Profile(session, true, registration.Token);
-                        break;
-                    }
-                    catch (IOException error) when (error.Message == "TAILSCALE_ENROLLMENT_PENDING")
-                    {
+                    progress?.Invoke("COORDINATOR_NODE_KEY");
+                    while (!(await daemon.Control.ReadState(registration.Token)).HasNodeKey)
                         await Task.Delay(125, registration.Token);
+                    Mark("node_key_ready");
+                    nodeKeyReady = true;
+                    progress?.Invoke("ACCOUNT_CONFIRM");
+                    while (true)
+                    {
+                        try
+                        {
+                            await account.Profile(session, true, registration.Token);
+                            break;
+                        }
+                        catch (IOException error) when (error.Message == "TAILSCALE_ENROLLMENT_PENDING")
+                        {
+                            await Task.Delay(125, registration.Token);
+                        }
                     }
+                    Mark("account_confirmed");
                 }
-                Mark("account_confirmed");
+                catch (OperationCanceledException error) when (!attempt.IsCancellationRequested)
+                {
+                    throw new IOException(nodeKeyReady ? "TAILSCALE_ENROLLMENT_TIMEOUT" : "TAILSCALE_COORDINATOR_TIMEOUT", error);
+                }
             }
             progress?.Invoke("SELECT_EXIT");
             await daemon.Control.SelectExitNode(profile.NodeId, attempt.Token);
             Mark("exit_selected");
             progress?.Invoke("VERIFY_EXIT");
-            await ExitCheck.Verify(daemon, profile, attempt.Token, timing is null ? null : Mark);
+            await ExitCheck.Verify(daemon, profile, attempt.Token, timing is null ? null : Mark, slowCoordinator: true);
             attempt.Token.ThrowIfCancellationRequested();
             return (daemon, profile);
         }

@@ -35,6 +35,9 @@ internal static partial class LiveAcceptance
             if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
                 throw new IOException("ACCEPTANCE_CREDENTIALS_MISSING");
 
+            phase = "LOGIN_LAYOUT";
+            VerifyLoginLayout();
+            report["login_layout_verified"] = true;
             phase = "BASELINE";
             string state = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, "state");
             using var web = new HttpClient(new SocketsHttpHandler
@@ -47,8 +50,16 @@ internal static partial class LiveAcceptance
             var direct = await ObserveIPv4(web, timeout.Token);
             report["baseline"] = await Performance(web, direct, timeout.Token);
 
+            phase = "LOGIN_ERROR_RESPONSE";
+            string device = ClientConnection.Device(state);
+            try
+            {
+                await account.Login(username, "", device, timeout.Token);
+                throw new IOException("EMPTY_LOGIN_UNEXPECTEDLY_SUCCEEDED");
+            }
+            catch (IOException error) when (error.Message == "INVALID_CREDENTIALS") { }
             phase = "LOGIN";
-            session = await account.Login(username, password, ClientConnection.Device(state), timeout.Token);
+            session = await account.Login(username, password, device, timeout.Token);
             password = null;
 
             var connections = new List<object>();
@@ -172,6 +183,31 @@ internal static partial class LiveAcceptance
             File.WriteAllText(output, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
         }
         return result;
+    }
+
+    private static void VerifyLoginLayout()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                ApplicationConfiguration.Initialize();
+                using var window = new MainForm();
+                window.Show();
+                window.PerformLayout();
+                var login = window.Controls.Find("account-login", true).Single();
+                var bounds = login.RectangleToScreen(login.ClientRectangle);
+                if (login is not SmoothButton || !login.Visible || bounds.Width < 180 || bounds.Height < 30 ||
+                    !window.RectangleToScreen(window.ClientRectangle).Contains(bounds))
+                    throw new IOException("LOGIN_LAYOUT_BUTTON_NOT_VISIBLE");
+            }
+            catch (Exception error) { failure = error; }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!thread.Join(TimeSpan.FromSeconds(12)) || failure is not null)
+            throw new IOException("LOGIN_LAYOUT_NOT_VERIFIED", failure);
     }
 
     private static async Task<object> Performance(HttpClient web, IPAddress expected, CancellationToken cancel)

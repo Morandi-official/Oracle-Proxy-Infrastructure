@@ -1,4 +1,4 @@
 {
-  "version": "0.1.1",
-  "request": "verify-direct-https-before-retaining-coordination"
+  "version": "0.1.2",
+  "request": "verify-windows-account-connectivity-and-rounded-login-layout"
 }

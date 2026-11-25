@@ -125,7 +125,7 @@ internal sealed class AccountClient : IDisposable
 
     private async Task<AccountRoute?> FindLoginRoute(CancellationToken cancel)
     {
-        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         limit.CancelAfter(AlternateDeadline);
         var ordinary = TryRoute(new("direct", null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower),
             limit.Token);
@@ -164,9 +164,16 @@ internal sealed class AccountClient : IDisposable
         }
         finally
         {
-            await limit.CancelAsync();
-            foreach (var probe in pending)
-                (await probe)?.Dispose();
+            _ = CancelUnusedRoutes(limit, pending);
+        }
+    }
+
+    private static async Task CancelUnusedRoutes(CancellationTokenSource limit, List<Task<AccountRoute?>> pending)
+    {
+        using (limit)
+        {
+            try { await limit.CancelAsync().ConfigureAwait(false); }
+            finally { await Task.WhenAll(pending.Select(DisposeWhenReady)).ConfigureAwait(false); }
         }
     }
 
@@ -290,17 +297,43 @@ internal sealed class AccountClient : IDisposable
         token.GetString() is { Length: > 0 and <= 2041 } value
             ? value : throw new IOException("ACCOUNT_RESPONSE_INVALID");
 
-    internal async Task<ExitProfile> Profile(string token, bool confirm, CancellationToken cancel)
+    internal Task<ExitProfile> Profile(string token, bool confirm, CancellationToken cancel) =>
+        ReadProfile(confirm ? "confirm" : "profile", token, cancel);
+
+    internal async Task<ExitProfile> AuthorizeConnection(string token, CancellationToken cancel)
     {
-        using var response = await Post(confirm ? "confirm" : "profile", token, new { }, cancel);
+        try { return await Profile(token, false, cancel); }
+        catch (IOException error) when (error.Message == "TAILSCALE_ENROLLMENT_PENDING")
+        {
+            // The previous native attempt has stopped. The server checks
+            // this device's unused ticket before it allows a replacement.
+            return await ReadProfile("retry-profile", token, cancel);
+        }
+    }
+
+    private async Task<ExitProfile> ReadProfile(string action, string token, CancellationToken cancel)
+    {
+        using var response = await Post(action, token, new { }, cancel);
         var data = response.RootElement;
+        if (!Uri.TryCreate(ReadProfileString(data, "coordinator"), UriKind.Absolute, out var coordinator) ||
+            coordinator.Scheme != Uri.UriSchemeHttps ||
+            !long.TryParse(ReadProfileString(data, "exit_node_id"), NumberStyles.None, CultureInfo.InvariantCulture,
+                out long nodeId) || nodeId <= 0 ||
+            !IPAddress.TryParse(ReadProfileString(data, "ipv4"), out var ipv4) ||
+            ipv4.AddressFamily != AddressFamily.InterNetwork ||
+            !IPAddress.TryParse(ReadProfileString(data, "ipv6"), out var ipv6) ||
+            ipv6.AddressFamily != AddressFamily.InterNetworkV6 ||
+            !data.TryGetProperty("enrollment_key", out var key) ||
+            key.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+            throw new IOException("ACCOUNT_RESPONSE_INVALID");
+
         bool? rateLimited = data.TryGetProperty("rate_limited", out var limited)
             && limited.ValueKind is JsonValueKind.True or JsonValueKind.False ? limited.GetBoolean() : null;
-        return new ExitProfile(new Uri(data.GetProperty("coordinator").GetString()!),
-            long.Parse(data.GetProperty("exit_node_id").GetString()!, CultureInfo.InvariantCulture),
-            data.GetProperty("ipv4").GetString()!, data.GetProperty("ipv6").GetString()!,
-            data.GetProperty("enrollment_key").GetString(), rateLimited);
+        return new ExitProfile(coordinator, nodeId, ipv4.ToString(), ipv6.ToString(), key.GetString(), rateLimited);
     }
+
+    private static string? ReadProfileString(JsonElement data, string name) =>
+        data.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     internal async Task Release(string token, CancellationToken cancel)
     {
@@ -373,7 +406,8 @@ internal sealed class AccountClient : IDisposable
     private static async Task DisposeWhenReady(Task<AccountRoute?> preparation)
     {
         try { (await preparation)?.Dispose(); }
-        catch (Exception error) when (error is IOException or HttpRequestException or OperationCanceledException) { }
+        catch (Exception error) when (error is IOException or HttpRequestException or OperationCanceledException
+            or NotSupportedException) { }
     }
 
     public void Dispose()

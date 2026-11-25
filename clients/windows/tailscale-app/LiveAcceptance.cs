@@ -52,14 +52,7 @@ internal static partial class LiveAcceptance
             var direct = await ObserveIPv4(web, timeout.Token);
             report["baseline"] = await Performance(web, direct, timeout.Token);
 
-            phase = "LOGIN_ERROR_RESPONSE";
             string device = ClientConnection.Device(state);
-            try
-            {
-                await account.Login(username, "", device, timeout.Token);
-                throw new IOException("EMPTY_LOGIN_UNEXPECTEDLY_SUCCEEDED");
-            }
-            catch (IOException error) when (error.Message == "INVALID_CREDENTIALS") { }
             phase = "PREPARE_LOGIN";
             var warmup = Stopwatch.StartNew();
             await account.PrepareLogin(timeout.Token);
@@ -67,12 +60,23 @@ internal static partial class LiveAcceptance
             phase = "LOGIN";
             var loginTime = Stopwatch.StartNew();
             session = await account.Login(username, password, device, timeout.Token);
+            report["account_first_login_ms"] = warmup.ElapsedMilliseconds;
             report["account_warm_login_ms"] = loginTime.ElapsedMilliseconds;
             report["account_login_http"] = account.ResponseVersion?.ToString();
             report["account_login_route"] = account.LoginRoute;
             report["coordinator_system_dns_blocked"] = systemDnsBlocked;
             if (systemDnsBlocked && account.LoginRoute?.StartsWith("encrypted-dns-", StringComparison.Ordinal) != true)
                 throw new IOException("ACCOUNT_DNS_FALLBACK_NOT_USED");
+            phase = "LOGIN_ERROR_RESPONSE";
+            using (var rejected = new AccountClient())
+            {
+                try
+                {
+                    await rejected.Login(username, "", device, timeout.Token);
+                    throw new IOException("EMPTY_LOGIN_UNEXPECTEDLY_SUCCEEDED");
+                }
+                catch (IOException error) when (error.Message == "INVALID_CREDENTIALS") { }
+            }
             phase = "ENCRYPTED_DNS_LOGIN";
             await account.VerifyEncryptedDnsLogin(username, password, device, timeout.Token);
             report["account_encrypted_dns_login_verified"] = true;
@@ -83,6 +87,17 @@ internal static partial class LiveAcceptance
                 report["account_encrypted_dns_http3_login_verified"] = true;
             }
             password = null;
+
+            phase = "ABANDONED_ENROLLMENT";
+            var abandoned = await account.Profile(session, false, timeout.Token);
+            if (abandoned.Key is null) throw new IOException("FRESH_DEVICE_ENROLLMENT_KEY_REQUIRED");
+            await Task.Delay(TimeSpan.FromSeconds(13), timeout.Token);
+            try
+            {
+                await account.Profile(session, false, timeout.Token);
+                throw new IOException("ABANDONED_ENROLLMENT_NOT_REPRODUCED");
+            }
+            catch (IOException error) when (error.Message == "TAILSCALE_ENROLLMENT_PENDING") { }
 
             var connections = new List<object>();
             report["connections"] = connections;
@@ -111,6 +126,7 @@ internal static partial class LiveAcceptance
                 {
                     if (run == 0)
                     {
+                        report["abandoned_enrollment_recovered"] = true;
                         report["account_rate_limited"] = profile.RateLimited;
                         bool dnsHintReady = timing.ContainsKey("coordinator_dns_hint_ready");
                         report["coordinator_dns_hint_ready"] = dnsHintReady;

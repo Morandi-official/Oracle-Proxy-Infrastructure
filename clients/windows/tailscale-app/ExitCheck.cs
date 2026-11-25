@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 
 namespace OracleProxy.Tailscale;
 
@@ -11,6 +12,9 @@ internal static class ExitCheck
     private static readonly Uri V4 = new("https://1.1.1.1/cdn-cgi/trace");
     private static readonly Uri V6 = new("https://[2606:4700:4700::1111]/cdn-cgi/trace");
     private static readonly Uri Backup = new("https://checkip.global.api.aws/");
+    private static readonly ConditionalWeakTable<DaemonProcess, ProofPreference> LastProof = new();
+
+    private sealed record ProofPreference(long NodeId, string IPv4, string IPv6, bool IPv4Backup, bool IPv6Backup);
 
     internal static async Task Verify(DaemonProcess daemon, ExitProfile profile, CancellationToken cancel,
         Action<string>? timing = null, bool slowCoordinator = false)
@@ -34,16 +38,22 @@ internal static class ExitCheck
             mapReady = true;
             limit.CancelAfter(TimeSpan.FromSeconds(10));
 
+            LastProof.TryGetValue(daemon, out var previous);
+            if (previous?.NodeId != profile.NodeId || previous.IPv4 != profile.IPv4 || previous.IPv6 != profile.IPv6)
+                previous = null;
+            int alternateDelay = previous is null ? 250 : 100;
             // Start fresh sockets once the selected exit is present. An earlier
             // attempt can retain a pending connect across the route change.
-            await Task.WhenAll(
+            var backupWinners = await Task.WhenAll(
                 VerifyFamily(daemon.AdapterName, V4, profile.IPv4, AddressFamily.InterNetwork,
-                    "ipv4", timing, limit.Token),
+                    previous?.IPv4Backup == true, alternateDelay, "ipv4", timing, limit.Token),
                 VerifyFamily(daemon.AdapterName, V6, profile.IPv6, AddressFamily.InterNetworkV6,
-                    "ipv6", timing, limit.Token));
+                    previous?.IPv6Backup == true, alternateDelay, "ipv6", timing, limit.Token));
             var verified = await daemon.Control.ReadState(limit.Token);
             if (verified.State != "Running" || verified.ExitId != exit)
                 throw new IOException("EXIT_NOT_VERIFIED");
+            LastProof.AddOrUpdate(daemon, new ProofPreference(profile.NodeId, profile.IPv4, profile.IPv6,
+                backupWinners[0], backupWinners[1]));
         }
         catch (OperationCanceledException error) when (!cancel.IsCancellationRequested)
         {
@@ -55,8 +65,8 @@ internal static class ExitCheck
         NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(
             value => value.Name == name && value.OperationalStatus == OperationalStatus.Up);
 
-    private static async Task VerifyFamily(string adapter, Uri target, string expected, AddressFamily family,
-        string milestone, Action<string>? timing, CancellationToken cancel)
+    private static async Task<bool> VerifyFamily(string adapter, Uri target, string expected, AddressFamily family,
+        bool backupFirst, int alternateDelay, string milestone, Action<string>? timing, CancellationToken cancel)
     {
         var expectedAddress = IPAddress.Parse(expected);
         int probes = 0;
@@ -71,37 +81,38 @@ internal static class ExitCheck
                 // Abort the first stalled socket promptly while interfaces settle.
                 // Later attempts retain the former budgets for slower networks.
                 bool first = probes++ == 0;
-                var result = await Probe(source, target, expectedAddress, family, first, cancel);
+                if (first && backupFirst)
+                    timing?.Invoke($"{milestone}_backup_first");
+                var result = await Probe(source, expectedAddress, family, first,
+                    backupFirst ? Backup : target, backupFirst ? target : Backup, alternateDelay, cancel);
                 cancel.ThrowIfCancellationRequested();
-                if (result.Verified)
+                if (result is not null)
                 {
                     timing?.Invoke($"{milestone}_verified");
-                    if (result.Backup)
+                    if (result == Backup)
                         timing?.Invoke($"{milestone}_backup_verified");
-                    return;
+                    return result == Backup;
                 }
             }
             await Task.Delay(probes < 2 ? 25 : 125, cancel);
         }
     }
 
-    private static async Task<(bool Verified, bool Backup)> Probe(IPAddress source, Uri target, IPAddress expected,
-        AddressFamily family, bool first, CancellationToken cancel)
+    private static async Task<Uri?> Probe(IPAddress source, IPAddress expected, AddressFamily family, bool first,
+        Uri preferredTarget, Uri alternateTarget, int alternateDelay, CancellationToken cancel)
     {
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         try
         {
-            var primary = Matches(source, target, expected, family, first, attempt.Token);
-            if (await Task.WhenAny(primary, Task.Delay(250, attempt.Token)) == primary && await primary)
-                return (true, false);
+            var preferred = VerifyTarget(source, preferredTarget, expected, family, first, attempt.Token);
+            if (await Task.WhenAny(preferred, Task.Delay(alternateDelay, attempt.Token)) == preferred &&
+                await preferred is { } verified)
+                return verified;
 
             cancel.ThrowIfCancellationRequested();
-            var backup = Matches(source, Backup, expected, family, first, attempt.Token);
-            var winner = await Task.WhenAny(primary, backup);
-            if (await winner)
-                return (true, winner == backup);
-
-            return winner == primary ? (await backup, true) : (await primary, false);
+            var alternate = VerifyTarget(source, alternateTarget, expected, family, first, attempt.Token);
+            var winner = await Task.WhenAny(preferred, alternate);
+            return await winner ?? await (winner == preferred ? alternate : preferred);
         }
         finally
         {
@@ -109,7 +120,7 @@ internal static class ExitCheck
         }
     }
 
-    private static async Task<bool> Matches(IPAddress source, Uri target, IPAddress expected, AddressFamily family,
+    private static async Task<Uri?> VerifyTarget(IPAddress source, Uri target, IPAddress expected, AddressFamily family,
         bool first, CancellationToken cancel)
     {
         using var http = new HttpClient(new SocketsHttpHandler
@@ -120,6 +131,7 @@ internal static class ExitCheck
                 var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp);
                 try
                 {
+                    socket.NoDelay = true;
                     socket.Bind(new IPEndPoint(source, 0));
                     var endpoint = context.DnsEndPoint;
                     if (IPAddress.TryParse(endpoint.Host.Trim('[', ']'), out var literal))
@@ -143,9 +155,9 @@ internal static class ExitCheck
             var result = await http.GetStringAsync(target, cancel);
             var ip = target == Backup ? result.Trim() : result.Split('\n')
                 .FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal))?[3..].Trim();
-            return IPAddress.TryParse(ip, out var observed) && observed.Equals(expected);
+            return IPAddress.TryParse(ip, out var observed) && observed.Equals(expected) ? target : null;
         }
-        catch (HttpRequestException) { return false; }
-        catch (OperationCanceledException) { return false; }
+        catch (HttpRequestException) { return null; }
+        catch (OperationCanceledException) { return null; }
     }
 }

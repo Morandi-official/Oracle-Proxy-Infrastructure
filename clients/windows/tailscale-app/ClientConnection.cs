@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -6,6 +10,53 @@ namespace OracleProxy.Tailscale;
 
 internal static class ClientConnection
 {
+    private static readonly IPAddress PublicV4 = IPAddress.Parse("1.1.1.1");
+    private static readonly IPAddress PublicV6 = IPAddress.Parse("2606:4700:4700::1111");
+
+    [DllImport("iphlpapi.dll", ExactSpelling = true)]
+    private static extern uint GetBestInterfaceEx(byte[] destination, out uint interfaceIndex);
+
+    private static bool UsesOrdinaryRoute(IPAddress destination, int ownedIndex)
+    {
+        var socket = new IPEndPoint(destination, 0).Serialize();
+        var address = new byte[socket.Size];
+        for (var index = 0; index < address.Length; index++) address[index] = socket[index];
+        uint result = GetBestInterfaceEx(address, out uint selected);
+        if (result == 0) return selected != 0 && selected != (uint)ownedIndex;
+        // Machines with no native IPv6 route can still use the VPN for IPv6.
+        return destination.AddressFamily == AddressFamily.InterNetworkV6 && result is 1168 or 1231;
+    }
+
+    internal static async Task<bool> TryRestoreDirect(DaemonProcess daemon, CancellationToken cancel)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        deadline.CancelAfter(TimeSpan.FromSeconds(2));
+        try
+        {
+            await daemon.Control.ClearExit(deadline.Token);
+            while (true)
+            {
+                var state = await daemon.Control.ReadState(deadline.Token);
+                var adapter = NetworkInterface.GetAllNetworkInterfaces()
+                    .FirstOrDefault(value => value.Name == daemon.AdapterName)?.GetIPProperties();
+                if (state is { State: "Running", HasNodeKey: true, ExitId: "" } &&
+                    adapter?.GetIPv4Properties() is { } v4 &&
+                    adapter.GetIPv6Properties() is { } v6 &&
+                    adapter.DnsAddresses.Count == 0 &&
+                    UsesOrdinaryRoute(PublicV4, v4.Index) && UsesOrdinaryRoute(PublicV6, v6.Index))
+                    return true;
+                await Task.Delay(50, deadline.Token);
+            }
+        }
+        catch (Exception error) when (IsRecoverable(error, cancel) || error is NetworkInformationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRecoverable(Exception error, CancellationToken cancel) =>
+        !cancel.IsCancellationRequested && error is IOException or HttpRequestException or OperationCanceledException;
+
     internal static string StateFor(string root, string username) =>
         Path.Combine(root, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(username))));
 
@@ -22,8 +73,39 @@ internal static class ClientConnection
     }
 
     internal static async Task<(DaemonProcess Daemon, ExitProfile Profile)> Open(AccountClient account, string session, string state,
-        CancellationToken cancel, Action<string>? progress = null, Action<string, long>? timing = null)
+        CancellationToken cancel, Action<string>? progress = null, Action<string, long>? timing = null,
+        DaemonProcess? retained = null, ExitProfile? previous = null)
     {
+        if (retained is not null)
+        {
+            bool reused = false;
+            try
+            {
+                progress?.Invoke("RETAINED_ACCOUNT_PROFILE");
+                var profile = await account.Profile(session, false, cancel);
+                if (profile.Key is null && previous?.Coordinator == profile.Coordinator)
+                {
+                    try
+                    {
+                        var stateBefore = await retained.Control.ReadState(cancel);
+                        if (stateBefore is { State: "Running", HasNodeKey: true, ExitId: "" })
+                        {
+                            progress?.Invoke("RETAINED_SELECT_EXIT");
+                            await retained.Control.SelectExitNode(profile.NodeId, cancel);
+                            await ExitCheck.Verify(retained, profile, cancel);
+                            cancel.ThrowIfCancellationRequested();
+                            reused = true;
+                            return (retained, profile);
+                        }
+                    }
+                    catch (Exception error) when (IsRecoverable(error, cancel)) { }
+                }
+            }
+            finally
+            {
+                if (!reused) await retained.DisposeAsync();
+            }
+        }
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         var startedAt = Stopwatch.GetTimestamp();
         void Mark(string stage) => timing?.Invoke(stage, (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);

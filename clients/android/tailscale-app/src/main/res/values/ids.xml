@@ -5,5 +5,4 @@
     <item name="password" type="id" />
     <item name="login" type="id" />
     <item name="connect" type="id" />
-    <item name="disconnect" type="id" />
 </resources>

@@ -10,7 +10,6 @@ internal sealed class MainForm : Form
     private readonly Label _status = new() { Text = "请登录", AutoSize = true, Padding = new Padding(0, 12, 0, 12) };
     private readonly Button _login = new() { Text = "登录", AutoSize = true };
     private readonly Button _connect = new() { Text = "连接", Enabled = false, AutoSize = true };
-    private readonly Button _disconnect = new() { Text = "断开并恢复直连", Enabled = false, AutoSize = true };
     private readonly string _stateRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Morandi", "ProxyTailscale");
     private readonly CancellationTokenSource _lifetime = new();
@@ -19,6 +18,9 @@ internal sealed class MainForm : Form
     private string? _session;
     private string? _state;
     private DaemonProcess? _daemon;
+    private ExitProfile? _profile;
+    private bool _connected;
+    private Task? _disconnectTask;
     private bool _closing;
     private bool _closeApproved;
 
@@ -36,17 +38,24 @@ internal sealed class MainForm : Form
         layout.Controls.Add(_user);
         layout.Controls.Add(_password);
         var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
-        actions.Controls.AddRange([_login, _connect, _disconnect]);
+        actions.Controls.AddRange([_login, _connect]);
         layout.Controls.Add(actions);
         Controls.Add(layout);
         AcceptButton = _login;
         _login.Click += async (_, _) => await Login();
         _connect.Click += async (_, _) =>
         {
-            _connectTask = Connect();
-            await _connectTask;
+            if (_connected || _connecting is not null)
+            {
+                _disconnectTask = Disconnect(keepCoordinator: true);
+                await _disconnectTask;
+            }
+            else
+            {
+                _connectTask = Connect();
+                await _connectTask;
+            }
         };
-        _disconnect.Click += async (_, _) => await Disconnect();
         FormClosing += CloseRequested;
     }
 
@@ -77,16 +86,19 @@ internal sealed class MainForm : Form
 
     private async Task Connect()
     {
-        if (_session is null || _state is null || _connecting is not null || _daemon is not null) return;
+        if (_session is null || _state is null || _connecting is not null) return;
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _connecting = attempt;
-        _connect.Enabled = false;
-        _disconnect.Enabled = true;
+        _connect.Text = "取消连接";
         _status.Text = "正在连接";
         var elapsed = Stopwatch.StartNew();
         try
         {
-            (_daemon, _) = await ClientConnection.Open(_account, _session, _state, attempt.Token);
+            var retained = _daemon;
+            _daemon = null;
+            (_daemon, _profile) = await ClientConnection.Open(_account, _session, _state, attempt.Token,
+                retained: retained, previous: _profile);
+            _connected = true;
             _status.Text = $"已连接 · {elapsed.ElapsedMilliseconds} ms";
         }
         catch (Exception failure)
@@ -110,28 +122,36 @@ internal sealed class MainForm : Form
         finally
         {
             _connecting = null;
-            if (!_closing)
+            if (!_closing && !attempt.IsCancellationRequested)
             {
-                _connect.Enabled = _daemon is null && _session is not null;
-                _disconnect.Enabled = _daemon is not null;
+                _connect.Text = _connected ? "断开" : "连接";
+                _connect.Enabled = _session is not null;
             }
         }
     }
 
-    private async Task Disconnect()
+    private async Task Disconnect(bool keepCoordinator)
     {
         _connect.Enabled = false;
-        _disconnect.Enabled = false;
         _status.Text = "正在恢复直连";
         try
         {
             if (_connecting is not null) await _connecting.CancelAsync();
             if (_connectTask is not null) await _connectTask;
-            await StopDaemon();
+            if (!keepCoordinator || !_connected || _daemon is null ||
+                !await ClientConnection.TryRestoreDirect(_daemon, _lifetime.Token))
+                await StopDaemon();
+            _connected = false;
             _status.Text = "已断开 · 当前直连";
+            _connect.Text = "连接";
             _connect.Enabled = _session is not null && !_closing;
         }
-        catch (Exception failure) { _status.Text = Message(failure); }
+        catch (Exception failure)
+        {
+            _status.Text = Message(failure);
+            _connect.Text = "断开";
+            _connect.Enabled = !_closing;
+        }
     }
 
     private async Task StopDaemon()
@@ -148,7 +168,8 @@ internal sealed class MainForm : Form
         if (_closing) return;
         _closing = true;
         await _lifetime.CancelAsync();
-        await Disconnect();
+        if (_disconnectTask is not null) await _disconnectTask;
+        await Disconnect(keepCoordinator: false);
         _closeApproved = true;
         Close();
     }

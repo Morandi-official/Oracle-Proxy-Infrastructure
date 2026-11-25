@@ -146,14 +146,15 @@ internal sealed class LocalControl : IDisposable
             ExitNodeAllowLANAccessSet = true,
             WantRunning = true,
             WantRunningSet = true,
+            CorpDNS = true,
+            CorpDNSSet = true,
         }, cancellation);
     }
 
     internal Task Stop(CancellationToken cancellation = default) =>
         Send(HttpMethod.Patch, "prefs", new { WantRunning = false, WantRunningSet = true }, cancellation);
 
-#if RETAINED_COORDINATOR_ACCEPTANCE
-    internal Task ClearExitForProbe(CancellationToken cancellation) =>
+    internal Task ClearExit(CancellationToken cancellation) =>
         Send(HttpMethod.Patch, "prefs", new
         {
             ExitNodeID = "",
@@ -161,7 +162,12 @@ internal sealed class LocalControl : IDisposable
             ExitNodeIPSet = true,
             WantRunning = true,
             WantRunningSet = true,
+            CorpDNS = false,
+            CorpDNSSet = true,
         }, cancellation);
+
+#if RETAINED_COORDINATOR_ACCEPTANCE
+    internal Task ClearExitForProbe(CancellationToken cancellation) => ClearExit(cancellation);
 #endif
 
     internal async Task<string> ReadExitTransport(long nodeId, CancellationToken cancellation)

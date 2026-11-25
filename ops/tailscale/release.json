@@ -1,7 +1,5 @@
 {
   "version": "0.1.1",
-  "publish": false,
-  "android_only": true,
-  "android_latency_only": true,
-  "request": "measure-post-auth-android-peer-priming"
+  "publish": true,
+  "request": "unified-connect-button-and-automatic-reconnect"
 }

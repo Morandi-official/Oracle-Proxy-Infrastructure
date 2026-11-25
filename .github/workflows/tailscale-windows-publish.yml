@@ -58,14 +58,25 @@ jobs:
           ACCEPTANCE_RUN: ${{ steps.acceptance.outputs.run }}
         run: |
           set -euo pipefail
-          jq -e '
-            .accepted == true and .login_layout_verified == true and .warm_reconnects > 0 and
-            .abandoned_enrollment_recovered == true and .account_first_login_ms > 0
-          ' windows/ACCEPTANCE.json >/dev/null
+          check_speed_and_recovery() {
+            jq -e '
+              def within_second: type == "number" and . > 0 and . <= 1000;
+              .accepted == true and .login_layout_verified == true and .abandoned_enrollment_recovered == true and
+              (.account_first_login_ms | within_second) and (.account_warm_login_ms | within_second) and
+              ([.connections[] | select(.reused_coordinator == true) | .connect_ms] |
+                length >= 2 and all(.[]; within_second))
+            ' "$1" >/dev/null
+          }
+          dns=windows/ACCEPTANCE.json
+          proxy=windows/PROXY_COORDINATOR_ACCEPTANCE.json
+          jq -e '.coordinator_system_dns_blocked == true and .coordinator_dns_hint_ready == true' "$dns" >/dev/null
+          jq -e '.coordinator_proxy_only == true and .coordinator_proxy_hint_ready == true' "$proxy" >/dev/null
+          check_speed_and_recovery "$dns"
+          check_speed_and_recovery "$proxy"
           (cd windows && sha256sum --strict -c SHA256SUMS.txt)
           tag="tailscale-windows-v$VERSION"
           gh release create "$tag" "windows/Proxy-$VERSION-win-x64.zip" \
             "windows/Proxy-$VERSION-win-x64-setup.exe" windows/SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "Proxy Tailscale $VERSION for Windows" --latest=false \
-            --notes "Windows account authorization recovery and faster login-path selection. [Cloud acceptance](https://github.com/$GH_REPO/actions/runs/$ACCEPTANCE_RUN)"
+            --notes "The installed Windows build passed the DNS fallback and alternate coordinator route tests. [Cloud acceptance](https://github.com/$GH_REPO/actions/runs/$ACCEPTANCE_RUN)"
           gh release view "$tag" --json url,assets --jq '.url, (.assets[].url)'

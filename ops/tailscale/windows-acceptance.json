@@ -1,5 +1,4 @@
 {
   "version": "0.1.1",
-  "experiment": "retained-coordinator",
-  "request": "measure-retained-control-with-direct-routing"
+  "request": "verify-production-reconnect-with-windows-socket-route-selection"
 }

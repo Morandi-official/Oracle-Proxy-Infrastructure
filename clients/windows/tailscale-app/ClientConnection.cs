@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -13,24 +12,33 @@ internal static class ClientConnection
     private static readonly IPAddress PublicV4 = IPAddress.Parse("1.1.1.1");
     private static readonly IPAddress PublicV6 = IPAddress.Parse("2606:4700:4700::1111");
 
-    [DllImport("iphlpapi.dll", ExactSpelling = true)]
-    private static extern uint GetBestInterfaceEx(byte[] destination, out uint interfaceIndex);
-
-    private static bool UsesOrdinaryRoute(IPAddress destination, int ownedIndex)
+    private static bool UsesOrdinaryRoute(IPAddress destination, IPInterfaceProperties owned)
     {
-        var socket = new IPEndPoint(destination, 0).Serialize();
-        var address = new byte[socket.Size];
-        for (var index = 0; index < address.Length; index++) address[index] = socket[index];
-        uint result = GetBestInterfaceEx(address, out uint selected);
-        if (result == 0) return selected != 0 && selected != (uint)ownedIndex;
-        // Machines with no native IPv6 route can still use the VPN for IPv6.
-        return destination.AddressFamily == AddressFamily.InterNetworkV6 && result is 1168 or 1231;
+        using var socket = new Socket(destination.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
+        try
+        {
+            // Connecting a datagram socket selects a source address without sending a packet.
+            socket.Connect(new IPEndPoint(destination, 443));
+            return socket.LocalEndPoint is IPEndPoint source &&
+                !owned.UnicastAddresses.Any(value => value.Address.Equals(source.Address));
+        }
+        catch (SocketException error) when (destination.AddressFamily == AddressFamily.InterNetworkV6 &&
+            error.SocketErrorCode is SocketError.NetworkUnreachable or SocketError.HostUnreachable or
+                SocketError.AddressNotAvailable)
+        {
+            return true;
+        }
     }
 
-    internal static async Task<bool> TryRestoreDirect(DaemonProcess daemon, CancellationToken cancel)
+    private static bool HasConfiguredDns(IPInterfaceProperties owned) =>
+        owned.DnsAddresses.Any(value => value.ToString().Split('%', 2)[0] is not
+            ("fec0:0:0:ffff::1" or "fec0:0:0:ffff::2" or "fec0:0:0:ffff::3"));
+
+    internal static async Task<bool> TryRestoreDirect(DaemonProcess daemon, CancellationToken cancel, Action<string>? fallback = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         deadline.CancelAfter(TimeSpan.FromSeconds(2));
+        string waitingFor = "clear_exit";
         try
         {
             await daemon.Control.ClearExit(deadline.Token);
@@ -39,17 +47,24 @@ internal static class ClientConnection
                 var state = await daemon.Control.ReadState(deadline.Token);
                 var adapter = NetworkInterface.GetAllNetworkInterfaces()
                     .FirstOrDefault(value => value.Name == daemon.AdapterName)?.GetIPProperties();
-                if (state is { State: "Running", HasNodeKey: true, ExitId: "" } &&
-                    adapter?.GetIPv4Properties() is { } v4 &&
-                    adapter.GetIPv6Properties() is { } v6 &&
-                    adapter.DnsAddresses.Count == 0 &&
-                    UsesOrdinaryRoute(PublicV4, v4.Index) && UsesOrdinaryRoute(PublicV6, v6.Index))
+                if (state is not { State: "Running", HasNodeKey: true, ExitId: "" })
+                    waitingFor = "exit_selection";
+                else if (adapter is null)
+                    waitingFor = "owned_adapter";
+                else if (HasConfiguredDns(adapter))
+                    waitingFor = "owned_dns";
+                else if (!UsesOrdinaryRoute(PublicV4, adapter))
+                    waitingFor = "ipv4_route";
+                else if (!UsesOrdinaryRoute(PublicV6, adapter))
+                    waitingFor = "ipv6_route";
+                else
                     return true;
                 await Task.Delay(50, deadline.Token);
             }
         }
-        catch (Exception error) when (IsRecoverable(error, cancel) || error is NetworkInformationException)
+        catch (Exception error) when (IsRecoverable(error, cancel) || error is NetworkInformationException or SocketException)
         {
+            fallback?.Invoke(waitingFor);
             return false;
         }
     }

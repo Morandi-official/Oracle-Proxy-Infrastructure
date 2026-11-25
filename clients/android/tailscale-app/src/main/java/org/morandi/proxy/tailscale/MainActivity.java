@@ -34,7 +34,7 @@ public final class MainActivity extends Activity {
     private EditText password;
     private Button login;
     private Button connect;
-    private Button disconnect;
+    private boolean connectionRequested;
     private String token;
     private volatile LocalControl control;
     private volatile Network verifiedNetwork;
@@ -75,12 +75,12 @@ public final class MainActivity extends Activity {
         layout.addView(password);
         login = button(layout, "登录", this::login);
         login.setId(R.id.login);
-        connect = button(layout, "连接", this::requestVpn);
+        connect = button(layout, "连接", () -> {
+            if (connectionRequested) disconnect();
+            else requestVpn();
+        });
         connect.setId(R.id.connect);
-        disconnect = button(layout, "断开并恢复直连", this::disconnect);
-        disconnect.setId(R.id.disconnect);
         connect.setEnabled(false);
-        disconnect.setEnabled(false);
         var scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(layout);
@@ -162,21 +162,28 @@ public final class MainActivity extends Activity {
             item.setVisibility(session == null ? View.VISIBLE : View.GONE);
         }
         login.setEnabled(session == null);
+        connectionRequested = false;
+        connect.setText("连接");
         connect.setEnabled(session != null);
-        disconnect.setEnabled(false);
         status.setText(label);
     }
 
     private void requestVpn() {
         var permission = VpnService.prepare(this);
         if (permission == null) connect();
-        else startActivityForResult(permission, VPN_PERMISSION);
+        else {
+            connect.setEnabled(false);
+            startActivityForResult(permission, VPN_PERMISSION);
+        }
     }
 
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (request == VPN_PERMISSION && result == RESULT_OK) connect();
+        if (request == VPN_PERMISSION) {
+            if (result == RESULT_OK) connect();
+            else connect.setEnabled(token != null);
+        }
     }
 
     private void connect() {
@@ -184,8 +191,9 @@ public final class MainActivity extends Activity {
         int attempt = generation.incrementAndGet();
         long start = SystemClock.elapsedRealtime();
         String session = token;
-        connect.setEnabled(false);
-        disconnect.setEnabled(true);
+        connectionRequested = true;
+        connect.setText("取消连接");
+        connect.setEnabled(true);
         status.setText("正在连接");
         EngineHost.CLIENT_ACTIONS.execute(() -> {
             try {
@@ -239,6 +247,7 @@ public final class MainActivity extends Activity {
                     if (generation.get() != attempt) return;
                     verifiedNetwork = verified;
                     lastConnectionTiming = timing;
+                    connect.setText("断开");
                     status.setText("已连接 · " + elapsed + " ms");
                     if (!verified.equals(networks.getActiveNetwork())) recover(verified);
                 });
@@ -306,7 +315,7 @@ public final class MainActivity extends Activity {
         verifiedNetwork = null;
         accounts.cancelCurrentRequest();
         stopService(new Intent(this, BridgeVpnService.class));
-        disconnect.setEnabled(false);
+        connect.setEnabled(false);
         status.setText("正在恢复直连");
         EngineHost.CLIENT_ACTIONS.execute(() -> {
             stopEngine();
@@ -319,8 +328,9 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 if (generation.get() != attempt) return;
                 status.setText(closed ? DIRECT : "VPN 正在停止，请稍候");
-                connect.setEnabled(closed && token != null);
-                disconnect.setEnabled(!closed);
+                connectionRequested = !closed;
+                connect.setText(closed ? "连接" : "断开");
+                connect.setEnabled(!closed || token != null);
                 if (closed) stoppingNetwork = null;
             });
         });

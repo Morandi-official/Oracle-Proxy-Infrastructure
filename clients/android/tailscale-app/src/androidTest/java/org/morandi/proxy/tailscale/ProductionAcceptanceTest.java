@@ -143,14 +143,23 @@ public final class ProductionAcceptanceTest {
 
     private long disconnect(MainActivity activity) {
         long started = SystemClock.elapsedRealtime();
-        click(activity, R.id.disconnect);
+        assertEquals("断开", connectionButtonLabel(activity));
+        click(activity, R.id.connect);
         await("User disconnection removed the Android tunnel", () -> !hasVpn() && status(activity).equals(DIRECT));
+        assertEquals("连接", connectionButtonLabel(activity));
         return SystemClock.elapsedRealtime() - started;
     }
 
     private long awaitVerified(MainActivity activity) {
         await("Production authenticated WireGuard egress on IPv4 and IPv6", () -> status(activity).startsWith(CONNECTED));
         return Long.parseLong(status(activity).substring(CONNECTED.length()).replace(" ms", ""));
+    }
+
+    private String connectionButtonLabel(MainActivity activity) {
+        var value = new AtomicReference<String>();
+        instrumentation.runOnMainSync(() -> value.set(
+                activity.<TextView>findViewById(R.id.connect).getText().toString()));
+        return value.get();
     }
 
     private void click(MainActivity activity, int id) {

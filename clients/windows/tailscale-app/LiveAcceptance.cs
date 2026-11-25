@@ -28,6 +28,8 @@ internal static partial class LiveAcceptance
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(4));
         string? session = null;
         int result = 1;
+        DaemonProcess? retained = null;
+        ExitProfile? previous = null;
         try
         {
             if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
@@ -51,6 +53,7 @@ internal static partial class LiveAcceptance
 
             var connections = new List<object>();
             report["connections"] = connections;
+            int warmReconnects = 0;
             for (int run = 0; run < 3; run++)
             {
                 phase = run == 0 ? "FIRST_CONNECT" : "RECONNECT";
@@ -59,8 +62,14 @@ internal static partial class LiveAcceptance
                 string attempt = phase;
                 var timing = new ConcurrentDictionary<string, long>();
                 report["last_connection_milestones_ms"] = timing;
+                var supplied = retained;
+                retained = null;
                 var (daemon, profile) = await ClientConnection.Open(account, session, state, timeout.Token,
-                    stage => phase = attempt + "_" + stage, (stage, elapsed) => timing[stage] = elapsed);
+                    stage => phase = attempt + "_" + stage, (stage, elapsed) => timing[stage] = elapsed,
+                    retained: supplied, previous: previous);
+                bool reused = ReferenceEquals(supplied, daemon);
+                if (reused) warmReconnects++;
+                previous = profile;
                 long connectedMs = timer.ElapsedMilliseconds;
                 string initialTransport;
                 string transport;
@@ -94,27 +103,37 @@ internal static partial class LiveAcceptance
                         report["stability"] = new { samples = 10, interval_ms = 2000, failures = 0 };
                     }
                     transport = await daemon.Control.ReadExitTransport(profile.NodeId, timeout.Token);
+                    phase = "DISCONNECT";
+                    if (run < 2 && await ClientConnection.TryRestoreDirect(daemon, timeout.Token))
+                        retained = daemon;
                 }
                 finally
                 {
                     var stop = Stopwatch.StartNew();
-                    try { await daemon.DisposeAsync(); }
-                    catch { phase = "DISCONNECT_ENGINE"; throw; }
+                    if (retained is null)
+                    {
+                        try { await daemon.DisposeAsync(); }
+                        catch { phase = "DISCONNECT_ENGINE"; throw; }
+                    }
                     timing["disconnect_engine_duration"] = stop.ElapsedMilliseconds;
                 }
 
                 phase = "RESTORE_DIRECT";
                 var restoring = Stopwatch.StartNew();
                 var restored = await ObserveIPv4(web, timeout.Token);
+                await Dns.GetHostAddressesAsync("speed.cloudflare.com", timeout.Token);
                 if (!restored.Equals(direct)) throw new IOException("DIRECT_ROUTE_NOT_RESTORED");
                 connections.Add(new
                 {
                     started_at = startedAt,
-                    connect_ms = connectedMs, initial_transport = initialTransport, transport,
+                    connect_ms = connectedMs, reused_coordinator = reused, initial_transport = initialTransport, transport,
                     milestones_ms = timing,
                     direct_route_confirmation_ms = restoring.ElapsedMilliseconds,
                 });
             }
+            phase = "VERIFY_FAST_RECONNECT";
+            if (warmReconnects == 0) throw new IOException("WARM_RECONNECT_NOT_OBSERVED");
+            report["warm_reconnects"] = warmReconnects;
             report.Remove("last_connection_milestones_ms");
             result = 0;
         }
@@ -126,6 +145,15 @@ internal static partial class LiveAcceptance
         }
         finally
         {
+            if (retained is not null)
+            {
+                try { await retained.DisposeAsync(); }
+                catch
+                {
+                    report["retained_cleanup_failed"] = true;
+                    result = 1;
+                }
+            }
             if (session is not null)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(15));

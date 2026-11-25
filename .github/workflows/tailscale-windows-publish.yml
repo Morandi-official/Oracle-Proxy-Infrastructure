@@ -1,0 +1,68 @@
+name: Publish accepted Tailscale Windows client
+
+on:
+  push:
+    branches: [main]
+    paths: [ops/tailscale/windows-release.json]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tailscale-windows-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: acceptance
+        name: Verify the accepted Windows source and package run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          request=ops/tailscale/windows-release.json
+          version=$(jq -er '.version | strings | select(test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))' "$request")
+          run=$(jq -er '.accepted_run | tostring | select(test("^[1-9][0-9]*$"))' "$request")
+          api="repos/$GITHUB_REPOSITORY/actions/runs/$run"
+          tested=$(gh api "$api" | jq -er 'select(
+            .name == "Tailscale Windows packages and Oracle acceptance" and
+            .head_branch == "main" and .event == "push" and .conclusion == "success") | .head_sha')
+          gh api "$api/jobs?per_page=100" | jq -e '
+            [.jobs[] | select(.conclusion == "success") | .name] | contains(["build", "live"])' >/dev/null
+          git fetch --no-tags --depth=1 origin "$tested"
+          git diff --exit-code "$tested" "$GITHUB_SHA" -- clients/windows/tailscale clients/windows/tailscale-app ops/tailscale/windows .github/workflows/tailscale-windows.yml
+          test "$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' clients/windows/tailscale-app/Proxy.Tailscale.csproj)" = "$version"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: tailscale-windows-client
+          path: windows
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.acceptance.outputs.run }}
+      - name: Publish the verified Windows packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.acceptance.outputs.version }}
+          ACCEPTANCE_RUN: ${{ steps.acceptance.outputs.run }}
+        run: |
+          set -euo pipefail
+          jq -e '.accepted == true and .login_layout_verified == true and .warm_reconnects > 0' windows/ACCEPTANCE.json >/dev/null
+          (cd windows && sha256sum --strict -c SHA256SUMS.txt)
+          tag="tailscale-windows-v$VERSION"
+          gh release create "$tag" "windows/Proxy-$VERSION-win-x64.zip" \
+            "windows/Proxy-$VERSION-win-x64-setup.exe" windows/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "Proxy Tailscale $VERSION for Windows" --latest=false \
+            --notes "Windows login connectivity and rounded interface update. Cloud acceptance: https://github.com/$GH_REPO/actions/runs/$ACCEPTANCE_RUN"
+          gh release view "$tag" --json url,assets --jq '.url, (.assets[].url)'

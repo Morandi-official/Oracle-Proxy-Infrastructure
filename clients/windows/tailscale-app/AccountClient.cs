@@ -23,11 +23,14 @@ internal sealed class AccountClient : IDisposable
         MaxResponseContentBufferSize = 8192,
     };
     private Task<AccountRoute?>? _preparation;
+    private Task<WindowsProxySetting?>? _windowsProxy;
     private long _preparationStarted;
     private AccountRoute? _active;
 
     internal Version? ResponseVersion { get; private set; }
     internal string? LoginRoute => _active?.Kind;
+
+    private sealed record WindowsProxySetting(IWebProxy Handler, Uri? CoordinatorProxy);
 
     private sealed class AccountRoute(string kind, IWebProxy? proxy, Version version, HttpVersionPolicy policy,
         IPAddress? address = null, Uri? coordinatorProxy = null) : IDisposable
@@ -57,6 +60,13 @@ internal sealed class AccountClient : IDisposable
 
     internal async Task<string?> PrepareLogin(CancellationToken cancel)
     {
+        if (_preparation is { IsCompleted: true } prior &&
+            (Stopwatch.GetElapsedTime(_preparationStarted) > TimeSpan.FromSeconds(45) ||
+             prior.IsCompletedSuccessfully && prior.Result is null))
+        {
+            _preparation = null;
+            _ = DisposeWhenReady(prior);
+        }
         if (_preparation is null)
         {
             _preparationStarted = Stopwatch.GetTimestamp();
@@ -86,38 +96,36 @@ internal sealed class AccountClient : IDisposable
         }
         if (route is null) throw new IOException("ACCOUNT_ROUTE_TIMEOUT");
 
-        var payload = new { username, password, device };
-        try
-        {
-            cancel.ThrowIfCancellationRequested();
-            try
-            {
-                using var result = await Post("login", null, payload, cancel, route);
-                string token = ReadToken(result);
-                _active = route;
-                return token;
-            }
-            catch (IOException error) when (CanTryAnotherRoute(error))
-            {
-                // A stale connection or a network change can invalidate a warmed route.
-                // Verify another route before repeating the stateless sign-in request.
-                tryingAlternate?.Invoke();
-                route.Dispose();
-                route = await FindLoginRoute(cancel) ?? throw new IOException("ACCOUNT_ROUTE_TIMEOUT", error);
-                using var result = await Post("login", null, payload, cancel, route);
-                string token = ReadToken(result);
-                _active = route;
-                return token;
-            }
-        }
-        finally
-        {
-            if (!ReferenceEquals(route, _active)) route.Dispose();
-        }
+        _active = route;
+        using var result = await PostWithRouteRecovery("login", null, new { username, password, device }, cancel,
+            tryingAlternate);
+        return ReadToken(result);
     }
 
     private static bool CanTryAnotherRoute(IOException error) => error.Message is
-        "ACCOUNT_DNS_FAILED" or "ACCOUNT_CONNECT_FAILED" or "ACCOUNT_TIMEOUT" or "ACCOUNT_HTTP_FAILED" or "ACCOUNT_PROXY_FAILED";
+        "ACCOUNT_DNS_FAILED" or "ACCOUNT_CONNECT_FAILED" or "ACCOUNT_TIMEOUT" or "ACCOUNT_HTTP_FAILED"
+        or "ACCOUNT_PROXY_FAILED" or "ACCOUNT_TLS_FAILED";
+
+    private async Task<JsonDocument> PostWithRouteRecovery(string action, string? token, object value,
+        CancellationToken cancel, Action? tryingAlternate = null)
+    {
+        var route = _active ?? throw new IOException("LOGIN_REQUIRED");
+        try
+        {
+            return await Post(action, token, value, cancel, route);
+        }
+        catch (IOException error) when (!cancel.IsCancellationRequested && CanTryAnotherRoute(error))
+        {
+            tryingAlternate?.Invoke();
+            // Verify a replacement without credentials. Only replay after the
+            // first request has ended. The server reconciles interrupted enrollment.
+            var replacement = await FindLoginRoute(cancel, route.Kind)
+                ?? throw new IOException("ACCOUNT_ROUTE_TIMEOUT", error);
+            _active = replacement;
+            route.Dispose();
+            return await Post(action, token, value, cancel, replacement);
+        }
+    }
 
     internal CoordinatorRouteHint CoordinatorRoute => _active switch
     {
@@ -125,23 +133,28 @@ internal sealed class AccountClient : IDisposable
             new(Address.IdnHost, null, proxy, Direct: false),
         { Kind: "system-proxy" } or null =>
             new(Address.IdnHost, null, null, Direct: false),
-        var route => new(Address.IdnHost, route.AddressProof, null, Direct: true),
+        var route => new(Address.IdnHost, route.AddressProof, null, Direct: true,
+            FallbackProxy: _windowsProxy is { IsCompletedSuccessfully: true } resolved
+                ? resolved.Result?.CoordinatorProxy : null),
     };
 
-    private async Task<AccountRoute?> FindLoginRoute(CancellationToken cancel)
+    private async Task<AccountRoute?> FindLoginRoute(CancellationToken cancel, string? previous = null)
     {
         var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         limit.CancelAfter(AlternateDeadline);
+        // Proxy discovery also serves the native TCP coordinator. An account
+        // probe over QUIC can win without proving that its TCP route works.
+        var windowsProxy = _windowsProxy = ResolveWindowsProxy();
         var addresses = TryResolveAccountAddress(limit.Token);
         var pending = new List<Task<AccountRoute?>>
         {
-            TryRoute(new("direct", null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower), limit.Token),
-            TryEncryptedDns(addresses, http3: false, limit.Token),
-            TryWindowsProxy(limit.Token),
-            TryRoute(new("http1", null, HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact), limit.Token),
+            TryRoute(new("direct", null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower), limit.Token, previous),
+            TryEncryptedDns(addresses, http3: false, limit.Token, previous),
+            TryWindowsProxy(windowsProxy, limit.Token, previous),
+            TryRoute(new("http1", null, HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact), limit.Token, previous),
         };
         if (System.Net.Quic.QuicConnection.IsSupported)
-            pending.Add(TryEncryptedDns(addresses, http3: true, limit.Token));
+            pending.Add(TryEncryptedDns(addresses, http3: true, limit.Token, previous));
         AccountRoute? selected = null;
         try
         {
@@ -173,32 +186,48 @@ internal sealed class AccountClient : IDisposable
         }
     }
 
-    private async Task<AccountRoute?> TryWindowsProxy(CancellationToken cancel)
+    private static async Task<WindowsProxySetting?> ResolveWindowsProxy()
     {
         try
         {
             var proxy = HttpClient.DefaultProxy;
-            var endpoint = await Task.Run(() => proxy.IsBypassed(Address) ? null : proxy.GetProxy(Address), cancel)
-                .WaitAsync(TimeSpan.FromSeconds(3), cancel);
-            if (endpoint is null || endpoint == Address) return null;
+            var endpoint = await Task.Run(() => proxy.GetProxy(Address)).WaitAsync(TimeSpan.FromSeconds(3));
+            if (endpoint is null || endpoint == Address || !endpoint.IsAbsoluteUri) return null;
             var coordinatorProxy = endpoint.Scheme is "http" or "https" && endpoint.UserInfo.Length == 0 &&
                 endpoint.PathAndQuery == "/" && endpoint.Fragment.Length == 0 && proxy.Credentials is null
                 ? endpoint : null;
-            return await TryRoute(new("system-proxy", proxy, HttpVersion.Version20,
-                HttpVersionPolicy.RequestVersionOrLower, coordinatorProxy: coordinatorProxy), cancel);
+            return new(new WebProxy(endpoint) { Credentials = proxy.Credentials }, coordinatorProxy);
         }
-        catch (Exception error) when (error is TimeoutException or OperationCanceledException or HttpRequestException or IOException)
+        catch (Exception error) when (error is TimeoutException or OperationCanceledException or
+            HttpRequestException or IOException or ArgumentException)
         {
             return null;
         }
     }
 
-    private async Task<AccountRoute?> TryRoute(AccountRoute route, CancellationToken cancel)
+    private async Task<AccountRoute?> TryWindowsProxy(Task<WindowsProxySetting?> discovery, CancellationToken cancel,
+        string? previous)
+    {
+        try
+        {
+            var proxy = await discovery.WaitAsync(cancel);
+            if (proxy is null) return null;
+            return await TryRoute(new("system-proxy", proxy.Handler, HttpVersion.Version20,
+                HttpVersionPolicy.RequestVersionOrLower, coordinatorProxy: proxy.CoordinatorProxy), cancel, previous);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<AccountRoute?> TryRoute(AccountRoute route, CancellationToken cancel, string? previous = null)
     {
         // This native API check has no secret and is rejected before the login rate limit.
         bool verified = false;
         try
         {
+            if (route.Kind == previous) await Task.Delay(250, cancel);
             var probe = new { username = "proxy-route-check", password = "", device = new string('0', 64) };
             using var response = await Post("login", null, probe, cancel, route, recordProtocol: false);
             return null;
@@ -218,14 +247,15 @@ internal sealed class AccountClient : IDisposable
         }
     }
 
-    private async Task<AccountRoute?> TryEncryptedDns(Task<List<IPAddress>> addresses, bool http3, CancellationToken cancel)
+    private async Task<AccountRoute?> TryEncryptedDns(Task<List<IPAddress>> addresses, bool http3,
+        CancellationToken cancel, string? previous = null)
     {
         foreach (var ip in await addresses)
         {
             var route = http3
                 ? new AccountRoute("encrypted-dns-http3", null, HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact, ip)
                 : new AccountRoute("encrypted-dns-tcp", null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower, ip);
-            if (await TryRoute(route, cancel) is { } verified) return verified;
+            if (await TryRoute(route, cancel, previous) is { } verified) return verified;
         }
         return null;
     }
@@ -249,36 +279,59 @@ internal sealed class AccountClient : IDisposable
 
     private static async Task<List<IPAddress>> TryResolveAccountAddress(CancellationToken cancel)
     {
-        try { return await ResolveAccountAddress(cancel); }
+        using var probes = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        var pending = new List<Task<List<IPAddress>>>
+        {
+            ResolveAccountAddress("https://1.1.1.1/dns-query", null, probes.Token),
+            ResolveAccountAddress("https://8.8.8.8/resolve", "dns.google", probes.Token),
+        };
+        while (pending.Count > 0)
+        {
+            var finished = await Task.WhenAny(pending);
+            pending.Remove(finished);
+            var addresses = await finished;
+            if (addresses.Count == 0) continue;
+            probes.Cancel();
+            return addresses;
+        }
+        return [];
+    }
+
+    private static async Task<List<IPAddress>> ResolveAccountAddress(string endpoint, string? authority,
+        CancellationToken cancel)
+    {
+        // Only the fixed account hostname is sent to an authenticated resolver.
+        using var query = new HttpRequestMessage(HttpMethod.Get,
+            endpoint + "?type=A&name=" + Uri.EscapeDataString(Address.IdnHost));
+        query.Headers.Host = authority;
+        query.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
+        try
+        {
+            using var reply = await EncryptedDns.SendAsync(query, cancel);
+            reply.EnsureSuccessStatusCode();
+            using var result = JsonDocument.Parse(await reply.Content.ReadAsByteArrayAsync(cancel));
+            if (result.RootElement.ValueKind != JsonValueKind.Object ||
+                !result.RootElement.TryGetProperty("Status", out var status) || status.ValueKind != JsonValueKind.Number ||
+                !status.TryGetInt32(out int code) || code != 0 ||
+                !result.RootElement.TryGetProperty("Answer", out var answers) || answers.ValueKind != JsonValueKind.Array)
+                return [];
+
+            var addresses = new List<IPAddress>();
+            foreach (var answer in answers.EnumerateArray().Take(8))
+            {
+                if (answer.ValueKind == JsonValueKind.Object && answer.TryGetProperty("type", out var type) &&
+                    type.ValueKind == JsonValueKind.Number && type.TryGetInt32(out int kind) && kind == 1 &&
+                    answer.TryGetProperty("data", out var value) && value.ValueKind == JsonValueKind.String &&
+                    IPAddress.TryParse(value.GetString(), out var ip) && ip.AddressFamily == AddressFamily.InterNetwork &&
+                    IsPublicAddress(ip))
+                    addresses.Add(ip);
+            }
+            return addresses;
+        }
         catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException)
         {
             return [];
         }
-    }
-
-    private static async Task<List<IPAddress>> ResolveAccountAddress(CancellationToken cancel)
-    {
-        // Only the fixed account hostname is sent to an authenticated resolver.
-        using var query = new HttpRequestMessage(HttpMethod.Get,
-            "https://1.1.1.1/dns-query?type=A&name=" + Uri.EscapeDataString(Address.IdnHost));
-        query.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
-        using var reply = await EncryptedDns.SendAsync(query, cancel);
-        reply.EnsureSuccessStatusCode();
-        using var result = JsonDocument.Parse(await reply.Content.ReadAsByteArrayAsync(cancel));
-        if (!result.RootElement.TryGetProperty("Status", out var status) || !status.TryGetInt32(out int code) || code != 0 ||
-            !result.RootElement.TryGetProperty("Answer", out var answers) || answers.ValueKind != JsonValueKind.Array)
-            throw new IOException("ACCOUNT_ENCRYPTED_DNS_FAILED");
-
-        var addresses = new List<IPAddress>();
-        foreach (var answer in answers.EnumerateArray().Take(8))
-        {
-            if (answer.TryGetProperty("type", out var type) && type.TryGetInt32(out int kind) && kind == 1 &&
-                answer.TryGetProperty("data", out var value) && value.ValueKind == JsonValueKind.String &&
-                IPAddress.TryParse(value.GetString(), out var ip) && ip.AddressFamily == AddressFamily.InterNetwork &&
-                IsPublicAddress(ip))
-                addresses.Add(ip);
-        }
-        return addresses;
     }
 
     private static bool IsPublicAddress(IPAddress ip)
@@ -313,7 +366,7 @@ internal sealed class AccountClient : IDisposable
 
     private async Task<ExitProfile> ReadProfile(string action, string token, CancellationToken cancel)
     {
-        using var response = await Post(action, token, new { }, cancel);
+        using var response = await PostWithRouteRecovery(action, token, new { }, cancel);
         var data = response.RootElement;
         if (!Uri.TryCreate(ReadProfileString(data, "coordinator"), UriKind.Absolute, out var coordinator) ||
             coordinator.Scheme != Uri.UriSchemeHttps ||
@@ -337,7 +390,7 @@ internal sealed class AccountClient : IDisposable
 
     internal async Task Release(string token, CancellationToken cancel)
     {
-        using var response = await Post("release", token, new { }, cancel);
+        using var response = await PostWithRouteRecovery("release", token, new { }, cancel);
     }
 
     private async Task<JsonDocument> Post(string action, string? token, object value, CancellationToken cancel,

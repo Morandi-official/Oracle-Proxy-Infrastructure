@@ -160,6 +160,13 @@ jobs:
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -CoordinatorProxyOnly
+      - name: Verify QUIC login and native coordinator fallback while direct TCP is blocked
+        if: needs.build.outputs.coordinator_proxy_fault == 'true'
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -MixedCoordinatorRoute
       - uses: actions/upload-artifact@v4
         if: needs.build.outputs.experiment != 'retained-coordinator'
         with:

@@ -1,4 +1,4 @@
 {
   "version": "0.1.1",
-  "request": "verify-production-reconnect-with-windows-socket-route-selection"
+  "request": "verify-direct-https-before-retaining-coordination"
 }

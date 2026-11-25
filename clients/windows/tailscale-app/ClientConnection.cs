@@ -34,10 +34,15 @@ internal static class ClientConnection
         owned.DnsAddresses.Any(value => value.ToString().Split('%', 2)[0] is not
             ("fec0:0:0:ffff::1" or "fec0:0:0:ffff::2" or "fec0:0:0:ffff::3"));
 
-    internal static async Task<bool> TryRestoreDirect(DaemonProcess daemon, CancellationToken cancel, Action<string>? fallback = null)
+    internal static async Task<bool> TryRestoreDirect(DaemonProcess daemon, ExitProfile profile, CancellationToken cancel, Action<string>? fallback = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        deadline.CancelAfter(TimeSpan.FromSeconds(2));
+        deadline.CancelAfter(TimeSpan.FromSeconds(6));
+        using var web = new HttpClient(new SocketsHttpHandler
+        {
+            UseProxy = false, AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromMilliseconds(550),
+        }) { Timeout = TimeSpan.FromMilliseconds(900), MaxResponseContentBufferSize = 8192 };
+        web.DefaultRequestHeaders.ConnectionClose = true;
         string waitingFor = "clear_exit";
         try
         {
@@ -58,7 +63,20 @@ internal static class ClientConnection
                 else if (!UsesOrdinaryRoute(PublicV6, adapter))
                     waitingFor = "ipv6_route";
                 else
-                    return true;
+                {
+                    waitingFor = "direct_https";
+                    try
+                    {
+                        string trace = await web.GetStringAsync("https://1.1.1.1/cdn-cgi/trace", deadline.Token);
+                        string? address = trace.Split('\n').FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal));
+                        if (address is not null && IPAddress.TryParse(address[3..].Trim(), out var observed) &&
+                            observed.AddressFamily == AddressFamily.InterNetwork &&
+                            !observed.Equals(IPAddress.Parse(profile.IPv4)))
+                            return true;
+                    }
+                    catch (HttpRequestException) { }
+                    catch (OperationCanceledException) when (!deadline.IsCancellationRequested) { }
+                }
                 await Task.Delay(50, deadline.Token);
             }
         }

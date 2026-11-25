@@ -105,8 +105,10 @@ internal static partial class LiveAcceptance
                     }
                     transport = await daemon.Control.ReadExitTransport(profile.NodeId, timeout.Token);
                     phase = "DISCONNECT";
-                    if (run < 2 && await ClientConnection.TryRestoreDirect(daemon, timeout.Token, reason => directFallback = reason))
+                    var directTimer = Stopwatch.StartNew();
+                    if (run < 2 && await ClientConnection.TryRestoreDirect(daemon, profile, timeout.Token, reason => directFallback = reason))
                         retained = daemon;
+                    timing["direct_verification_duration"] = directTimer.ElapsedMilliseconds;
                 }
                 finally
                 {
@@ -122,6 +124,7 @@ internal static partial class LiveAcceptance
                 phase = "RESTORE_DIRECT";
                 var restoring = Stopwatch.StartNew();
                 var restored = await ObserveIPv4(web, timeout.Token);
+                phase = "RESTORE_DIRECT_DNS";
                 await Dns.GetHostAddressesAsync("speed.cloudflare.com", timeout.Token);
                 if (!restored.Equals(direct)) throw new IOException("DIRECT_ROUTE_NOT_RESTORED");
                 connections.Add(new

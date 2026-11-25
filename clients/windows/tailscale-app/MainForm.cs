@@ -139,7 +139,7 @@ internal sealed class MainForm : Form
             if (_connecting is not null) await _connecting.CancelAsync();
             if (_connectTask is not null) await _connectTask;
             if (!keepCoordinator || !_connected || _daemon is null ||
-                !await ClientConnection.TryRestoreDirect(_daemon, _lifetime.Token))
+                _profile is null || !await ClientConnection.TryRestoreDirect(_daemon, _profile, _lifetime.Token))
                 await StopDaemon();
             _connected = false;
             _status.Text = "已断开 · 当前直连";

@@ -1,18 +1,169 @@
+diff --git a/control/controlhttp/client.go b/control/controlhttp/client.go
+--- a/control/controlhttp/client.go
++++ b/control/controlhttp/client.go
+@@ -33,6 +33,7 @@
+ 	"net/netip"
+ 	"net/url"
+ 	"runtime"
++	"strings"
+ 	"sync/atomic"
+ 	"time"
+ 
+@@ -54,6 +55,55 @@
+ )
+ 
+ var stdDialer net.Dialer
++
++// IsProxyAppCoordinator restricts the dedicated Windows application's overrides
++// to the same hostname authenticated by its account client.
++func IsProxyAppCoordinator(host string) bool {
++	return host != "" && strings.EqualFold(host, envknob.String("TS_ORACLE_PROXY_TLS_HOST"))
++}
++
++// ProxyAppCoordinatorIP is the DNS address used by the verified account route.
++func ProxyAppCoordinatorIP(host string) netip.Addr {
++	if !IsProxyAppCoordinator(host) {
++		return netip.Addr{}
++	}
++	ip, _ := netip.ParseAddr(envknob.String("TS_ORACLE_PROXY_COORDINATOR_IP"))
++	return ip
++}
++
++// ConfigureProxyAppCoordinatorTransport shares the authenticated account route
++// for the coordinator and aligns HTTPS CONNECT's timeout with direct TLS.
++func ConfigureProxyAppCoordinatorTransport(tr *http.Transport, host string) {
++	if !IsProxyAppCoordinator(host) {
++		return
++	}
++	tr.TLSHandshakeTimeout = 22 * time.Second
++	var selected *url.URL
++	switch envknob.String("TS_ORACLE_PROXY_COORDINATOR_ROUTE") {
++	case "direct":
++	case "proxy":
++		endpoint, err := url.Parse(envknob.String("TS_ORACLE_PROXY_COORDINATOR_PROXY"))
++		if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
++			endpoint.User != nil || endpoint.Hostname() == "" ||
++			endpoint.RawQuery != "" || endpoint.Fragment != "" ||
++			(endpoint.Path != "" && endpoint.Path != "/") {
++			return
++		}
++		selected = endpoint
++	default:
++		return
++	}
++	fallback := tr.Proxy
++	tr.Proxy = func(req *http.Request) (*url.URL, error) {
++		if req.URL.Scheme == "https" && strings.EqualFold(req.URL.Hostname(), host) {
++			return selected, nil
++		}
++		if fallback != nil {
++			return fallback(req)
++		}
++		return nil, nil
++	}
++}
+ 
+ // Dial connects to the HTTP server at this Dialer's Host:HTTPPort, requests to
+ // switch to the Tailscale control protocol, and returns an established control
+@@ -404,6 +454,9 @@
+ // Only the provided ctx is used, not a.ctx.
+ func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, optAddr netip.Addr, optACEHost string, init []byte) (_ net.Conn, retErr error) {
+ 	var dns *dnscache.Resolver
++	if optACEHost == "" && !optAddr.IsValid() {
++		optAddr = ProxyAppCoordinatorIP(u.Hostname())
++	}
+ 
+ 	// If we were provided an address to dial, then create a resolver that just
+ 	// returns that value; otherwise, fall back to DNS.
+@@ -494,11 +547,15 @@
+ 	// care about the TLS security (because we just do the Noise crypto atop whatever
+ 	// connection we get, including HTTP port 80 plaintext) so this permits
+ 	// middleboxes to MITM their users. All they'll see is some Noise.
+-	tr.TLSClientConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+-		if err := verify(cs); err != nil && a.Logf != nil && !a.omitCertErrorLogging {
+-			a.Logf("warning: TLS cert verificication for %q failed: %v", a.Hostname, err)
+-		}
+-		return nil // regardless
++	if IsProxyAppCoordinator(u.Hostname()) {
++		ConfigureProxyAppCoordinatorTransport(tr, u.Hostname())
++	} else {
++		tr.TLSClientConfig.VerifyConnection = func(cs tls.ConnectionState) error {
++			if err := verify(cs); err != nil && a.Logf != nil && !a.omitCertErrorLogging {
++				a.Logf("warning: TLS cert verificication for %q failed: %v", a.Hostname, err)
++			}
++			return nil // regardless
++		}
+ 	}
+ 
+ 	tr.DialTLSContext = dnscache.TLSDialer(dialer, dns, tr.TLSClientConfig)
+diff --git a/control/controlclient/direct.go b/control/controlclient/direct.go
+--- a/control/controlclient/direct.go
++++ b/control/controlclient/direct.go
+@@ -21,6 +21,7 @@
+ 	"net"
+ 	"net/http"
+ 	"net/netip"
++	"net/url"
+ 	"os"
+ 	"reflect"
+ 	"runtime"
+@@ -31,6 +32,7 @@
+ 	"time"
+ 
+ 	"go4.org/mem"
++	"tailscale.com/control/controlhttp"
+ 	"tailscale.com/control/controlknobs"
+ 	"tailscale.com/control/ts2021"
+ 	"tailscale.com/envknob"
+@@ -328,6 +330,14 @@
+ 		LookupIPFallback: dnsfallback.MakeLookupFunc(opts.Logf, netMon),
+ 		Logf:             opts.Logf,
+ 	}
++	var coordinatorHost string
++	if coordinator, err := url.Parse(opts.ServerURL); err == nil {
++		coordinatorHost = coordinator.Hostname()
++		if ip := controlhttp.ProxyAppCoordinatorIP(coordinatorHost); ip.IsValid() {
++			dnsCache.SingleHost = coordinatorHost
++			dnsCache.SingleHostStaticResult = []netip.Addr{ip}
++		}
++	}
+ 
+ 	httpc := opts.HTTPTestClient
+ 	if httpc == nil && runtime.GOOS == "js" {
+@@ -353,6 +363,7 @@
+ 			tr.TLSClientConfig.RootCAs = opts.ExtraRootCAs
+ 		}
+ 		tr.TLSClientConfig = tlsdial.Config(opts.HealthTracker, tr.TLSClientConfig)
++		controlhttp.ConfigureProxyAppCoordinatorTransport(tr, coordinatorHost)
+ 		var dialFunc netx.DialFunc
+ 		dialFunc, interceptedDial = makeScreenTimeDetectingDialFunc(opts.Dialer.SystemDial)
+ 		tr.DialContext = dnscache.Dialer(dialFunc, dnsCache)
+diff --git a/control/ts2021/client.go b/control/ts2021/client.go
+--- a/control/ts2021/client.go
++++ b/control/ts2021/client.go
+@@ -231,6 +231,10 @@
+ 	// of 1000ms, give ourselves an extra 5 seconds to complete the
+ 	// handshake.
+ 	timeoutSec += 5
++	if controlhttp.IsProxyAppCoordinator(nc.host) {
++		// Cover the scoped TLS deadline and the Noise upgrade.
++		timeoutSec = max(timeoutSec, 28)
++	}
+ 
+ 	// Be extremely defensive and ensure that the timeout is in the range
+ 	// [5, 60] seconds (e.g. if we accidentally get a negative number).
 diff --git a/net/dnscache/dnscache.go b/net/dnscache/dnscache.go
 --- a/net/dnscache/dnscache.go
 +++ b/net/dnscache/dnscache.go
-@@ -673,7 +673,14 @@
+@@ -673,7 +673,11 @@
  		}
  		tlsConn := tls.Client(tcpConn, cfg)
  
 -		handshakeCtx, handshakeTimeoutCancel := context.WithTimeout(ctx, 5*time.Second)
-+		// Allow the configured Proxy coordinator to finish TLS on a slow path.
-+		// Keep the upstream deadline for every other host and never change verification.
 +		handshakeTimeout := 5 * time.Second
 +		if host != "" && host == envknob.String("TS_ORACLE_PROXY_TLS_HOST") {
 +			handshakeTimeout = 22 * time.Second
 +		}
-+
 +		handshakeCtx, handshakeTimeoutCancel := context.WithTimeout(ctx, handshakeTimeout)
  		defer handshakeTimeoutCancel()
  		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {

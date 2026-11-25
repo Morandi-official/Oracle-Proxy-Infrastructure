@@ -150,41 +150,26 @@ internal static class ClientConnection
             return result;
         }
 
-        // Let the account TLS request run while Windows starts the native engine.
-        async Task PrepareCoordinator(Task<ExitProfile> pending)
-        {
-            var authorized = await pending.ConfigureAwait(false);
-            var address = account.CoordinatorAddressProof(authorized.Coordinator);
-            if (address is null) return;
-            try
-            {
-                await DaemonProcess.CacheVerifiedCoordinatorAddress(state, authorized.Coordinator, address, attempt.Token);
-                Mark("coordinator_dns_hint_ready");
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                Mark("coordinator_dns_hint_unavailable");
-            }
-        }
-
         progress?.Invoke("ACCOUNT_PROFILE");
         var profileTask = Record(account.AuthorizeConnection(session, attempt.Token), "account_ready");
-        var coordinatorTask = PrepareCoordinator(profileTask);
+        var coordinator = account.CoordinatorRoute;
+        if (coordinator.Address is not null) Mark("coordinator_dns_hint_ready");
+        if (coordinator.Proxy is not null) Mark("coordinator_proxy_hint_ready");
         var daemonTask = Record(DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
-            state, attempt.Token, timing is null ? null : Mark, authorization: coordinatorTask), "daemon_ready");
+            state, attempt.Token, timing is null ? null : Mark, authorization: profileTask, coordinator: coordinator),
+            "daemon_ready");
         try
         {
             var profile = await profileTask;
             progress?.Invoke("DAEMON_PROFILE");
             var daemon = await daemonTask;
-            await coordinatorTask;
             if (profile.Key is not null)
             {
                 progress?.Invoke("ENROLLMENT_START");
                 await daemon.Control.Enroll(profile.Coordinator, profile.Key, attempt.Token);
                 Mark("enrollment_started");
                 using var registration = CancellationTokenSource.CreateLinkedTokenSource(attempt.Token);
-                registration.CancelAfter(TimeSpan.FromSeconds(45));
+                registration.CancelAfter(TimeSpan.FromSeconds(55));
                 bool nodeKeyReady = false;
                 try
                 {

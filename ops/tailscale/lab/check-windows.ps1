@@ -51,9 +51,12 @@ try {
         $patch = Join-Path $work 'coordinator-tls-timeout.patch'
         $utf8 = [Text.UTF8Encoding]::new($false)
         $originalPatch = (Resolve-Path -LiteralPath "$PSScriptRoot/../windows/coordinator-tls-timeout.patch").Path
-        $dnsCacheSource = Join-Path $source 'net/dnscache/dnscache.go'
         [IO.File]::WriteAllText($patch, [IO.File]::ReadAllText($originalPatch).Replace("`r`n", "`n"), $utf8)
-        [IO.File]::WriteAllText($dnsCacheSource, [IO.File]::ReadAllText($dnsCacheSource).Replace("`r`n", "`n"), $utf8)
+        foreach ($relative in @('net/dnscache/dnscache.go', 'control/controlhttp/client.go',
+                'control/controlclient/direct.go', 'control/ts2021/client.go')) {
+            $sourceFile = Join-Path $source $relative
+            [IO.File]::WriteAllText($sourceFile, [IO.File]::ReadAllText($sourceFile).Replace("`r`n", "`n"), $utf8)
+        }
         Push-Location $source
         try {
             & git -c core.autocrlf=false apply --check $patch
@@ -61,6 +64,9 @@ try {
             & git -c core.autocrlf=false apply $patch
             if ($LASTEXITCODE -ne 0) { throw 'COORDINATOR_TLS_PATCH_FAILED' }
             $env:CGO_ENABLED = '0'
+            Copy-Item -LiteralPath "$PSScriptRoot/../windows/coordinator-noise_test.go" -Destination 'control/ts2021/proxy_coordinator_test.go'
+            & go test -v -count=1 -timeout=90s -run '^TestProxyAppCoordinatorDelayedNoise$' ./control/ts2021
+            if ($LASTEXITCODE -ne 0) { throw 'COORDINATOR_DELAYED_NOISE_TEST_FAILED' }
             & go build -trimpath -buildvcs=false -ldflags "-s -w -X tailscale.com/version.shortStamp=$version -X tailscale.com/version.longStamp=$version-proxy.$($sourceCommit.Substring(0, 10))" -o $engine ./cmd/tailscaled
             if ($LASTEXITCODE -ne 0) { throw 'TAILSCALE_PINNED_SOURCE_BUILD_FAILED' }
         }

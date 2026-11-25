@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -12,6 +13,7 @@ internal static partial class LiveAcceptance
     private const string Username = "ORACLE_CLIENT_ACCEPTANCE_USERNAME";
     private const string Password = "ORACLE_CLIENT_ACCEPTANCE_PASSWORD";
     private const string Trace = "https://1.1.1.1/cdn-cgi/trace";
+    private const string PlainIPv4Trace = "https://api.ipify.org/";
     private const string Speed = "https://speed.cloudflare.com/";
     private const int TransferBytes = 10 * 1024 * 1024;
     private const int ParallelStreams = 4;
@@ -28,6 +30,7 @@ internal static partial class LiveAcceptance
         Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PROXY_ONLY", null);
         bool mixedCoordinatorRoute = Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_MIXED_COORDINATOR_ROUTE") == "true";
         Environment.SetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_MIXED_COORDINATOR_ROUTE", null);
+        string trace = mixedCoordinatorRoute ? PlainIPv4Trace : Trace;
         string phase = "START";
         var report = new Dictionary<string, object?>();
         using var account = new AccountClient();
@@ -53,8 +56,8 @@ internal static partial class LiveAcceptance
                 ConnectTimeout = TimeSpan.FromSeconds(8),
                 PooledConnectionLifetime = TimeSpan.FromSeconds(3),
             }) { Timeout = TimeSpan.FromSeconds(15), MaxResponseContentBufferSize = 8192 };
-            var direct = await ObserveIPv4(web, timeout.Token);
-            report["baseline"] = await Performance(web, direct, timeout.Token);
+            var direct = await ObserveIPv4(web, timeout.Token, trace);
+            report["baseline"] = await Performance(web, direct, timeout.Token, trace);
 
             string device = ClientConnection.Device(state);
             phase = "PREPARE_LOGIN";
@@ -172,10 +175,15 @@ internal static partial class LiveAcceptance
                             throw new IOException("COORDINATOR_PROXY_HINT_NOT_USED");
                         if (mixedCoordinatorRoute)
                         {
-                            bool fallbackProxyReady = account.CoordinatorRoute.FallbackProxy is not null;
+                            bool fallbackProxyReady = timing.ContainsKey("coordinator_fallback_proxy_hint_ready");
                             report["coordinator_fallback_proxy_hint_ready"] = fallbackProxyReady;
                             if (!fallbackProxyReady)
                                 throw new IOException("COORDINATOR_FALLBACK_PROXY_HINT_NOT_USED");
+                            bool backupProof = timing.ContainsKey("ipv4_backup_verified") &&
+                                timing.ContainsKey("ipv6_backup_verified");
+                            report["dual_stack_backup_proof_verified"] = backupProof;
+                            if (!backupProof)
+                                throw new IOException("DUAL_STACK_BACKUP_PROBE_NOT_USED");
                         }
                     }
                     phase = "VERIFY_SYSTEM_ROUTE";
@@ -190,17 +198,17 @@ internal static partial class LiveAcceptance
                         AllowAutoRedirect = false,
                         ConnectTimeout = TimeSpan.FromSeconds(8),
                     }) { Timeout = TimeSpan.FromSeconds(15), MaxResponseContentBufferSize = 8192 };
-                    await RequireIPv4(tunneled, expected, timeout.Token);
+                    await RequireIPv4(tunneled, expected, timeout.Token, trace);
                     initialTransport = await daemon.Control.ReadExitTransport(profile.NodeId, timeout.Token);
                     if (run == 0)
                     {
                         phase = "TUNNEL_PERFORMANCE";
-                        report["tunnel"] = await Performance(tunneled, expected, timeout.Token);
+                        report["tunnel"] = await Performance(tunneled, expected, timeout.Token, trace);
                         phase = "TUNNEL_STABILITY";
                         for (int sample = 0; sample < 10; sample++)
                         {
                             await Task.Delay(TimeSpan.FromSeconds(2), timeout.Token);
-                            await RequireIPv4(tunneled, expected, timeout.Token);
+                            await RequireIPv4(tunneled, expected, timeout.Token, trace);
                         }
                         report["stability"] = new { samples = 10, interval_ms = 2000, failures = 0 };
                     }
@@ -232,10 +240,7 @@ internal static partial class LiveAcceptance
 
                 phase = "RESTORE_DIRECT";
                 var restoring = Stopwatch.StartNew();
-                var restored = await ObserveIPv4(web, timeout.Token);
-                phase = "RESTORE_DIRECT_DNS";
-                await Dns.GetHostAddressesAsync("speed.cloudflare.com", timeout.Token);
-                if (!restored.Equals(direct)) throw new IOException("DIRECT_ROUTE_NOT_RESTORED");
+                await VerifyDirectRestoration(web, direct, timeout.Token, trace);
                 connections.Add(new
                 {
                     started_at = startedAt,
@@ -306,13 +311,13 @@ internal static partial class LiveAcceptance
             throw new IOException("LOGIN_LAYOUT_NOT_VERIFIED", failure);
     }
 
-    private static async Task<object> Performance(HttpClient web, IPAddress expected, CancellationToken cancel)
+    private static async Task<object> Performance(HttpClient web, IPAddress expected, CancellationToken cancel, string trace)
     {
         var latencies = new List<double>();
         for (int i = 0; i < 10; i++)
         {
             var sample = Stopwatch.StartNew();
-            await RequireIPv4(web, expected, cancel);
+            await RequireIPv4(web, expected, cancel, trace);
             latencies.Add(sample.Elapsed.TotalMilliseconds);
         }
         latencies.Sort();
@@ -333,7 +338,7 @@ internal static partial class LiveAcceptance
         const int uploadPerStream = 4 * 1024 * 1024;
         var multiDownload = await Aggregate(web, downloadPerStream, Download, cancel);
         var multiUpload = await Aggregate(web, uploadPerStream, Upload, cancel);
-        await RequireIPv4(web, expected, cancel);
+        await RequireIPv4(web, expected, cancel, trace);
         return new
         {
             bytes_each_direction = TransferBytes,
@@ -403,13 +408,40 @@ internal static partial class LiveAcceptance
     private static double Rate(int bytes, TimeSpan elapsed) =>
         Math.Round(8.0 * bytes / elapsed.TotalSeconds / 1_000_000, 2);
 
-    private static async Task RequireIPv4(HttpClient web, IPAddress expected, CancellationToken cancel)
+    private static async Task RequireIPv4(HttpClient web, IPAddress expected, CancellationToken cancel, string trace = Trace)
     {
-        if (!(await ObserveIPv4(web, cancel)).Equals(expected)) throw new IOException("UNEXPECTED_SYSTEM_EGRESS");
+        if (!(await ObserveIPv4(web, cancel, trace)).Equals(expected)) throw new IOException("UNEXPECTED_SYSTEM_EGRESS");
     }
 
-    private static Task<IPAddress> ObserveIPv4(HttpClient web, CancellationToken cancel) =>
-        ObserveIP(web, Trace, cancel);
+    private static Task<IPAddress> ObserveIPv4(HttpClient web, CancellationToken cancel, string trace = Trace) =>
+        ObserveIP(web, trace, cancel);
+
+    private static async Task VerifyDirectRestoration(HttpClient web, IPAddress expected, CancellationToken cancel, string trace)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        deadline.CancelAfter(TimeSpan.FromSeconds(6));
+        try
+        {
+            while (true)
+            {
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+                attempt.CancelAfter(TimeSpan.FromSeconds(1));
+                try
+                {
+                    if ((await ObserveIPv4(web, attempt.Token, trace)).Equals(expected) &&
+                        (await Dns.GetHostAddressesAsync("speed.cloudflare.com", attempt.Token)).Length > 0)
+                        return;
+                }
+                catch (Exception error) when (error is HttpRequestException or SocketException ||
+                    error is OperationCanceledException && !deadline.IsCancellationRequested) { }
+                await Task.Delay(100, deadline.Token);
+            }
+        }
+        catch (OperationCanceledException error) when (!cancel.IsCancellationRequested)
+        {
+            throw new IOException("DIRECT_ROUTE_NOT_RESTORED", error);
+        }
+    }
 
     private static async Task<IPAddress> ObserveIP(HttpClient web, string endpoint, CancellationToken cancel)
     {
@@ -418,8 +450,10 @@ internal static partial class LiveAcceptance
         using var response = await web.SendAsync(request, cancel);
         response.EnsureSuccessStatusCode();
         string body = await response.Content.ReadAsStringAsync(cancel);
-        var ip = body.Split('\n').FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal));
-        return ip is not null && IPAddress.TryParse(ip[3..].Trim(), out var address)
+        var ip = endpoint == PlainIPv4Trace
+            ? body.Trim()
+            : body.Split('\n').FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal))?[3..].Trim();
+        return IPAddress.TryParse(ip, out var address)
             ? address : throw new IOException("TRACE_RESPONSE_MISSING_IP");
     }
 }

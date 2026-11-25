@@ -235,7 +235,8 @@ internal sealed class MainForm : Form
 
     private static bool KnownMilestone(string step) => step is
         "account_ready" or "retained_account_ready" or "retained_exit_selected" or "coordinator_dns_hint_ready" or
-        "coordinator_proxy_hint_ready" or "daemon_spawned" or "daemon_ready" or "enrollment_started" or
+        "coordinator_proxy_hint_ready" or "coordinator_fallback_proxy_hint_ready" or "daemon_spawned" or
+        "daemon_ready" or "enrollment_started" or "ipv4_backup_verified" or "ipv6_backup_verified" or
         "node_key_ready" or "account_confirmed" or "persisted_node_key_ready" or "exit_selected" or "exit_map_ready";
 
     private void ShowSession(bool loggedIn)

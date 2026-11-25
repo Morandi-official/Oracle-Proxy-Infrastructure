@@ -135,6 +135,7 @@ internal static class ClientConnection
         var coordinator = account.CoordinatorRoute;
         if (coordinator.Address is not null) Mark("coordinator_dns_hint_ready");
         if (coordinator.Proxy is not null) Mark("coordinator_proxy_hint_ready");
+        if (coordinator.FallbackProxy is not null) Mark("coordinator_fallback_proxy_hint_ready");
         progress?.Invoke("DAEMON_PROFILE");
         var daemon = await DaemonProcess.Start(Path.Combine(AppContext.BaseDirectory, "engine", "tailscaled.exe"),
             state, cancel, timing is null ? null : Mark, coordinator: coordinator);

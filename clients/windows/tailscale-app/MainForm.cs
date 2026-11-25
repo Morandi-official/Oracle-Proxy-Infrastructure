@@ -180,7 +180,8 @@ internal sealed class MainForm : Form
             {
                 throw new IOException("DEVICE_FILE_UNAVAILABLE", error);
             }
-            _session = await _account.Login(username, _password.Text, device, _lifetime.Token);
+            _session = await _account.Login(username, _password.Text, device, _lifetime.Token,
+                () => { if (!_closing) SetStatus("正在尝试备用登录路径…"); });
             _password.Clear();
             _identity.Text = username;
             ShowSession(loggedIn: true);

@@ -8,16 +8,17 @@ namespace OracleProxy.Tailscale;
 
 internal sealed class AccountClient : IDisposable
 {
+    private static readonly TimeSpan AlternateDeadline = TimeSpan.FromSeconds(22);
     private static readonly Uri Address = new("https://vpn-admin.morandi.dpdns.org/api/tailscale/v1/");
     private static readonly HttpClient EncryptedDns = new(new SocketsHttpHandler
     {
         AllowAutoRedirect = false,
         UseCookies = false,
         UseProxy = false,
-        ConnectTimeout = TimeSpan.FromSeconds(3),
+        ConnectTimeout = TimeSpan.FromSeconds(5),
     })
     {
-        Timeout = TimeSpan.FromSeconds(4),
+        Timeout = TimeSpan.FromSeconds(8),
         MaxResponseContentBufferSize = 8192,
     };
     private readonly AccountRoute _direct = new(null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower);
@@ -26,7 +27,7 @@ internal sealed class AccountClient : IDisposable
     internal Version? ResponseVersion { get; private set; }
 
     private sealed class AccountRoute(IWebProxy? proxy, Version version, HttpVersionPolicy policy,
-        bool encryptedDns = false, IPAddress? http3Address = null) : IDisposable
+        bool encryptedDns = false, IPAddress? http3Address = null, bool slowPath = false) : IDisposable
     {
         internal Version Version { get; } = version;
         internal HttpVersionPolicy Policy { get; } = policy;
@@ -39,18 +40,19 @@ internal sealed class AccountClient : IDisposable
             UseProxy = proxy is not null,
             Proxy = proxy,
             ConnectCallback = encryptedDns ? ConnectThroughEncryptedDns : null,
-            ConnectTimeout = TimeSpan.FromSeconds(5),
+            ConnectTimeout = slowPath ? AlternateDeadline : TimeSpan.FromSeconds(5),
         })
         {
             BaseAddress = http3Address is null ? Address : new UriBuilder(Address) { Host = http3Address.ToString() }.Uri,
-            Timeout = TimeSpan.FromSeconds(12),
+            Timeout = slowPath ? AlternateDeadline : TimeSpan.FromSeconds(12),
             MaxResponseContentBufferSize = 16_384,
         };
 
         public void Dispose() => Http.Dispose();
     }
 
-    internal async Task<string> Login(string username, string password, string device, CancellationToken cancel)
+    internal async Task<string> Login(string username, string password, string device, CancellationToken cancel,
+        Action? tryingAlternate = null)
     {
         var payload = new { username, password, device };
         _alternate?.Dispose();
@@ -62,6 +64,7 @@ internal sealed class AccountClient : IDisposable
         }
         catch (IOException error) when (CanTryAnotherRoute(error))
         {
+            tryingAlternate?.Invoke();
             var route = await FindAlternate(cancel);
             if (route is null) throw;
             try
@@ -84,10 +87,10 @@ internal sealed class AccountClient : IDisposable
     private async Task<AccountRoute?> FindAlternate(CancellationToken cancel)
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        limit.CancelAfter(TimeSpan.FromSeconds(7));
+        limit.CancelAfter(AlternateDeadline);
         var pending = new List<Task<AccountRoute?>>
         {
-            TryRoute(new(null, HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact), limit.Token),
+            TryRoute(new(null, HttpVersion.Version11, HttpVersionPolicy.RequestVersionExact, slowPath: true), limit.Token),
             TryWindowsProxy(limit.Token),
             TryRoute(CreateEncryptedDnsRoute(), limit.Token),
         };
@@ -126,7 +129,7 @@ internal sealed class AccountClient : IDisposable
             var bypass = await Task.Run(() => proxy.IsBypassed(Address), cancel)
                 .WaitAsync(TimeSpan.FromSeconds(3), cancel);
             return bypass ? null : await TryRoute(
-                new(proxy, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower), cancel);
+                new(proxy, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower, slowPath: true), cancel);
         }
         catch (Exception error) when (error is TimeoutException or OperationCanceledException or HttpRequestException)
         {
@@ -161,7 +164,7 @@ internal sealed class AccountClient : IDisposable
     }
 
     private static AccountRoute CreateEncryptedDnsRoute() =>
-        new(null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower, encryptedDns: true);
+        new(null, HttpVersion.Version20, HttpVersionPolicy.RequestVersionOrLower, encryptedDns: true, slowPath: true);
 
     internal async Task VerifyEncryptedDnsLogin(string username, string password, string device, CancellationToken cancel)
     {
@@ -180,7 +183,7 @@ internal sealed class AccountClient : IDisposable
             foreach (var ip in addresses)
             {
                 var route = await TryRoute(new(null, HttpVersion.Version30, HttpVersionPolicy.RequestVersionExact,
-                    http3Address: ip), cancel);
+                    http3Address: ip, slowPath: true), cancel);
                 if (route is not null) return route;
             }
         }

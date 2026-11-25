@@ -1,5 +1,5 @@
 {
   "version": "0.1.1",
-  "publish": true,
-  "request": "unified-connect-button-and-automatic-reconnect"
+  "publish": false,
+  "request": "accept-unified-connect-toggle-and-automatic-reconnect"
 }

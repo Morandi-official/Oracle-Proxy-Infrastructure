@@ -150,18 +150,18 @@ jobs:
           $blocked = $env:SYSTEM_DNS_FAULT -ceq 'true'
           ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -RetentionExperiment:$retain -BlockSystemDns:$blocked
       - uses: actions/setup-python@v5
-        if: needs.build.outputs.coordinator_proxy_fault == 'true'
+        if: ${{ !cancelled() && needs.build.outputs.coordinator_proxy_fault == 'true' }}
         with:
           python-version: '3.12'
       - name: Verify installed login and real exit with only the alternate coordinator route
-        if: needs.build.outputs.coordinator_proxy_fault == 'true'
+        if: ${{ !cancelled() && needs.build.outputs.coordinator_proxy_fault == 'true' }}
         env:
           VERSION: ${{ needs.build.outputs.version }}
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
         run: ./ops/tailscale/windows/accept.ps1 -Version $env:VERSION -BundleDirectory ./dist/tailscale-windows -Live -CoordinatorProxyOnly
       - name: Verify QUIC login and native coordinator fallback while direct TCP is blocked
-        if: needs.build.outputs.coordinator_proxy_fault == 'true'
+        if: ${{ !cancelled() && needs.build.outputs.coordinator_proxy_fault == 'true' }}
         env:
           VERSION: ${{ needs.build.outputs.version }}
           ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}

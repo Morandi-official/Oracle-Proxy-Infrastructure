@@ -74,7 +74,7 @@ jobs:
           jq -e '.coordinator_system_dns_blocked == true and .coordinator_dns_hint_ready == true' "$dns" >/dev/null
           jq -e '.coordinator_proxy_only == true and .coordinator_proxy_hint_ready == true' "$proxy" >/dev/null
           jq -e '.coordinator_mixed_route == true and .account_login_route == "encrypted-dns-http3" and
-            .coordinator_fallback_proxy_hint_ready == true' "$mixed" >/dev/null
+            .coordinator_fallback_proxy_hint_ready == true and .dual_stack_backup_proof_verified == true' "$mixed" >/dev/null
           check_speed_and_recovery "$dns"
           check_speed_and_recovery "$proxy"
           check_speed_and_recovery "$mixed"

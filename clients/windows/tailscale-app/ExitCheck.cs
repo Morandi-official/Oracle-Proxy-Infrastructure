@@ -10,6 +10,7 @@ internal static class ExitCheck
 {
     private static readonly Uri V4 = new("https://1.1.1.1/cdn-cgi/trace");
     private static readonly Uri V6 = new("https://[2606:4700:4700::1111]/cdn-cgi/trace");
+    private static readonly Uri Backup = new("https://checkip.global.api.aws/");
 
     internal static async Task Verify(DaemonProcess daemon, ExitProfile profile, CancellationToken cancel,
         Action<string>? timing = null, bool slowCoordinator = false)
@@ -37,9 +38,9 @@ internal static class ExitCheck
             // attempt can retain a pending connect across the route change.
             await Task.WhenAll(
                 VerifyFamily(daemon.AdapterName, V4, profile.IPv4, AddressFamily.InterNetwork,
-                    timing is null ? null : () => timing("ipv4_verified"), limit.Token),
+                    "ipv4", timing, limit.Token),
                 VerifyFamily(daemon.AdapterName, V6, profile.IPv6, AddressFamily.InterNetworkV6,
-                    timing is null ? null : () => timing("ipv6_verified"), limit.Token));
+                    "ipv6", timing, limit.Token));
             var verified = await daemon.Control.ReadState(limit.Token);
             if (verified.State != "Running" || verified.ExitId != exit)
                 throw new IOException("EXIT_NOT_VERIFIED");
@@ -55,8 +56,9 @@ internal static class ExitCheck
             value => value.Name == name && value.OperationalStatus == OperationalStatus.Up);
 
     private static async Task VerifyFamily(string adapter, Uri target, string expected, AddressFamily family,
-        Action? verified, CancellationToken cancel)
+        string milestone, Action<string>? timing, CancellationToken cancel)
     {
+        var expectedAddress = IPAddress.Parse(expected);
         int probes = 0;
         while (true)
         {
@@ -69,13 +71,41 @@ internal static class ExitCheck
                 // Abort the first stalled socket promptly while interfaces settle.
                 // Later attempts retain the former budgets for slower networks.
                 bool first = probes++ == 0;
-                if (await Matches(source, target, IPAddress.Parse(expected), family, first, cancel))
+                var result = await Probe(source, target, expectedAddress, family, first, cancel);
+                cancel.ThrowIfCancellationRequested();
+                if (result.Verified)
                 {
-                    verified?.Invoke();
+                    timing?.Invoke($"{milestone}_verified");
+                    if (result.Backup)
+                        timing?.Invoke($"{milestone}_backup_verified");
                     return;
                 }
             }
             await Task.Delay(probes < 2 ? 25 : 125, cancel);
+        }
+    }
+
+    private static async Task<(bool Verified, bool Backup)> Probe(IPAddress source, Uri target, IPAddress expected,
+        AddressFamily family, bool first, CancellationToken cancel)
+    {
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        try
+        {
+            var primary = Matches(source, target, expected, family, first, attempt.Token);
+            if (await Task.WhenAny(primary, Task.Delay(250, attempt.Token)) == primary && await primary)
+                return (true, false);
+
+            cancel.ThrowIfCancellationRequested();
+            var backup = Matches(source, Backup, expected, family, first, attempt.Token);
+            var winner = await Task.WhenAny(primary, backup);
+            if (await winner)
+                return (true, winner == backup);
+
+            return winner == primary ? (await backup, true) : (await primary, false);
+        }
+        finally
+        {
+            attempt.Cancel();
         }
     }
 
@@ -85,13 +115,24 @@ internal static class ExitCheck
         using var http = new HttpClient(new SocketsHttpHandler
         {
             UseProxy = false, AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromMilliseconds(first ? 600 : 1500),
-            ConnectCallback = async (_, cancellation) =>
+            ConnectCallback = async (context, cancellation) =>
             {
                 var socket = new Socket(family, SocketType.Stream, ProtocolType.Tcp);
                 try
                 {
                     socket.Bind(new IPEndPoint(source, 0));
-                    await socket.ConnectAsync(new IPEndPoint(IPAddress.Parse(target.Host.Trim('[', ']')), 443), cancellation);
+                    var endpoint = context.DnsEndPoint;
+                    if (IPAddress.TryParse(endpoint.Host.Trim('[', ']'), out var literal))
+                    {
+                        await socket.ConnectAsync(new IPEndPoint(literal, endpoint.Port), cancellation);
+                    }
+                    else
+                    {
+                        var addresses = await Dns.GetHostAddressesAsync(endpoint.Host, family, cancellation);
+                        if (addresses.Length == 0)
+                            throw new SocketException((int)SocketError.HostNotFound);
+                        await socket.ConnectAsync(addresses, endpoint.Port, cancellation);
+                    }
                     return new NetworkStream(socket, ownsSocket: true);
                 }
                 catch { socket.Dispose(); throw; }
@@ -100,11 +141,11 @@ internal static class ExitCheck
         try
         {
             var result = await http.GetStringAsync(target, cancel);
-            var ip = result.Split('\n').FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal));
-            return ip is not null && IPAddress.TryParse(ip[3..].Trim(), out var observed)
-                && observed.Equals(expected);
+            var ip = target == Backup ? result.Trim() : result.Split('\n')
+                .FirstOrDefault(line => line.StartsWith("ip=", StringComparison.Ordinal))?[3..].Trim();
+            return IPAddress.TryParse(ip, out var observed) && observed.Equals(expected);
         }
         catch (HttpRequestException) { return false; }
-        catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { return false; }
+        catch (OperationCanceledException) { return false; }
     }
 }

@@ -136,7 +136,12 @@ try {
                 $env:HTTPS_PROXY = "http://127.0.0.1:$port"
                 $env:NO_PROXY = ''
                 if ($MixedCoordinatorRoute) {
+                    $rule = New-NetFirewallRule -Name ('ProxyAcceptance-' + [guid]::NewGuid().ToString('N')) `
+                        -DisplayName 'Disposable exit-probe fallback acceptance' -Program (Join-Path $desktop 'Proxy.exe') `
+                        -Direction Outbound -Action Block -RemoteAddress @('1.1.1.1', '2606:4700:4700::1111') -RemotePort 443 -Protocol TCP
+                    $firewall += $rule
                     $env:ORACLE_CLIENT_ACCEPTANCE_MIXED_COORDINATOR_ROUTE = 'true'
+                    Write-Output 'WINDOWS_PRIMARY_EXIT_PROBES_BLOCKED'
                     Write-Output 'WINDOWS_DIRECT_COORDINATOR_TCP_BLOCKED_QUIC_AVAILABLE'
                 }
                 else {

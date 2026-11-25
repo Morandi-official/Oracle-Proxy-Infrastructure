@@ -9,7 +9,7 @@ diff --git a/net/dnscache/dnscache.go b/net/dnscache/dnscache.go
 +		// Allow the configured Proxy coordinator to finish TLS on a slow path.
 +		// Keep the upstream deadline for every other host and never change verification.
 +		handshakeTimeout := 5 * time.Second
-+		if host == "vpn-admin.morandi.dpdns.org" {
++		if host != "" && host == envknob.String("TS_ORACLE_PROXY_TLS_HOST") {
 +			handshakeTimeout = 22 * time.Second
 +		}
 +

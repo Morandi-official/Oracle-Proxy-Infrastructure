@@ -24,7 +24,8 @@ internal sealed class DaemonProcess : IAsyncDisposable
 
     internal static async Task<DaemonProcess> Start(
         string trustedExecutable, string privateStateDirectory, CancellationToken cancellation,
-        Action<string>? timing = null, Task? authorization = null)
+        Action<string>? timing = null, Task? authorization = null,
+        string coordinatorTlsHost = "vpn-admin.morandi.dpdns.org")
     {
         var instance = Guid.NewGuid().ToString("N");
         var adapter = "ProxyTail-" + instance[..12];
@@ -45,6 +46,7 @@ internal sealed class DaemonProcess : IAsyncDisposable
         start.Environment["TS_NO_LOGS_NO_SUPPORT"] = "true";
         // The Oracle coordinator exposes Noise upgrades only on HTTPS.
         start.Environment["TS_FORCE_NOISE_443"] = "true";
+        start.Environment["TS_ORACLE_PROXY_TLS_HOST"] = coordinatorTlsHost;
         start.ArgumentList.Add(@"--socket=\\.\pipe\" + LocalControl.PipePrefix + instance);
         start.ArgumentList.Add("--state=" + Path.Combine(Path.GetFullPath(privateStateDirectory), "state"));
         start.ArgumentList.Add("--statedir=" + Path.GetFullPath(privateStateDirectory));

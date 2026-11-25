@@ -39,7 +39,7 @@ internal static class DnsRecoveryAcceptance
             }
         }
 
-        const string host = "vpn-admin.morandi.dpdns.org";
+        const string host = "proxy-coordinator.test";
         var coordinator = new Uri("https://" + host);
         var now = DateTimeOffset.UtcNow;
         using var rootKey = RSA.Create(2048);
@@ -74,7 +74,7 @@ internal static class DnsRecoveryAcceptance
             trust.Add(publicRoot);
             Console.WriteLine("DISPOSABLE_TEST_TLS_ROOT_READY");
             await DaemonProcess.CacheVerifiedCoordinatorAddress(state, coordinator, IPAddress.Loopback, limit.Token);
-            await using var daemon = await DaemonProcess.Start(trustedEngine, state, limit.Token);
+            await using var daemon = await DaemonProcess.Start(trustedEngine, state, limit.Token, coordinatorTlsHost: host);
             var observe = ObserveDelayedRequest(listener, host, keyPair, publicRoot, limit.Token);
             var credential = "hskey-auth-" + new string('a', 12) + "-" + new string('b', 64);
             await daemon.Control.Enroll(coordinator, credential, limit.Token);

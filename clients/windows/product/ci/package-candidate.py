@@ -111,7 +111,7 @@ def main():
     if not (vendor / 'modules.txt').is_file() or not licenses(vendor):
         raise RuntimeError('Complete vendored core sources and notices required')
     version = ET.parse(PRODUCT / 'OracleProxy.Product.csproj').findtext('./PropertyGroup/Version')
-    if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+', version):
+    if not isinstance(version, str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?', version):
         raise RuntimeError('Explicit candidate version required')
     sdk, runtime = runtime_material()
     metadata = {'channel': 'unsigned-acceptance-candidate', 'version': version,

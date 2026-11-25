@@ -43,6 +43,13 @@ class SetupBoundary(unittest.TestCase):
                 self.assertFalse(run.call_args.kwargs['check'])
                 self.assertEqual(run.call_args.kwargs['timeout'], 15)
 
+    def test_windows_version_accepts_restarted_semver_and_legacy_candidate(self):
+        self.assertEqual(build.windows_version_numbers('0.1.0'), '0.1.0.0')
+        self.assertEqual(build.windows_version_numbers('0.3.0-rc47'), '0.3.0.47')
+        for version in ('0.1', '0.1.0-extra', '0.1.0+source', '0.65536.0'):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                build.windows_version_numbers(version)
+
     def test_iscc_failure_or_non_compiler_output_is_not_accepted(self):
         for code, output in ((2, 'Inno Setup 6 Command-Line Compiler\n'), (1, 'Error: unsupported command\n'), (0, '')):
             with self.subTest(code=code, output=output), patch.object(build.subprocess, 'run', return_value=subprocess.CompletedProcess(['iscc', '/?'], code, output)):

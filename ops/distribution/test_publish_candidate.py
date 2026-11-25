@@ -4,7 +4,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from publish_candidate import REPO, read_archive, validate_run, validate_path_run, validate_manifest, validate_dotnet_runtime
+from publish_candidate import REPO, TAG, read_archive, validate_run, validate_path_run, validate_manifest, validate_dotnet_runtime
 
 
 class PublicationBoundaries(unittest.TestCase):
@@ -16,7 +16,7 @@ class PublicationBoundaries(unittest.TestCase):
                 {'name': 'Microsoft.NETCore.App', 'version': '10.0.14'},
                 {'name': 'Microsoft.WindowsDesktop.App', 'version': '10.0.14'}]}}
 
-    def test_runtime_metadata_requires_actual_exact_rc47_sdk_and_runtime(self):
+    def test_runtime_metadata_requires_actual_exact_sdk_and_runtime(self):
         metadata = self.runtime_metadata()
         validate_dotnet_runtime(metadata)
         reversed_frameworks = copy.deepcopy(metadata)
@@ -55,13 +55,14 @@ class PublicationBoundaries(unittest.TestCase):
             with self.subTest(frameworks=value), self.assertRaises(ValueError):
                 validate_dotnet_runtime(candidate)
 
-    def test_manifest_requires_two_distinct_exact_artifacts_and_rc47_source(self):
-        manifest={'version':'0.3.0-rc47','run_id':42,'uu_path_run_id':43,'source_revision':'a'*40,
+    def test_manifest_requires_two_distinct_exact_artifacts_and_wireguard_source(self):
+        self.assertEqual(TAG, 'wireguard-windows-v0.1.0')
+        manifest={'version':'0.1.0','run_id':42,'uu_path_run_id':43,'source_revision':'a'*40,
                   'artifacts':[{'id':1,'sha256':'b'*64},{'id':2,'sha256':'c'*64}]}
         validate_manifest(manifest)
         variants=[dict(manifest,artifacts=[]),dict(manifest,artifacts=manifest['artifacts'][:1]),
                   dict(manifest,artifacts=manifest['artifacts']*2),dict(manifest,artifacts=[manifest['artifacts'][0]]*2),
-                  dict(manifest,source_revision='main'),dict(manifest,run_id=True),dict(manifest,version='0.3.0-rc9'),
+                  dict(manifest,source_revision='main'),dict(manifest,run_id=True),dict(manifest,version='0.3.0-rc47'),
                   dict(manifest,uu_path_run_id=None),dict(manifest,uu_path_run_id=True),dict(manifest,uu_path_run_id=0),
                   dict(manifest,uu_path_run_id=42),dict(manifest,workflow_override='untrusted')]
         missing=copy.deepcopy(manifest);del missing['uu_path_run_id'];variants.append(missing)

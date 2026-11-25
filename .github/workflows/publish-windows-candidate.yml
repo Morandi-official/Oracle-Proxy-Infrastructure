@@ -1,4 +1,4 @@
-name: Publish verified Windows rc47 prerelease
+name: Publish verified Windows WireGuard prerelease
 on:
   pull_request:
     paths: ['ops/distribution/**', '.github/workflows/publish-windows-candidate.yml']
@@ -12,16 +12,26 @@ jobs:
   check-pinned-acceptance:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      candidate: ${{ steps.manifest.outputs.present }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s ops/distribution -p 'test_*.py' -v
+      - id: manifest
+        run: |
+          if [[ -f ops/distribution/windows-wireguard-0.1.0.json ]]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
       - run: python3 ops/distribution/publish_candidate.py --check
+        if: steps.manifest.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-pinned-acceptance.outputs.candidate == 'true'
     needs: check-pinned-acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -29,7 +39,7 @@ jobs:
       contents: write
       actions: read
     concurrency:
-      group: oracle-proxy-rc47-publication
+      group: oracle-proxy-wireguard-windows-publication
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4

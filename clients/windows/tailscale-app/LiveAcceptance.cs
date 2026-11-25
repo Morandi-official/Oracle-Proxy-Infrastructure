@@ -60,6 +60,8 @@ internal static partial class LiveAcceptance
             catch (IOException error) when (error.Message == "INVALID_CREDENTIALS") { }
             phase = "LOGIN";
             session = await account.Login(username, password, device, timeout.Token);
+            report["account_login_http"] = account.ResponseVersion?.ToString();
+            report["account_http3_post_verified"] = await account.VerifyHttp3LoginRoute(timeout.Token);
             password = null;
 
             var connections = new List<object>();

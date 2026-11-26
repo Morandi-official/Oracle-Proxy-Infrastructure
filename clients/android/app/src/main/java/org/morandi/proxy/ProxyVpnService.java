@@ -21,6 +21,8 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     private static final String CHANNEL = "proxy_vpn";
     private static final int NOTIFICATION = 7721;
     private static final String START = "org.morandi.proxy.VPN_START";
+    private static final String START_GENERATION = "start_generation";
+    private static final String FOREGROUND_REQUIRED = "foreground_required";
     private static final String DISCONNECT = "org.morandi.proxy.VPN_DISCONNECT";
     private static final long START_TIMEOUT_MS = 2_500;
     private static final long STOP_TIMEOUT_MS = 1_500;
@@ -28,8 +30,10 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     private static final AtomicBoolean PREPARING_NOTIFICATION = new AtomicBoolean();
     private static volatile Notification notificationTemplate;
     private static ProxyVpnService live;
+    private static long sequence = SystemClock.elapsedRealtimeNanos();
+    private static long requestedGeneration;
     private static boolean startFailed;
-    private boolean foreground;
+    private long foregroundGeneration;
 
     static void prepareNotification(Context context) {
         if (notificationTemplate != null || !PREPARING_NOTIFICATION.compareAndSet(false, true)) {
@@ -59,12 +63,16 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     }
 
     private static long requestStart(Context context, boolean requireForeground) throws IOException {
+        long generation;
         synchronized (LIFECYCLE) {
+            generation = ++sequence;
+            requestedGeneration = generation;
             startFailed = false;
         }
         long deadline = SystemClock.elapsedRealtime() + START_TIMEOUT_MS;
         try {
-            Intent intent = new Intent(context, ProxyVpnService.class).setAction(START);
+            Intent intent = new Intent(context, ProxyVpnService.class).setAction(START)
+                    .putExtra(START_GENERATION, generation).putExtra(FOREGROUND_REQUIRED, requireForeground);
             if (requireForeground) {
                 context.startForegroundService(intent);
             } else {
@@ -83,7 +91,7 @@ public final class ProxyVpnService extends GoBackend.VpnService {
             throws IOException, InterruptedException {
         synchronized (LIFECYCLE) {
             while (!callback.cancelled() && !startFailed) {
-                if (live != null && live.foreground) {
+                if (live != null && requestedGeneration != 0 && live.foregroundGeneration == requestedGeneration) {
                     return;
                 }
                 long remaining = deadline - SystemClock.elapsedRealtime();
@@ -100,6 +108,10 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     }
 
     static boolean stop(Context context) {
+        synchronized (LIFECYCLE) {
+            requestedGeneration = 0;
+            LIFECYCLE.notifyAll();
+        }
         context.stopService(new Intent(context, ProxyVpnService.class));
         long deadline = SystemClock.elapsedRealtime() + STOP_TIMEOUT_MS;
         // GoBackend's singleton is reset on the main thread during onDestroy.
@@ -161,7 +173,20 @@ public final class ProxyVpnService extends GoBackend.VpnService {
             stopSelf();
             return START_NOT_STICKY;
         }
+        long generation = intent.getLongExtra(START_GENERATION, 0);
+        boolean current;
+        synchronized (LIFECYCLE) {
+            current = generation != 0 && generation == requestedGeneration;
+        }
+        // A cancelled preparation can already have an onStartCommand posted
+        // on Android's main thread. Stop only this startId if it arrives late.
+        if (!current && !intent.getBooleanExtra(FOREGROUND_REQUIRED, false)) {
+            stopSelfResult(startId);
+            return START_NOT_STICKY;
+        }
         try {
+            // Even a superseded startForegroundService request has to promote
+            // before stopping; a normal preparation above has no such contract.
             Notification notification = notification(this).clone();
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(NOTIFICATION, notification,
@@ -170,16 +195,21 @@ public final class ProxyVpnService extends GoBackend.VpnService {
                 startForeground(NOTIFICATION, notification);
             }
             synchronized (LIFECYCLE) {
-                foreground = true;
-                LIFECYCLE.notifyAll();
+                if (generation != 0 && generation == requestedGeneration) {
+                    foregroundGeneration = generation;
+                    LIFECYCLE.notifyAll();
+                    return START_NOT_STICKY;
+                }
             }
         } catch (RuntimeException error) {
             synchronized (LIFECYCLE) {
-                startFailed = true;
-                LIFECYCLE.notifyAll();
+                if (generation == requestedGeneration) {
+                    startFailed = true;
+                    LIFECYCLE.notifyAll();
+                }
             }
-            stopSelf();
         }
+        stopSelfResult(startId);
         return START_NOT_STICKY;
     }
 
@@ -214,7 +244,7 @@ public final class ProxyVpnService extends GoBackend.VpnService {
 
     @Override public void onDestroy() {
         synchronized (LIFECYCLE) {
-            foreground = false;
+            foregroundGeneration = 0;
         }
         stopForeground(STOP_FOREGROUND_REMOVE);
         super.onDestroy();

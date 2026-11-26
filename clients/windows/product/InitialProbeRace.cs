@@ -15,10 +15,25 @@ internal static class InitialProbeRace
     }
     internal static async Task<VerifiedExit> Verify(Task<VerifiedExit?>? accelerated,Func<CancellationToken,Task<VerifiedExit>> fallback,CancellationToken stop)
     {
+        stop.ThrowIfCancellationRequested();
+        if(accelerated is null)return await fallback(stop);
+
+        // The core is already starting two QUIC handshakes inside WireGuard.
+        // Stagger the two TCP/TLS handshakes on the same cold path. If the
+        // core reports unavailable, start HTTPS immediately.
         using var losing=CancellationTokenSource.CreateLinkedTokenSource(stop);
+        Task headStart=Task.Delay(100,losing.Token);
+        if(await Task.WhenAny(accelerated,headStart).WaitAsync(stop)==accelerated){
+            if(await accelerated is VerifiedExit ready){
+                losing.Cancel();
+                return ready;
+            }
+            losing.Cancel();
+            return await fallback(stop);
+        }
+        stop.ThrowIfCancellationRequested();
         Task<VerifiedExit> tcp=fallback(losing.Token);
         try{
-            if(accelerated is null)return await tcp;
             Task first=await Task.WhenAny((Task)accelerated,tcp).WaitAsync(stop);
             if(first==tcp){
                 try{return await tcp;}

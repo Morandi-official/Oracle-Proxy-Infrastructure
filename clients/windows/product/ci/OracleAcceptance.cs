@@ -264,7 +264,7 @@ internal static class OracleAcceptance
         }
         public void Dispose()=>Set(_index,_original);
     }
-    private static async Task SampleDownload(string path,OracleNetworkPerformance.DownloadWindow? window=null)
+    private static async Task SampleDownload(string path,OracleNetworkPerformance.TransferWindow? window=null)
     {
         bool complete=false;
         try{
@@ -278,7 +278,7 @@ internal static class OracleAcceptance
             await using var stream=await response.Content.ReadAsStreamAsync(timeout.Token);
             byte[] buffer=new byte[32768];int total=0,read;
             while((read=await stream.ReadAsync(buffer.AsMemory(0,Math.Min(buffer.Length,limit+1-total)),timeout.Token))>0){
-                window?.BodyChunk();total+=read;if(total>limit)break;
+                window?.Progress();total+=read;if(total>limit)break;
             }
             if(total!=limit)throw new IOException("THROUGHPUT_SAMPLE_SIZE_MISMATCH");
             complete=true;
@@ -302,8 +302,9 @@ internal static class OracleAcceptance
         await OracleNetworkPerformance.Measure(targets,allowedExits,tunneled,index);
         // Reuse the existing bounded download so loaded sampling costs only
         // small STUN packets rather than another bulk transfer.
-        var window=new OracleNetworkPerformance.DownloadWindow();
+        var window=new OracleNetworkPerformance.TransferWindow();
         await Task.WhenAll(SampleDownload(route,window),OracleNetworkPerformance.Measure(targets,allowedExits,tunneled,index,window));
+        if(tunneled)await OracleNetworkPerformance.MeasureTransfers(targets,allowedExits,index);
         Check(PathMatches(await Send("Status")),"REAL_NETWORK_RTT_"+route+"_STATE_AFTER");
     }
     private static async Task BulkDownload()

@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -31,7 +32,44 @@ class ClientApi {
     private Network reusablePhysicalNetwork;
     private volatile PasswordTiming lastPasswordTiming;
     private enum Warmup { NONE, RUNNING, READY, UNAVAILABLE }
-    private volatile Warmup loginWarmup = Warmup.NONE;
+    private final AtomicReference<LoginWarmup> loginWarmup = new AtomicReference<>();
+
+    // One offer per visible sign-in screen. The click can cancel a queued GET
+    // even while it is selecting a Network. Only the GET worker owns its socket.
+    static final class LoginWarmup {
+        private volatile Warmup state = Warmup.NONE;
+        private boolean pending = true;
+
+        synchronized boolean pending() { return pending; }
+
+        synchronized boolean begin() {
+            if (!pending) return false;
+            pending = false;
+            state = Warmup.RUNNING;
+            return true;
+        }
+
+        synchronized void cancelPending() { pending = false; }
+
+        private synchronized void finish(boolean reusable) {
+            if (pending || state == Warmup.RUNNING) {
+                pending = false;
+                state = reusable ? Warmup.READY : Warmup.UNAVAILABLE;
+            }
+        }
+    }
+
+    LoginWarmup offerLoginWarmup() {
+        LoginWarmup offer = new LoginWarmup();
+        LoginWarmup previous = loginWarmup.getAndSet(offer);
+        if (previous != null) previous.cancelPending();
+        return offer;
+    }
+
+    void cancelPendingLoginWarmup() {
+        LoginWarmup offer = loginWarmup.get();
+        if (offer != null) offer.cancelPending();
+    }
 
     record PasswordTiming(long streamOpenMs, long uploadMs, long responseHeadersMs,
                           long responseBodyMs, long networkSelectMs, long configureMs, long outputOpenMs,
@@ -62,7 +100,8 @@ class ClientApi {
         long streamOpened = 0;
         long requestWritten = 0;
         long outputRequested = 0;
-        Warmup warmupAtStart = loginWarmup;
+        LoginWarmup offered = loginWarmup.get();
+        Warmup warmupAtStart = offered == null ? Warmup.NONE : offered.state;
         Warmup warmupAtOutput = warmupAtStart;
         if (passwordRequest) {
             lastPasswordTiming = null;
@@ -95,7 +134,7 @@ class ClientApi {
                 connection.setDoOutput(true);
                 if (passwordRequest) {
                     outputRequested = SystemClock.elapsedRealtime();
-                    warmupAtOutput = loginWarmup;
+                    warmupAtOutput = offered == null ? Warmup.NONE : offered.state;
                 }
                 try (var output = connection.getOutputStream()) {
                     if (passwordRequest) {
@@ -144,8 +183,8 @@ class ClientApi {
         }
     }
 
-    void warmLoginConnection() {
-        loginWarmup = Warmup.RUNNING;
+    void warmLoginConnection(LoginWarmup offer) {
+        if (!offer.pending()) return;
         HttpsURLConnection connection = null;
         boolean responseConsumed = false;
         try {
@@ -159,6 +198,7 @@ class ClientApi {
             connection.setUseCaches(false);
             connection.setConnectTimeout(1_500);
             connection.setReadTimeout(1_500);
+            if (!offer.begin()) return;
             // With no bearer this endpoint returns before fetching account data.
             // Drain that bounded response so the TLS connection can be reused.
             if (connection.getResponseCode() == 401) {
@@ -171,7 +211,7 @@ class ClientApi {
         } catch (Exception ignored) {
             // Login does not wait for this anonymous request and sends credentials only once.
         } finally {
-            loginWarmup = responseConsumed ? Warmup.READY : Warmup.UNAVAILABLE;
+            offer.finish(responseConsumed);
             if (connection != null && !responseConsumed) {
                 connection.disconnect();
             }

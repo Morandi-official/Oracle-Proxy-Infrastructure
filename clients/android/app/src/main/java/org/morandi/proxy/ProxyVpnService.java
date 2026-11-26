@@ -235,12 +235,32 @@ public final class ProxyVpnService extends GoBackend.VpnService {
                         if (address.getAddress() instanceof Inet4Address) carrierInode4 = inode;
                         if (address.getAddress() instanceof Inet6Address) carrierInode6 = inode;
                     }
+                    logCarrierReceiveOptionsForTest(copy.getFd(), address.getAddress() instanceof Inet6Address);
                 }
             } catch (IOException | ErrnoException | RuntimeException unavailable) {
                 // Socket protection itself succeeded. Diagnostics are optional.
             }
         }
         return protectedFromTunnel;
+    }
+
+    // Observes a duplicate of an already-protected FD only during load acceptance.
+    private static native int[] carrierReceiveOptionsForTest(int fd);
+
+    private static void logCarrierReceiveOptionsForTest(int fd, boolean ipv6) {
+        int receiveBytes = -1;
+        int gro = -1;
+        try {
+            int[] options = carrierReceiveOptionsForTest(fd);
+            if (options != null && options.length == 2) {
+                receiveBytes = options[0];
+                gro = options[1];
+            }
+        } catch (UnsatisfiedLinkError unavailable) {
+            // Stock upstream libraries on 32-bit devices do not include this observation.
+        }
+        Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CARRIER_SOCKET_" + (ipv6 ? "V6" : "V4")
+                + "=RCVBUF_BYTES:" + receiveBytes + ";UDP_GRO:" + gro);
     }
 
     static long[] carrierInodesForTest() {

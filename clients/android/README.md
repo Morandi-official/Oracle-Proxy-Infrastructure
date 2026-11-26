@@ -19,7 +19,7 @@ If a network handover interrupts exit verification, Proxy closes the unsuccessfu
 
 ## Build and test
 
-Use JDK 17, Gradle 8.13, Android SDK Platform 36 and Android Build Tools 36.0.0.
+Use JDK 17, Gradle 8.13, Android SDK Platform 36, Android Build Tools 36.0.0, NDK 27.0.12077973, Go 1.24.3, Python 3 and Git. The regular Gradle build verifies WireGuard Android 1.0.20260102 and rebuilds its ARM64 and x86-64 JNI libraries with Android UDP batch reads. The APK records module checksums and license texts under `assets/wireguard-native/`.
 
 ```sh
 cd clients/android

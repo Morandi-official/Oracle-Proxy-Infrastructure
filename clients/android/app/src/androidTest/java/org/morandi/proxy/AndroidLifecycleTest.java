@@ -62,6 +62,22 @@ public final class AndroidLifecycleTest {
     private static final String DEVICE_NAME = "Android 验收设备";
 
     @Test
+    public void foregroundSignInOffersOneAnonymousRequestAndSubmissionCancelsQueuedWork() {
+        ClientApi api = new ClientApi();
+        ClientApi.LoginWarmup stoppedScreen = api.offerLoginWarmup();
+        ClientApi.LoginWarmup submitted = api.offerLoginWarmup();
+        assertFalse(stoppedScreen.begin());
+        api.cancelPendingLoginWarmup();
+        assertFalse(submitted.begin());
+
+        ClientApi.LoginWarmup typing = api.offerLoginWarmup();
+        assertTrue(typing.begin());
+        assertFalse(typing.begin());
+        api.cancelPendingLoginWarmup();
+        assertFalse(typing.begin());
+    }
+
+    @Test
     public void stoppingPreparationWaitsForTheSubmittedServiceStart() throws Exception {
         Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
         CountDownLatch startEntered = new CountDownLatch(1);

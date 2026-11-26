@@ -208,8 +208,8 @@ public final class MainActivity extends Activity {
         boolean visibleLogin = watching && showingLogin;
         if (visibleLogin == preparingSignIn) return;
         preparingSignIn = visibleLogin;
-        if (visibleLogin) controller.prepareSignInIdentity();
-        else controller.discardSignInIdentity();
+        if (visibleLogin) controller.prepareSignIn();
+        else controller.discardSignInPreparation();
     }
 
     private void buildShell() {

@@ -35,8 +35,9 @@ final class TransferStabilityTestProbe implements AutoCloseable {
     private volatile boolean finish;
     private volatile boolean cancelled;
     private volatile long ended;
-    private volatile Throwable failure;
+    private volatile IOException failure;
     private int completed;
+    private String phase = "OPEN";
 
     TransferStabilityTestProbe(Network vpn, boolean upload) {
         this.vpn = vpn;
@@ -87,11 +88,16 @@ final class TransferStabilityTestProbe implements AutoCloseable {
             while (!cancelled && completed < MAX_TRANSFERS && (completed < MIN_TRANSFERS || !finish)
                     && SystemClock.elapsedRealtime() < deadline) {
                 long start = SystemClock.elapsedRealtimeNanos();
+                phase = "OPEN";
                 transfer(buffer, deadline);
                 durations[completed++] = SystemClock.elapsedRealtimeNanos() - start;
             }
         } catch (Exception error) {
-            failure = error;
+            // Count only earlier, fully acknowledged transfers. A completed
+            // upload write alone does not establish that the server accepted it.
+            long bodyBytes = bytes.get() - (long) completed * BYTES;
+            failure = new IOException("ANDROID_LOAD_FAILED_" + direction() + "_PHASE=" + phase
+                    + "_COMPLETED=" + completed + "_BODY_BYTES=" + bodyBytes, error);
         } finally {
             ended = SystemClock.elapsedRealtimeNanos();
             began.countDown();
@@ -114,17 +120,20 @@ final class TransferStabilityTestProbe implements AutoCloseable {
                 connection.setFixedLengthStreamingMode(BYTES);
                 connection.setRequestProperty("Content-Type", "application/octet-stream");
                 try (OutputStream out = connection.getOutputStream()) {
+                    phase = "WRITE_BODY";
                     for (int sent = 0; sent < BYTES; sent += buffer.length) {
                         out.write(buffer);
                         progressed(buffer.length, deadline);
                     }
                 }
             }
+            phase = "RESPONSE_HEADERS";
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
                 throw new IOException("ANDROID_LOAD_HTTP_" + direction() + "=" + status);
             }
             if (!upload) {
+                phase = "READ_BODY";
                 int count = 0;
                 try (InputStream in = connection.getInputStream()) {
                     int n;
@@ -149,7 +158,8 @@ final class TransferStabilityTestProbe implements AutoCloseable {
     }
 
     private void checkFailure() throws IOException {
-        if (failure != null) throw new IOException("ANDROID_LOAD_FAILED_" + direction(), failure);
+        IOException captured = failure;
+        if (captured != null) throw captured;
     }
 
     @Override public void close() {

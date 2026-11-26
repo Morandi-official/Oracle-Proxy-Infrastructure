@@ -54,18 +54,21 @@ echo "$archive_sha  signed.zip" | sha256sum -c -
 for file in "$apk" SHA256SUMS.txt version.txt; do unzip -p signed.zip "$file" > "$file"; done
 cmp version.txt <(printf '0.2.0\n')
 cmp SHA256SUMS.txt <(sha256sum "$apk")
+echo "8a05c39b893a282e19b3207dda1f7e8fce249a01eb1ce25af12944a06dc9d972  $apk" | sha256sum -c -
 sha256sum "$apk"
 
 mkdir prior
 gh release download wireguard-android-v0.1.0 --pattern "$apk" --dir prior
 echo "1c477913fb61ecc2e30cabd0c0dedc2b31fef3cad6ee489ed302231e7b6cd258  prior/$apk" | sha256sum -c -
-sdk_tools=$(find "${ANDROID_HOME:?}/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -1)
-[[ -x $sdk_tools ]]
+sdk_tools="${ANDROID_HOME:?}/build-tools/36.0.0"
+if [[ ! -x $sdk_tools/apksigner ]]; then sdkmanager 'build-tools;36.0.0'; fi
 for signed_apk in "prior/$apk" "$apk"; do
-  "$sdk_tools" verify --min-sdk-version 29 --print-certs "$signed_apk" > cert.txt
-  [[ $(sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p' cert.txt) == "$certificate" ]]
+  "$sdk_tools/apksigner" verify --min-sdk-version 29 --print-certs "$signed_apk" > cert.txt
+  grep -i 'certificate SHA-256 digest' cert.txt
+  signer=$(sed -nE 's/^Signer .*certificate SHA-256 digest:[[:space:]]*([[:xdigit:]]{64})[[:space:]]*$/\1/p' cert.txt | tr 'A-F' 'a-f')
+  [[ $signer == "$certificate" ]]
 done
-"$(dirname "$sdk_tools")/aapt" dump badging "$apk" > badging.txt
+"$sdk_tools/aapt" dump badging "$apk" > badging.txt
 grep -Fq "package: name='org.morandi.proxy' versionCode='7' versionName='0.2.0'" badging.txt
 grep -Fxq "sdkVersion:'29'" badging.txt
 [[ $mode == publish ]] || exit 0

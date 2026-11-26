@@ -810,6 +810,13 @@ def main(arguments):
     if os.geteuid() != 0 or len(arguments) != 2 or not re.fullmatch(r'[a-f0-9]{40}', arguments[1]):
         raise ValueError('ROOT_PROJECT_OPERATION_REQUIRED')
     operation, revision = arguments
+    if operation in ('deploy', 'preflight'):
+        request = json.loads(Path(__file__).with_name('request.json').read_text())
+        spec = importlib.util.spec_from_file_location('enrollment_console', Path(__file__).with_name('enrollment_console.py'))
+        console = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(console)
+        if console.dispatch(host, operation, request, revision):
+            return
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
         if request.get('request_id')=='retire-rc38-observed-ci-two-20261109':

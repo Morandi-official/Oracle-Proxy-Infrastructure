@@ -35,6 +35,7 @@ jobs:
     outputs:
       operation: ${{ steps.request.outputs.operation }}
       ci_retirement: ${{ steps.request.outputs.ci_retirement }}
+      enrollment_console: ${{ steps.request.outputs.enrollment_console }}
       secondary_endpoint: ${{ steps.request.outputs.secondary_endpoint }}
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +60,7 @@ jobs:
           LOCAL_PASSWORD: ${{ secrets.ORACLE_ADMIN_LOCAL_PASSWORD }}
           OPERATION: ${{ steps.request.outputs.operation }}
           CI_RETIREMENT: ${{ steps.request.outputs.ci_retirement }}
+          ENROLLMENT_CONSOLE: ${{ steps.request.outputs.enrollment_console }}
           REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -99,7 +101,9 @@ jobs:
             python3 -c 'import json,os; print(json.dumps({"client_id":os.environ["CLIENT_ID"],"client_secret":os.environ["CLIENT_SECRET"]}))' \
               | "${SSH[@]}" "configure $REVISION"
           }
-          if [[ "$OPERATION" == deploy ]]; then
+          if [[ "$ENROLLMENT_CONSOLE" == true ]]; then
+            run_project "deploy $REVISION"
+          elif [[ "$OPERATION" == deploy ]]; then
             run_project "preflight $REVISION"
             run_project "install-runtime $REVISION"
             if [[ -n "$CLIENT_SECRET" || -n "$LOCAL_USERNAME" || -n "$LOCAL_PASSWORD" ]]; then configure; fi
@@ -112,14 +116,17 @@ jobs:
           fi
           bootstrap_browser=$(sed -n 's/^ADMIN_BOOTSTRAP_BROWSER=\(READY\|CHANGED\|NOT_LOCAL\)$/\1/p' "$operation_log" | tail -n 1)
           echo "bootstrap_browser=${bootstrap_browser:-UNKNOWN}" >> "$GITHUB_OUTPUT"
-          if [[ "$OPERATION" == deploy || "$OPERATION" == enable-https ]] && [[ "$CI_RETIREMENT" != true ]]; then
+          if [[ "$ENROLLMENT_CONSOLE" == true ]]; then
+            curl --fail --silent --show-error --connect-timeout 8 --max-time 10 --retry 3 --retry-delay 2 --retry-all-errors \
+              --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
+          elif [[ "$OPERATION" == deploy || "$OPERATION" == enable-https ]] && [[ "$CI_RETIREMENT" != true ]]; then
             curl --fail --silent --show-error --connect-timeout 8 --max-time 10 --retry 12 --retry-delay 5 --retry-all-errors \
               --output /dev/null https://vpn-admin.morandi.dpdns.org/login/
             python3 ops/oracle-project/verify_public.py
             python3 ops/oracle-project/verify_downloads.py
           fi
       - name: Public administrator website HTTP/3 reachability
-        if: (steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https' || steps.request.outputs.transport_probe == 'true') && steps.request.outputs.ci_retirement != 'true'
+        if: (steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https' || steps.request.outputs.transport_probe == 'true') && steps.request.outputs.ci_retirement != 'true' && steps.request.outputs.enrollment_console != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -131,7 +138,7 @@ jobs:
             "$quic_venv/bin/python" ops/oracle-project/verify_secondary_endpoint.py
           fi
       - name: Real Chromium and Firefox administrator login acceptance
-        if: (steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https') && steps.request.outputs.ci_retirement != 'true'
+        if: (steps.request.outputs.operation == 'deploy' || steps.request.outputs.operation == 'enable-https') && steps.request.outputs.ci_retirement != 'true' && steps.request.outputs.enrollment_console != 'true'
         shell: bash
         env:
           ADMIN_BOOTSTRAP_BROWSER_STATE: ${{ steps.execute.outputs.bootstrap_browser }}
@@ -194,7 +201,7 @@ jobs:
 
   release-download-links:
     needs: operations
-    if: needs.operations.result == 'success' && (needs.operations.outputs.operation == 'deploy' || needs.operations.outputs.operation == 'enable-https') && needs.operations.outputs.ci_retirement != 'true'
+    if: needs.operations.result == 'success' && (needs.operations.outputs.operation == 'deploy' || needs.operations.outputs.operation == 'enable-https') && needs.operations.outputs.ci_retirement != 'true' && needs.operations.outputs.enrollment_console != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

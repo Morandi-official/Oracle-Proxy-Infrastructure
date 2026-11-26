@@ -474,7 +474,7 @@ static void CheckDepartedJournal(const std::vector<wchar_t>& data,const std::wst
     const Owner owner={static_cast<DWORD>(Number(fields[3],MAXDWORD)),Number(fields[4],~0ULL)};
     if(!OwnerEnded(owner)) Fail("OWNER");
 }
-static void WitnessDeparture(NET_LUID previous) {
+static void WitnessDeparture(NET_LUID previous,bool preparedOnly) {
     auto& witness=DepartedWitness();
     if(witness.previous.Value || !CurrentJournal().empty()) Fail("OWNER");
     VerifyNic(previous);
@@ -494,8 +494,12 @@ static void WitnessDeparture(NET_LUID previous) {
     const auto mirror=ReadProtectedBindingReceipt();
     if(!journal.empty() && !mirror.empty() && journal!=mirror) Fail("JOURNAL");
     if(journal.empty()) journal=mirror;
-    if(!journal.empty()) CheckDepartedJournal(journal,fixed,previous);
-    else if(rc==CR_SUCCESS) Fail("MISSING_JOURNAL");
+    if(preparedOnly){
+        if(!journal.empty()) Fail("JOURNAL");
+    }else{
+        if(journal.empty()) Fail("MISSING_JOURNAL");
+        CheckDepartedJournal(journal,fixed,previous);
+    }
     VerifyDepartedNode(fixed);
     witness.previousJournal=std::move(journal);witness.previous=previous;
 }
@@ -603,6 +607,8 @@ static void RecoverFreshBindings(NET_LUID previous,NET_LUID fresh){
             if(journal.empty()){
                 // Neither of the two protected old stores has an original
                 // baseline. Only accept a new default-on stack, read-only.
+                for(const auto& [id,b]:paths)
+                    if((id[0]==L'4' || id[0]==L'6') && !b.enabled) Fail("FRESH_UNRECORDED");
                 try{Capture(target,paths);}
                 catch(const Failure& f){if(!strcmp(f.reason,"BASELINE"))Fail("FRESH_UNRECORDED");throw;}
             }else{
@@ -683,13 +689,27 @@ extern "C" __declspec(dllexport) DWORD __cdecl OpRestoreIpBindings(ULONG64 creat
 
 // The replacement belongs to the same SYSTEM helper that attested the departed
 // device; only the exact original TCP/IP path choices may be restored.
-extern "C" __declspec(dllexport) DWORD __cdecl OpDormantDepartureEvidence(ULONG64 oldLuid,ULONG64 newLuid) {
+extern "C" __declspec(dllexport) DWORD __cdecl OpDormantDepartureEvidence(ULONG64 oldLuid,ULONG64 newLuid,DWORD preparedOnly) {
     try {
         RequireSystem();Apartment apartment;TransactionLock serial;
         NET_LUID oldId={},newId={};oldId.Value=oldLuid;newId.Value=newLuid;
-        if(!oldId.Value) Fail("IDENTITY");
-        if(newId.Value) RecoverFreshBindings(oldId,newId);
-        else WitnessDeparture(oldId);
+        if(!oldId.Value || preparedOnly>1) Fail("IDENTITY");
+        if(newId.Value) {
+            // Positive phase is part of this helper's own two-step witness.
+            if(DepartedWitness().previousJournal.empty()!=(preparedOnly!=0)) Fail("JOURNAL");
+            RecoverFreshBindings(oldId,newId);
+        }else{
+            const auto limit=Clock::now()+std::chrono::milliseconds(2000);
+            for(;;){
+                try{WitnessDeparture(oldId,preparedOnly!=0);break;}
+                catch(const Failure& f){
+                    const bool removing=!strcmp(f.reason,"PRESENT_STARTED") || !strcmp(f.reason,"PRESENT_STOPPED") ||
+                        !strcmp(f.reason,"PRESENT_PROBLEM") || !strcmp(f.reason,"SETUP_PRESENT");
+                    if(!preparedOnly || !removing || Clock::now()>=limit) throw;
+                    Sleep(25);
+                }
+            }
+        }
         return ERROR_SUCCESS;
     }catch(const Failure& failure){
         const auto* r=failure.reason;

@@ -16,6 +16,7 @@ const (
 	recoveryNone adapterRecoveryMode = iota
 	recoveryGuarded
 	recoveryDormant
+	recoveryPrepared
 )
 
 // Mode selection is a fixed private child argv, never an input-frame field or
@@ -27,6 +28,8 @@ func parseAdapterRecoveryMode(arguments []string) adapterRecoveryMode {
 			return recoveryGuarded
 		case "--recover-dormant-adapter":
 			return recoveryDormant
+		case "--recover-prepared-adapter":
+			return recoveryPrepared
 		}
 	}
 	return recoveryNone

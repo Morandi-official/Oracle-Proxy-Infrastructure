@@ -190,9 +190,20 @@ func TestOrder(t *testing.T){
             }
             return nil
         }
-        err:=recover(7,restore,proof)
+        err:=recover(7,restore,proof,false)
         if (err==nil)!=s.success || !reflect.DeepEqual(events,s.expected){t.Fatalf("%v: %v",events,err)}
     })}
+    for _,deny:=range []bool{false,true}{
+        events=nil;missing=false;queryFailed=false;replaced=false
+        err:=recover(7,func(uint64)error{t.Fatal("prepared recovery called restore writer");return nil},func(old,fresh uint64,cause error)error{
+            if old!=7 || cause!=nil{t.Fatal("foreign phase")}
+            if fresh==0{events=append(events,"prepared");if deny{return fmt.Errorf("journal")}}else if fresh==12{events=append(events,"on")}else{t.Fatal("foreign fresh creator")}
+            return nil
+        },true)
+        want:=[]string{"empty7","prepared","identity","create","empty12","on","close","absent"}
+        if deny{want=[]string{"empty7","prepared"}}
+        if (err!=nil)!=deny || !reflect.DeepEqual(events,want){t.Fatalf("prepared %v: %v %v",deny,events,err)}
+    }
 }
 """
         with tempfile.TemporaryDirectory() as work:

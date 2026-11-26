@@ -49,8 +49,12 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("frame")
 		}
-		if recoveryMode == recoveryDormant {
-			err = oracleTun.RecoverDormantOracleAdapter(request.LUID, restoreAdapterBindings, dormantDepartureEvidence)
+		if recoveryMode == recoveryDormant || recoveryMode == recoveryPrepared {
+			preparedOnly := recoveryMode == recoveryPrepared
+			evidence := func(previous, fresh uint64, cause error) error {
+				return dormantDepartureEvidence(previous, fresh, cause, preparedOnly)
+			}
+			err = oracleTun.RecoverDormantOracleAdapter(request.LUID, restoreAdapterBindings, evidence, preparedOnly)
 		} else {
 			err = oracleTun.RecoverOracleAdapter(request.LUID, restoreAdapterBindings)
 		}

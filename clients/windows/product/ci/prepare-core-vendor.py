@@ -494,7 +494,7 @@ DORMANT_RECOVERY = '''// RecoverDormantOracleAdapter handles only a dead creator
 // guarded recovery it never removes addresses, routes or DNS. Native snapshots
 // must prove only Windows-generated local address/route metadata remains
 // before a fresh Create is attempted. A Down row alone never permits recovery.
-func RecoverDormantOracleAdapter(value uint64, restore func(uint64) error, departed func(uint64, uint64, error) error) error {
+func RecoverDormantOracleAdapter(value uint64, restore func(uint64) error, departed func(uint64, uint64, error) error, preparedOnly bool) error {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
 	if value == 0 || restore == nil || departed == nil || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
@@ -504,7 +504,13 @@ func RecoverDormantOracleAdapter(value uint64, restore func(uint64) error, depar
 	// restore touches only a matching durable owner+PnP journal; no journal
 	// is an idempotent read-only result. Never remove an unrestored device.
 	wasDeparted := false
-	if err := restore(value); err != nil {
+	if preparedOnly {
+		// The private parent recorded this exact fresh creator and revoked
+		// this phase before any activation/park. Both original binding stores
+		// must be empty. No writer is used while proving the old SWD disappeared.
+		if err := departed(value, 0, nil); err != nil { return err }
+		wasDeparted = true
+	} else if err := restore(value); err != nil {
 		if proofErr := departed(value, 0, err); proofErr != nil { return proofErr }
 		wasDeparted = true
 	}

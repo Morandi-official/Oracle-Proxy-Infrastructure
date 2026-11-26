@@ -1,8 +1,10 @@
 // Disposable SYSTEM-only measurement. This executable is never packaged.
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <netioapi.h>
 #include <cfgmgr32.h>
 #include <netcfgx.h>
 #include <devguid.h>

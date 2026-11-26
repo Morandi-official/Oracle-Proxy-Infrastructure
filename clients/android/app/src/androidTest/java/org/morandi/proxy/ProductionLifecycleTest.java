@@ -63,6 +63,7 @@ public final class ProductionLifecycleTest {
                 enrollment.login(username, password, true);
                 fresh.report("LOGIN_FRESH");
             }
+            reportPasswordPhases("FRESH", enrollment, api);
             assertFalse("Release test requires a fresh emulator identity", enrollment.snapshot().registered);
             enrollment.confirmDevice("Android CI " + run);
             await("Production device enrollment", () -> enrollment.snapshot().registered
@@ -87,6 +88,7 @@ public final class ProductionLifecycleTest {
                 controller.login(username, password, false);
                 warm.report("LOGIN_WARM");
             }
+            reportPasswordPhases("WARM", controller, api);
 
             MainActivity screen = (MainActivity) instrumentation.startActivitySync(
                     new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -164,7 +166,9 @@ public final class ProductionLifecycleTest {
         android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CONNECT_PHASES_" + label
                 + "=TOTAL_MS:" + timing.totalMs + ";POLICY_MS:" + timing.policyMs
                 + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";NATIVE_START_MS:" + timing.nativeStartMs
-                + ";NETWORK_WAIT_MS:" + timing.networkWaitMs + ";EXIT_PROOF_MS:" + timing.exitProofMs
+                + ";NETWORK_WAIT_MS:" + timing.networkWaitMs
+                + ";NETWORK_DISCOVERY_MS:" + timing.networkDiscoveryMs
+                + ";NETWORK_BIND_MS:" + timing.networkBindingMs + ";EXIT_PROOF_MS:" + timing.exitProofMs
                 + ";ATTEMPTS:" + timing.attempts);
     }
 
@@ -257,6 +261,19 @@ public final class ProductionLifecycleTest {
                 connection.disconnect();
             }
         }
+    }
+
+    private static void reportPasswordPhases(String kind, AppController controller, ClientApi api) {
+        AppController.LoginTiming local = controller.lastLoginTiming();
+        ClientApi.PasswordTiming http = api.lastPasswordTiming();
+        assertNotNull("Android login phase durations recorded", local);
+        assertNotNull("Android authentication HTTP phase durations recorded", http);
+        android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_LOGIN_" + kind + "_PHASES="
+                + "QUEUE_MS:" + local.queueMs() + ",IDENTITY_MS:" + local.identityMs()
+                + ",AUTH_MS:" + local.authenticateMs() + ",SESSION_MS:" + local.sessionMs()
+                + ",STREAM_OPEN_MS:" + http.streamOpenMs() + ",UPLOAD_MS:" + http.uploadMs()
+                + ",RESPONSE_HEADERS_MS:" + http.responseHeadersMs()
+                + ",RESPONSE_BODY_MS:" + http.responseBodyMs());
     }
 
     private static String decode(Bundle arguments, String key) {

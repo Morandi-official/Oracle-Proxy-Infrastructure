@@ -41,6 +41,7 @@ public final class TunnelEngine {
     private static final long CONNECT_DEADLINE_MS = 48_000;
     private static final long PORT_HINT_LIFETIME_MS = 10 * 60_000;
     private static final long CANCELLATION_CHECK_MS = 80;
+    private static final long BIND_RETRY_INITIAL_MS = 20;
 
     public interface Callback {
         void trying(String endpoint);
@@ -70,6 +71,8 @@ public final class TunnelEngine {
         long serviceWaitMs;
         long nativeStartMs;
         long networkWaitMs;
+        long networkDiscoveryMs;
+        long networkBindingMs;
         long exitProofMs;
         String ipv4ProofProtocol = "";
         String ipv6ProofProtocol = "";
@@ -326,22 +329,27 @@ public final class TunnelEngine {
     private Result verify(TunnelProfile target, TunnelProfile.Candidate candidate, long deadline,
                           Callback callback, Network previousNetwork, AttemptTiming timing) throws InterruptedException {
         long detectionStarted = SystemClock.elapsedRealtime();
-        long probeDeadline = Math.min(deadline, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS);
-        Network vpn = awaitNetwork(target, Math.min(probeDeadline,
-                SystemClock.elapsedRealtime() + VPN_NETWORK_WAIT_MS), callback, previousNetwork);
-        if (vpn == null || cancelled(callback)) {
-            trace("compatible Android VPN network unavailable");
-            return null;
-        }
-        // Android can publish this Network before netd permits its explicit
-        // socket binding. Confirm that the same VPN accepts a socket without
-        // sending traffic, and leave the original proof deadline in effect.
-        if (!awaitProbeBinding(vpn, probeDeadline, callback)) {
-            return null;
+        long probeDeadline = Math.min(deadline, detectionStarted + VERIFY_DEADLINE_MS);
+        Network vpn;
+        try (NetworkChanges changes = new NetworkChanges()) {
+            vpn = awaitNetwork(target, Math.min(probeDeadline, detectionStarted + VPN_NETWORK_WAIT_MS),
+                    callback, previousNetwork, changes);
+            if (vpn == null || cancelled(callback)) {
+                trace("compatible Android VPN network unavailable");
+                return null;
+            }
+            long bindingStarted = SystemClock.elapsedRealtime();
+            timing.networkDiscoveryMs = bindingStarted - detectionStarted;
+            lastProbeNetwork = vpn;
+            // Android can publish this VPN before netd permits it to bind a
+            // socket. Keep waiting on the same Network, without sending data.
+            if (!awaitProbeBinding(vpn, probeDeadline, callback, changes)) {
+                return null;
+            }
+            timing.networkBindingMs = SystemClock.elapsedRealtime() - bindingStarted;
         }
         long proofStarted = SystemClock.elapsedRealtime();
         timing.networkWaitMs = proofStarted - detectionStarted;
-        lastProbeNetwork = vpn;
         trace("Android VPN network ready");
         // An Android network agent is visible slightly before all its routes
         // are ready. Retry early socket failures on the same VPN within the
@@ -361,9 +369,10 @@ public final class TunnelEngine {
         return null;
     }
 
-    private boolean awaitProbeBinding(Network vpn, long deadline, Callback callback)
+    private boolean awaitProbeBinding(Network vpn, long deadline, Callback callback, NetworkChanges changes)
             throws InterruptedException {
         boolean waiting = false;
+        long delay = BIND_RETRY_INITIAL_MS;
         while (up && !cancelled(callback)) {
             long remaining = deadline - SystemClock.elapsedRealtime();
             if (remaining <= 0) {
@@ -377,7 +386,8 @@ public final class TunnelEngine {
                     trace("Android VPN socket binding not ready");
                     waiting = true;
                 }
-                Thread.sleep(Math.min(CANCELLATION_CHECK_MS, remaining));
+                changes.await(Math.min(delay, remaining));
+                delay = Math.min(CANCELLATION_CHECK_MS, delay * 2);
             }
         }
         trace("compatible Android VPN socket binding unavailable");
@@ -419,6 +429,7 @@ public final class TunnelEngine {
                     }
                     timing.ipv4ProofProtocol = ipv4.protocol;
                     timing.ipv6ProofProtocol = ipv6 == null ? "" : ipv6.protocol;
+                    CloudflareExitProbe.rememberVerifiedProtocols(ipv4, ipv6);
                     return new Result(candidate.endpoint(), ipv4.address,
                             ipv6 == null ? "" : ipv6.address, timing);
                 }
@@ -458,58 +469,79 @@ public final class TunnelEngine {
         return new CloudflareExitProbe.Proof(actual.getHostAddress(), "fixture");
     }
 
-    private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback, Network previousNetwork)
-            throws InterruptedException {
-        Network ready = findNetwork(target, previousNetwork);
-        if (ready != null) {
-            return ready;
+    private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback,
+                                 Network previousNetwork, NetworkChanges changes) throws InterruptedException {
+        while (up && !cancelled(callback)) {
+            Network ready = findNetwork(target, previousNetwork);
+            if (ready != null) {
+                return ready;
+            }
+            long remaining = deadline - SystemClock.elapsedRealtime();
+            if (remaining <= 0) {
+                break;
+            }
+            changes.await(Math.min(remaining, CANCELLATION_CHECK_MS));
         }
-        Semaphore changes = new Semaphore(0);
-        ConnectivityManager.NetworkCallback wake = new ConnectivityManager.NetworkCallback() {
-            private void signal() {
-                if (changes.availablePermits() == 0) {
-                    changes.release();
-                }
+        return null;
+    }
+
+    private final class NetworkChanges extends ConnectivityManager.NetworkCallback implements AutoCloseable {
+        private final Semaphore changes = new Semaphore(0);
+        private boolean registrationAttempted;
+        private boolean watching;
+
+        private void signal() {
+            if (changes.availablePermits() == 0) {
+                changes.release();
             }
-            @Override public void onAvailable(Network network) {
-                signal();
-            }
-            @Override public void onLinkPropertiesChanged(Network network, LinkProperties links) {
-                signal();
-            }
-            @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
-                signal();
-            }
-        };
-        boolean watching;
-        try {
-            connectivity.registerNetworkCallback(new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
-                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
-                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                    .build(), wake);
-            watching = true;
-        } catch (RuntimeException error) {
-            watching = false;
         }
-        try {
-            while (up && !cancelled(callback)) {
-                ready = findNetwork(target, previousNetwork);
-                if (ready != null) {
-                    return ready;
+
+        @Override public void onAvailable(Network network) {
+            signal();
+        }
+
+        @Override public void onLinkPropertiesChanged(Network network, LinkProperties links) {
+            signal();
+        }
+
+        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+            signal();
+        }
+
+        @Override public void onBlockedStatusChanged(Network network, boolean blocked) {
+            signal();
+        }
+
+        @Override public void onLost(Network network) {
+            signal();
+        }
+
+        void await(long timeoutMs) throws InterruptedException {
+            if (!registrationAttempted) {
+                registrationAttempted = true;
+                try {
+                    connectivity.registerNetworkCallback(new NetworkRequest.Builder()
+                            .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
+                            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                            .removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
+                            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                            .build(), this);
+                    watching = true;
+                } catch (RuntimeException error) {
+                    // Some Android versions or profiles may refuse the callback.
+                    // A bounded retry still checks the exact VPN Network.
                 }
-                long remaining = deadline - SystemClock.elapsedRealtime();
-                if (remaining <= 0) {
-                    break;
-                }
-                changes.tryAcquire(Math.min(remaining, watching ? CANCELLATION_CHECK_MS : 30),
-                        TimeUnit.MILLISECONDS);
             }
-            return null;
-        } finally {
             if (watching) {
-                connectivity.unregisterNetworkCallback(wake);
+                changes.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
+            } else {
+                Thread.sleep(timeoutMs);
+            }
+        }
+
+        @Override public void close() {
+            if (watching) {
+                connectivity.unregisterNetworkCallback(this);
             }
         }
     }

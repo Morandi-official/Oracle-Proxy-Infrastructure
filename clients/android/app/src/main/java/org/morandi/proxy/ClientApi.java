@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.os.SystemClock;
 
 import org.json.JSONObject;
 
@@ -28,6 +29,14 @@ class ClientApi {
 
     private final ConnectivityManager connectivity;
     private Network reusablePhysicalNetwork;
+    private volatile PasswordTiming lastPasswordTiming;
+
+    record PasswordTiming(long streamOpenMs, long uploadMs, long responseHeadersMs,
+                          long responseBodyMs) {}
+
+    PasswordTiming lastPasswordTiming() {
+        return lastPasswordTiming;
+    }
 
     ClientApi() {
         connectivity = null;
@@ -45,6 +54,13 @@ class ClientApi {
             throw new ApiError("LOGIN_REQUIRED");
         }
 
+        boolean passwordRequest = "authenticate".equals(action);
+        long started = passwordRequest ? SystemClock.elapsedRealtime() : 0;
+        long streamOpened = 0;
+        long requestWritten = 0;
+        if (passwordRequest) {
+            lastPasswordTiming = null;
+        }
         URL url = new URL(ORIGIN + "/api/client/" + action);
         Network controlNetwork = controlNetwork();
         HttpsURLConnection connection = (HttpsURLConnection) (controlNetwork == null
@@ -71,12 +87,19 @@ class ClientApi {
                 connection.setFixedLengthStreamingMode(request.length);
                 connection.setDoOutput(true);
                 try (var output = connection.getOutputStream()) {
+                    if (passwordRequest) {
+                        streamOpened = SystemClock.elapsedRealtime();
+                    }
                     output.write(request);
                 } finally {
                     java.util.Arrays.fill(request, (byte) 0);
                 }
+                if (passwordRequest) {
+                    requestWritten = SystemClock.elapsedRealtime();
+                }
             }
             int status = connection.getResponseCode();
+            long headersReceived = passwordRequest ? SystemClock.elapsedRealtime() : 0;
             if (status >= 300 && status < 400) {
                 throw new ApiError("API_UNAVAILABLE");
             }
@@ -94,6 +117,11 @@ class ClientApi {
                     code = status == 401 ? "LOGIN_REQUIRED" : "API_UNAVAILABLE";
                 }
                 throw new ApiError(code);
+            }
+            if (passwordRequest) {
+                lastPasswordTiming = new PasswordTiming(streamOpened - started,
+                        requestWritten - streamOpened, headersReceived - requestWritten,
+                        SystemClock.elapsedRealtime() - headersReceived);
             }
             return response;
         } finally {

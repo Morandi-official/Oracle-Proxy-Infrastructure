@@ -16,7 +16,7 @@ import java.util.function.Predicate;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-/** Times a touchscreen release through the first view draw of the verified status. */
+/** Times a touchscreen release through a focused draw of the expected status or action. */
 final class VisibleConnectionTiming implements AutoCloseable {
     static final long TARGET_NANOS = TimeUnit.MILLISECONDS.toNanos(1000);
 
@@ -26,6 +26,8 @@ final class VisibleConnectionTiming implements AutoCloseable {
     private final Predicate<AppController.State> verified;
     private final CountDownLatch visible = new CountDownLatch(1);
     private final Rect visibleStatus = new Rect();
+    private final int expectedId;
+    private final String expectedText;
     private final ViewTreeObserver.OnDrawListener drawn = this::onDraw;
     private final ViewTreeObserver.OnWindowFocusChangeListener focus = this::onFocusChanged;
     private final String diagnosticLabel;
@@ -44,6 +46,14 @@ final class VisibleConnectionTiming implements AutoCloseable {
 
     VisibleConnectionTiming(String diagnosticLabel, Instrumentation instrumentation, MainActivity screen,
                             AppController controller, Predicate<AppController.State> verified) {
+        this(diagnosticLabel, instrumentation, screen, controller, verified, R.id.connection_status, "已连接");
+    }
+
+    VisibleConnectionTiming(String diagnosticLabel, Instrumentation instrumentation, MainActivity screen,
+                            AppController controller, Predicate<AppController.State> verified,
+                            int expectedId, String expectedText) {
+        this.expectedId = expectedId;
+        this.expectedText = expectedText;
         this.diagnosticLabel = diagnosticLabel;
         this.instrumentation = instrumentation;
         this.screen = screen;
@@ -57,13 +67,17 @@ final class VisibleConnectionTiming implements AutoCloseable {
     }
 
     void tapConnectButton() {
+        tapButton(R.id.connect);
+    }
+
+    void tapButton(int actionId) {
         instrumentation.waitForIdleSync();
         Rect bounds = new Rect();
         instrumentation.runOnMainSync(() -> {
-            View connect = screen.findViewById(R.id.connect);
-            assertNotNull("The Connect action is present", connect);
-            assertTrue("The Connect action is enabled", connect.isEnabled());
-            assertTrue("The Connect action is visible", connect.getLocalVisibleRect(bounds));
+            View connect = screen.findViewById(actionId);
+            assertNotNull("The action is present", connect);
+            assertTrue("The action is enabled", connect.isEnabled());
+            assertTrue("The action is visible", connect.getLocalVisibleRect(bounds));
             int[] position = new int[2];
             connect.getLocationOnScreen(position);
             bounds.offset(position[0], position[1]);
@@ -123,9 +137,9 @@ final class VisibleConnectionTiming implements AutoCloseable {
         if (start == 0 || visible.getCount() == 0 || !verified.test(controller.snapshot())) {
             return;
         }
-        TextView status = screen.findViewById(R.id.connection_status);
+        TextView status = screen.findViewById(expectedId);
         if (status != null && status.isShown() && status.getLocalVisibleRect(visibleStatus)
-                && "已连接".contentEquals(status.getText())) {
+                && expectedText.contentEquals(status.getText())) {
             long now = SystemClock.elapsedRealtimeNanos();
             boolean focused = screen.hasWindowFocus();
             if (firstVerifiedDraw == 0) {
@@ -140,7 +154,7 @@ final class VisibleConnectionTiming implements AutoCloseable {
     }
 
     long await(String label) throws InterruptedException {
-        assertTrue(label + " drew a reachable verified connection status",
+        assertTrue(label + " drew the expected status in the foreground",
                 visible.await(65, TimeUnit.SECONDS));
         return duration;
     }

@@ -93,6 +93,48 @@ def prepareTunnel = tasks.register('prepareWireGuardTunnel', Exec) {
     }
 }
 
+// This diagnostic library belongs exclusively to the instrumentation APK.
+abstract class BuildUploadTestJni extends DefaultTask {
+    @InputFile @PathSensitive(PathSensitivity.RELATIVE) abstract RegularFileProperty getSourceFile()
+    @Input abstract Property<String> getNdkVersion()
+    @Input abstract Property<Integer> getMinApi()
+    @Internal abstract DirectoryProperty getNdkHome()
+    @OutputDirectory abstract DirectoryProperty getOutputDir()
+    @javax.inject.Inject abstract ExecOperations getCommands()
+
+    @TaskAction void compile() {
+        def os = System.getProperty('os.name')
+        def host = os.startsWith('Windows') ? 'windows-x86_64' :
+                (os.startsWith('Mac') ? 'darwin-x86_64' : 'linux-x86_64')
+        def tool = os.startsWith('Windows') ? 'clang.exe' : 'clang'
+        def clang = ndkHome.file("toolchains/llvm/prebuilt/${host}/bin/${tool}").get().asFile
+        def targets = ['arm64-v8a': 'aarch64-linux-android', 'x86_64': 'x86_64-linux-android',
+                       'armeabi-v7a': 'armv7a-linux-androideabi', 'x86': 'i686-linux-android']
+        targets.each { abi, triple ->
+            def dest = outputDir.dir(abi).get().asFile
+            dest.mkdirs()
+            commands.exec {
+                commandLine clang, "--target=${triple}${minApi.get()}", '-O2', '-Wall', '-Werror',
+                        '-fPIC', '-shared', '-Wl,-z,max-page-size=16384,-z,relro,-z,now',
+                        '-Wl,-soname,libproxy_upload_test.so', sourceFile.get().asFile,
+                        '-o', new File(dest, 'libproxy_upload_test.so')
+            }
+        }
+    }
+}
+
+androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+    if (variant.androidTest != null) {
+        def compileProbe = tasks.register("compile${variant.name.capitalize()}UploadTestJni", BuildUploadTestJni) {
+            sourceFile.set(layout.projectDirectory.file('src/androidTest/native/upload_tcp_info.c'))
+            ndkHome.set(androidComponents.sdkComponents.ndkDirectory)
+            ndkVersion.set(android.ndkVersion)
+            minApi.set(android.defaultConfig.minSdk)
+        }
+        variant.androidTest.sources.jniLibs.addGeneratedSourceDirectory(compileProbe) { it.outputDir }
+    }
+}
+
 dependencies {
     upstreamWireGuard 'com.wireguard.android:tunnel:1.0.20260102@aar'
     implementation files(derivedTunnel).builtBy(prepareTunnel)

@@ -51,7 +51,7 @@ internal sealed partial class MainForm : Form
     private readonly ToolTip _help=new(){ShowAlways=true,InitialDelay=350,ReshowDelay=100,AutoPopDelay=18000};
     private bool _deviceExpanded,_hasAccount,_authenticated,_dashboardShown,_toolsExpanded,_provisioning,_serviceReady;
     private readonly SmoothButton _bootstrapRetry=new(){Name="bootstrap-retry",Text="重试初始化",Height=38,Visible=false};
-    private readonly TableLayoutPanel _shell,_toolsContent;
+    private readonly TableLayoutPanel _shell,_toolsContent,_connectionContent,_accountContent;
     private readonly Panel _loginGate;
     private readonly Panel _startupGate;
     private readonly StableViewport _viewport;
@@ -191,7 +191,7 @@ internal sealed partial class MainForm : Form
 
         _mode.AutoSize=false;_mode.Height=44;_mode.Font=new Font(Font.FontFamily,18,FontStyle.Bold);_mode.AutoEllipsis=false;_mode.Margin=new Padding(0,0,0,8);
         _detail.AutoSize=false;_detail.Height=62;_detail.MinimumSize=Size.Empty;_detail.MaximumSize=Size.Empty;_detail.AutoEllipsis=false;_detail.ForeColor=Muted;_detail.Margin=new Padding(0,0,0,6);
-        var connection=Stack("connectionContent");Row(connection,_mode);Row(connection,_detail);
+        var connection=_connectionContent=Stack("connectionContent");Row(connection,_mode);Row(connection,_detail);
         var metrics=new TableLayoutPanel{Name="connectionMetrics",AutoSize=false,Height=156,Dock=DockStyle.Fill,ColumnCount=3,RowCount=2,Margin=new Padding(0,0,0,8)};
         for(int i=0;i<3;i++)metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));for(int i=0;i<2;i++)metrics.RowStyles.Add(new RowStyle(SizeType.Percent,50));
         _exitIp.Font=new Font(Font.FontFamily,10,FontStyle.Bold);_protocol.Font=new Font(Font.FontFamily,9.5f,FontStyle.Bold);
@@ -206,7 +206,7 @@ internal sealed partial class MainForm : Form
         _help.SetToolTip(_disconnect,"安全断开 VPN 并恢复普通应用直连，保留已登记设备。");
         _telemetry.AutoSize=false;_telemetry.Height=28;_telemetry.AutoEllipsis=true;_telemetry.ForeColor=Muted;_telemetry.Margin=new Padding(0,8,0,0);Row(connection,_telemetry);
         var connectionCard=Card("connectionSection","当前连接",connection);summary.Controls.Add(connectionCard,0,0);connectionCard.Margin=new Padding(0,0,10,12);
-        var account=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,10);Row(account,_accountName);
+        var account=_accountContent=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,10);Row(account,_accountName);
         _usage.AutoSize=false;_usage.Height=48;_usage.Margin=new Padding(0,0,0,4);Row(account,_usage);
         _progress.Dock=DockStyle.Fill;_progress.Height=20;_progress.Margin=new Padding(0,0,0,10);Row(account,_progress);
         _expiry.AutoSize=false;_expiry.Height=48;_expiry.AutoEllipsis=true;_expiry.Margin=new Padding(0,0,0,4);Row(account,_expiry);_usageUpdated.AutoSize=false;_usageUpdated.Height=28;_usageUpdated.AutoEllipsis=true;_usageUpdated.Margin=new Padding(0,0,0,10);Row(account,_usageUpdated);
@@ -666,8 +666,14 @@ internal sealed partial class MainForm : Form
     internal void Display(JsonObject state)
     {
         SuspendLayout();_shell.SuspendLayout();_loginGate.SuspendLayout();
+        // Suspend the direct layout owners as well as their outer view. A
+        // parent suspension alone does not batch its nested grid mutations.
+        _connectionContent.SuspendLayout();_accountContent.SuspendLayout();_registrationGroup.SuspendLayout();
         try{DisplaySnapshot(state);}
-        finally{_loginGate.ResumeLayout(true);_shell.ResumeLayout(true);ResumeLayout(true);}
+        finally{
+            _registrationGroup.ResumeLayout(true);_accountContent.ResumeLayout(true);_connectionContent.ResumeLayout(true);
+            _loginGate.ResumeLayout(true);_shell.ResumeLayout(true);ResumeLayout(true);
+        }
     }
     private void DisplaySnapshot(JsonObject state)
     {
@@ -760,7 +766,8 @@ internal sealed partial class MainForm : Form
             string entryText=entry.Length>0?$"公网 {entry}{suffix}\n内网 {(local.Length>0?local+suffix:"—")}":"—";
             if(_protocol.Tag is Label protocolCaption)protocolCaption.Text=mode=="connected"?protocolText:"连接入口";
             if(_protocol.Text!=entryText)_protocol.Text=entryText;
-            _help.SetToolTip(_protocol,protocolText+"\n"+entryText);
+            string protocolHelp=protocolText+"\n"+entryText;
+            if(_help.GetToolTip(_protocol)!=protocolHelp)_help.SetToolTip(_protocol,protocolHelp);
             _latency.Text=mode=="connected" && latency is not null?$"{latency} ms":"—";
             _uu.Text=state["error"]?.GetValue<string>()=="UU_TRUST_NOT_VERIFIED"
                 ?"信任核验未通过"
@@ -774,8 +781,10 @@ internal sealed partial class MainForm : Form
             // refresh after service restart. This is not a signed-out state.
             bool restoring=state["login_authenticated"]?.GetValue<bool>()==true && account is null;
             _startupGate.Controls[0].Text=restoring?"正在恢复已保存的登录…":"正在准备安全连接…";
-            if(restoring)_timer.Interval=1000;
             bool awaitingFirstRefresh=restoring && string.IsNullOrEmpty(state["error"]?.GetValue<string>());
+            // Poll local IPC promptly while the first authenticated account
+            // response is pending. Retain the slower recovery poll on failure.
+            if(restoring)_timer.Interval=awaitingFirstRefresh?100:1000;
             UpdateUdpAction();
             RevealView(awaitingFirstRefresh?null:_authenticated);
 

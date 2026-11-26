@@ -855,7 +855,7 @@ internal static class ProductTests
         UiAssert(startup.Visible && !login.Visible && !shell.Visible,"REMEMBERED_STARTUP_EXPOSED_LOGIN_OR_PARTIAL_DASHBOARD");
         int loginFrames=0;login.VisibleChanged+=(_,_)=>{if(login.Visible)loginFrames++;};
         var restoring=(JsonObject)ready.DeepClone();restoring["account"]=null;restoring["login_authenticated"]=true;
-        initial.SetResult(restoring);UiPumpUntil(()=>form.PollInterval==1000,"COLD_SERVICE_RESTORATION_DID_NOT_SET_BOUNDED_POLL");
+        initial.SetResult(restoring);UiPumpUntil(()=>form.PollInterval==100,"COLD_SERVICE_RESTORATION_DID_NOT_SET_FAST_BOUNDED_POLL");
         for(int attempt=0;attempt<4;attempt++){
             form.Display((JsonObject)restoring.DeepClone());Application.DoEvents();
             UiAssert(startup.Visible && !login.Visible && !shell.Visible && loginFrames==0 && form.AcceptButton is null,"REMEMBERED_PROOF_WITH_PENDING_ACCOUNT_FLASHED_LOGIN");
@@ -869,6 +869,7 @@ internal static class ProductTests
         Application.DoEvents();
         UiAssert(login.Visible && UiDescendants(login).OfType<Button>().Single(c=>c.Text=="登录").Enabled,
             "REMEMBERED_ACCOUNT_OUTAGE_DISABLED_MANUAL_LOGIN");
+        UiAssert(form.PollInterval==1000,"REMEMBERED_ACCOUNT_OUTAGE_DID_NOT_BACK_OFF_POLLING");
         current=ready;
         form.Display((JsonObject)ready.DeepClone());
         Application.DoEvents();

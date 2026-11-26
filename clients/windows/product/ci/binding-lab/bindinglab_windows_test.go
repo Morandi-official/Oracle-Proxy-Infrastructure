@@ -147,9 +147,15 @@ func TestDisposableOracleBindings(t *testing.T) {
 		t.Fatal("PROVIDER_START")
 	}
 	lines := bufio.NewScanner(output)
+	bindingReadback, restored := false, false
 	expect := func(value string) bool {
 		for n := 0; n < 6 && lines.Scan(); n++ {
 			line := lines.Text()
+			if line == "READBACK 0" || line == "READBACK 1" {
+				bindingReadback = line == "READBACK 1"
+				t.Logf("BIND_LAB_BINDINGS_READBACK=%t", bindingReadback)
+				continue
+			}
 			fields := strings.Fields(line)
 			if len(fields) == 4 && fields[0] == "IDENTITY" && (fields[1] == "before" || fields[1] == "unbound") {
 				pv, pe := strconv.Atoi(fields[2])
@@ -171,6 +177,9 @@ func TestDisposableOracleBindings(t *testing.T) {
 	}
 	defer func() {
 		_ = input.Close()
+		if restored && !expect("OTHERS_UNCHANGED") {
+			t.Error("OTHER_BINDINGS_READBACK_FAILED")
+		}
 		if shell.Wait() != nil {
 			t.Error("PROVIDER_OR_RESTORE_FAILED")
 		}
@@ -214,8 +223,17 @@ func TestDisposableOracleBindings(t *testing.T) {
 	if err != nil || !expect("RESTORED") {
 		t.Fatal("BINDINGS_NOT_RESTORED")
 	}
-	if err = setOracleParkedAdmin(luid, winipcfg.NetIfAdminStatusDown, winipcfg.NetIfAdminStatusUp); err != nil {
-		t.Fatal("ADMIN_RESTORE_FAILED")
+	restored = true
+	row, err := luid.Interface()
+	if err != nil || row.InterfaceGUID != *guid || row.InterfaceLUID != luid {
+		t.Fatal("RESTORE_IDENTITY_FAILED")
+	}
+	if row.AdminStatus == winipcfg.NetIfAdminStatusDown {
+		if err = setOracleParkedAdmin(luid, winipcfg.NetIfAdminStatusDown, winipcfg.NetIfAdminStatusUp); err != nil {
+			t.Fatal("ADMIN_RESTORE_FAILED")
+		}
+	} else if row.AdminStatus != winipcfg.NetIfAdminStatusUp {
+		t.Fatal("UNEXPECTED_ADMIN_STATE")
 	}
 	for n := 0; n < 100; n++ {
 		_, v4 := luid.IPInterface(windows.AF_INET)
@@ -237,7 +255,11 @@ func TestDisposableOracleBindings(t *testing.T) {
 	}
 	readyMs := time.Since(click).Milliseconds()
 	session.End()
-	t.Logf("DISABLE_INCLUDING_PROVIDER_START_MS=%d RESTORE_TO_EMPTY_SESSION_MS=%d STRICT_EMPTY=%t", disableMs, readyMs, empty)
+	empty = empty && bindingReadback
+	t.Logf("DISABLE_INCLUDING_PROVIDER_START_MS=%d RESTORE_TO_EMPTY_SESSION_MS=%d STRICT_EMPTY=%t RESTORE_UNDER_1S=%t", disableMs, readyMs, empty, readyMs < 1000)
+	if readyMs >= 1000 {
+		t.Error("RESTORE_EXCEEDED_1S")
+	}
 	if !empty {
 		t.Fatal("UNBIND_DID_NOT_PROVE_EMPTY")
 	}

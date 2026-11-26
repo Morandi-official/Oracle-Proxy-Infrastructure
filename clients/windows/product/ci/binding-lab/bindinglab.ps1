@@ -58,7 +58,9 @@ try {
     try {
         foreach ($item in $original) { SetOwned $item.ComponentID $false }
         Evidence 'unbound'
-        if (@(Bindings | Where-Object Enabled).Count) { throw 'STILL_BOUND' }
+        $readback = $false
+        try { $readback = @(Bindings | Where-Object Enabled).Count -eq 0 } catch {}
+        [Console]::Out.WriteLine("READBACK $([int]$readback)")
         [Console]::Out.WriteLine('UNBOUND')
         if ([Console]::In.ReadLine() -ne 'RESTORE') { throw 'PARENT_ENDED' }
     } finally {
@@ -70,6 +72,7 @@ try {
     }
     [Console]::Out.WriteLine('RESTORED')
     if (Compare-Object $baseline @(Others)) { throw 'OTHER_BINDINGS_CHANGED' }
+    [Console]::Out.WriteLine('OTHERS_UNCHANGED')
 } catch {
     # A failed device/provider identity aborts this trial. No provider strings,
     # known network addresses, physical inventory or interface names are logged.

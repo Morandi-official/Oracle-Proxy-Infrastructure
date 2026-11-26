@@ -23,7 +23,7 @@ Set-Content "$fixture/result" $LASTEXITCODE
     for($i=0;$i -lt 210 -and !(Test-Path "$fixture/result");$i++){Start-Sleep -Seconds 1}
     if(!(Test-Path "$fixture/result")){throw 'Disposable child deadline expired'}
     Get-Content "$fixture/binding.log"
-    if((Get-Content "$fixture/result") -ne '0'){throw 'Protocol binding measurement failed'}
+    if((Get-Content "$fixture/result") -ne '0' -or @(Select-String -LiteralPath "$fixture/binding.log" -Pattern 'STRICT_EMPTY=true RESTORE_UNDER_1S=true').Count -ne 2){throw 'Two strictly empty and subsecond restore trials required'}
 }finally{
     if(Get-ScheduledTask $task -ErrorAction Ignore){Stop-ScheduledTask $task -ErrorAction Ignore;Unregister-ScheduledTask $task -Confirm:$false}
     if(Get-NetAdapter -Name OracleProxy -IncludeHidden -ErrorAction Ignore){throw 'Temporary adapter persisted'}

@@ -26,6 +26,8 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           $ErrorActionPreference = 'Stop'
+          go mod tidy
+          if ($LASTEXITCODE) { throw 'Core dependency resolution failed' }
           go mod vendor
           if ($LASTEXITCODE) { throw 'Vendor retrieval failed' }
           python ../ci/prepare-core-vendor.py

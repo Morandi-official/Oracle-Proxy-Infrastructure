@@ -591,11 +591,11 @@ public final class TunnelEngine {
             if (!active.getAsBoolean() || !up || !matches(vpn, target)) {
                 return null;
             }
+            probeDeadline = Math.min(deadline, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS);
         }
         long proofStarted = SystemClock.elapsedRealtime();
         timing.ownerWaitMs = proofStarted - boundAt;
         timing.networkWaitMs = proofStarted - detectionStarted;
-        probeDeadline = Math.min(deadline, proofStarted + VERIFY_DEADLINE_MS);
         ExitEvidence result = verifyExits(target, candidate, vpn, probeDeadline, active);
         if (result != null) {
             timing.exitProofMs = SystemClock.elapsedRealtime() - proofStarted;

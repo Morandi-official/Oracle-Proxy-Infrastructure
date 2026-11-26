@@ -251,8 +251,13 @@ try {
  }).Count){throw 'LIVE_GUI_X_LEFT_ADAPTER'}
  if(@(Get-Process -ErrorAction Stop | Where-Object {$_.Id -eq $lastCore -or $_.ProcessName -eq 'Proxy.Core'}).Count){throw 'LIVE_GUI_X_LEFT_HOLDER'}
  Assert-OtherAdapterBindingState $otherBindings
- if(!$connectTargetMet){throw 'LIVE_GUI_VERIFIED_CONNECT_OVER_TARGET'}
  Write-Host 'ACTUAL_PRODUCT_GUI_CLOSED_WITHOUT_SERVICE_HOLDER_OR_ADAPTER=PASS'
+ if(!$connectTargetMet){
+  # Separate a measured latency miss from route, identity or shutdown failure.
+  # The host retains this failed gate while it exercises the independent link.
+  Write-Host 'ACTUAL_PROXY_GUI_VERIFIED_CONNECT_TARGET_MISSED=true'
+  exit 17
+ }
 } catch {
  Park-FailureWitness
  Write-Host "ACTUAL_PROXY_GUI_FAILURE_STAGE=$script:stage"

@@ -20,7 +20,7 @@ internal static class OracleNetworkPerformance
     {
         private readonly TaskCompletionSource<bool> _started=new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _finished=new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private long _first,_last;
+        private long _first,_last,_failedBlockStart,_failedBlockEnd;
         private bool _complete;
 
         internal string Condition { get; } = condition;
@@ -36,6 +36,15 @@ internal static class OracleNetworkPerformance
             _first=now;
             _started.TrySetResult(true);
         }
+
+        internal void FailedBlock(long start)
+        {
+            _failedBlockStart=start;
+            _failedBlockEnd=Stopwatch.GetTimestamp();
+        }
+
+        internal bool HasFailedBlock=>_failedBlockStart!=0;
+        internal bool DuringFailedBlock(long at)=>HasFailedBlock && at>=_failedBlockStart && at<=_failedBlockEnd;
 
         internal void Finish(bool complete)
         {
@@ -146,6 +155,14 @@ internal static class OracleNetworkPerformance
 
     private static bool Report(Target target,Sample[] samples,bool tunneled,TransferWindow? window)
     {
+        if(window?.HasFailedBlock==true){
+            var attempts=samples.Where(s=>window.DuringFailedBlock(s.Sent)).ToArray();
+            Console.WriteLine("WINDOWS_PERF_FAILED_BLOCK_STUN="+JsonSerializer.Serialize(new{
+                condition=window.Condition,endpoint=target.Host,attempts_started=attempts.Length,
+                verified_replies_before_failure=attempts.Count(s=>s.RttMs.HasValue && window.DuringFailedBlock(s.Finished)),
+                verified_replies_total=attempts.Count(s=>s.RttMs.HasValue)
+            }));
+        }
         var qualifying=window is null?samples:samples.Where(s=>window.Contains(s.Sent,s.Finished)).ToArray();
         var timings=qualifying.Where(s=>s.RttMs is not null).Select(s=>s.RttMs!.Value).ToArray();
         var sorted=timings.Order().ToArray();
@@ -217,33 +234,89 @@ internal static class OracleNetworkPerformance
         }
     }
 
+    // Keep one known-length write, matching the original ByteArrayContent workload.
+    private sealed class TrackedUpload(byte[] payload):HttpContent
+    {
+        internal bool Started { get; private set; }
+        internal bool Copied { get; private set; }
+        protected override bool TryComputeLength(out long length){length=payload.Length;return true;}
+        protected override Task SerializeToStreamAsync(Stream stream,TransportContext? context)=>
+            SerializeToStreamAsync(stream,context,CancellationToken.None);
+        protected override async Task SerializeToStreamAsync(Stream stream,TransportContext? context,CancellationToken token)
+        {
+            Started=true;
+            await stream.WriteAsync(payload.AsMemory(),token);
+            Copied=true;
+        }
+    }
+
     private static async Task TransferBlocks(HttpClient client,TransferWindow window,IPAddress address,int index,
         bool upload,byte[] payload,int blocks,CancellationToken cancel)
     {
         var durations=new List<double>(blocks);
+        var receiveBuffer=new byte[16*1024];
         bool complete=false;
+        long started=0;
+        string phase="route";
+        int? status=null;
+        int bodyBytes=0;
+        TrackedUpload? content=null;
+        CancellationToken blockToken=default;
         try{
             AssertInterface(address,index);
             window.Progress();
             for(int block=0;block<blocks;block++){
                 string path=upload?"/__up?":"/__down?bytes="+payload.Length+"&";
                 using var request=new HttpRequestMessage(upload?HttpMethod.Post:HttpMethod.Get,path+"sample="+Guid.NewGuid().ToString("N"));
+                status=null;
+                bodyBytes=0;
+                phase="send_request";
                 if(upload){
-                    request.Content=new ByteArrayContent(payload);
-                    request.Content.Headers.ContentType=new("application/octet-stream");
+                    content=new TrackedUpload(payload);
+                    content.Headers.ContentType=new("application/octet-stream");
+                    request.Content=content;
                 }
                 using var blockDeadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);
                 blockDeadline.CancelAfter(TimeSpan.FromSeconds(10));
-                long started=Stopwatch.GetTimestamp();
-                using var response=await client.SendAsync(request,blockDeadline.Token);
+                blockToken=blockDeadline.Token;
+                started=Stopwatch.GetTimestamp();
+                using var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,blockDeadline.Token);
+                status=(int)response.StatusCode;
+                phase="http_status";
                 response.EnsureSuccessStatusCode();
-                byte[] body=await response.Content.ReadAsByteArrayAsync(blockDeadline.Token);
-                if(upload?body.Length>4096:body.Length!=payload.Length)throw new IOException("TRANSFER_RESPONSE_SIZE");
+                phase="read_response";
+                int limit=upload?4096:payload.Length;
+                if(response.Content.Headers.ContentLength>limit)throw new IOException("TRANSFER_RESPONSE_SIZE");
+                await using var stream=await response.Content.ReadAsStreamAsync(blockDeadline.Token);
+                while(true){
+                    int read=await stream.ReadAsync(receiveBuffer.AsMemory(0,Math.Min(receiveBuffer.Length,limit+1-bodyBytes)),blockDeadline.Token);
+                    if(read==0)break;
+                    bodyBytes+=read;
+                    if(bodyBytes>limit)throw new IOException("TRANSFER_RESPONSE_SIZE");
+                }
+                if(!upload && bodyBytes!=payload.Length)throw new IOException("TRANSFER_RESPONSE_SIZE");
                 durations.Add(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 window.Progress();
+                started=0;
             }
             AssertInterface(address,index);
             complete=true;
+        }catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException or SocketException){
+            if(started!=0){
+                window.FailedBlock(started);
+                if(upload && phase=="send_request"){
+                    phase=content?.Copied==true?"body_copied_waiting_for_headers":content?.Started==true?"write_request_body":"connect_or_send_headers";
+                }
+                Console.WriteLine("WINDOWS_PERF_TRANSFER_FAILURE="+JsonSerializer.Serialize(new{
+                    direction=upload?"upload":"download",block=durations.Count+1,phase,
+                    error_category=error is OperationCanceledException?(cancel.IsCancellationRequested?"series_deadline":blockToken.IsCancellationRequested?"block_deadline":"operation_cancelled"):
+                        error.GetType().Name,http_status=status,http_error=(error as HttpRequestException)?.HttpRequestError.ToString(),
+                    socket_error=error.GetBaseException() is SocketException socket?socket.SocketErrorCode.ToString():null,
+                    request_body_copied=upload?(bool?)(content?.Copied==true):null,response_bytes_read=bodyBytes,
+                    elapsed_ms=Math.Round(Stopwatch.GetElapsedTime(started).TotalMilliseconds,2)
+                }));
+            }
+            throw;
         }finally{
             window.Finish(complete);
             Console.WriteLine("WINDOWS_PERF_TRANSFER="+JsonSerializer.Serialize(new{

@@ -216,6 +216,8 @@ internal static class OracleAcceptance
         .Select(n=>n.GetIPProperties().GetIPv4Properties()).First()
         ?? throw new IOException("DISPOSABLE_PHYSICAL_IPV4_PROPERTIES_REQUIRED");
     private static int PhysicalIndex()=>PhysicalIPv4().Index;
+    private static int TunnelIndex()=>NetworkInterface.GetAllNetworkInterfaces()
+        .Single(n=>n.Name=="OracleProxy" && n.OperationalStatus==OperationalStatus.Up).GetIPProperties().GetIPv4Properties().Index;
     private static async Task<bool> CarrierDirectBlocked()
     {
         using var socket=new TcpClient(AddressFamily.InterNetwork);using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -262,8 +264,9 @@ internal static class OracleAcceptance
         }
         public void Dispose()=>Set(_index,_original);
     }
-    private static async Task SampleDownload(string path)
+    private static async Task SampleDownload(string path,OracleNetworkPerformance.DownloadWindow? window=null)
     {
+        bool complete=false;
         try{
             const int limit=2*1024*1024;
             using var handler=new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false};
@@ -275,13 +278,33 @@ internal static class OracleAcceptance
             await using var stream=await response.Content.ReadAsStreamAsync(timeout.Token);
             byte[] buffer=new byte[32768];int total=0,read;
             while((read=await stream.ReadAsync(buffer.AsMemory(0,Math.Min(buffer.Length,limit+1-total)),timeout.Token))>0){
-                total+=read;if(total>limit)break;
+                window?.BodyChunk();total+=read;if(total>limit)break;
             }
             if(total!=limit)throw new IOException("THROUGHPUT_SAMPLE_SIZE_MISMATCH");
+            complete=true;
             Console.WriteLine("WINDOWS_DOWNLOAD_"+path+"_BYTES="+total+";ELAPSED_MS="+stopwatch.ElapsedMilliseconds);
         }catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException){
             Console.WriteLine("WINDOWS_DOWNLOAD_"+path+"=UNAVAILABLE");
-        }
+        }finally{window?.Finish(complete);}
+    }
+    private static async Task MeasureNetwork(OracleNetworkPerformance.Target[] targets,IReadOnlySet<string> allowedExits,
+        bool tunneled,uint expectedCore=0)
+    {
+        bool PathMatches(JsonObject state)=>state["mode"]?.GetValue<string>()==(tunneled?"connected":"disconnected") &&
+            state["intent"]?.GetValue<bool>()==tunneled && state["guard"]?.GetValue<bool>()==tunneled &&
+            state["tun_permitted"]?.GetValue<bool>()==tunneled && (!tunneled || expectedCore>0 &&
+                state["core_pid"]?.GetValue<uint>()==expectedCore && state["transport"]?.GetValue<string>()=="wireguard-udp" &&
+                state["tun_route_mask"]?.GetValue<uint>()==15 &&
+                state["verified_exit_ip"]?.GetValue<string>() is string exit && allowedExits.Contains(exit));
+        string route=tunneled?"WIREGUARD_UDP":"DIRECT";
+        Check(PathMatches(await Send("Status")),"REAL_NETWORK_RTT_"+route+"_STATE_BEFORE");
+        int index=tunneled?TunnelIndex():PhysicalIndex();
+        await OracleNetworkPerformance.Measure(targets,allowedExits,tunneled,index);
+        // Reuse the existing bounded download so loaded sampling costs only
+        // small STUN packets rather than another bulk transfer.
+        var window=new OracleNetworkPerformance.DownloadWindow();
+        await Task.WhenAll(SampleDownload(route,window),OracleNetworkPerformance.Measure(targets,allowedExits,tunneled,index,window));
+        Check(PathMatches(await Send("Status")),"REAL_NETWORK_RTT_"+route+"_STATE_AFTER");
     }
     private static async Task BulkDownload()
     {
@@ -485,8 +508,9 @@ internal static class OracleAcceptance
             int devices=login["account"]!["device_count"]!.GetValue<int>();
             var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
             IPAddress? performanceTarget=await OraclePerformance.ResolveTarget();
+            var networkTargets=await OracleNetworkPerformance.ResolveTargets();
             await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:false);
-            await SampleDownload("DIRECT");
+            await MeasureNetwork(networkTargets,allowed,tunneled:false);
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
             using var runningUu=Process.GetProcessById(int.Parse(Environment.GetEnvironmentVariable("ORACLE_CI_RUNNING_UU_PID")!));
             Check(!runningUu.HasExited && connected["uu_candidates"]?.GetValue<int>()>0 &&
@@ -501,7 +525,7 @@ internal static class OracleAcceptance
                 "REAL_AUTHENTICATED_USAGE_AND_SERVER_OBSERVATION_AVAILABLE_TO_UI");
             await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:true);
             var meterStart=await Send("Status");
-            await SampleDownload("WIREGUARD_UDP");
+            await MeasureNetwork(networkTargets,allowed,tunneled:true,connected["core_pid"]!.GetValue<uint>());
             await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
             var meterEnd=await Send("Status");
             uint core=meterStart["core_pid"]?.GetValue<uint>()??0;

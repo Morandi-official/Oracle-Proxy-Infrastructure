@@ -232,7 +232,9 @@ internal sealed partial class VpnRuntime : IDisposable
     {
         if(overlapProtection && (standby || guardInstalled))throw new IOException("CORE_STARTUP_MODE_INVALID");
         if(!ActivePolicy())throw new IOException("ACCOUNT_NOT_ACTIVE");
-        if(_secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
+        // In the overlap path Apply verifies the same executable paths before
+        // installing WFP. Only a private, unconfigured core can start in parallel.
+        if(!overlapProtection && _secret.UuPaths.Any(path=>!UuDiscovery.Trusted(path)))throw new IOException("UU_TRUST_CHANGED_REFRESH_REQUIRED");
         // A dead prepared core's proof cannot survive cleanup failure or be
         // inherited by a replacement. Dispose it and invalidate its generation
         // before inspecting any persistent adapter identity.
@@ -247,9 +249,8 @@ internal sealed partial class VpnRuntime : IDisposable
         try{
             _stage="CORE_START";_probeFailures=0;_generation++;_verified=default;_verifiedGeneration=-1;_latency=null;_carrierStarted=System.Diagnostics.Stopwatch.GetTimestamp();
             _runningAddress=TransportPolicy.IngressAddress(EffectiveState());_coreStartedAt=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _nativeUdpAttempt=new JsonObject{
+            var attempt=_nativeUdpAttempt=new JsonObject{
                 ["transport_address"]=_runningAddress,
-                ["port_order"]=string.Join(",",NativeUdpPortPolicy.Select(_state!,_secret,int.Parse(_state!["tunnel"]!["endpoint"]!.GetValue<string>().Split(':')[1]))),
                 ["endpoint_port"]=int.Parse(_state!["tunnel"]!["endpoint"]!.GetValue<string>().Split(':')[1]),
                 ["started_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["started_without_tun"]=standby,
                 ["inner_mtu"]=_state!["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel"?1280:1200,["preferred_port"]=_secret.NativeUdpPortPreference,["socket_binding"]=_secret.NativeUdpPortPreference==8443?"native_udp_fixed_8443":_secret.NativeUdpAdaptive?"native_udp_adaptive_pair":"native_udp_dual_port",["probe_result"]="pending",["probe_failures"]=0,["core_age_ms"]=0};
@@ -257,7 +258,8 @@ internal sealed partial class VpnRuntime : IDisposable
             // Only private, unconfigured preparation may overlap WFP work.
             // Both tasks must finish successfully before ACTIVATE is sent.
             Task protection=overlapProtection?Task.Run(()=>NativeGuard.Apply(_secret.UuPaths)):Task.CompletedTask;
-            await Task.WhenAll(protection,_core.Start(EffectiveState(),_secret,standby:true,probeReady:standby?null:BeginEgressProbe));
+            await Task.WhenAll(protection,_core.Start(EffectiveState(),_secret,standby:true,probeReady:standby?null:BeginEgressProbe,
+                configuredPorts:ports=>attempt["port_order"]=string.Join(",",ports)));
             if(overlapProtection){_mode="protected";if(_switchTimings is not null)_switchTimings["protection_joined_ms"]=coreTimer.ElapsedMilliseconds;}
             if(_switchTimings is not null)_switchTimings["core_process_ms"]=coreTimer.ElapsedMilliseconds;
             if(!standby){_stage="TUN_ACTIVATE";await _core.Activate();_stage="TUN_AUTHORIZE";NativeGuard.AuthorizeTun(_core.Pid);}

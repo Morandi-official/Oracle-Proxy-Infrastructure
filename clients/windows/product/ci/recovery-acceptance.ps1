@@ -53,6 +53,12 @@ for($i=0;$i -lt 150 -and !(Test-Path $result);$i++){
   try{
    $luid=[uint64](Get-Content -LiteralPath "$root/park-ready" -Raw)
    Assert-OwnedIpBindings $luid $false
+   $registryKey=Get-Item -LiteralPath 'HKLM:/SYSTEM/CurrentControlSet/Services/OracleProxyService' -ErrorAction Stop
+   $saved=@($registryKey.GetValue('OracleProxyOriginalWintunBindings'))
+   if($saved.Count -lt 7 -or $saved[0] -ne 'OracleProxy-Bindings-1' -or $saved[1] -ne $luid.ToString()){
+    throw 'PARKED_BINDING_RECEIPT_NOT_DURABLE'
+   }
+   Write-Host 'ACTUAL_PARKED_BINDINGS_HAVE_MATCHING_DURABLE_RECEIPT=PASS' 
    Assert-OtherAdapterBindingState $otherBindings
    $observed=$true
   }finally{Set-Content "$root/park-observed" 'DONE'}
@@ -65,6 +71,11 @@ Write-Host $body
 $expected=if($ParkOnly){'REAL_SYSTEM_PARKED_HOLDER_EXITED_AND_ADAPTER_REMOVED=PASS'}else{'REAL_UAC_RECOVERY_TRANSACTION_REMOVES_DORMANT_ORPHAN_AND_RESTARTS_AUTHENTICATED_CONTROL_SERVICE=PASS'}
 if($body -notmatch 'RESULT=PASS' -or !$body.Contains($expected)){throw 'Real SYSTEM fixture failed'}
 if($fixturePid){Wait-Process -Id $fixturePid -Timeout 10 -ErrorAction SilentlyContinue}
+if($ParkOnly){
+ $registryKey=Get-Item -LiteralPath 'HKLM:/SYSTEM/CurrentControlSet/Services/OracleProxyService' -ErrorAction Stop
+ if($null -ne $registryKey.GetValue('OracleProxyOriginalWintunBindings')){throw 'ORIGINAL_BINDING_RECEIPT_STILL_PRESENT'}
+ Write-Host 'ACTUAL_RESTORED_BINDING_RECEIPT_RETIRED=PASS'
+}
 $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
 if($remove.ExitCode -ne 0){throw 'Focused recovery fixture uninstall failed'}
 if($ParkOnly){

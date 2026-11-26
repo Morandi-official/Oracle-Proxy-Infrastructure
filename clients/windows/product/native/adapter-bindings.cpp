@@ -176,6 +176,7 @@ static Bindings ReadPaths(INetCfg* cfg, Receipt& r) {
 // in one property update and read back before a binding can be changed.
 static const DEVPROPKEY receiptKey={{0xefdc660c,0xab4f,0x4ab9,{0x87,0x9f,0xa9,0x29,0x1d,0x5b,0x77,0x63}},2};
 static constexpr size_t MaxReceiptChars=32768;
+#include "binding-receipt.inc"
 using Strings=std::vector<std::wstring>;
 static SRWLOCK transactionLock=SRWLOCK_INIT;
 // A lost or externally altered persistent receipt must not be treated as
@@ -257,15 +258,24 @@ static std::vector<wchar_t> Encode(const Receipt& r,const Owner& owner) {
     data.push_back(0);
     return data;
 }
+static std::vector<wchar_t> OriginalBindingReceipt(DEVINST node) {
+    const auto device = ReadProperty(node);
+    const auto service = ReadProtectedBindingReceipt();
+    if (!device.empty() && !service.empty() && device != service) Fail("JOURNAL");
+    return device.empty() ? service : device;
+}
 static void Store(DEVINST node,const std::vector<wchar_t>& data){
+    StoreProtectedBindingReceipt(data);
     auto rc=CM_Set_DevNode_PropertyW(node,&receiptKey,DEVPROP_TYPE_STRING_LIST,
         reinterpret_cast<PBYTE>(const_cast<wchar_t*>(data.data())),static_cast<ULONG>(data.size()*sizeof(wchar_t)),0);
     if(rc!=CR_SUCCESS || ReadProperty(node)!=data) Fail("JOURNAL");
 }
 static void Clear(DEVINST node,const std::vector<wchar_t>& expected){
-    if(expected.empty() || ReadProperty(node)!=expected ||
-       CM_Set_DevNode_PropertyW(node,&receiptKey,DEVPROP_TYPE_EMPTY,nullptr,0,0)!=CR_SUCCESS ||
-       !ReadProperty(node).empty()) Fail("JOURNAL");
+    if(expected.empty() || OriginalBindingReceipt(node)!=expected) Fail("JOURNAL");
+    if(!ReadProperty(node).empty() &&
+       (CM_Set_DevNode_PropertyW(node,&receiptKey,DEVPROP_TYPE_EMPTY,nullptr,0,0)!=CR_SUCCESS ||
+        !ReadProperty(node).empty())) Fail("JOURNAL");
+    ClearProtectedBindingReceipt(expected);
     CurrentJournal().clear();
 }
 static bool MapMatches(const Receipt& receipt,const Bindings& current,bool restored){
@@ -341,7 +351,7 @@ static void Change(NET_LUID luid,bool restore) {
         // installation with no per-device transaction. Confirming absence of
         // our own property is read-only even for a dormant admin-Up interface.
         {auto owned=Owned(writer.cfg.Get(),receipt,false);}
-        if(ReadProperty(VerifyPnp(receipt.pnp)).empty()){
+        if(OriginalBindingReceipt(VerifyPnp(receipt.pnp)).empty()){
             writer.finish();return;
         }
     }
@@ -349,7 +359,7 @@ static void Change(NET_LUID luid,bool restore) {
     {
         auto paths=ReadPaths(writer.cfg.Get(),receipt);
         const DEVINST node=VerifyPnp(receipt.pnp);
-        originalBytes=ReadProperty(node);
+        originalBytes=OriginalBindingReceipt(node);
         if(!liveJournal.empty() && originalBytes!=liveJournal) Fail("JOURNAL");
         if(!originalBytes.empty()){
             const auto fields=Decode(originalBytes);
@@ -375,6 +385,9 @@ static void Change(NET_LUID luid,bool restore) {
             originalBytes=Encode(receipt,caller);
             Store(node,originalBytes);
         }
+        // Complete an interrupted journal write before changing any protocol.
+        if(ReadProperty(node)!=originalBytes || ReadProtectedBindingReceipt()!=originalBytes)
+            Store(node,originalBytes);
         liveJournal=originalBytes;
         for(auto& [id,b]:paths){
             const bool original=receipt.original.at(id);
@@ -475,46 +488,161 @@ static void WitnessDeparture(NET_LUID previous) {
         if(CM_Get_Device_IDW(phantom,observed,_countof(observed),0)!=CR_SUCCESS ||
            _wcsicmp(observed,fixed.c_str())) Fail("PNP");
         journal=ReadProperty(phantom);
-        // A surviving devnode must account for its original binding choices.
-        if(journal.empty()) Fail("MISSING_JOURNAL");
-        CheckDepartedJournal(journal,fixed,previous);
     }else if(rc!=CR_NO_SUCH_DEVNODE){
         Fail("PNP");
     }
+    const auto mirror=ReadProtectedBindingReceipt();
+    if(!journal.empty() && !mirror.empty() && journal!=mirror) Fail("JOURNAL");
+    if(journal.empty()) journal=mirror;
+    if(!journal.empty()) CheckDepartedJournal(journal,fixed,previous);
+    else if(rc==CR_SUCCESS) Fail("MISSING_JOURNAL");
     VerifyDepartedNode(fixed);
     witness.previousJournal=std::move(journal);witness.previous=previous;
 }
-static void VerifyFreshBindings(NET_LUID previous,NET_LUID fresh) {
-    auto& witness=DepartedWitness();
-    if(!fresh.Value || !previous.Value || witness.previous.Value!=previous.Value) Fail("OWNER");
-    const auto fixed=FixedSoftwareDevice();
-    Receipt receipt{fresh,fixed,{}};
+using FlagMap=std::map<std::wstring,bool>;
+static std::wstring ComponentKey(const std::wstring& id){
+    const auto end=id.find(L'|',2);
+    if(id.size()<5 || id[1]!=L'|' || end==std::wstring::npos || end==2 || end+1>=id.size())
+        Fail("JOURNAL");
+    return id.substr(0,end); // Fixed kind and component ID, excluding opaque generation token.
+}
+static void LoadFreshOriginal(Receipt& target,const Strings& fields,const Bindings& paths){
+    std::map<std::wstring,size_t> expected,current;
+    bool exact=true;
+    for(size_t i=5;i<fields.size();++i){
+        const auto& field=fields[i];
+        if(field.empty() || (field[0]!=L'+' && field[0]!=L'-')) Fail("JOURNAL");
+        const auto id=field.substr(1);
+        ++expected[ComponentKey(id)];exact=exact && paths.count(id)!=0;
+    }
+    for(const auto& [id,p]:paths) ++current[ComponentKey(id)];
+    if(expected!=current) Fail("FRESH_COMPONENTS");
+    if(!exact) Fail("FRESH_TOKENS");
+    LoadOriginal(target,fields,paths);
+}
+static FlagMap Flags(const Bindings& paths){
+    FlagMap result;
+    for(const auto& [id,b]:paths) result.emplace(id,b.enabled);
+    return result;
+}
+// Stage IPv4/IPv6 only. Cascaded components are observed and compared in a
+// separate post-Apply graph. Holding any child COM pointer across Apply is unsafe.
+static void StageIpCommit(Session& writer,const Bindings& paths,const FlagMap& wanted){
+    for(const auto& [id,b]:paths){
+        if(id[0]!=L'4' && id[0]!=L'6') continue;
+        const bool enabled=wanted.at(id);
+        if(b.enabled!=enabled){
+            writer.pending=true;Ok(b.path->Enable(enabled?TRUE:FALSE),"STAGE");
+        }
+    }
+}
+static void Commit(Session& writer){
+    if(writer.pending){Ok(writer.cfg->Apply(),"APPLY");writer.pending=false;}
+    writer.finish();
+}
+static void VerifyRecoverableFlags(const Receipt& target,const Bindings& paths){
+    for(const auto& [id,b]:paths){
+        const bool baseline=target.original.at(id);
+        if((id[0]==L'N' && b.enabled!=baseline) || (b.enabled && !baseline)) Fail("FRESH_FLAGS");
+    }
+}
+static void RollBackFresh(Receipt& target,const FlagMap& before,const std::vector<wchar_t>& journal){
+    Session writer;writer.acquire();writer.init();
+    {
+        auto paths=ReadPaths(writer.cfg.Get(),target);
+        Receipt authenticated{target.luid,target.pnp,{}};
+        LoadFreshOriginal(authenticated,Decode(journal),paths);
+        if(authenticated.original!=target.original || ReadProperty(VerifyPnp(target.pnp))!=journal ||
+           ReadProtectedBindingReceipt()!=journal) Fail("JOURNAL");
+        VerifyRecoverableFlags(target,paths);
+        StageIpCommit(writer,paths,before);
+    }
+    Commit(writer);
+    Receipt initial{target.luid,target.pnp,before};
+    AwaitReadback(initial,true); // exact pre-Apply snapshot, including every dependency
+}
+// PnP startup and NetCfg refresh are asynchronous. Only read while waiting;
+// the writer below reopens the graph and repeats the identity and journal checks.
+static void AwaitFreshGraph(NET_LUID fresh,const std::vector<wchar_t>& journal){
     const auto deadline=Clock::now()+std::chrono::milliseconds(1800);
     for(;;){
-        try {
+        try{
+            Receipt sample{fresh,FixedSoftwareDevice(),{}};
             Session reader;reader.create();reader.init();
             {
-                auto paths=ReadPaths(reader.cfg.Get(),receipt);
-                const auto current=ReadProperty(VerifyPnp(fixed));
-                if(!current.empty() && current!=witness.previousJournal) Fail("JOURNAL");
-                if(witness.previousJournal.empty()){
-                    // The old devnode (including its property) was entirely gone.
-                    // The newly created independent instance must have both protocols on.
-                    Capture(receipt,paths);
-                }else{
-                    // Never transplant path activity across device generations.
-                    // The newly materialized device must already satisfy its full
-                    // captured map, including other bindings and dependency cascades.
-                    LoadOriginal(receipt,Decode(witness.previousJournal),paths);
-                    if(!MapMatches(receipt,paths,true)) Fail("DRIFT");
+                auto paths=ReadPaths(reader.cfg.Get(),sample);
+                if(!journal.empty()){
+                    LoadFreshOriginal(sample,Decode(journal),paths);
+                    if(!MapMatches(sample,paths,true) && !MapMatches(sample,paths,false)) Fail("FRESH_FLAGS");
                 }
             }
-            reader.finish();VerifyLive(receipt);return;
-        }catch(const Failure& issue){
-            receipt.original.clear();
-            if(!TransientRead(issue) || Clock::now()>=deadline) throw;
+            reader.finish();VerifyLive(sample);return;
+        }catch(const Failure& f){
+            const bool settle=TransientRead(f) || !strcmp(f.reason,"FRESH_COMPONENTS") ||
+                !strcmp(f.reason,"FRESH_TOKENS") || !strcmp(f.reason,"FRESH_FLAGS");
+            if(!settle || Clock::now()>=deadline) throw;
             Sleep(20);
         }
+    }
+}
+static void RecoverFreshBindings(NET_LUID previous,NET_LUID fresh){
+    auto& witness=DepartedWitness();
+    if(!fresh.Value || !previous.Value || witness.previous.Value!=previous.Value) Fail("OWNER");
+    const auto& journal=witness.previousJournal;
+    Receipt target{fresh,FixedSoftwareDevice(),{}};
+    FlagMap before;
+    bool stagedOrApplied=false;
+    AwaitFreshGraph(fresh,journal);
+    try{
+        Session writer;writer.acquire();writer.init();
+        {
+            auto paths=ReadPaths(writer.cfg.Get(),target);
+            const DEVINST node=VerifyPnp(target.pnp);
+            const auto onDevice=ReadProperty(node),mirror=ReadProtectedBindingReceipt();
+            if((!onDevice.empty() && onDevice!=journal) || (!mirror.empty() && mirror!=journal)) Fail("JOURNAL");
+            if(journal.empty()){
+                // Neither of the two protected old stores has an original
+                // baseline. Only accept a new default-on stack, read-only.
+                try{Capture(target,paths);}
+                catch(const Failure& f){if(!strcmp(f.reason,"BASELINE"))Fail("FRESH_UNRECORDED");throw;}
+            }else{
+                CheckDepartedJournal(journal,target.pnp,previous);
+                LoadFreshOriginal(target,Decode(journal),paths);
+                if(!MapMatches(target,paths,true)){
+                    if(!MapMatches(target,paths,false)) Fail("FRESH_FLAGS");
+                    before=Flags(paths);
+                    // Keep the exact *old* baseline and dead owner authoritative,
+                    // including on a partial Apply or the loss of the new PDO.
+                    StoreProtectedBindingReceipt(journal);
+                    if(onDevice.empty()) Store(node,journal);
+                    if(ReadProperty(node)!=journal || ReadProtectedBindingReceipt()!=journal) Fail("JOURNAL");
+                    stagedOrApplied=true;
+                    StageIpCommit(writer,paths,target.original);
+                }
+            }
+        }
+        Commit(writer);
+        AwaitReadback(target,true);
+    }catch(...){
+        if(stagedOrApplied){
+            try{RollBackFresh(target,before,journal);}
+            catch(...){Fail("FRESH_ROLLBACK");}
+        }
+        throw;
+    }
+    if(!journal.empty()){
+        // Revalidate under the write lock before retiring the two durable
+        // copies. Failed readback or interrupted cleanup retains a recoverable copy.
+        Session writer;writer.acquire();writer.init();
+        {
+            auto paths=ReadPaths(writer.cfg.Get(),target);
+            if(!MapMatches(target,paths,true)) Fail("FRESH_FLAGS");
+            const auto node=VerifyPnp(target.pnp);
+            auto remaining=ReadProperty(node);
+            if(!remaining.empty()) Clear(node,journal);
+            else ClearProtectedBindingReceipt(journal);
+        }
+        writer.finish();
     }
 }
 static DWORD Run(ULONG64 expected,bool restore) {
@@ -553,14 +681,14 @@ extern "C" __declspec(dllexport) DWORD __cdecl OpRestoreIpBindings(ULONG64 creat
     return Run(creatorLuid,true);
 }
 
-// The SYSTEM recovery process which witnessed the exact departed node is the
-// only process able to compare the replacement. Neither phase edits bindings.
+// The replacement belongs to the same SYSTEM helper that attested the departed
+// device; only the exact original TCP/IP path choices may be restored.
 extern "C" __declspec(dllexport) DWORD __cdecl OpDormantDepartureEvidence(ULONG64 oldLuid,ULONG64 newLuid) {
     try {
         RequireSystem();Apartment apartment;TransactionLock serial;
         NET_LUID oldId={},newId={};oldId.Value=oldLuid;newId.Value=newLuid;
         if(!oldId.Value) Fail("IDENTITY");
-        if(newId.Value) VerifyFreshBindings(oldId,newId);
+        if(newId.Value) RecoverFreshBindings(oldId,newId);
         else WitnessDeparture(oldId);
         return ERROR_SUCCESS;
     }catch(const Failure& failure){
@@ -572,6 +700,14 @@ extern "C" __declspec(dllexport) DWORD __cdecl OpDormantDepartureEvidence(ULONG6
         if(!strcmp(r,"MISSING_JOURNAL")) return 5;
         if(!strcmp(r,"JOURNAL")) return 6;
         if(!strcmp(r,"OWNER")) return 7;
+        if(!strcmp(r,"FRESH_COMPONENTS")) return 10;
+        if(!strcmp(r,"FRESH_TOKENS")) return 11;
+        if(!strcmp(r,"FRESH_FLAGS")) return 12;
+        if(!strcmp(r,"FRESH_UNRECORDED")) return 13;
+        if(!strcmp(r,"FRESH_ROLLBACK")) return 14;
+        if(!strcmp(r,"READBACK")) return 15;
+        if(!strcmp(r,"STAGE") || !strcmp(r,"APPLY")) return 16;
+        if(!strcmp(r,"PNP") || !strcmp(r,"IDENTITY")) return newLuid ? 17 : 9;
         return newLuid ? 8 : 9;
     }catch(...){return 9;}
 }

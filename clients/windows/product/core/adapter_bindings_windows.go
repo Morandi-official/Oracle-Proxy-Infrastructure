@@ -149,6 +149,22 @@ func dormantDepartureEvidence(previous, fresh uint64, original error) error {
 		return bindingRestoreFailure("DORMANT_DEVICE_OWNER")
 	case 8:
 		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_MISMATCH")
+	case 10:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_COMPONENTS")
+	case 11:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_PATH_TOKENS")
+	case 12:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_FLAGS")
+	case 13:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_UNRECORDED_DISABLED")
+	case 14:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_ROLLBACK_FAILED")
+	case 15:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_READBACK")
+	case 16:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_APPLY")
+	case 17:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_IDENTITY")
 	default:
 		return bindingRestoreFailure("DORMANT_DEVICE_QUERY_FAILED")
 	}

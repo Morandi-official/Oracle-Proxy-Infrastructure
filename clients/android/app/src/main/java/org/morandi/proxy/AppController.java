@@ -232,6 +232,8 @@ public final class AppController {
         final long nativeStartMs;
         final long networkWaitMs;
         final long exitProofMs;
+        final String ipv4ProofProtocol;
+        final String ipv6ProofProtocol;
         final int attempts;
 
         ConnectionTiming(long totalMs, long policyMs, TunnelEngine.AttemptTiming attempt) {
@@ -241,6 +243,8 @@ public final class AppController {
             this.nativeStartMs = attempt.nativeStartMs;
             this.networkWaitMs = attempt.networkWaitMs;
             this.exitProofMs = attempt.exitProofMs;
+            this.ipv4ProofProtocol = attempt.ipv4ProofProtocol;
+            this.ipv6ProofProtocol = attempt.ipv6ProofProtocol;
             this.attempts = attempt.attempts;
         }
     }

@@ -6,6 +6,7 @@ def signingStorePath = providers.environmentVariable('ANDROID_SIGNING_STORE_PATH
 def signingStorePassword = providers.environmentVariable('ANDROID_SIGNING_KEYSTORE_PASSWORD')
 def signingKeyAlias = providers.environmentVariable('ANDROID_SIGNING_KEY_ALIAS')
 def signingKeyPassword = providers.environmentVariable('ANDROID_SIGNING_KEY_PASSWORD')
+def http3ExitProbe = providers.gradleProperty('proxyHttp3ExitProbe').orNull == 'true'
 def hasReleaseSigning = [signingStorePath, signingStorePassword, signingKeyAlias, signingKeyPassword]
         .every { it.isPresent() && !it.get().isBlank() }
 
@@ -20,6 +21,7 @@ android {
         versionCode = 6
         versionName = '0.1.0'
         testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
+        buildConfigField 'boolean', 'H3_EXIT_PROOF_ENABLED', http3ExitProbe.toString()
     }
 
     compileOptions {

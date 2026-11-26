@@ -117,6 +117,7 @@ public final class ProductionLifecycleTest {
             }
             android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_VERIFIED_FAMILIES="
                     + (api.dualStack ? 2 : 1));
+            reportProofProtocol(controller, "FIRST");
             Network vpn = vpnNetwork(context);
             assertNotNull("Production VPN network is installed", vpn);
             assertTrue("DNS resolves over the VPN network", vpn.getAllByName("www.cloudflare.com").length > 0);
@@ -130,6 +131,7 @@ public final class ProductionLifecycleTest {
                 tapConnect(instrumentation, screen, reconnect);
                 reconnect.report("CONNECT_RECONNECT_CLICK");
             }
+            reportProofProtocol(controller, "RECONNECT");
             controller.disconnect();
             await("Production VPN route removed after reconnect",
                     () -> "disconnected".equals(controller.snapshot().mode) && !engine.isUp()
@@ -147,6 +149,23 @@ public final class ProductionLifecycleTest {
 
     private static boolean signedIn(AppController.State state) {
         return state.signedIn && !state.busy;
+    }
+
+    private static void reportProofProtocol(AppController controller, String label) {
+        AppController.ConnectionTiming timing = controller.lastConnectTiming();
+        assertNotNull("Verified connection records its actual proof protocols", timing);
+        assertTrue(timing.ipv4ProofProtocol.equals("h3") || timing.ipv4ProofProtocol.equals("https"));
+        assertTrue(timing.ipv6ProofProtocol.isEmpty() || timing.ipv6ProofProtocol.equals("h3")
+                || timing.ipv6ProofProtocol.equals("https"));
+        android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_EXIT_PROOF_" + label
+                + "=IPV4:" + timing.ipv4ProofProtocol + ";IPV6:"
+                + (timing.ipv6ProofProtocol.isEmpty() ? "blocked" : timing.ipv6ProofProtocol)
+                + ";H3_CANDIDATE=" + (BuildConfig.H3_EXIT_PROOF_ENABLED ? 1 : 0));
+        android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CONNECT_PHASES_" + label
+                + "=TOTAL_MS:" + timing.totalMs + ";POLICY_MS:" + timing.policyMs
+                + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";NATIVE_START_MS:" + timing.nativeStartMs
+                + ";NETWORK_WAIT_MS:" + timing.networkWaitMs + ";EXIT_PROOF_MS:" + timing.exitProofMs
+                + ";ATTEMPTS:" + timing.attempts);
     }
 
     private static void tapConnect(Instrumentation instrumentation, MainActivity screen, StateTiming timing) {

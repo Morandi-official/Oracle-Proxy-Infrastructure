@@ -482,6 +482,7 @@ internal static class OracleAcceptance
         string? username=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME"),password=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
         if(string.IsNullOrWhiteSpace(username)||string.IsNullOrEmpty(password))return 2;
         string? ownedCiDevice=null;
+        string phase="CLIENT_ADMISSION";
         try{
             await CrashController(username,password);
             await Send("AttachClient");
@@ -493,9 +494,9 @@ internal static class OracleAcceptance
             ownedCiDevice=login["registration"]!["device_id"]!.GetValue<string>();
             Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+ownedCiDevice);
             // Exact identities observed in failed main runs 43574325984,
-            // 43575513345 and 44271623029. Never
+            // 43575513345, 44271623029 and 45759719017. Never
             // delete by account-wide, name-prefix or age-based heuristics.
-            foreach(string priorFailedCi in new[]{"82cd151654c7","d8a1b9adf004","b0eb3ba5c647"}){
+            foreach(string priorFailedCi in new[]{"82cd151654c7","d8a1b9adf004","b0eb3ba5c647","7880b679ca14"}){
                 if(priorFailedCi!=ownedCiDevice && login["devices"] is JsonArray devicesBefore && devicesBefore.Any(d=>d?["id"]?.GetValue<string>()==priorFailedCi && d?["current"]?.GetValue<bool>()==false)){
                     login=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",priorFailedCi));
                     Check(login["devices"] is JsonArray remaining && remaining.All(d=>d?["id"]?.GetValue<string>()!=priorFailedCi),"PRIOR_EXACT_FAILED_CI_DEVICE_RETIRED");
@@ -509,8 +510,10 @@ internal static class OracleAcceptance
             var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
             IPAddress? performanceTarget=await OraclePerformance.ResolveTarget();
             var networkTargets=await OracleNetworkPerformance.ResolveTargets();
+            phase="DIRECT_NETWORK";
             await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:false);
             await MeasureNetwork(networkTargets,allowed,tunneled:false);
+            phase="CONNECT";
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
             using var runningUu=Process.GetProcessById(int.Parse(Environment.GetEnvironmentVariable("ORACLE_CI_RUNNING_UU_PID")!));
             Check(!runningUu.HasExited && connected["uu_candidates"]?.GetValue<int>()>0 &&
@@ -523,9 +526,11 @@ internal static class OracleAcceptance
             Check(connected["tun_route_mask"]?.GetValue<uint>()==15,"ORDINARY_ROUTE_BOTH_IPV4_AND_IPV6_HALVES_USE_OWNED_TUN");
             Check(connected["observed_at"]?.GetValue<long>()>0 && connected["account"]?["used_bytes"]?.GetValue<long>()>=0,
                 "REAL_AUTHENTICATED_USAGE_AND_SERVER_OBSERVATION_AVAILABLE_TO_UI");
+            phase="TUNNELED_NETWORK";
             await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:true);
             var meterStart=await Send("Status");
             await MeasureNetwork(networkTargets,allowed,tunneled:true,connected["core_pid"]!.GetValue<uint>());
+            phase="BROWSER";
             await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
             var meterEnd=await Send("Status");
             uint core=meterStart["core_pid"]?.GetValue<uint>()??0;
@@ -535,9 +540,11 @@ internal static class OracleAcceptance
                 last?["sample_ms"]?.GetValue<long>()>start && first["rx_bytes"]?.GetValue<long>() is long rx && rx>=0 &&
                 first["tx_bytes"]?.GetValue<long>() is long tx && tx>=0 && last?["rx_bytes"]?.GetValue<long>()>rx && last?["tx_bytes"]?.GetValue<long>()>tx,
                 "REAL_LOCAL_TUN_COUNTERS_ADVANCE_IN_BOTH_DIRECTIONS_DURING_BROWSER_TRAFFIC");
+            phase="GUI_TOGGLE";
             await LiveGuiUdpToggle();
             // X intentionally clears a non-remembered login. Reauthenticate the
             // same durable key; never allocate a second CI device for GUI timing.
+            phase="ACCOUNT_AND_DIAGNOSTICS";
             await Send("AttachClient");
             loginTimer.Restart();
             var resumed=RequireSuccess("Login",await ControlPipe.Send("Login",username,Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD")));
@@ -570,19 +577,35 @@ internal static class OracleAcceptance
                 "REAL_COLD_START_RESTORES_REMEMBERED_LOGIN_FROM_PRE_MIGRATION_IP_CACHE");
             Console.WriteLine("WINDOWS_PERF_REMEMBERED_FRESH_REFRESH_AFTER_COLD_START_MS="+loginMs);
 
+            phase="DEVICE_RETIREMENT";
             var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));
             Check(deleted["login_authenticated"]?.GetValue<bool>()==false && deleted["account"] is null && deleted["core_pid"]?.GetValue<uint>()==0 && deleted["intent"]?.GetValue<bool>()==false,"MIGRATION_DEVICE_SELF_DELETE_CLEARS_LOGIN_AND_RETIRES_ONLY_THIS_CI_SLOT");
             ownedCiDevice=null;Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
-        }catch(Exception error){Console.WriteLine("MIGRATION_ERROR_TYPE="+error.GetType().Name);Console.WriteLine("MIGRATION_ASSERTION="+_lastAssertion);try{await ControlPipe.Send("Disconnect");}catch{}return 1;}
+        }catch(Exception error){
+            Console.WriteLine("MIGRATION_FAILURE_PHASE="+phase);
+            Console.WriteLine("MIGRATION_ERROR_TYPE="+error.GetType().Name);
+            Console.WriteLine("MIGRATION_ASSERTION="+_lastAssertion);
+            // Reattach only after the all-off service has finished stopping.
+            try{await Send("Disconnect");await StoppedService();}
+            catch(Exception stopError){Console.WriteLine("MIGRATION_FAILURE_STOP_TYPE="+stopError.GetType().Name);}
+            return 1;
+        }
         finally{
             if(ownedCiDevice is not null){
+                string retirementPhase="ATTACH";
                 try{
                     await Send("AttachClient");
+                    retirementPhase="AUTHENTICATE";
                     var cleanupLogin=RequireSuccess("Login",await ControlPipe.Send("Login",username,Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD")));
+                    retirementPhase="MATCH_IDENTITY";
                     if(cleanupLogin["registration"]?["device_id"]?.GetValue<string>()!=ownedCiDevice)throw new IOException("CI_CLEANUP_DEVICE_IDENTITY_CHANGED");
+                    retirementPhase="DELETE";
                     var retired=await ControlPipe.Send("DeleteDevice",ownedCiDevice).WaitAsync(TimeSpan.FromSeconds(15));
                     Console.WriteLine("FAILED_RUN_OWN_CI_DEVICE_RETIREMENT="+(retired["ok"]?.GetValue<bool>()==true && retired["login_authenticated"]?.GetValue<bool>()==false?"PASS":"UNCONFIRMED"));
-                }catch{Console.WriteLine("FAILED_RUN_OWN_CI_DEVICE_RETIREMENT=UNCONFIRMED");}
+                }catch(Exception error){
+                    Console.WriteLine($"FAILED_RUN_OWN_CI_DEVICE_RETIREMENT_PHASE={retirementPhase};TYPE={error.GetType().Name}");
+                    Console.WriteLine("FAILED_RUN_OWN_CI_DEVICE_RETIREMENT=UNCONFIRMED");
+                }
             }
         }
     }

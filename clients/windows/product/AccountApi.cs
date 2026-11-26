@@ -10,6 +10,7 @@ internal sealed class AccountApi : IDisposable
     private readonly HttpClient _directHttp;
     private readonly HttpClient _protectedHttp;
     private readonly CancellationTokenSource _stop=new();
+    private int _disconnectedRouteWarmed;
     private static readonly object AddressGate=new();
     internal const string BootstrapAddress="152.67.156.100";
     private static string[] KnownAddresses=[];
@@ -46,6 +47,27 @@ internal sealed class AccountApi : IDisposable
         return new HttpClient(handler) { BaseAddress = Base, Timeout = TimeSpan.FromSeconds(12) };
     }
 
+    internal void WarmDisconnectedRoute()
+    {
+        if (Interlocked.Exchange(ref _disconnectedRouteWarmed, 1) == 0)
+            _ = WarmDisconnectedRouteAsync();
+    }
+
+    private async Task WarmDisconnectedRouteAsync()
+    {
+        // Reuse a validated TLS connection for manual login. The anonymous
+        // state request carries no account, token, cookies, or device identity.
+        try {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+            deadline.CancelAfter(TimeSpan.FromSeconds(3));
+            using var response = await _directHttp.GetAsync("api/client/state",
+                HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            await response.Content.LoadIntoBufferAsync(1024, deadline.Token);
+        } catch (Exception error) when (error is HttpRequestException or IOException or OperationCanceledException or ObjectDisposedException) {
+            // A missed warmup must not block or replace the real login.
+        }
+    }
+
     internal static async ValueTask<Stream> ConnectAccount(
         DnsEndPoint endpoint,
         bool protectedPath,
@@ -56,12 +78,54 @@ internal sealed class AccountApi : IDisposable
         if (endpoint.Host != Base.Host || endpoint.Port != 443)
             throw new IOException("UNTRUSTED_API_ENDPOINT");
         cancel.ThrowIfCancellationRequested();
-        if (!protectedPath) {
-            var connection = await trySystemRoute(endpoint, cancel);
-            if (connection is not null) return connection;
+        if (protectedPath) return await connectPhysicalRoute(cancel).ConfigureAwait(false);
+
+        // The preferred system route keeps its short head start. If DNS or TCP
+        // is slow, try the known physical route without waiting for its full
+        // timeout. The HTTP handler authenticates the fixed TLS name and sends
+        // credentials only over the single winning socket.
+        using var race = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        Task<Stream?>? system = null;
+        Task<Stream>? physical = null;
+        try {
+            system = trySystemRoute(endpoint, race.Token);
+            if (await Task.WhenAny(system, Task.Delay(200, race.Token)).ConfigureAwait(false) != system) {
+                cancel.ThrowIfCancellationRequested();
+                physical = connectPhysicalRoute(race.Token);
+                await Task.WhenAny((Task)system, physical).WaitAsync(cancel).ConfigureAwait(false);
+            }
             cancel.ThrowIfCancellationRequested();
+            if (system.IsCompletedSuccessfully && system.Result is Stream preferred) {
+                system = null;
+                return preferred;
+            }
+            if (physical is null) {
+                // Preserve the ordinary path's unexpected errors when it
+                // finishes before a fallback has even started.
+                await system.ConfigureAwait(false);
+                physical = connectPhysicalRoute(race.Token);
+            } else if (physical.IsCompleted && !physical.IsCompletedSuccessfully && !system.IsCompleted) {
+                if (await system.WaitAsync(cancel).ConfigureAwait(false) is Stream remaining) {
+                    cancel.ThrowIfCancellationRequested();
+                    system = null;
+                    return remaining;
+                }
+            }
+            var fallback = await physical.WaitAsync(cancel).ConfigureAwait(false);
+            cancel.ThrowIfCancellationRequested();
+            physical = null;
+            return fallback;
+        } finally {
+            race.Cancel();
+            if (system is not null) _ = DisposeLateConnection(system);
+            if (physical is not null) _ = DisposeLateConnection(physical);
         }
-        return await connectPhysicalRoute(cancel);
+    }
+
+    private static async Task DisposeLateConnection<T>(Task<T> attempt) where T : Stream?
+    {
+        try { (await attempt.ConfigureAwait(false))?.Dispose(); }
+        catch (Exception) { /* The abandoned route no longer owns the request. */ }
     }
 
     private static Task<Stream?> TrySystemRoute(DnsEndPoint endpoint, CancellationToken cancel) =>

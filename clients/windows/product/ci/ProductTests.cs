@@ -473,6 +473,34 @@ internal static class ProductTests
         }, PhysicalRoute, CancellationToken.None).GetAwaiter().GetResult();
         UiAssert(ReferenceEquals(fallback, physical) && calls.SequenceEqual(new[] { "system", "physical" }),
             "DISCONNECTED_ACCOUNT_API_RETAINS_PHYSICAL_FALLBACK_BEFORE_TLS");
+        using var lateSystemStream = new MemoryStream();
+        using var fastPhysicalStream = new MemoryStream();
+        var slowSystem = new TaskCompletionSource<Stream?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken systemCancellation = default;
+        var hedged = AccountApi.ConnectAccount(endpoint, false, (_, token) => {
+            systemCancellation = token;
+            return slowSystem.Task;
+        }, _ => Task.FromResult<Stream>(fastPhysicalStream), CancellationToken.None).AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+        UiAssert(ReferenceEquals(hedged, fastPhysicalStream) && systemCancellation.IsCancellationRequested && fastPhysicalStream.CanRead,
+            "ACCOUNT_PHYSICAL_ROUTE_WINS_WHILE_SYSTEM_ROUTE_IS_STALLED");
+        slowSystem.SetResult(lateSystemStream);
+        UiAssert(SpinWait.SpinUntil(() => !lateSystemStream.CanRead, TimeSpan.FromSeconds(3)),
+            "ACCOUNT_LATE_SYSTEM_RESULT_IS_DISPOSED");
+
+        using var survivingSystemStream = new MemoryStream();
+        var systemWatchingFallback = new TaskCompletionSource<Stream?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fallbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failedPhysical = new TaskCompletionSource<Stream>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var surviving = AccountApi.ConnectAccount(endpoint, false, (_, _) => systemWatchingFallback.Task, _ => {
+            fallbackStarted.SetResult();
+            return failedPhysical.Task;
+        }, CancellationToken.None).AsTask();
+        fallbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+        failedPhysical.SetException(new IOException("SYNTHETIC_PHYSICAL_ROUTE_UNAVAILABLE"));
+        systemWatchingFallback.SetResult(survivingSystemStream);
+        UiAssert(ReferenceEquals(surviving.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult(), survivingSystemStream) && survivingSystemStream.CanRead,
+            "ACCOUNT_PHYSICAL_ROUTE_FAILURE_CANNOT_SUPPRESS_A_VALID_SYSTEM_ROUTE");
         Console.WriteLine("ACCOUNT_API_ROUTE_MODE_AND_TLS_ORIGIN_BOUNDARY=PASS");
     }
 

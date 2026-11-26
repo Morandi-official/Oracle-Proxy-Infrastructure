@@ -10,6 +10,7 @@ try{
     if($LASTEXITCODE){throw 'SYSTEM fixture ACL not secured'}
     Set-Content "$fixture/authorized" 'DISPOSABLE_GITHUB_ONLY' -Encoding ascii
     Copy-Item "$env:RUNNER_TEMP/binding-lab.test.exe" "$fixture/binding-lab.test.exe"
+    Copy-Item "$env:RUNNER_TEMP/binding-native.exe" "$fixture/binding-native.exe"
     $body=@'
 $env:ORACLE_BINDING_LAB='DISPOSABLE_WINDOWS_RUNNER'
 $fixture=Join-Path $env:ProgramData OracleProxyCandidateFixture

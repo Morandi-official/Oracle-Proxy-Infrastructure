@@ -5,8 +5,10 @@ package tun
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/netip"
@@ -25,6 +27,56 @@ import (
 
 //go:embed bindinglab.ps1
 var bindingLabScript string
+
+// Set by the lab-only build after compiling this commit's native executable.
+var bindingLabNativeSHA256 string
+
+type labSnapshot struct {
+	PNP, Description, Hash string
+	Count                  int
+	Present, Matching      bool
+}
+
+// Independent CIM/PnP witness. Called before starting the helper, while already unbound,
+// and after session timing is finished; the read-only script never mutates bindings.
+func bindingSnapshot(ctx context.Context, luid winipcfg.LUID, stage string, original labSnapshot) (labSnapshot, error) {
+	var result labSnapshot
+	system, err := windows.GetSystemDirectory()
+	if err != nil {
+		return result, err
+	}
+	utf := utf16.Encode([]rune(bindingLabScript))
+	raw := make([]byte, len(utf)*2)
+	for i, u := range utf {
+		raw[2*i], raw[2*i+1] = byte(u), byte(u>>8)
+	}
+	audit := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(raw))
+	audit.Env = append(os.Environ(), "ORACLE_TEST_CREATED_LUID="+strconv.FormatUint(uint64(luid), 10), "ORACLE_TEST_AUDIT_STAGE="+stage, "ORACLE_TEST_BASELINE_PNP="+original.PNP, "ORACLE_TEST_BASELINE_DESC="+original.Description)
+	output, err := audit.Output()
+	if err != nil {
+		return result, fmt.Errorf("CIM_QUERY_FAILED")
+	}
+	if err := json.Unmarshal(output, &result); err != nil || result.PNP == "" || result.Description == "" || result.Count <= 0 || len(result.Hash) != 64 {
+		return result, fmt.Errorf("CIM_WITNESS_INVALID")
+	}
+	return result, nil
+}
+
+func logBindingPhase(t *testing.T, fields []string) bool {
+	if len(fields) != 7 || fields[0] != "PHASE" || (fields[1] != "before" && fields[1] != "restore") {
+		return false
+	}
+	var times [5]int64
+	for i, v := range fields[2:] {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 || n > 90000 {
+			return false
+		}
+		times[i] = n
+	}
+	t.Logf("NETCFG_%s LOCK_MS=%d IDENTIFY_MS=%d STAGE_MS=%d APPLY_MS=%d READBACK_MS=%d", fields[1], times[0], times[1], times[2], times[3], times[4])
+	return true
+}
 
 // Read only this creator's complete GAA record. Never print an address, zone or suffix.
 func labDefaultDNS(luid winipcfg.LUID) (int, bool) {
@@ -120,18 +172,48 @@ func TestDisposableOracleBindings(t *testing.T) {
 	}
 	count, isDefault := labDefaultDNS(luid)
 	t.Logf("BIND_LAB_DNS_COUNT=%d BIND_LAB_IPV6_DEFAULT_TRIPLET=%t", count, isDefault)
-	system, err := windows.GetSystemDirectory()
-	if err != nil {
-		t.Fatal("SYSTEM_DIRECTORY")
-	}
-	utf := utf16.Encode([]rune(bindingLabScript))
-	bytes := make([]byte, len(utf)*2)
-	for i, u := range utf {
-		bytes[2*i], bytes[2*i+1] = byte(u), byte(u>>8)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	shell := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(bytes))
+	fixture := filepath.Join(os.Getenv("ProgramData"), "OracleProxyCandidateFixture")
+	self, err := os.Executable()
+	if err != nil || !strings.EqualFold(filepath.Clean(filepath.Dir(self)), filepath.Clean(fixture)) {
+		t.Fatal("FIXTURE_EXECUTABLE_REQUIRED")
+	}
+	binary := filepath.Join(fixture, "binding-native.exe")
+	content, err := os.ReadFile(binary)
+	if err != nil || len(bindingLabNativeSHA256) != 64 || !strings.EqualFold(fmt.Sprintf("%x", sha256.Sum256(content)), bindingLabNativeSHA256) {
+		t.Fatal("NATIVE_HELPER_DIGEST_MISMATCH")
+	}
+	original, err := bindingSnapshot(ctx, luid, "before", labSnapshot{})
+	if err != nil || !original.Present || !original.Matching {
+		t.Fatal("CIM_BASELINE_FAILED")
+	}
+	t.Logf("BIND_LAB_IDENTITY_before PNP_PRESENT=%t MATCHING_NIC=%t", original.Present, original.Matching)
+	checkWitness := func(stage string) bool {
+		auditCtx, stopAudit := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stopAudit()
+		auditStarted := time.Now()
+		observed, e := bindingSnapshot(auditCtx, luid, stage, original)
+		t.Logf("CIM_%s_OTHER_BINDINGS_AUDIT_MS=%d", stage, time.Since(auditStarted).Milliseconds())
+		if e != nil {
+			t.Errorf("CIM_%s_QUERY_FAILED", stage)
+			return false
+		}
+		t.Logf("BIND_LAB_IDENTITY_%s PNP_PRESENT=%t MATCHING_NIC=%t", stage, observed.Present, observed.Matching)
+		if observed.PNP != original.PNP || !observed.Present || (stage == "restored" && !observed.Matching) {
+			t.Errorf("CIM_%s_IDENTITY_FAILED", stage)
+			return false
+		}
+		sameBindings := observed.Count == original.Count && observed.Hash == original.Hash
+		t.Logf("CIM_%s_OTHER_BINDINGS_UNCHANGED=%t BINDING_ROWS=%d", stage, sameBindings, observed.Count)
+		if !sameBindings {
+			t.Errorf("CIM_%s_OTHER_BINDINGS_CHANGED", stage)
+			return false
+		}
+		return true
+	}
+	shell := exec.CommandContext(ctx, binary)
+	shell.Dir = fixture
 	shell.Env = append(os.Environ(), "ORACLE_TEST_CREATED_LUID="+strconv.FormatUint(uint64(luid), 10))
 	input, err := shell.StdinPipe()
 	if err != nil {
@@ -148,41 +230,58 @@ func TestDisposableOracleBindings(t *testing.T) {
 	}
 	lines := bufio.NewScanner(output)
 	bindingReadback, restored := false, false
+	phaseReported := make(map[string]bool)
+	logLine := func(line string) bool {
+		if line == "READBACK 0" || line == "READBACK 1" {
+			bindingReadback = line == "READBACK 1"
+			t.Logf("BIND_LAB_BINDINGS_READBACK=%t", bindingReadback)
+			return true
+		}
+		fields := strings.Fields(line)
+		if logBindingPhase(t, fields) {
+			if phaseReported[fields[1]] {
+				t.Error("NETCFG_DUPLICATE_PHASE")
+			}
+			phaseReported[fields[1]] = true
+			return true
+		}
+		switch line {
+		case "FAILED_INPUT", "FAILED_SYSTEM", "FAILED_FIXTURE", "FAILED_COM", "FAILED_LOCK", "FAILED_INIT", "FAILED_IDENTITY", "FAILED_PNP", "FAILED_ENUM", "FAILED_PATH", "FAILED_BASELINE", "FAILED_DRIFT", "FAILED_STAGE", "FAILED_APPLY", "FAILED_REBOOT", "FAILED_READBACK", "FAILED_PARENT_ENDED", "FAILED_ROLLBACK", "ROLLBACK_FAILED":
+			t.Log(line)
+		}
+		return false
+	}
 	expect := func(value string) bool {
-		for n := 0; n < 6 && lines.Scan(); n++ {
+		for n := 0; n < 16 && lines.Scan(); n++ {
 			line := lines.Text()
-			if line == "READBACK 0" || line == "READBACK 1" {
-				bindingReadback = line == "READBACK 1"
-				t.Logf("BIND_LAB_BINDINGS_READBACK=%t", bindingReadback)
-				continue
+			if line == value {
+				return true
 			}
-			fields := strings.Fields(line)
-			if len(fields) == 4 && fields[0] == "IDENTITY" && (fields[1] == "before" || fields[1] == "unbound") {
-				pv, pe := strconv.Atoi(fields[2])
-				nv, ne := strconv.Atoi(fields[3])
-				if pe == nil && ne == nil && pv >= -1 && pv <= 1 && nv >= -1 && nv <= 1 {
-					t.Logf("BIND_LAB_IDENTITY_%s PNP_PRESENT=%d MATCHING_NIC=%d", fields[1], pv, nv)
-				}
-				continue
+			if !logLine(line) {
+				return false
 			}
-			if strings.HasPrefix(line, "FAILED_") {
-				switch line {
-				case "FAILED_IDENTITY", "FAILED_REPLACED", "FAILED_BINDINGS", "FAILED_AMBIGUOUS", "FAILED_BINDING_CHANGE", "FAILED_BASELINE", "FAILED_STILL_BOUND", "FAILED_PARENT_ENDED", "FAILED_ROLLBACK", "FAILED_OTHER_BINDINGS_CHANGED", "FAILED_PROVIDER":
-					t.Log(line)
-				}
-			}
-			return line == value
 		}
 		return false
 	}
 	defer func() {
 		_ = input.Close()
-		if restored && !expect("OTHERS_UNCHANGED") {
-			t.Error("OTHER_BINDINGS_READBACK_FAILED")
+		complete := false
+		for lines.Scan() {
+			line := lines.Text()
+			if line == "HELPER_COMPLETE" {
+				complete = true
+			} else {
+				logLine(line)
+			}
 		}
-		if shell.Wait() != nil {
+		if restored && (!complete || !phaseReported["before"] || !phaseReported["restore"]) {
+			t.Error("NATIVE_COMPLETION_WITNESS_MISSING")
+		}
+		if err := shell.Wait(); err != nil {
 			t.Error("PROVIDER_OR_RESTORE_FAILED")
 		}
+		t.Logf("NATIVE_HELPER_EXIT=%d NATIVE_HELPER_ACK=%t", shell.ProcessState.ExitCode(), complete)
+		checkWitness("restored")
 	}()
 	unbound := expect("UNBOUND")
 	t.Logf("BIND_LAB_DISABLE_PROVIDER_ELAPSED_MS=%d", time.Since(started).Milliseconds())
@@ -190,6 +289,7 @@ func TestDisposableOracleBindings(t *testing.T) {
 		t.Fatal("BINDING_DISABLE_FAILED")
 	}
 	disableMs := time.Since(started).Milliseconds()
+	checkWitness("unbound")
 	var empty bool
 	for n := 0; n < 25; n++ {
 		empty = verifyOracleParkedEmpty(luid) == nil
@@ -224,6 +324,7 @@ func TestDisposableOracleBindings(t *testing.T) {
 		t.Fatal("BINDINGS_NOT_RESTORED")
 	}
 	restored = true
+	providerReady := time.Since(click)
 	row, err := luid.Interface()
 	if err != nil || row.InterfaceGUID != *guid || row.InterfaceLUID != luid {
 		t.Fatal("RESTORE_IDENTITY_FAILED")
@@ -235,6 +336,7 @@ func TestDisposableOracleBindings(t *testing.T) {
 	} else if row.AdminStatus != winipcfg.NetIfAdminStatusUp {
 		t.Fatal("UNEXPECTED_ADMIN_STATE")
 	}
+	adminReady := time.Since(click)
 	for n := 0; n < 100; n++ {
 		_, v4 := luid.IPInterface(windows.AF_INET)
 		_, v6 := luid.IPInterface(windows.AF_INET6)
@@ -246,6 +348,7 @@ func TestDisposableOracleBindings(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+	dualIPReady := time.Since(click)
 	if err = verifyOracleRecoveryIdentity(luid); err != nil {
 		t.Fatal("CREATOR_CHANGED")
 	}
@@ -254,7 +357,8 @@ func TestDisposableOracleBindings(t *testing.T) {
 		t.Fatal("SESSION_REOPEN_FAILED")
 	}
 	readyMs := time.Since(click).Milliseconds()
-	session.End()
+	defer session.End()
+	t.Logf("BIND_LAB_RESTORE_CUMULATIVE_MS provider=%d admin=%d dual_ip=%d session=%d", providerReady.Milliseconds(), adminReady.Milliseconds(), dualIPReady.Milliseconds(), readyMs)
 	empty = empty && bindingReadback
 	t.Logf("DISABLE_INCLUDING_PROVIDER_START_MS=%d RESTORE_TO_EMPTY_SESSION_MS=%d STRICT_EMPTY=%t RESTORE_UNDER_1S=%t", disableMs, readyMs, empty, readyMs < 1000)
 	if readyMs >= 1000 {
@@ -263,4 +367,5 @@ func TestDisposableOracleBindings(t *testing.T) {
 	if !empty {
 		t.Fatal("UNBIND_DID_NOT_PROVE_EMPTY")
 	}
+	labRoundTrip(t, luid, session, click)
 }

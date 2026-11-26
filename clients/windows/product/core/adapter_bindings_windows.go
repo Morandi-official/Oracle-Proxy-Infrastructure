@@ -16,8 +16,8 @@ import (
 // Only the attested SYSTEM child uses this DLL. Its parent pins both images and
 // holds a non-replaceable bundle lease throughout the entire child lifetime.
 var adapterBindingLibrary struct {
-	once          sync.Once
-	park, restore uintptr
+	once                    sync.Once
+	park, restore, departed uintptr
 }
 
 func loadAdapterBindingLibrary() {
@@ -47,13 +47,14 @@ func loadAdapterBindingLibrary() {
 	}
 	park, errPark := windows.GetProcAddress(module, "OpParkIpBindings")
 	restore, errRestore := windows.GetProcAddress(module, "OpRestoreIpBindings")
-	if errPark != nil || errRestore != nil || park == 0 || restore == 0 {
+	departed, errDeparted := windows.GetProcAddress(module, "OpDormantDepartureEvidence")
+	if errPark != nil || errRestore != nil || errDeparted != nil || park == 0 || restore == 0 || departed == 0 {
 		_ = windows.FreeLibrary(module)
 		return
 	}
 	// Keep the module alive, including its owner-scoped recovery state, until
 	// process exit. Failure to resolve either operation disables both.
-	adapterBindingLibrary.park, adapterBindingLibrary.restore = park, restore
+	adapterBindingLibrary.park, adapterBindingLibrary.restore, adapterBindingLibrary.departed = park, restore, departed
 }
 
 func parkAdapterBindings(luid uint64) error {
@@ -109,5 +110,46 @@ func bindingRestoreResult(status uintptr) error {
 		return bindingRestoreFailure("PARK_RESTORE_INVALID_STATE")
 	default:
 		return bindingRestoreFailure("PARK_BINDINGS_RESTORE_FAILED")
+	}
+}
+
+// Only the dedicated dormant recovery child may call this after its ordinary
+// restore failed specifically at the exact NetCfg/PnP identity stage.
+func dormantDepartureEvidence(previous, fresh uint64, original error) error {
+	if (fresh == 0) != (original != nil) {
+		return bindingRestoreFailure("DORMANT_DEVICE_QUERY_FAILED")
+	}
+	if fresh == 0 {
+		typed, ok := original.(bindingRestoreFailure)
+		if !ok || (typed != "PARK_RESTORE_IDENTITY" && typed != "PARK_RESTORE_PNP") {
+			return original
+		}
+	}
+	adapterBindingLibrary.once.Do(loadAdapterBindingLibrary)
+	if previous == 0 || adapterBindingLibrary.departed == 0 {
+		return errors.New("PARK_BINDINGS_LOAD_FAILED")
+	}
+	status, _, _ := syscall.SyscallN(adapterBindingLibrary.departed, uintptr(previous), uintptr(fresh))
+	switch status {
+	case 0:
+		return nil
+	case 1:
+		return bindingRestoreFailure("DORMANT_DEVICE_PRESENT_STARTED")
+	case 2:
+		return bindingRestoreFailure("DORMANT_DEVICE_PRESENT_STOPPED")
+	case 3:
+		return bindingRestoreFailure("DORMANT_DEVICE_PRESENT_PROBLEM")
+	case 4:
+		return bindingRestoreFailure("DORMANT_DEVICE_SETUP_PRESENT")
+	case 5:
+		return bindingRestoreFailure("DORMANT_DEVICE_JOURNAL_MISSING")
+	case 6:
+		return bindingRestoreFailure("DORMANT_DEVICE_JOURNAL_INVALID")
+	case 7:
+		return bindingRestoreFailure("DORMANT_DEVICE_OWNER")
+	case 8:
+		return bindingRestoreFailure("DORMANT_DEVICE_FRESH_MISMATCH")
+	default:
+		return bindingRestoreFailure("DORMANT_DEVICE_QUERY_FAILED")
 	}
 }

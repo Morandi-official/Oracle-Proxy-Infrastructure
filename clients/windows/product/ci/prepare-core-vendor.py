@@ -494,24 +494,34 @@ DORMANT_RECOVERY = '''// RecoverDormantOracleAdapter handles only a dead creator
 // guarded recovery it never removes addresses, routes or DNS. Native snapshots
 // must prove only Windows-generated local address/route metadata remains
 // before a fresh Create is attempted. A Down row alone never permits recovery.
-func RecoverDormantOracleAdapter(value uint64, restore func(uint64) error) error {
+func RecoverDormantOracleAdapter(value uint64, restore func(uint64) error, departed func(uint64, uint64, error) error) error {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
-	if value == 0 || restore == nil || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
+	if value == 0 || restore == nil || departed == nil || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
 	luid := winipcfg.LUID(value)
 	if err := verifyOracleDormantEmpty(luid); err != nil { return err }
 	// The service already attested the dead creator and its receipt. Native
 	// restore touches only a matching durable owner+PnP journal; no journal
 	// is an idempotent read-only result. Never remove an unrestored device.
-	if err := restore(value); err != nil { return err }
+	wasDeparted := false
+	if err := restore(value); err != nil {
+		if proofErr := departed(value, 0, err); proofErr != nil { return proofErr }
+		wasDeparted = true
+	}
 	// A live/existing device or packet session must cause Create to collide.
 	// Never open/adopt it. Only this successful fresh Create grants a creator
 	// handle that this helper may close; no packet session is started here.
-	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	if err := verifyOracleRecoveryIdentity(luid); err != nil {
+		// The old IP Helper projection can disappear after the independent
+		// SWD witness. Reject any alias/GUID collision or enumeration error.
+		absent, queryErr := oracleRecoveryAbsent()
+		if !wasDeparted || queryErr != nil || !absent { return err }
+	}
 	created, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
 	if err != nil { return fmt.Errorf("DORMANT_RECREATE_FAILED") }
 	fresh := winipcfg.LUID(created.LUID())
 	err = verifyOracleDormantEmpty(fresh)
+	if err == nil && wasDeparted { err = departed(value, uint64(fresh), nil) }
 	// Always close our own fresh creator, including on a failed native audit.
 	// WintunCloseAdapter has void ABI; inspect the native table independently.
 	created.Close()

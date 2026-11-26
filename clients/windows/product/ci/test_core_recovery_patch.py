@@ -120,11 +120,87 @@ func TestExactEmptyDNSSnapshot(t *testing.T){
         self.assertLess(vendor.RECOVERY.index('verifyOracleRecoveryIdentity(luid)'), vendor.RECOVERY.index('restore(value)'))
         self.assertLess(vendor.RECOVERY.index('restore(value)'), vendor.RECOVERY.index('flushOracleRecoveryInterface(luid)'))
         self.assertLess(source.index('verifyOracleDormantEmpty(fresh)'),source.index('created.Close()'))
-        self.assertLess(source.index('created.Close()'),source.index('oracleRecoveryAbsent()'))
+        self.assertLess(source.index('created.Close()'),source.rindex('oracleRecoveryAbsent()'))
         for forbidden in ('OpenAdapter(','.Delete(','.Flush','SetInterfaceDnsSettings','StartSession(',
                           'exec.Command','os.Open','registry.','WFP','Uninstall(',
                           'entry.FirstDNSServerAddress','entry.DNSSuffix()', 'entry.FirstDNSSuffix'):
             self.assertNotIn(forbidden,source)
+
+    def test_dormant_departure_requires_two_snapshots_and_verifies_fresh_before_close(self):
+        go=shutil.which('go')
+        self.assertIsNotNone(go, 'Go is required to verify dormant recovery')
+        body=vendor.DORMANT_RECOVERY.split('func RecoverDormantOracleAdapter(',1)[1].split('func verifyOracleDormantEmpty(',1)[0]
+        body=('func recover('+body).replace('oracleAdapterMutex','mu').replace('winipcfg.LUID','uint64')
+        body=body.replace('wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))','create()')
+        stub=r"""
+package recovery
+import ("fmt"; "reflect"; "sync"; "testing"; "time")
+var mu sync.Mutex
+var oraclePreparedAdapter *adapter
+var events []string
+var missing, queryFailed, replaced bool
+type adapter struct{}
+func (a *adapter) LUID() uint64 {return 12}
+func (a *adapter) Close(){ events=append(events,"close") }
+func create() (*adapter,error){events=append(events,"create");return &adapter{},nil}
+func verifyOracleDormantEmpty(l uint64) error {events=append(events,fmt.Sprint("empty",l));return nil}
+func verifyOracleRecoveryIdentity(l uint64) error {
+    events=append(events,"identity")
+    if missing {return fmt.Errorf("identity")}
+    return nil
+}
+func oracleRecoveryAbsent() (bool,error){
+    events=append(events,"absent")
+    if queryFailed {return false,fmt.Errorf("query")}
+    return !replaced,nil
+}
+"""
+        cases=r"""
+func TestOrder(t *testing.T){
+    fields := []struct{
+        name string
+        prevEvidence, freshEvidence, restoreOK, missing, queryFailure, conflicting bool
+        expected []string
+        success bool
+    }{
+        {"ordinary",false,false,true,false,false,false,[]string{"empty7","restore","identity","create","empty12","close","absent"},true},
+        {"refused old proof",false,true,false,false,false,false,[]string{"empty7","restore","previous"},false},
+        {"positive departure",true,true,false,false,false,false,[]string{"empty7","restore","previous","identity","create","empty12","fresh","close","absent"},true},
+        {"fresh mismatch",true,false,false,false,false,false,[]string{"empty7","restore","previous","identity","create","empty12","fresh","close"},false},
+        {"old MIB disappeared",true,true,false,true,false,false,[]string{"empty7","restore","previous","identity","absent","create","empty12","fresh","close","absent"},true},
+        {"MIB query failed",true,true,false,true,true,false,[]string{"empty7","restore","previous","identity","absent"},false},
+        {"replacement collision",true,true,false,true,false,true,[]string{"empty7","restore","previous","identity","absent"},false},
+    }
+    for _,s:=range fields{t.Run(s.name,func(t *testing.T){
+        events=nil;missing=s.missing;queryFailed=s.queryFailure;replaced=s.conflicting
+        restoreErr:=fmt.Errorf("restore")
+        restore:=func(value uint64)error{
+            if value!=7 {t.Fatal("old identity")}
+            events=append(events,"restore")
+            if !s.restoreOK {return restoreErr};return nil
+        }
+        proof:=func(old,fresh uint64,e error)error{
+            if old!=7 {t.Fatal("foreign identity")}
+            if fresh==0{
+                if e!=restoreErr{t.Fatal("lost original failure")}
+                events=append(events,"previous");if !s.prevEvidence{return fmt.Errorf("previous")}
+            }else{
+                if e!=nil||fresh!=12{t.Fatal("foreign creator")}
+                events=append(events,"fresh");if !s.freshEvidence{return fmt.Errorf("fresh")}
+            }
+            return nil
+        }
+        err:=recover(7,restore,proof)
+        if (err==nil)!=s.success || !reflect.DeepEqual(events,s.expected){t.Fatalf("%v: %v",events,err)}
+    })}
+}
+"""
+        with tempfile.TemporaryDirectory() as work:
+            root=Path(work);(root/'go.mod').write_text('module recovered\n\ngo 1.23\n')
+            (root/'recovery_test.go').write_text(stub+body+cases)
+            env=dict(os.environ,GOWORK='off',GOTOOLCHAIN='local')
+            result=subprocess.run([go,'test','./...'],cwd=root,env=env,text=True,capture_output=True,timeout=60)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_dormant_native_snapshot_boundaries_execute_the_patched_audit(self):
         # Run the exact audit algorithm with native-table calls replaced by

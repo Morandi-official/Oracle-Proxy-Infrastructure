@@ -50,7 +50,7 @@ func run() error {
 			return fmt.Errorf("frame")
 		}
 		if recoveryMode == recoveryDormant {
-			err = oracleTun.RecoverDormantOracleAdapter(request.LUID, restoreAdapterBindings)
+			err = oracleTun.RecoverDormantOracleAdapter(request.LUID, restoreAdapterBindings, dormantDepartureEvidence)
 		} else {
 			err = oracleTun.RecoverOracleAdapter(request.LUID, restoreAdapterBindings)
 		}

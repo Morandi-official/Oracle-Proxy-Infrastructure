@@ -8,6 +8,7 @@
 #include <iphlpapi.h>
 #include <netioapi.h>
 #include <cfgmgr32.h>
+#include <setupapi.h>
 #include <netcfgx.h>
 #include <devguid.h>
 #include <wrl/client.h>
@@ -19,6 +20,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -408,6 +410,113 @@ static void Restore(NET_LUID luid) {
         }
     }
 }
+// Wintun 0.14.1 builds the SWD instance ID from the GUID supplied to
+// WintunCreateAdapter. Reconfirm it against the new NetCfg/PnP identity.
+static std::wstring FixedSoftwareDevice() {
+    wchar_t guid[40]={};
+    if(!StringFromGUID2(expectedGuid,guid,_countof(guid))) Fail("IDENTITY");
+    return std::wstring(L"SWD\\WINTUN\\")+guid;
+}
+struct PresentDevices {
+    HDEVINFO set;
+    PresentDevices():set(SetupDiGetClassDevsW(&GUID_DEVCLASS_NET,nullptr,nullptr,DIGCF_PRESENT)){
+        if(set==INVALID_HANDLE_VALUE) Fail("LOOKUP");
+    }
+    ~PresentDevices(){SetupDiDestroyDeviceInfoList(set);}
+};
+static void VerifyDepartedNode(const std::wstring& fixed) {
+    DEVINST located=0;
+    auto id=fixed;
+    // Stopped, disabled, problem or inaccessible nodes are not proof of removal.
+    auto result=CM_Locate_DevNodeW(&located,id.data(),CM_LOCATE_DEVNODE_NORMAL);
+    if(result==CR_SUCCESS){
+        ULONG status=0,problem=0;
+        if(CM_Get_DevNode_Status(&status,&problem,located,0)!=CR_SUCCESS) Fail("LOOKUP");
+        if(status & DN_HAS_PROBLEM) Fail("PRESENT_PROBLEM");
+        if(status & DN_STARTED) Fail("PRESENT_STARTED");
+        Fail("PRESENT_STOPPED");
+    }
+    if(result!=CR_NO_SUCH_DEVNODE) Fail("LOOKUP");
+    PresentDevices devices;
+    for(DWORD i=0;;++i){
+        SP_DEVINFO_DATA item={};item.cbSize=sizeof(item);
+        if(!SetupDiEnumDeviceInfo(devices.set,i,&item)){
+            if(GetLastError()==ERROR_NO_MORE_ITEMS) break;
+            Fail("LOOKUP");
+        }
+        wchar_t instance[MAX_DEVICE_ID_LEN]={};
+        if(!SetupDiGetDeviceInstanceIdW(devices.set,&item,instance,_countof(instance),nullptr)) Fail("LOOKUP");
+        if(!_wcsicmp(instance,fixed.c_str())) Fail("SETUP_PRESENT");
+    }
+}
+struct Departure {
+    NET_LUID previous={};
+    std::vector<wchar_t> previousJournal;
+};
+static Departure& DepartedWitness(){static Departure value;return value;}
+static void CheckDepartedJournal(const std::vector<wchar_t>& data,const std::wstring& fixed,NET_LUID previous) {
+    const auto fields=Decode(data);
+    if(fields.size()<7 || fields[0]!=L"OracleProxy-Bindings-1" ||
+       Number(fields[1],~0ULL)!=previous.Value || _wcsicmp(fields[2].c_str(),fixed.c_str())) Fail("JOURNAL");
+    const Owner owner={static_cast<DWORD>(Number(fields[3],MAXDWORD)),Number(fields[4],~0ULL)};
+    if(!OwnerEnded(owner)) Fail("OWNER");
+}
+static void WitnessDeparture(NET_LUID previous) {
+    auto& witness=DepartedWitness();
+    if(witness.previous.Value || !CurrentJournal().empty()) Fail("OWNER");
+    VerifyNic(previous);
+    const auto fixed=FixedSoftwareDevice();
+    VerifyDepartedNode(fixed);
+    DEVINST phantom=0; auto id=fixed;
+    auto rc=CM_Locate_DevNodeW(&phantom,id.data(),CM_LOCATE_DEVNODE_PHANTOM);
+    std::vector<wchar_t> journal;
+    if(rc==CR_SUCCESS){
+        wchar_t observed[MAX_DEVICE_ID_LEN]={};
+        if(CM_Get_Device_IDW(phantom,observed,_countof(observed),0)!=CR_SUCCESS ||
+           _wcsicmp(observed,fixed.c_str())) Fail("PNP");
+        journal=ReadProperty(phantom);
+        // A surviving devnode must account for its original binding choices.
+        if(journal.empty()) Fail("MISSING_JOURNAL");
+        CheckDepartedJournal(journal,fixed,previous);
+    }else if(rc!=CR_NO_SUCH_DEVNODE){
+        Fail("PNP");
+    }
+    VerifyDepartedNode(fixed);
+    witness.previousJournal=std::move(journal);witness.previous=previous;
+}
+static void VerifyFreshBindings(NET_LUID previous,NET_LUID fresh) {
+    auto& witness=DepartedWitness();
+    if(!fresh.Value || !previous.Value || witness.previous.Value!=previous.Value) Fail("OWNER");
+    const auto fixed=FixedSoftwareDevice();
+    Receipt receipt{fresh,fixed,{}};
+    const auto deadline=Clock::now()+std::chrono::milliseconds(1800);
+    for(;;){
+        try {
+            Session reader;reader.create();reader.init();
+            {
+                auto paths=ReadPaths(reader.cfg.Get(),receipt);
+                const auto current=ReadProperty(VerifyPnp(fixed));
+                if(!current.empty() && current!=witness.previousJournal) Fail("JOURNAL");
+                if(witness.previousJournal.empty()){
+                    // The old devnode (including its property) was entirely gone.
+                    // The newly created independent instance must have both protocols on.
+                    Capture(receipt,paths);
+                }else{
+                    // Never transplant path activity across device generations.
+                    // The newly materialized device must already satisfy its full
+                    // captured map, including other bindings and dependency cascades.
+                    LoadOriginal(receipt,Decode(witness.previousJournal),paths);
+                    if(!MapMatches(receipt,paths,true)) Fail("DRIFT");
+                }
+            }
+            reader.finish();VerifyLive(receipt);return;
+        }catch(const Failure& issue){
+            receipt.original.clear();
+            if(!TransientRead(issue) || Clock::now()>=deadline) throw;
+            Sleep(20);
+        }
+    }
+}
 static DWORD Run(ULONG64 expected,bool restore) {
     try{
         RequireSystem();Apartment apartment;TransactionLock serial;
@@ -442,4 +551,27 @@ extern "C" __declspec(dllexport) DWORD __cdecl OpParkIpBindings(ULONG64 creatorL
 }
 extern "C" __declspec(dllexport) DWORD __cdecl OpRestoreIpBindings(ULONG64 creatorLuid){
     return Run(creatorLuid,true);
+}
+
+// The SYSTEM recovery process which witnessed the exact departed node is the
+// only process able to compare the replacement. Neither phase edits bindings.
+extern "C" __declspec(dllexport) DWORD __cdecl OpDormantDepartureEvidence(ULONG64 oldLuid,ULONG64 newLuid) {
+    try {
+        RequireSystem();Apartment apartment;TransactionLock serial;
+        NET_LUID oldId={},newId={};oldId.Value=oldLuid;newId.Value=newLuid;
+        if(!oldId.Value) Fail("IDENTITY");
+        if(newId.Value) VerifyFreshBindings(oldId,newId);
+        else WitnessDeparture(oldId);
+        return ERROR_SUCCESS;
+    }catch(const Failure& failure){
+        const auto* r=failure.reason;
+        if(!strcmp(r,"PRESENT_STARTED")) return 1;
+        if(!strcmp(r,"PRESENT_STOPPED")) return 2;
+        if(!strcmp(r,"PRESENT_PROBLEM")) return 3;
+        if(!strcmp(r,"SETUP_PRESENT")) return 4;
+        if(!strcmp(r,"MISSING_JOURNAL")) return 5;
+        if(!strcmp(r,"JOURNAL")) return 6;
+        if(!strcmp(r,"OWNER")) return 7;
+        return newLuid ? 8 : 9;
+    }catch(...){return 9;}
 }

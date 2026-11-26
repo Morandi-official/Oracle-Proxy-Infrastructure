@@ -46,6 +46,11 @@ internal static class LoginAdmissionTests
             var quotaPending=await LoginAdmission.Run((action,_,_)=>action=="authenticate"?Task.FromResult(Login(false)):throw new ApiException("DEVICE_LIMIT_REACHED"),()=>"key",()=>throw new Exception("MUST_NOT_ROTATE"),"u","p","PC");
             Check(!DeviceRegistration.Confirmed(quotaPending) && quotaPending["token"]!.GetValue<string>()=="synthetic-token" && quotaPending["admission_error"]!.GetValue<string>()=="DEVICE_LIMIT_REACHED");
         }
+        {
+            var quotaPending=Login(false);quotaPending["admission_error"]="DEVICE_LIMIT_REACHED";
+            var result=await LoginAdmission.Run((action,_,_)=>action=="authenticate"?Task.FromResult(quotaPending):throw new Exception("MUST_NOT_REPEAT_CONFIRMATION"),()=>"key",()=>throw new Exception("MUST_NOT_ROTATE"),"u","p","PC");
+            Check(ReferenceEquals(result,quotaPending) && !DeviceRegistration.Confirmed(result));
+        }
         try{await LoginAdmission.Run((action,_,_)=>Task.FromResult(action=="authenticate"?Login(false):State(false)),()=>"key",()=>{},"u","p","PC");throw new Exception("UNCONFIRMED_ACCEPTED");}
         catch(IOException error){Check(error.Message=="DEVICE_CONFIRMATION_REQUIRED");}
         var pending=new JsonObject{["login_authenticated"]=true,["account"]=new JsonObject(),["device_registered"]=false,["registration"]=new JsonObject{["status"]="pending"}};

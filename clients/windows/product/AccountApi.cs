@@ -183,6 +183,7 @@ internal sealed class AccountApi : IDisposable
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);deadline.CancelAfter(TimeSpan.FromSeconds(12));
         using var request=new HttpRequestMessage(body is null?HttpMethod.Get:HttpMethod.Post,"api/client/"+action);
         request.Headers.Add("X-Oracle-Client-Capabilities","dual-stack-v1");
+        if(action=="authenticate")request.Headers.Add("X-Oracle-Confirm-Device","true");
         if(token.Length>0)request.Headers.Authorization=new("Bearer",token);
         if(body is not null)request.Content=new StringContent(body.ToJsonString(),Encoding.UTF8,"application/json");
         using var result=await Send(request,deadline.Token);

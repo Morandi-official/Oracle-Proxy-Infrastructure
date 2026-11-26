@@ -1,5 +1,6 @@
 """Real web credential/session/authorization flow against the real policy engine."""
 import base64
+from datetime import timedelta
 import importlib.util
 import json
 import tempfile
@@ -9,8 +10,9 @@ from unittest.mock import patch
 
 from django.contrib.auth.hashers import make_password
 from django.test import Client, TestCase, override_settings
+from django.utils import timezone
 
-from .models import ClientAccount, ClientSession, ClientLoginThrottle
+from .models import Audit, ClientAccount, ClientSession, ClientLoginThrottle
 from .tests import HOST
 
 spec=importlib.util.spec_from_file_location('client_policy_tests',Path(__file__).resolve().parents[1]/'control/test_agent.py')
@@ -70,10 +72,11 @@ class ClientApiTests(TestCase):
         self.assertNotIn('rate_limited',data['account'])
         self.assertIn('used_bytes',data['account'])
 
-    def login(self,index=3,confirm=True,**extra):
+    def login(self,index=3,confirm=True,auto=False,**extra):
         value={'username':'client01','password':'test-only-password-012345','public_key':base64.b64encode(bytes([index])*32).decode(),'device_name':'Synthetic Win11','client_version':'0.3.0-rc18'}
         value.update(extra)
-        authenticated=self.client.post('/api/client/authenticate',json.dumps(value),content_type='application/json',secure=True)
+        headers={'HTTP_X_ORACLE_CONFIRM_DEVICE':'true'} if auto else {}
+        authenticated=self.client.post('/api/client/authenticate',json.dumps(value),content_type='application/json',secure=True,**headers)
         if authenticated.status_code!=200 or not confirm or not authenticated.json()['registration']['requires_confirmation']:return authenticated
         token=authenticated.json()['token']
         result=self.enroll(token)
@@ -227,6 +230,88 @@ class ClientApiTests(TestCase):
         self.assertEqual(self.engine.snapshot()['users'][0]['device_count'],0)
         self.assertEqual(self.enroll(token,public_key=base64.b64encode(bytes([9])*32).decode()).status_code,400)
         self.assertEqual(self.enroll('x'*43).status_code,401)
+        self.assertEqual(self.engine.snapshot()['users'][0]['device_count'],0)
+
+    def test_explicit_login_confirmation_uses_normal_enrollment_and_session(self):
+        self.assertEqual(self.login(confirm=False,auto=True,password='incorrect').status_code,401)
+        self.assertFalse(ClientSession.objects.exists())
+        self.assertEqual(self.engine.snapshot()['users'][0]['device_count'],0)
+
+        result=self.login(confirm=False,auto=True)
+        self.assertEqual(result.status_code,200,result.content)
+        value=result.json();session=ClientSession.objects.get()
+        self.assertEqual(value['registration']['status'],'registered')
+        self.assertEqual(value['registration']['device_name'],'Synthetic Win11')
+        self.assertEqual(value['account']['device_count'],1)
+        self.assertIsNotNone(value['tunnel'])
+        self.assertEqual(value['token_expires_at'],int(session.expires_at.timestamp()))
+        self.assertGreater(session.expires_at,timezone.now()+timedelta(days=29))
+        self.assertTrue(session.enrollment_flow)
+        self.assertEqual(session.reported_mode,'disconnected')
+        self.assertEqual(self.state(value['token']).json()['registration'],value['registration'])
+        self.assertEqual(set(Audit.objects.values_list('action',flat=True)),
+                         {'device.confirmation.requested','device.confirmation.submitted'})
+        self.assertEqual(self.login(confirm=False,auto=True).json()['account']['device_count'],1)
+        self.assertEqual(Audit.objects.filter(action='device.confirmation.submitted').count(),1)
+
+        self.engine.dispatch({'operation':'peer.revoke','actor':'github:204281968',
+                              'data':{'public_key':value['device']['public_key']}})
+        self.assertEqual(self.login(confirm=False,auto=True).json()['error'],'DEVICE_REVOKED')
+
+    def test_login_with_same_device_recovers_after_lost_enrollment_response(self):
+        dispatch=self.engine.dispatch
+        attempts=[]
+
+        def lose_first_enrollment_response(request):
+            result=dispatch(request)
+            if request['operation']=='peer.enroll':
+                attempts.append(request['data']['public_key'])
+                if len(attempts)==1:
+                    raise TimeoutError('simulated lost enrollment response')
+            return result
+
+        with patch.object(self.engine,'dispatch',side_effect=lose_first_enrollment_response):
+            first=self.login(confirm=False,auto=True)
+            self.assertEqual(first.status_code,503)
+            self.assertNotIn('token',first.json())
+            pending=ClientSession.objects.get()
+            retry=self.login(confirm=False,auto=True)
+        self.assertEqual(retry.status_code,200,retry.content)
+        value=retry.json()
+        self.assertEqual(attempts,[value['device']['public_key']])
+        self.assertEqual(value['account']['device_count'],1)
+        self.assertEqual(value['registration']['status'],'registered')
+        self.assertIsNotNone(self.state(value['token']).json()['tunnel'])
+        current=ClientSession.objects.get()
+        self.assertNotEqual(current.token_hash,pending.token_hash)
+        self.assertGreater(current.expires_at,timezone.now()+timedelta(days=29))
+
+    def test_automatic_confirmation_keeps_pending_session_on_device_limit(self):
+        for index in (3,5,6):self.assertEqual(self.login(index).status_code,200)
+        result=self.login(7,confirm=False,auto=True)
+        self.assertEqual(result.status_code,200,result.content)
+        value=result.json();session=ClientSession.objects.get(public_key=value['device']['public_key'])
+        self.assertEqual(value['admission_error'],'DEVICE_LIMIT_REACHED')
+        self.assertEqual(value['registration']['status'],'pending')
+        self.assertIsNone(value['tunnel'])
+        self.assertEqual(value['account']['device_count'],3)
+        self.assertEqual(self.engine.snapshot()['users'][0]['device_count'],3)
+        self.assertEqual(session.reported_mode,'pending')
+        self.assertEqual(value['token_expires_at'],int(session.expires_at.timestamp()))
+        self.assertLessEqual(session.expires_at,timezone.now()+timedelta(minutes=15))
+        self.assertEqual(self.state(value['token']).json()['registration']['status'],'pending')
+
+    def test_automatic_confirmation_checks_pending_session_limit_before_enrollment(self):
+        expiry=timezone.now()+timedelta(minutes=15)
+        ClientSession.objects.bulk_create([
+            ClientSession(account=self.account,public_key=base64.b64encode(bytes([index])*32).decode(),
+                          token_hash=f'{index:064x}',expires_at=expiry,enrollment_flow=True,reported_mode='pending')
+            for index in range(32,64)
+        ])
+        result=self.login(confirm=False,auto=True)
+        self.assertEqual(result.status_code,400)
+        self.assertEqual(result.json()['error'],'PENDING_SESSION_LIMIT')
+        self.assertEqual(ClientSession.objects.count(),32)
         self.assertEqual(self.engine.snapshot()['users'][0]['device_count'],0)
 
     def test_explicit_confirmation_is_idempotent_named_and_audited(self):

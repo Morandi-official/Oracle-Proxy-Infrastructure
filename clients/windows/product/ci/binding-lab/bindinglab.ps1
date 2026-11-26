@@ -16,6 +16,11 @@ function BindingHash($entries,[bool]$forceIpOff) {
     try {return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($tokens -join "`n")))).Replace('-','')}
     finally {$sha.Dispose()}
 }
+# Only opaque, per-experiment HMAC tokens leave the CIM reader for target row diagnostics.
+function RowToken([string]$field,[string]$value) {
+    $bytes=[Text.Encoding]::UTF8.GetBytes($field+[char]0+$value)
+    return ([BitConverter]::ToString($rowHmac.ComputeHash($bytes))).Replace('-','').Substring(0,24).ToLowerInvariant()
+}
 try {
     if ($stage -notin 'before','unbound','restored' -or !$luid) { throw 'STAGE' }
     $all=@(Get-CimInstance -Namespace $ns MSFT_NetAdapter -OperationTimeoutSec 5)
@@ -52,9 +57,24 @@ try {
             if ($six.Count -eq 1 -and $null -ne $six[0].Enabled) {$ip6=[int][bool]$six[0].Enabled}
         } catch {$targetCount=0; $targetHash=''; $targetOffHash=''; $ip4=-1; $ip6=-1}
     }
+    $targetRows=@()
+    if ($targetCount -gt 0 -and $targetCount -le 128 -and $targetHash) {
+        $rowHmac=[Security.Cryptography.HMACSHA256]::new([Convert]::FromBase64String($env:ORACLE_TEST_BINDING_REPORT_KEY))
+        try {
+            $targetRows=@(foreach ($binding in $target) {
+                $id=[string]$binding.ComponentID
+                [ordered]@{
+                    kind=(RowToken 'kind' ($id.ToLowerInvariant())); raw=(RowToken 'component' $id)
+                    instance=(RowToken 'instance' ([string]$binding.InstanceID))
+                    descriptor=(RowToken 'description' ([string]$binding.InterfaceDescription))
+                    enabled=[bool]$binding.Enabled
+                }
+            })
+        } finally {$rowHmac.Dispose()}
+    }
     [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
-    [Console]::WriteLine((ConvertTo-Json -Compress -InputObject ([ordered]@{
+    [Console]::WriteLine((ConvertTo-Json -Depth 4 -Compress -InputObject ([ordered]@{
         pnp=$pnp; description=$desc; present=($nodes.Count -eq 1); matching=($owned.Count -eq 1); count=$others.Count; hash=$hash
-        targetCount=$targetCount; targetHash=$targetHash; targetOffHash=$targetOffHash; ip4=$ip4; ip6=$ip6
+        targetRows=$targetRows; targetCount=$targetCount; targetHash=$targetHash; targetOffHash=$targetOffHash; ip4=$ip4; ip6=$ip6
     })))
 } catch {exit 1}

@@ -5,9 +5,12 @@ package tun
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,6 +41,94 @@ type labSnapshot struct {
 	TargetCount, IP4, IP6     int
 	Count                     int
 	Present, Matching         bool
+	TargetRows                []labTargetRow
+}
+
+type labTargetRow struct {
+	Kind, Raw, Instance, Descriptor string
+	Enabled                         bool
+}
+
+// Compare identities within this disposable job, without publishing a stable
+// cross-host fingerprint. Tokens are HMAC-SHA256(key, field || NUL || UTF8(value))[:12].
+var labReportKey = func() []byte {
+	key := make([]byte, 32)
+	rand.Read(key)
+	return key
+}()
+
+func knownComponentTokens() map[string]string {
+	result := make(map[string]string)
+	for _, id := range strings.Fields("ms_tcpip ms_tcpip6 ms_msclient ms_server ms_pacer ms_lldp ms_lltdio ms_rspndr ms_ndiscap ms_wfplwf_lower ms_wfplwf_upper ms_l1vhlwf ms_implat ms_ndisuio ms_netbios ms_netbt ms_wanarp ms_wanarpv6 ms_bridge ms_pppoe ms_netbios_smb vms_pp") {
+		h := hmac.New(sha256.New, labReportKey)
+		h.Write([]byte("kind\x00" + id))
+		result[hex.EncodeToString(h.Sum(nil)[:12])] = id
+	}
+	return result
+}
+
+func bindingRowCounts(rows []labTargetRow, labels map[string]string, ipOff bool) (map[string][2]int, bool) {
+	counts := make(map[string][2]int)
+	for _, row := range rows {
+		for _, token := range []string{row.Kind, row.Raw, row.Instance, row.Descriptor} {
+			if len(token) != 24 || strings.Trim(token, "0123456789abcdef") != "" {
+				return nil, false
+			}
+		}
+		label := labels[row.Kind]
+		if label == "" {
+			label = "anon-" + row.Kind
+		}
+		key := fmt.Sprintf("component=%s instance=%s component_token=%s description_token=%s", label, row.Instance, row.Raw, row.Descriptor)
+		state := 0
+		if row.Enabled && !(ipOff && (label == "ms_tcpip" || label == "ms_tcpip6")) {
+			state = 1
+		}
+		count := counts[key]
+		count[state]++
+		counts[key] = count
+	}
+	return counts, true
+}
+
+// Each tuple reports the number of disabled/enabled copies of the exact row.
+// A replaced CIM instance emits a removed row and an added row, even if the
+// enabled value and normalized component ID were the same before and after.
+func logTargetRows(t *testing.T, stage string, original, observed labSnapshot) {
+	if len(original.TargetRows) != original.TargetCount || len(observed.TargetRows) != observed.TargetCount ||
+		original.TargetCount < 1 || observed.TargetCount < 1 || original.TargetCount > 128 || observed.TargetCount > 128 {
+		t.Logf("CIM_%s_TARGET_ROW_DETAIL_UNAVAILABLE", stage)
+		return
+	}
+	labels := knownComponentTokens()
+	before, ok1 := bindingRowCounts(original.TargetRows, labels, false)
+	expected, ok2 := bindingRowCounts(original.TargetRows, labels, stage == "unbound")
+	now, ok3 := bindingRowCounts(observed.TargetRows, labels, false)
+	if !ok1 || !ok2 || !ok3 {
+		t.Logf("CIM_%s_TARGET_ROW_DETAIL_INVALID", stage)
+		return
+	}
+	keys := make([]string, 0, len(before)+len(now))
+	for key := range before {
+		keys = append(keys, key)
+	}
+	for key := range now {
+		if _, found := before[key]; !found {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	mismatches := 0
+	for _, key := range keys {
+		b, w, a := before[key], expected[key], now[key]
+		if w != a {
+			mismatches++
+		}
+		if stage == "before" || w != a || b != a {
+			t.Logf("CIM_%s_TARGET_ROW %s BEFORE_OFF_ON=%d/%d EXPECTED_OFF_ON=%d/%d OBSERVED_OFF_ON=%d/%d", stage, key, b[0], b[1], w[0], w[1], a[0], a[1])
+		}
+	}
+	t.Logf("CIM_%s_TARGET_MISMATCHED_ROW_KEYS=%d", stage, mismatches)
 }
 
 // Independent CIM/PnP witness. Called before starting the helper, while already unbound,
@@ -53,7 +145,7 @@ func bindingSnapshot(ctx context.Context, luid winipcfg.LUID, stage string, orig
 		raw[2*i], raw[2*i+1] = byte(u), byte(u>>8)
 	}
 	audit := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(raw))
-	audit.Env = append(os.Environ(), "ORACLE_TEST_CREATED_LUID="+strconv.FormatUint(uint64(luid), 10), "ORACLE_TEST_AUDIT_STAGE="+stage, "ORACLE_TEST_BASELINE_PNP="+original.PNP, "ORACLE_TEST_BASELINE_DESC="+original.Description)
+	audit.Env = append(os.Environ(), "ORACLE_TEST_CREATED_LUID="+strconv.FormatUint(uint64(luid), 10), "ORACLE_TEST_BINDING_REPORT_KEY="+base64.StdEncoding.EncodeToString(labReportKey), "ORACLE_TEST_AUDIT_STAGE="+stage, "ORACLE_TEST_BASELINE_PNP="+original.PNP, "ORACLE_TEST_BASELINE_DESC="+original.Description)
 	output, err := audit.Output()
 	if err != nil {
 		return result, fmt.Errorf("CIM_QUERY_FAILED")
@@ -215,6 +307,7 @@ func TestDisposableOracleBindings(t *testing.T) {
 	if err != nil || !original.Present || !original.Matching {
 		t.Fatal("CIM_BASELINE_FAILED")
 	}
+	logTargetRows(t, "before", original, original)
 	t.Logf("CIM_before_TARGET_BINDINGS ROWS=%d IPV4_ENABLED=%d IPV6_ENABLED=%d", original.TargetCount, original.IP4, original.IP6)
 	if original.TargetCount < 2 || original.IP4 != 1 || original.IP6 != 1 || len(original.TargetHash) != 64 || len(original.TargetOffHash) != 64 || original.TargetHash == original.TargetOffHash {
 		t.Fatal("CIM_TARGET_BASELINE_UNVERIFIED")
@@ -236,6 +329,7 @@ func TestDisposableOracleBindings(t *testing.T) {
 			t.Errorf("CIM_%s_IDENTITY_FAILED", stage)
 			return false
 		}
+		logTargetRows(t, stage, original, observed)
 		sameBindings := observed.Count == original.Count && observed.Hash == original.Hash
 		t.Logf("CIM_%s_OTHER_BINDINGS_UNCHANGED=%t BINDING_ROWS=%d", stage, sameBindings, observed.Count)
 		if !sameBindings {

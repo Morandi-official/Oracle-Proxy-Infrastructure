@@ -1570,12 +1570,15 @@ internal static class ProductTests
         };
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:59999",["server_public_key"]=serverKey.Public,["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
         var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private,UuPaths=uuPaths},"synthetic-probe-only");
+        Require(config["route"]!["find_process"]!.GetValue<bool>() && config["route"]!["rules"]![0]!["outbound"]!.GetValue<string>()=="uu-direct","TRUSTED_UU_ROUTES_KEEP_PROCESS_LOOKUP");
         var diagnosticState=(JsonObject)state.DeepClone();diagnosticState["tunnel"]!["endpoint"]="152.67.156.100:51820";
         var diagnosticSecret=new DurableState{PrivateKey=clientKey.Private,NativeUdpPortPreference=8443};
         bool diagnosticRefused=false;try{CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");}catch(IOException error)when(error.Message=="NATIVE_UDP8443_NOT_AVAILABLE"){diagnosticRefused=true;}
         Require(diagnosticRefused,"UNADVERTISED_NATIVE_8443_REFUSED");
         diagnosticState["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443,8443);
-        var diagnosticConfig=CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");
+        var diagnosticConfig=CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only",out var nativePorts);
+        Require(!diagnosticConfig["route"]!["find_process"]!.GetValue<bool>() && diagnosticConfig["route"]!["final"]!.GetValue<string>()=="oracle-wireguard","DEFAULT_WIREGUARD_ROUTE_SKIPS_UNUSED_PROCESS_LOOKUP");
+        Require(nativePorts.SequenceEqual(new[]{8443}),"PORT_DIAGNOSTICS_USE_THE_SAME_ORDER_AS_THE_CORE");
         Require(diagnosticConfig["outbounds"]![1]!["ports"]!.ToJsonString()=="[8443]" && diagnosticConfig["endpoints"]![0]!["peers"]![0]!["port"]!.GetValue<int>()==51820,"FIXED_NATIVE_8443_HAS_SINGLE_UNWRAPPED_PORT_AND_UNCHANGED_WG_PEER");
         Require(config["inbounds"]![0]!["mtu"]!.GetValue<int>()==1280 && config["endpoints"]![0]!["mtu"]!.GetValue<int>()==1200,"WINDOWS_TUN_IPV6_MINIMUM_WITH_IPV4_WG_1232_BYTE_OUTER_DATAGRAM_BUDGET");
         // The released service cannot do this: CI changes its *own* in-memory

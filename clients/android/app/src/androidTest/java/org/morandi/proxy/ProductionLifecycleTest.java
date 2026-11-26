@@ -165,10 +165,14 @@ public final class ProductionLifecycleTest {
                 + ";H3_CANDIDATE=" + (BuildConfig.H3_EXIT_PROOF_ENABLED ? 1 : 0));
         android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CONNECT_PHASES_" + label
                 + "=TOTAL_MS:" + timing.totalMs + ";POLICY_MS:" + timing.policyMs
+                + ";BACKEND_WAIT_MS:" + timing.backendWaitMs
                 + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";NATIVE_START_MS:" + timing.nativeStartMs
                 + ";NETWORK_WAIT_MS:" + timing.networkWaitMs
                 + ";NETWORK_DISCOVERY_MS:" + timing.networkDiscoveryMs
                 + ";NETWORK_BIND_MS:" + timing.networkBindingMs + ";EXIT_PROOF_MS:" + timing.exitProofMs
+                + ";WG_HANDSHAKE_MS:" + timing.handshakeMs
+                + ";IPV4_PROOF_MS:" + timing.ipv4ProofMs + ";IPV4_PROOF_ATTEMPTS:" + timing.ipv4ProofAttempts
+                + ";IPV6_PROOF_MS:" + timing.ipv6ProofMs + ";IPV6_PROOF_ATTEMPTS:" + timing.ipv6ProofAttempts
                 + ";ATTEMPTS:" + timing.attempts);
     }
 

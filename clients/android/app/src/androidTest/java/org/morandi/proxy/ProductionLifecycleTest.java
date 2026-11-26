@@ -214,7 +214,9 @@ public final class ProductionLifecycleTest {
                 + ";POLICY_WAIT_MS:" + timing.policyWaitMs
                 + ";CONSENT_POLICY_AGE_MS:" + timing.consentPolicyAgeMs
                 + ";BACKEND_WAIT_MS:" + timing.backendWaitMs
-                + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";NATIVE_START_MS:" + timing.nativeStartMs
+                + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";SERVICE_REQUEST_MS:" + timing.serviceRequestMs
+                + ";FOREGROUND_ACK_MS:" + timing.foregroundAckMs + ";BASELINE_READ_MS:" + timing.baselineReadMs
+                + ";RETRIED_SERVICE_START:" + (timing.retriedServiceStart ? 1 : 0) + ";NATIVE_START_MS:" + timing.nativeStartMs
                 + ";NETWORK_WAIT_MS:" + timing.networkWaitMs
                 + ";NETWORK_DISCOVERY_MS:" + timing.networkDiscoveryMs
                 + ";NETWORK_OWNER_WAIT_MS:" + timing.ownerWaitMs
@@ -337,7 +339,9 @@ public final class ProductionLifecycleTest {
                 + ",AUTH_MS:" + local.authenticateMs() + ",SESSION_MS:" + local.sessionMs()
                 + ",STREAM_OPEN_MS:" + http.streamOpenMs() + ",UPLOAD_MS:" + http.uploadMs()
                 + ",RESPONSE_HEADERS_MS:" + http.responseHeadersMs()
-                + ",RESPONSE_BODY_MS:" + http.responseBodyMs());
+                + ",RESPONSE_BODY_MS:" + http.responseBodyMs() + ",NETWORK_SELECT_MS:" + http.networkSelectMs()
+                + ",CONFIGURE_MS:" + http.configureMs() + ",OUTPUT_OPEN_MS:" + http.outputOpenMs()
+                + ",WARMUP_AT_START:" + http.warmupAtStart() + ",WARMUP_AT_OUTPUT:" + http.warmupAtOutput());
     }
 
     private static String decode(Bundle arguments, String key) {

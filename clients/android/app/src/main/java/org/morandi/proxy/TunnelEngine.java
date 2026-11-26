@@ -43,7 +43,8 @@ public final class TunnelEngine {
     private static final long CONNECT_DEADLINE_MS = 48_000;
     private static final long PORT_HINT_LIFETIME_MS = 10 * 60_000;
     private static final long CANCELLATION_CHECK_MS = 80;
-    private static final long BIND_RETRY_INITIAL_MS = 20;
+    private static final long FAST_BIND_WINDOW_MS = 800;
+    private static final long FAST_BIND_RETRY_MS = 25;
     private static final long EXIT_RETRY_BACKOFF_MS = 160;
     private static final long MIN_EXIT_RETRY_BUDGET_MS = 500;
     private static final int MAX_EXIT_PROBE_ATTEMPTS = 3;
@@ -170,7 +171,7 @@ public final class TunnelEngine {
             return;
         }
         preparedUnderlay = currentUnderlay(connectivity, null);
-        prepareBackend();
+        prepareLocalComponents();
         try {
             // Starting the notification-bearing service does not install a
             // TUN, load a server profile or send WireGuard traffic.
@@ -178,8 +179,12 @@ public final class TunnelEngine {
         } catch (IOException ignored) {
             // Connect can start the service normally after policy is available.
         }
-        // Prepare the HTTP engine during the policy request. A URL request is
-        // still created only after the fresh authorized VPN can bind sockets.
+    }
+
+    synchronized void prepareLocalComponents() {
+        // Safe during system consent. Neither component starts a service,
+        // attaches a TUN or makes an exit request.
+        prepareBackend();
         CloudflareExitProbe.prepare(context);
     }
 
@@ -245,7 +250,7 @@ public final class TunnelEngine {
             timing.firstAttemptedPort = firstAttemptedPort;
             timing.orderingUnderlay = underlay;
             timing.backendWaitMs = backendWaitMs;
-            try {
+            try (NetworkChanges changes = new NetworkChanges()) {
                 long serviceStarted = SystemClock.elapsedRealtime();
                 boolean overlappedStart = serviceDeadline != 0;
                 if (!overlappedStart) {
@@ -273,7 +278,7 @@ public final class TunnelEngine {
                 timing.nativeStartMs = SystemClock.elapsedRealtime() - nativeStarted;
                 trace("native tunnel started");
                 Network previousNetwork = lastProbeNetwork;
-                Result result = verify(target, candidate, deadline, callback, previousNetwork, timing);
+                Result result = verify(target, candidate, deadline, callback, previousNetwork, timing, changes);
                 if (result != null && up && !callback.cancelled()) {
                     profile = target;
                     connected = candidate;
@@ -409,9 +414,9 @@ public final class TunnelEngine {
         if (!up || profile == null || connected == null) {
             return false;
         }
-        try {
+        try (NetworkChanges changes = new NetworkChanges()) {
             return verify(profile, connected, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS,
-                    null, null, new AttemptTiming(0)) != null && up;
+                    null, null, new AttemptTiming(0), changes) != null && up;
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             return false;
@@ -446,27 +451,26 @@ public final class TunnelEngine {
     }
 
     private Result verify(TunnelProfile target, TunnelProfile.Candidate candidate, long deadline,
-                          Callback callback, Network previousNetwork, AttemptTiming timing) throws InterruptedException {
+                          Callback callback, Network previousNetwork, AttemptTiming timing,
+                          NetworkChanges changes) throws InterruptedException {
         long detectionStarted = SystemClock.elapsedRealtime();
         long probeDeadline = Math.min(deadline, detectionStarted + VERIFY_DEADLINE_MS);
-        Network vpn;
-        try (NetworkChanges changes = new NetworkChanges()) {
-            vpn = awaitNetwork(target, Math.min(probeDeadline, detectionStarted + VPN_NETWORK_WAIT_MS),
-                    callback, previousNetwork, changes);
-            if (vpn == null || cancelled(callback)) {
-                trace("compatible Android VPN network unavailable");
-                return null;
-            }
-            long bindingStarted = SystemClock.elapsedRealtime();
-            timing.networkDiscoveryMs = bindingStarted - detectionStarted;
-            lastProbeNetwork = vpn;
-            // Android can publish this VPN before netd permits it to bind a
-            // socket. Keep waiting on the same Network, without sending data.
-            if (!awaitProbeBinding(vpn, probeDeadline, callback, changes)) {
-                return null;
-            }
-            timing.networkBindingMs = SystemClock.elapsedRealtime() - bindingStarted;
+        Network vpn = awaitNetwork(target, Math.min(probeDeadline, detectionStarted + VPN_NETWORK_WAIT_MS),
+                callback, previousNetwork, changes);
+        if (vpn == null || cancelled(callback)) {
+            trace("compatible Android VPN network unavailable");
+            return null;
         }
+        long bindingStarted = SystemClock.elapsedRealtime();
+        timing.networkDiscoveryMs = bindingStarted - detectionStarted;
+        lastProbeNetwork = vpn;
+        // Android can publish this VPN before netd permits it to bind a
+        // socket. Keep waiting on the same Network, without sending data.
+        if (!awaitProbeBinding(vpn, probeDeadline, callback, changes)) {
+            return null;
+        }
+        timing.networkBindingMs = SystemClock.elapsedRealtime() - bindingStarted;
+        changes.close();
         long proofStarted = SystemClock.elapsedRealtime();
         timing.networkWaitMs = proofStarted - detectionStarted;
         trace("Android VPN network ready");
@@ -480,7 +484,7 @@ public final class TunnelEngine {
     private boolean awaitProbeBinding(Network vpn, long deadline, Callback callback, NetworkChanges changes)
             throws InterruptedException {
         boolean waiting = false;
-        long delay = BIND_RETRY_INITIAL_MS;
+        long fastUntil = SystemClock.elapsedRealtime() + FAST_BIND_WINDOW_MS;
         while (up && !cancelled(callback)) {
             long remaining = deadline - SystemClock.elapsedRealtime();
             if (remaining <= 0) {
@@ -494,8 +498,11 @@ public final class TunnelEngine {
                     trace("Android VPN socket binding not ready");
                     waiting = true;
                 }
-                changes.await(Math.min(delay, remaining));
-                delay = Math.min(CANCELLATION_CHECK_MS, delay * 2);
+                long now = SystemClock.elapsedRealtime();
+                long retryMs = now < fastUntil ? FAST_BIND_RETRY_MS : CANCELLATION_CHECK_MS;
+                if (now < deadline) {
+                    changes.await(Math.min(retryMs, deadline - now));
+                }
             }
         }
         trace("compatible Android VPN socket binding unavailable");
@@ -661,8 +668,21 @@ public final class TunnelEngine {
 
     private final class NetworkChanges extends ConnectivityManager.NetworkCallback implements AutoCloseable {
         private final Semaphore changes = new Semaphore(0);
-        private boolean registrationAttempted;
         private boolean watching;
+
+        NetworkChanges() {
+            try {
+                connectivity.registerNetworkCallback(new NetworkRequest.Builder()
+                        .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
+                        .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                        .removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
+                        .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                        .build(), this);
+                watching = true;
+            } catch (RuntimeException error) {
+                // Retain bounded polling on Android versions that reject the callback.
+            }
+        }
 
         private void signal() {
             if (changes.availablePermits() == 0) {
@@ -691,21 +711,6 @@ public final class TunnelEngine {
         }
 
         void await(long timeoutMs) throws InterruptedException {
-            if (!registrationAttempted) {
-                registrationAttempted = true;
-                try {
-                    connectivity.registerNetworkCallback(new NetworkRequest.Builder()
-                            .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
-                            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                            .removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
-                            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                            .build(), this);
-                    watching = true;
-                } catch (RuntimeException error) {
-                    // Some Android versions or profiles may refuse the callback.
-                    // A bounded retry still checks the exact VPN Network.
-                }
-            }
             if (watching) {
                 changes.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
             } else {
@@ -715,6 +720,7 @@ public final class TunnelEngine {
 
         @Override public void close() {
             if (watching) {
+                watching = false;
                 connectivity.unregisterNetworkCallback(this);
             }
         }

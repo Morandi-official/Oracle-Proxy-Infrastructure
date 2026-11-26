@@ -458,6 +458,7 @@ public final class MainActivity extends Activity {
             consentPending = true;
             try {
                 startActivityForResult(request, VPN_PERMISSION);
+                controller.prepareVpnConsent();
             } catch (android.content.ActivityNotFoundException error) {
                 consentPending = false;
                 Toast.makeText(this, "本机无法打开系统 VPN 授权。", Toast.LENGTH_LONG).show();

@@ -1,0 +1,42 @@
+name: Disposable Windows Wintun protocol binding measurement
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-wintun-binding-lab.yml'
+      - 'clients/windows/product/ci/binding-lab/**'
+permissions:
+  contents: read
+jobs:
+  measure:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Compile the isolated fixture with the candidate Wintun source
+        shell: pwsh
+        working-directory: clients/windows/product/core
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go mod vendor
+          if ($LASTEXITCODE) { throw 'Vendor retrieval failed' }
+          python ../ci/prepare-core-vendor.py
+          if ($LASTEXITCODE) { throw 'Pinned vendor patch failed' }
+          Copy-Item ../ci/binding-lab/bindinglab_windows_test.go,../ci/binding-lab/bindinglab.ps1 vendor/github.com/sagernet/sing-tun/
+          go test -mod=vendor -c -tags oracle_binding_lab -trimpath -o "$env:RUNNER_TEMP/binding-lab.test.exe" github.com/sagernet/sing-tun
+          if ($LASTEXITCODE) { throw 'Compile failed' }
+      - name: Verify embedded Wintun against the signed upstream distribution
+        shell: pwsh
+        run: ./clients/windows/product/ci/verify-wintun.ps1
+      - name: Measure only the disposable SYSTEM-owned virtual adapter
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./clients/windows/product/ci/binding-lab/run-disposable.ps1

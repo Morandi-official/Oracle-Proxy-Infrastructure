@@ -82,7 +82,10 @@ if [[ "$mode" == production ]]; then
         | tee "$working_dir/instrumentation.txt"
     unset user_b64 pass_b64
     download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
-    timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)|CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK))_MS=[0-9]+;TARGET_MS=1000;UNDER_TARGET=[01]$'
+    timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)_MS=[0-9]+;TARGET_MS=1000|'
+    timing+='CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK)_MS=[0-9]+;TARGET_MS=1500);UNDER_TARGET=[01]$'
+    reconnect_series='^ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=([0-9]+,){4}[0-9]+'
+    reconnect_series+=';N=5;MEDIAN_MS=[0-9]+;MAX_MS=[0-9]+;UNDER_1500MS=[0-5]$'
     login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
     login_phases+=',STREAM_OPEN_MS:[0-9]+,UPLOAD_MS:[0-9]+,RESPONSE_HEADERS_MS:[0-9]+,RESPONSE_BODY_MS:[0-9]+$'
     families='^ANDROID_PERF_VERIFIED_FAMILIES=[12]$'
@@ -102,7 +105,7 @@ if [[ "$mode" == production ]]; then
     rtt_unavailable='^ANDROID_PERF_UDP_STUN_(DIRECT|WIREGUARD_UDP)_STATUS=(DNS_UNAVAILABLE|NO_IPV4_ADDRESS)'
     rtt_unavailable+=';HOST=(stun[.]cloudflare[.]com|stun[.]l[.]google[.]com);PORT=(3478|19302)$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
-        grep -E -e "$download" -e "$timing" -e "$login_phases" -e "$families" -e "$proof" \
+        grep -E -e "$download" -e "$timing" -e "$reconnect_series" -e "$login_phases" -e "$families" -e "$proof" \
             -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" |
         tee "$working_dir/performance.txt"
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
@@ -110,6 +113,7 @@ if [[ "$mode" == production ]]; then
         PERF_LOGIN_FRESH_MS PERF_LOGIN_SAVED_CONTROLLER_MS PERF_LOGIN_WARM_MS \
         PERF_LOGIN_FRESH_PHASES PERF_LOGIN_WARM_PHASES \
         PERF_CONNECT_FIRST_CLICK_MS PERF_CONNECT_AFTER_CONSENT_MS PERF_CONNECT_RECONNECT_CLICK_MS \
+        PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS \
         PERF_EXIT_PROOF_FIRST PERF_EXIT_PROOF_RECONNECT \
         PERF_CONNECT_PHASES_FIRST PERF_CONNECT_PHASES_RECONNECT \
         PERF_HTTPS_DIRECT_FRESH_SAMPLES_MS PERF_HTTPS_DIRECT_REUSED_SAMPLES_MS \

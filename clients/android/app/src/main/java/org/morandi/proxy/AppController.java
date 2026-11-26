@@ -20,8 +20,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -43,6 +45,7 @@ public final class AppController {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1);
     private final ExecutorService presenceWorker = Executors.newSingleThreadExecutor();
+    private final ExecutorService connectionPolicyWorker = Executors.newSingleThreadExecutor();
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicLong intent = new AtomicLong();
     private final String defaultDeviceName;
@@ -71,6 +74,8 @@ public final class AppController {
 
     record LoginTiming(long queueMs, long identityMs, long authenticateMs, long sessionMs) {}
 
+    private record ConnectionPolicy(JSONObject state, long requestMs) {}
+
     LoginTiming lastLoginTiming() {
         return lastLoginTiming;
     }
@@ -91,6 +96,7 @@ public final class AppController {
     static synchronized void installForTest(AppController controller) {
         if (instance != null && instance != controller) {
             instance.presenceWorker.shutdownNow();
+            instance.connectionPolicyWorker.shutdownNow();
             instance.worker.shutdownNow();
         }
         instance = controller;
@@ -233,6 +239,10 @@ public final class AppController {
         });
     }
 
+    void prepareVpnConsent() {
+        worker.execute(engine::prepareLocalComponents);
+    }
+
     public void connect() {
         long requestedAt = SystemClock.elapsedRealtime();
         long requested = intent.incrementAndGet();
@@ -244,6 +254,9 @@ public final class AppController {
     static final class ConnectionTiming {
         final long totalMs;
         final long policyMs;
+        final long queueMs;
+        final long preparationMs;
+        final long policyWaitMs;
         final long backendWaitMs;
         final long serviceWaitMs;
         final long nativeStartMs;
@@ -263,9 +276,13 @@ public final class AppController {
         final Network orderingUnderlay;
         final Network verifiedUnderlay;
 
-        ConnectionTiming(long totalMs, long policyMs, TunnelEngine.AttemptTiming attempt) {
+        ConnectionTiming(long totalMs, long policyMs, long queueMs, long preparationMs,
+                         long policyWaitMs, TunnelEngine.AttemptTiming attempt) {
             this.totalMs = totalMs;
             this.policyMs = policyMs;
+            this.queueMs = queueMs;
+            this.preparationMs = preparationMs;
+            this.policyWaitMs = policyWaitMs;
             this.backendWaitMs = attempt.backendWaitMs;
             this.serviceWaitMs = attempt.serviceWaitMs;
             this.nativeStartMs = attempt.nativeStartMs;
@@ -295,21 +312,34 @@ public final class AppController {
         if (requested != intent.get() || token.isEmpty() || "connected".equals(mode)) {
             return;
         }
+        long startedAt = SystemClock.elapsedRealtime();
         lastConnectTiming = null;
         mode = "connecting";
         message = "";
         busy = true;
         publish();
+        Future<ConnectionPolicy> policy = null;
         try {
-            // The foreground service can start while HTTPS refreshes the
-            // policy. Only the fresh policy permits a native TUN activation.
+            String session = requirePolicySession();
+            policy = connectionPolicyWorker.submit(() -> {
+                long policyStarted = SystemClock.elapsedRealtime();
+                JSONObject update = api.call("state", session, null);
+                return new ConnectionPolicy(update, SystemClock.elapsedRealtime() - policyStarted);
+            });
+            // Android service setup and the fresh HTTPS request can proceed concurrently.
+            // The worker still applies the response before activating the TUN.
+            long preparationStarted = SystemClock.elapsedRealtime();
             engine.prepareConnection();
-            long policyStarted = SystemClock.elapsedRealtime();
-            refreshPolicy();
-            long policyMs = SystemClock.elapsedRealtime() - policyStarted;
+            long policyWaitStarted = SystemClock.elapsedRealtime();
             if (requested != intent.get()) {
                 return;
             }
+            ConnectionPolicy freshPolicy = awaitConnectionPolicy(policy);
+            long policyWaitMs = SystemClock.elapsedRealtime() - policyWaitStarted;
+            if (requested != intent.get()) {
+                return;
+            }
+            applyPolicy(freshPolicy.state());
             if (!registered() || tunnel() == null) {
                 throw new ClientApi.ApiError("DEVICE_CONFIRMATION_REQUIRED");
             }
@@ -340,7 +370,9 @@ public final class AppController {
             ipv4 = result.ipv4;
             ipv6 = result.ipv6 == null ? "" : result.ipv6;
             lastConnectTiming = new ConnectionTiming(
-                    SystemClock.elapsedRealtime() - requestedAt, policyMs, result.timing);
+                    SystemClock.elapsedRealtime() - requestedAt, freshPolicy.requestMs(),
+                    startedAt - requestedAt, policyWaitStarted - preparationStarted,
+                    policyWaitMs, result.timing);
             mode = "connected";
             verifyAfter = SystemClock.elapsedRealtime() + EXIT_CHECK_INTERVAL;
             reportPresence("connected");
@@ -349,11 +381,28 @@ public final class AppController {
                 loseConnection(textFor(failure), false);
             }
         } finally {
+            if (policy != null) {
+                policy.cancel(true);
+            }
             if (requested != intent.get()) {
                 loseConnection("", false);
             }
             busy = false;
             publish();
+        }
+    }
+
+    private static ConnectionPolicy awaitConnectionPolicy(Future<ConnectionPolicy> policy) throws Exception {
+        try {
+            return policy.get();
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof Exception cause) {
+                throw cause;
+            }
+            throw failed;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw interrupted;
         }
     }
 
@@ -489,11 +538,19 @@ public final class AppController {
     }
 
     private void refreshPolicy() throws Exception {
+        applyPolicy(api.call("state", requirePolicySession(), null));
+    }
+
+    private String requirePolicySession() throws ClientApi.ApiError {
         if (token.isEmpty() || tokenExpiresAt <= epochSeconds()) {
             throw new ClientApi.ApiError("LOGIN_REQUIRED");
         }
+        return token;
+    }
+
+    private void applyPolicy(JSONObject update) throws Exception {
         boolean restoring = accountState == null;
-        acceptState(api.call("state", token, null));
+        acceptState(update);
         if (restoring) {
             message = "";
         }

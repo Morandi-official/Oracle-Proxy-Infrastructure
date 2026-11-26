@@ -33,6 +33,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
@@ -108,7 +110,18 @@ public final class AndroidLifecycleTest {
             tap(instrumentation, activity, R.id.connect);
             allow = ui.wait(Until.findObject(By.res("android", "button1")), 7_000);
             assertNotNull("The user can reopen VPN consent", allow);
-            allow.click();
+            PolicyGate initialPolicy = new PolicyGate();
+            api.policyGate = initialPolicy;
+            try {
+                allow.click();
+                assertTrue("The approved attempt requests fresh account policy",
+                        initialPolicy.requested.await(7, TimeUnit.SECONDS));
+                assertFalse("A pending account response cannot activate the tunnel", engine.isUp());
+                assertFalse("A pending account response cannot install a VPN route", hasVpnRoute(context));
+            } finally {
+                api.policyGate = null;
+                initialPolicy.respond.countDown();
+            }
             await("verified connection", controller, () -> "connected".equals(controller.snapshot().mode));
             AppController.State connected = controller.snapshot();
             AppController.ConnectionTiming firstTiming = controller.lastConnectTiming();
@@ -247,9 +260,15 @@ public final class AndroidLifecycleTest {
         }
     }
 
+    private static final class PolicyGate {
+        final CountDownLatch requested = new CountDownLatch(1);
+        final CountDownLatch respond = new CountDownLatch(1);
+    }
+
     private static final class FixtureApi extends ClientApi {
         private final List<String> events = Collections.synchronizedList(new ArrayList<>());
         private volatile boolean policyDisabled;
+        private volatile PolicyGate policyGate;
         private boolean registered;
         private String clientPublicKey;
         private final String serverPublicKey;
@@ -285,6 +304,13 @@ public final class AndroidLifecycleTest {
                     events.add("logout");
                     return new JSONObject().put("ok", true);
                 case "state":
+                    PolicyGate gate = policyGate;
+                    if (gate != null) {
+                        gate.requested.countDown();
+                        if (!gate.respond.await(10, TimeUnit.SECONDS)) {
+                            throw new IOException("Timed out waiting for the fixture to release policy");
+                        }
+                    }
                     return state();
                 default:
                     throw new AssertionError("Unexpected account API operation: " + action);

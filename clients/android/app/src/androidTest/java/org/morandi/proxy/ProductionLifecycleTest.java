@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.VpnService;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Base64;
@@ -27,6 +28,8 @@ import java.io.InputStream;
 import java.net.Proxy;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.StringJoiner;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -41,6 +44,8 @@ import static org.junit.Assert.assertTrue;
 /** Trusted release job only. Uses the production client, TLS and exit probes. */
 @RunWith(AndroidJUnit4.class)
 public final class ProductionLifecycleTest {
+    private static final int PREAUTHORIZED_CONNECT_SAMPLES = 5;
+
     @Test
     public void signedAppAgainstProduction() throws Exception {
         Bundle arguments = InstrumentationRegistry.getArguments();
@@ -112,16 +117,22 @@ public final class ProductionLifecycleTest {
 
             Predicate<AppController.State> verified = state -> "connected".equals(state.mode)
                     && !state.verifiedIpv4.isEmpty() && (!api.dualStack || !state.verifiedIpv6.isEmpty());
-            try (StateTiming firstClick = new StateTiming(controller, verified);
-                 StateTiming afterConsent = new StateTiming(controller, verified)) {
-                tapConnect(instrumentation, screen, firstClick);
+            long afterConsentNanos;
+            try (VisibleConnectionTiming firstClick =
+                         new VisibleConnectionTiming(instrumentation, screen, controller, verified);
+                 VisibleConnectionTiming afterConsent =
+                         new VisibleConnectionTiming(instrumentation, screen, controller, verified)) {
+                firstClick.tapConnectButton();
                 UiDevice ui = UiDevice.getInstance(instrumentation);
                 UiObject2 allow = ui.wait(Until.findObject(By.res("android", "button1")), 8_000);
                 assertNotNull("Android VPN consent appeared on fresh installation", allow);
-                afterConsent.start();
-                allow.click();
-                firstClick.report("CONNECT_FIRST_CLICK");
-                afterConsent.report("CONNECT_AFTER_CONSENT");
+                // Resolve the control, including any accessibility idle waits, before timing
+                // the actual touchscreen release over Android's system consent control.
+                afterConsent.tap(allow.getVisibleBounds());
+                long firstClickNanos = firstClick.await("CONNECT_FIRST_CLICK");
+                afterConsentNanos = afterConsent.await("CONNECT_AFTER_CONSENT");
+                VisibleConnectionTiming.report("CONNECT_FIRST_CLICK", firstClickNanos);
+                VisibleConnectionTiming.report("CONNECT_AFTER_CONSENT", afterConsentNanos);
             }
             android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_VERIFIED_FAMILIES="
                     + (api.dualStack ? 2 : 1));
@@ -136,17 +147,30 @@ public final class ProductionLifecycleTest {
             controller.disconnect();
             await("Production VPN route removed", () -> "disconnected".equals(controller.snapshot().mode)
                     && !engine.isUp() && vpnNetwork(context) == null);
-            try (StateTiming reconnect = new StateTiming(controller, verified)) {
-                tapConnect(instrumentation, screen, reconnect);
-                reconnect.report("CONNECT_RECONNECT_CLICK");
+            long[] reconnectNanos = new long[PREAUTHORIZED_CONNECT_SAMPLES];
+            for (int sample = 0; sample < reconnectNanos.length; sample++) {
+                assertTrue("Android VPN consent still valid", VpnService.prepare(context) == null);
+                try (VisibleConnectionTiming reconnect =
+                             new VisibleConnectionTiming(instrumentation, screen, controller, verified)) {
+                    reconnect.tapConnectButton();
+                    reconnectNanos[sample] = reconnect.await("Preauthorized connection " + (sample + 1));
+                }
+                if (sample == 0) {
+                    VisibleConnectionTiming.report("CONNECT_RECONNECT_CLICK", reconnectNanos[sample]);
+                    reportProofProtocol(controller, "RECONNECT");
+                }
+                controller.disconnect();
+                await("Production VPN route removed after reconnect",
+                        () -> "disconnected".equals(controller.snapshot().mode) && !engine.isUp()
+                                && vpnNetwork(context) == null);
             }
-            reportProofProtocol(controller, "RECONNECT");
-            controller.disconnect();
-            await("Production VPN route removed after reconnect",
-                    () -> "disconnected".equals(controller.snapshot().mode) && !engine.isUp()
-                            && vpnNetwork(context) == null);
+            int underTarget = reportReconnectSamples(reconnectNanos);
             controller.removeDevice(controller.snapshot().deviceId);
             await("Dedicated test device removed and signed out", () -> !controller.snapshot().signedIn);
+            assertTrue("Real consent tap to visible verified VPN must complete within 1500 ms",
+                    afterConsentNanos <= VisibleConnectionTiming.TARGET_NANOS);
+            assertTrue("Every preauthorized tap to visible verified VPN must complete within 1500 ms",
+                    underTarget == reconnectNanos.length);
         } finally {
             active.disconnect();
             if (activity != null) {
@@ -172,6 +196,8 @@ public final class ProductionLifecycleTest {
                 + ";H3_CANDIDATE=" + (BuildConfig.H3_EXIT_PROOF_ENABLED ? 1 : 0));
         android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CONNECT_PHASES_" + label
                 + "=TOTAL_MS:" + timing.totalMs + ";POLICY_MS:" + timing.policyMs
+                + ";QUEUE_MS:" + timing.queueMs + ";PREPARATION_MS:" + timing.preparationMs
+                + ";POLICY_WAIT_MS:" + timing.policyWaitMs
                 + ";BACKEND_WAIT_MS:" + timing.backendWaitMs
                 + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";NATIVE_START_MS:" + timing.nativeStartMs
                 + ";NETWORK_WAIT_MS:" + timing.networkWaitMs
@@ -183,15 +209,22 @@ public final class ProductionLifecycleTest {
                 + ";ATTEMPTS:" + timing.attempts);
     }
 
-    private static void tapConnect(Instrumentation instrumentation, MainActivity screen, StateTiming timing) {
-        instrumentation.waitForIdleSync();
-        instrumentation.runOnMainSync(() -> {
-            android.view.View connect = screen.findViewById(R.id.connect);
-            assertNotNull("Connect action is present", connect);
-            assertTrue("Connect action is enabled", connect.isEnabled());
-            timing.start();
-            assertTrue("Connect action was accepted", connect.performClick());
-        });
+    private static int reportReconnectSamples(long[] durations) {
+        StringJoiner samples = new StringJoiner(",");
+        int underTarget = 0;
+        for (long duration : durations) {
+            samples.add(Long.toString(TimeUnit.NANOSECONDS.toMillis(duration)));
+            if (duration <= VisibleConnectionTiming.TARGET_NANOS) {
+                underTarget++;
+            }
+        }
+        long[] sorted = durations.clone();
+        Arrays.sort(sorted);
+        android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=" + samples
+                + ";N=" + sorted.length + ";MEDIAN_MS=" + TimeUnit.NANOSECONDS.toMillis(sorted[sorted.length / 2])
+                + ";MAX_MS=" + TimeUnit.NANOSECONDS.toMillis(sorted[sorted.length - 1])
+                + ";UNDER_1500MS=" + underTarget);
+        return underTarget;
     }
 
     private static final class StateTiming implements AutoCloseable {

@@ -585,7 +585,11 @@ internal static class ProductTests
         if(!network.Observe("synthetic-network-a") || network.Observe("synthetic-network-a") || !network.Observe("synthetic-network-b"))return 1;
         Console.WriteLine("NETWORK_CHANGE_RESTORES_NATIVE_UDP_PREFERENCE=PASS");
         Application.EnableVisualStyles();
-        var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active"};
+        var cycleStart=new DateTimeOffset(2026,10,12,12,0,0,TimeSpan.Zero);
+        var cycleEnd=cycleStart.AddDays(30);
+        var account=new JsonObject{["username"]="synthetic-user",["used_bytes"]=2147483648L,["limit_bytes"]=5368709120L,["remaining_bytes"]=3000000000L,
+            ["expires_at"]=1893456000L,["device_count"]=1,["device_limit"]=3,["status"]="active",
+            ["cycle"]=new JsonObject{["start_at"]=cycleStart.ToUnixTimeSeconds(),["end_at"]=cycleEnd.ToUnixTimeSeconds(),["duration_days"]=30,["usage_estimated"]=false}};
         var snapshot=new JsonObject{["login_authenticated"]=true,["mode"]="protected",["guard"]=true,["error"]="",["account"]=account,["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["period"]="2026-10",["uu_verified_programs"]=0};
         snapshot["device_registered"]=true;
         snapshot["registration"]=new JsonObject{["status"]="registered",["device_id"]="aabbccddeeff",["device_name"]="Known test PC",["confirmed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds(),["requires_slot"]=false};
@@ -598,6 +602,17 @@ internal static class ProductTests
         if(snapshot["failure"]!["socket_error"]?.GetValue<string>()!="ConnectionRefused" || snapshot["failure"]!.ToJsonString().Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         using var form=new MainForm((_,_,_)=>Task.FromResult((JsonObject)snapshot.DeepClone()));
         form.Display(snapshot);if(form.UsageProgress!=400||!form.UsageFresh)return 1;
+        var usage=Descendants(form).OfType<Label>().Single(c=>c.Name=="cycle-usage");
+        var interval=Descendants(form).OfType<Label>().Single(c=>c.Name=="cycle-interval");
+        var usageUpdated=Descendants(form).OfType<Label>().Single(c=>c.Name=="usage-updated");
+        string LocalDate(DateTimeOffset date)=>date.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+        UiAssert(usage.Text.Contains($"本周期已用 {2.147483648:0.00} GB / {5.368709120:0.00} GB",StringComparison.Ordinal) &&
+            usage.Text.Contains($"剩余 {3d:0.00} GB",StringComparison.Ordinal) &&
+            interval.Text==$"周期（本地时间）  {LocalDate(cycleStart)} 至 {LocalDate(cycleEnd)}" && usageUpdated.Text.Contains("服务器统计",StringComparison.Ordinal),
+            "USAGE_LABELS_SHOW_SERVER_TOTAL_REMAINING_AND_ACCOUNT_CYCLE");
+        account["cycle"]!["usage_estimated"]=true;form.Display(snapshot);
+        UiAssert(usageUpdated.Text.Contains("服务器估算",StringComparison.Ordinal),"USAGE_ESTIMATE_NOT_IDENTIFIED");
+        account["cycle"]!["usage_estimated"]=false;form.Display(snapshot);
         if(!form.ConnectionReport.Contains("native_udp.endpoint_port: 51820") || !form.ConnectionReport.Contains("egress_probe_timeout") || form.ConnectionReport.Contains("SYNTHETIC_NATIVE_SECRET_DO_NOT_COPY") || !form.ConnectionReport.Contains("EGRESS_PROBE") || !form.ConnectionReport.Contains("ConnectionRefused") || form.ConnectionReport.Contains("synthetic-user") || form.ConnectionReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY") || form.ConnectionReport.Contains("SYNTHETIC_SECRET_URL_PASSWORD"))return 1;
         Console.WriteLine("CONNECTION_FAILURE_STAGE_AND_ENUMS_EXPORTED_WITHOUT_MESSAGES_OR_CREDENTIALS=PASS");
         if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
@@ -619,7 +634,11 @@ internal static class ProductTests
         snapshot["mode"]="connected";snapshot["transport"]="wireguard-udp";snapshot["verified_exit_ip"]="152.67.156.100";snapshot["latency_ms"]=186L;snapshot["core_pid"]=123U;
         snapshot["traffic"]=new JsonObject{["sample_ms"]=1000L,["rx_bytes"]=10000L,["tx_bytes"]=20000L};form.Display(snapshot);
         snapshot["traffic"]=new JsonObject{["sample_ms"]=2000L,["rx_bytes"]=12048L,["tx_bytes"]=21024L};form.Display(snapshot);
-        if(form.DownloadRate!="2.0 KB/s" || form.UploadRate!="1.0 KB/s")return 1;
+        var downloadRate=Descendants(form).OfType<Label>().Single(c=>c.Name=="download-rate");
+        var uploadRate=Descendants(form).OfType<Label>().Single(c=>c.Name=="upload-rate");
+        UiAssert(downloadRate.Text=="0.002 MB/s" && uploadRate.Text=="0.001 MB/s","LOW_TRANSFER_RATES_KEEP_DECIMAL_MB_PER_SECOND");
+        snapshot["traffic"]=new JsonObject{["sample_ms"]=2500L,["rx_bytes"]=762048L,["tx_bytes"]=271024L};form.Display(snapshot);
+        UiAssert(downloadRate.Text=="1.500 MB/s" && uploadRate.Text=="0.500 MB/s","RATE_MATH_USES_ELAPSED_TIME_AND_DECIMAL_MEGABYTES");
         snapshot["traffic"]=new JsonObject{["sample_ms"]=3000L,["rx_bytes"]=0L,["tx_bytes"]=0L};form.Display(snapshot);
         if(form.DownloadRate!="采样中…" || form.UploadRate!="采样中…")return 1;
         snapshot["mode"]="protected";form.Display(snapshot);if(form.DownloadRate!="—" || form.UploadRate!="—")return 1;
@@ -628,13 +647,13 @@ internal static class ProductTests
             form.Size=size;form.Show();Application.DoEvents();StopUiPolling(form);form.PerformLayout();
             using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));
             var viewport=Descendants(form).Single(c=>c.Name=="viewport");
-            var sections=Descendants(form).OfType<GroupBox>().Where(c=>c.Name.EndsWith("Section",StringComparison.Ordinal)).OrderBy(c=>c.Top).ToArray();
+            var sections=Descendants(form).OfType<GroupBox>().Where(c=>c.Name.EndsWith("Section",StringComparison.Ordinal) || c.Name=="device-management-section").OrderBy(c=>c.Top).ToArray();
             var bounds=sections.Select(c=>c.RectangleToScreen(c.ClientRectangle)).ToArray();
-            if(sections.Length!=3 || !viewport.Visible || sections.Any(c=>!c.Visible || c.Width>viewport.ClientSize.Width) || bounds.SelectMany((a,i)=>bounds.Skip(i+1).Select(b=>a.IntersectsWith(b))).Any(overlap=>overlap))return 1;
+            if(sections.Length!=4 || !viewport.Visible || sections.Any(c=>!c.Visible || c.Width>viewport.ClientSize.Width) || bounds.SelectMany((a,i)=>bounds.Skip(i+1).Select(b=>a.IntersectsWith(b))).Any(overlap=>overlap))return 1;
             if(viewport is ScrollableControl scroller && scroller.HorizontalScroll.Visible)return 1;
             Directory.CreateDirectory("dist/review");image.Save($"dist/review/windows-client-{size.Width}x{size.Height}-synthetic.png");
         }
-        Console.WriteLine("THREE_ALIGNED_SECTIONS_FIT_NORMAL_AND_MINIMUM_WINDOW_WITHOUT_HORIZONTAL_SCROLL=PASS");
+        Console.WriteLine("DASHBOARD_AND_DEVICE_SECTIONS_FIT_WIDTH_WITHOUT_HORIZONTAL_SCROLL=PASS");
         UiStartupAndCompactRegression(snapshot);
         UiHigTextAndContrastRegression(snapshot);
         UiLoginAndLayoutRegression(snapshot);
@@ -644,7 +663,9 @@ internal static class ProductTests
         toolsViewport.ScrollControlIntoView(Descendants(form).Single(c=>c.Name=="toolsSection"));Application.DoEvents();
         using(var toolImage=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(toolImage,new Rectangle(Point.Empty,form.Size));toolImage.Save("dist/review/windows-client-tools-synthetic.png");}
         form.Hide();
-        snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);if(form.UsageFresh)return 1;
+        snapshot["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds()-60;form.Display(snapshot);
+        UiAssert(!form.UsageFresh && usageUpdated.Text.Contains("等待刷新",StringComparison.Ordinal) && usage.Text.Contains($"剩余 {3d:0.00} GB",StringComparison.Ordinal),
+            "STALE_SERVER_USAGE_REMAINS_VISIBLE_AND_IDENTIFIED");
         snapshot["mode"]="disconnected";snapshot["guard"]=false;snapshot["preparing"]=true;snapshot["quick_ready"]=true;
         snapshot["error"]="";snapshot["transport"]="wireguard-udp";
         var pollCalls=new List<string>();
@@ -706,14 +727,27 @@ internal static class ProductTests
         Console.WriteLine("CONNECT_PRESERVE_ADAPTIVE_PORT_SELECTION=PASS");
         var pending=(JsonObject)snapshot.DeepClone();pending["observed_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["received_at"]=DateTimeOffset.UtcNow.ToUnixTimeSeconds();pending["device_registered"]=false;pending["intent"]=false;pending["mode"]="disconnected";pending["guard"]=false;pending["ok"]=true;
         pending["registration"]=new JsonObject{["status"]="pending",["device_id"]="112233aabbcc",["device_name"]="DESKTOP-NEW",["requires_slot"]=true};pending["devices"]=new JsonArray();
-        using(var registrationForm=new MainForm((command,name,consent)=>Task.FromResult((JsonObject)pending.DeepClone()))){
+        bool enrolled=false;
+        using(var registrationForm=new MainForm((command,name,consent)=>{
+            if(command=="ConfirmDevice"){
+                UiAssert(name=="QA desktop" && consent=="confirmed","DEVICE_ADMISSION_DROPPED_TYPED_NAME_OR_CONSENT");
+                enrolled=true;pending["device_registered"]=true;pending["registration"]!["status"]="registered";
+                pending["registration"]!["device_name"]=name;
+            }
+            return Task.FromResult((JsonObject)pending.DeepClone());
+        })){
             UiShow(registrationForm);registrationForm.Display(pending);Application.DoEvents();
             var shell=Descendants(registrationForm).Single(c=>c.Name=="dashboard");
             var gate=Descendants(registrationForm).Single(c=>c.Name=="login-gate");
-            if(shell.Visible || !gate.Visible)return 1;
-            pending["device_registered"]=true;pending["registration"]!["status"]="registered";
-            registrationForm.Display(pending);Application.DoEvents();
-            if(!shell.Visible || gate.Visible)return 1;
+            UiAssert(!shell.Visible && gate.Visible,"PENDING_DEVICE_BYPASSED_ADMISSION");
+            var confirm=Descendants(gate).OfType<CheckBox>().Single(c=>c.Name=="device-confirm");
+            var name=Descendants(gate).OfType<TextBox>().Single(c=>c.Name=="device-name");
+            var register=UiButton(gate,"register-device");
+            UiAssert(confirm.Visible && name.Visible && register.Visible && !register.Enabled,"PENDING_ADMISSION_CONTROLS_MISSING_OR_UNCONFIRMED_BUTTON_ENABLED");
+            name.Text="QA desktop";confirm.Checked=true;
+            UiAssert(register.Enabled,"DEVICE_CONFIRMATION_DID_NOT_ENABLE_ADMISSION");
+            register.PerformClick();
+            UiPumpUntil(()=>enrolled && shell.Visible && !gate.Visible,"CONFIRMED_DEVICE_DID_NOT_REVEAL_DASHBOARD");
         }
         var unconfirmed=new JsonObject{["account"]=new JsonObject{["status"]="active"},["registration"]=new JsonObject{["status"]="pending"},["device"]=new JsonObject{["registered"]=false},["tunnel"]=null};
         if(DeviceRegistration.Confirmed(unconfirmed) || DeviceRegistration.ReportMode("connected",false,false)!="pending")return 1;
@@ -876,7 +910,7 @@ internal static class ProductTests
         UiAssert(shell.Visible && !login.Visible,"BACKGROUND_ACCOUNT_RETRY_DID_NOT_RESTORE_DASHBOARD");
         form.ClientSize=new Size(1220,820);form.PerformLayout();Application.DoEvents();
         var viewport=UiDescendants(form).Single(c=>c.Name=="viewport");var area=viewport.RectangleToScreen(viewport.ClientRectangle);
-        foreach(var card in UiDescendants(form).Where(c=>c.Name is "connectionSection" or "accountSection" or "toolsSection"))
+        foreach(var card in UiDescendants(form).Where(c=>c.Name is "connectionSection" or "accountSection"))
             UiAssert(area.Contains(card.RectangleToScreen(card.ClientRectangle)),"DEFAULT_WINDOW_REQUIRES_SCROLL_FOR_"+card.Name);
         UiAssert(Screen.FromControl(form).WorkingArea.Contains(form.RectangleToScreen(form.ClientRectangle)),"COMPACT_REVIEW_WINDOW_EXCEEDS_REAL_DESKTOP");
         var metrics=UiDescendants(form).Single(c=>c.Name=="connectionMetrics");
@@ -885,7 +919,7 @@ internal static class ProductTests
             UiAssert(measured.Height<=value.Height,"DUALSTACK_EXIT_TEXT_CLIPPED");
         }
         Directory.CreateDirectory("dist/review");using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save("dist/review/proxy-compact-rc31.png");}
-        Console.WriteLine("COLD_AND_WARM_REMEMBERED_STARTUP_PENDING_ACCOUNT_NEVER_SHOWS_LOGIN_AND_THREE_CARDS_VISIBLE=PASS");
+        Console.WriteLine("COLD_AND_WARM_REMEMBERED_STARTUP_PENDING_ACCOUNT_NEVER_SHOWS_LOGIN_AND_PRIMARY_CARDS_VISIBLE=PASS");
     }
 
     private static double UiContrast(Color foreground,Color background)
@@ -1079,14 +1113,19 @@ internal static class ProductTests
     private static void UiLayoutRegression(JsonObject source)
     {
         var state=UiReady(source);
+        state["devices"]!.AsArray().Add(new JsonObject{["id"]="bbccddeeff00",["name"]="Remote fixture",["current"]=false,["revoked"]=false});
+        state["devices"]!.AsArray().Add(new JsonObject{["id"]="bbccddeeff11",["name"]="Revoked fixture",["current"]=false,["revoked"]=true});
         using var form=new MainForm((_,_,_)=>Task.FromResult((JsonObject)state.DeepClone()));
         UiShow(form);
         var viewport=(ScrollableControl)UiDescendants(form).Single(control=>control.Name=="viewport");
         var maintenance=UiDescendants(form).Single(control=>control.Name=="system-maintenance");
-        var details=UiDescendants(form).Single(control=>control.Name=="deviceDetails");
+        var devicesCard=UiDescendants(form).Single(control=>control.Name=="device-management-section");
+        var devices=UiDescendants(devicesCard).OfType<ListBox>().Single(control=>control.Name=="my-devices");
+        var delete=UiButton(devicesCard,"delete-device");
+        var navigateDevices=UiButton(form,"navigate-devices");
+        UiAssert(!UiDescendants(form).Any(c=>c.Name=="device-details-toggle"),"DEVICE_LIST_STILL_BEHIND_A_DUPLICATE_DISCLOSURE");
         UiButton(form,"diagnostics-toggle").PerformClick();Application.DoEvents();
         var maintenanceToggle=UiButton(form,"maintenance-toggle");
-        var deviceToggle=UiButton(form,"device-details-toggle");
         Directory.CreateDirectory("dist/review");
         foreach(var size in new[]{new Size(900,600),new Size(1080,820)}){
             form.Size=size;
@@ -1097,35 +1136,42 @@ internal static class ProductTests
                     UiAssert(UiDescendants(form).Single(c=>c.Name=="login-gate").Visible && !UiDescendants(form).Single(c=>c.Name=="dashboard").Visible,"UNREGISTERED_DEVICE_REVEALED_CONNECTION_PAGE");
                     UiRecoveryReachable(form,"PENDING_ADMISSION");continue;
                 }
-                foreach(bool expandedDetails in new[]{false,true}){
-                    if(!pending && details.Visible!=expandedDetails){viewport.ScrollControlIntoView(deviceToggle);deviceToggle.PerformClick();Application.DoEvents();}
-                    UiAssert(details.Visible==expandedDetails,"REGISTRATION_DISCLOSURE_DID_NOT_CHANGE");
-                    foreach(bool expandedMaintenance in new[]{false,true}){
-                        if(maintenance.Visible!=expandedMaintenance){viewport.ScrollControlIntoView(maintenanceToggle);maintenanceToggle.PerformClick();Application.DoEvents();}
-                        form.PerformLayout();Application.DoEvents();
-                        UiAssert(maintenance.Visible==expandedMaintenance,"MAINTENANCE_DISCLOSURE_DID_NOT_CHANGE");
-                        UiAssert(!UiDescendants(form).OfType<ScrollableControl>().Any(control=>control.AutoScroll && control.HorizontalScroll.Visible),"EXPANDED_UI_HAS_HORIZONTAL_SCROLL");
-                        if(expandedMaintenance){
-                            var actions=UiDescendants(maintenance).OfType<Button>().ToArray();
-                            UiAssert(actions.Length>=4,"MAINTENANCE_ACTIONS_MISSING");
-                            foreach(var action in actions){
-                                UiAssert(action.Visible && action.Enabled && action.Parent!.ClientRectangle.Contains(action.Bounds),"MAINTENANCE_CHILD_CLIPPED_"+action.Text);
-                                viewport.ScrollControlIntoView(action);Application.DoEvents();
-                                var visible=action.RectangleToScreen(action.ClientRectangle);
-                                for(Control? ancestor=action.Parent;ancestor is not null;ancestor=ancestor.Parent)
-                                    UiAssert(ancestor.RectangleToScreen(ancestor.ClientRectangle).Contains(visible),"MAINTENANCE_ACTION_UNREACHABLE_"+action.Text);
-                            }
+                navigateDevices.PerformClick();Application.DoEvents();
+                UiAssert(devicesCard.Visible && devices.Visible && delete.Visible &&
+                    viewport.RectangleToScreen(viewport.ClientRectangle).IntersectsWith(devices.RectangleToScreen(devices.ClientRectangle)),"DEVICE_NAVIGATION_DID_NOT_REVEAL_LIST");
+                var visibleDevices=devices.Items.Cast<object>().Select(devices.GetItemText).ToArray();
+                UiAssert(visibleDevices.Length==2 && visibleDevices.Any(label=>label?.Contains("Known test PC")==true && label.Contains("本机")) &&
+                    visibleDevices.Any(label=>label?.Contains("Remote fixture")==true),"DEVICE_LIST_MISSED_ACTIVE_DEVICE_OR_INCLUDED_REVOKED_DEVICE");
+                devices.ClearSelected();UiAssert(!delete.Enabled,"DELETE_ALLOWED_WITHOUT_SELECTED_DEVICE");
+                devices.SelectedIndex=Array.FindIndex(visibleDevices,label=>label?.Contains("Remote fixture")==true);
+                UiAssert(delete.Enabled,"SELECTING_ACTIVE_REMOTE_DEVICE_DID_NOT_ENABLE_DELETE");
+                viewport.ScrollControlIntoView(delete);Application.DoEvents();
+                UiAssert(viewport.RectangleToScreen(viewport.ClientRectangle).Contains(delete.RectangleToScreen(delete.ClientRectangle)),"DEVICE_DELETE_ACTION_UNREACHABLE");
+                foreach(bool expandedMaintenance in new[]{false,true}){
+                    if(maintenance.Visible!=expandedMaintenance){viewport.ScrollControlIntoView(maintenanceToggle);maintenanceToggle.PerformClick();Application.DoEvents();}
+                    form.PerformLayout();Application.DoEvents();
+                    UiAssert(maintenance.Visible==expandedMaintenance,"MAINTENANCE_DISCLOSURE_DID_NOT_CHANGE");
+                    UiAssert(!UiDescendants(form).OfType<ScrollableControl>().Any(control=>control.AutoScroll && control.HorizontalScroll.Visible),"EXPANDED_UI_HAS_HORIZONTAL_SCROLL");
+                    if(expandedMaintenance){
+                        var actions=UiDescendants(maintenance).OfType<Button>().ToArray();
+                        UiAssert(actions.Length>=4,"MAINTENANCE_ACTIONS_MISSING");
+                        foreach(var action in actions){
+                            UiAssert(action.Visible && action.Enabled && action.Parent!.ClientRectangle.Contains(action.Bounds),"MAINTENANCE_CHILD_CLIPPED_"+action.Text);
+                            viewport.ScrollControlIntoView(action);Application.DoEvents();
+                            var visible=action.RectangleToScreen(action.ClientRectangle);
+                            for(Control? ancestor=action.Parent;ancestor is not null;ancestor=ancestor.Parent)
+                                UiAssert(ancestor.RectangleToScreen(ancestor.ClientRectangle).Contains(visible),"MAINTENANCE_ACTION_UNREACHABLE_"+action.Text);
                         }
-                        viewport.ScrollControlIntoView(maintenanceToggle);Application.DoEvents();
-                        UiRecoveryReachable(form,"LAYOUT");
-                        var recovery=UiButton(form,"emergency-recovery");
-                        Console.WriteLine($"UI_LAYOUT_RECT dpi={form.DeviceDpi} size={form.Width}x{form.Height} pending={pending} deviceDetails={expandedDetails} maintenance={expandedMaintenance} panel={maintenance.Width}x{maintenance.Height} recovery={recovery.Bounds}");
-                        if(expandedMaintenance && expandedDetails){using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save($"dist/review/windows-maintenance-{size.Width}x{size.Height}-pending-{pending}-dpi-{form.DeviceDpi}.png");}
                     }
+                    viewport.ScrollControlIntoView(maintenanceToggle);Application.DoEvents();
+                    UiRecoveryReachable(form,"LAYOUT");
+                    var recovery=UiButton(form,"emergency-recovery");
+                    Console.WriteLine($"UI_LAYOUT_RECT dpi={form.DeviceDpi} size={form.Width}x{form.Height} maintenance={expandedMaintenance} panel={maintenance.Width}x{maintenance.Height} recovery={recovery.Bounds}");
+                    if(expandedMaintenance){using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save($"dist/review/windows-maintenance-{size.Width}x{size.Height}-dpi-{form.DeviceDpi}.png");}
                 }
             }
         }
-        form.Hide();Console.WriteLine("MINIMUM_AND_NORMAL_WINDOWS_KEEP_EXPANDED_MAINTENANCE_AND_REGISTRATION_REACHABLE_WITHOUT_HORIZONTAL_SCROLL=PASS");
+        form.Hide();Console.WriteLine("MINIMUM_AND_NORMAL_WINDOWS_KEEP_DEVICE_MANAGEMENT_AND_MAINTENANCE_REACHABLE_WITHOUT_HORIZONTAL_SCROLL=PASS");
     }
     private static void UiRequestDeadlineRegression(JsonObject source)
     {

@@ -325,7 +325,7 @@ internal sealed partial class VpnRuntime : IDisposable
                 _stage="ACCOUNT_LOGIN";string username=value["username"]!.GetValue<string>(),password=value["password"]!.GetValue<string>();
                 if(username.Length is <3 or >64 || password.Length is <1 or >128)throw new IOException("INVALID_CREDENTIALS");
                 // Never reveal an earlier account while a new login/enrollment is pending.
-                ForgetLogin();_secret.Save();
+                ForgetLogin();
                 void NewIdentity(){
                     byte[] key=RandomNumberGenerator.GetBytes(32),pub=new byte[32];key[0]&=248;key[31]&=127;key[31]|=64;
                     try{X25519.GeneratePublicKey(key,0,pub,0);_secret.PrivateKey=Convert.ToBase64String(key);_secret.PublicKey=Convert.ToBase64String(pub);_secret.Save();}

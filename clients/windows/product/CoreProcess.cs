@@ -58,7 +58,14 @@ internal sealed class CoreProcess : IDisposable
             if(!ReferenceEquals(_process,owned))return;
             if(_nativeEvidence.Record(line.Data))return;
             if(line.Data=="ADAPTER_EMPTY_AUDITED"){_startTimings["empty_audited"]=1;return;}
+            if(line.Data=="ADAPTER_CREATE_BEGIN"){MarkStart("adapter_create_begin_ms");return;}
             if(line.Data is string timing && timing.Length<64){
+                // The pinned Wintun library logs this after the device mutex
+                // and DriverInstall, before creating the software device.
+                // This is a timing witness only, never an ownership signal.
+                if(timing.EndsWith(" Creating adapter",StringComparison.Ordinal) && _startTimings.ContainsKey("adapter_create_begin_ms")){
+                    MarkStart("adapter_pnp_begin_ms");return;
+                }
                 var pair=timing.Split(' ');
                 if(pair.Length==2 && (pair[0] is "ADAPTER_CREATE_MS" or "ADAPTER_AUDIT_MS") && long.TryParse(pair[1],out long ms) && ms is >=0 and <=60000){
                     _startTimings[pair[0]=="ADAPTER_CREATE_MS"?"adapter_create_ms":"adapter_audit_ms"]=ms;return;

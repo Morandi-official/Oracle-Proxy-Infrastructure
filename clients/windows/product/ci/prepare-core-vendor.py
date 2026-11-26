@@ -48,6 +48,7 @@ func PrepareOracleAdapter() error {
 	prepared := oraclePreparedAdapter != nil
 	oracleAdapterMutex.Unlock()
 	if prepared { return nil }
+	fmt.Fprintln(os.Stderr, "ADAPTER_CREATE_BEGIN")
 	started := time.Now()
 	adapter, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
 	fmt.Fprintln(os.Stderr, "ADAPTER_CREATE_MS", time.Since(started).Milliseconds())

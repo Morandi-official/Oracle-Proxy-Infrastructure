@@ -33,6 +33,7 @@ internal static class ProductTests
             catch(IOException error) when(error.Message=="UU_MAINTENANCE_BUSY"){return 4;}
         }
         if(args.SequenceEqual(new[]{"--lifetime-controller"}))return OracleAcceptance.LifetimeController().GetAwaiter().GetResult();
+        if(args.SequenceEqual(new[]{"--live-udp-parked-snapshot"}))return OracleAcceptance.CheckParkedGui().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--live-udp-timing-snapshot"}))return OracleAcceptance.PrintLiveTimings().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--udp-loss-self-test"}))return OracleAcceptance.VerifyUdpFaultSession();
@@ -94,7 +95,8 @@ internal static class ProductTests
         }
         if(args.SequenceEqual(new[]{"--rescue"})){Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
-        if(args.SequenceEqual(new[]{"--recovery-service"})){ServiceBase.Run(new Fixture(true));return 0;}
+        if(args.SequenceEqual(new[]{"--recovery-service"})){ServiceBase.Run(new Fixture(RunRecoveryOnly));return 0;}
+        if(args.SequenceEqual(new[]{"--park-service"})){ServiceBase.Run(new Fixture(RunParkedOffline));return 0;}
         return 2;
     }
     private static async Task<int> ServiceWorkerBudget()
@@ -761,6 +763,15 @@ internal static class ProductTests
         if(!exitForm.QuitClient().GetAwaiter().GetResult() || !exitForm.IsDisposed || !exitCalls.SequenceEqual(new[]{"Quit"}))return 1;
         using var refusedExit=new MainForm((_,_,_)=>Task.FromResult(new JsonObject{["ok"]=false,["intent"]=true,["core_pid"]=123U,["mode"]="protected"}));
         if(refusedExit.QuitClient().GetAwaiter().GetResult() || refusedExit.IsDisposed)return 1;
+        var parked=(JsonObject)quitState.DeepClone();parked["adapter_parked"]=true;
+        using var parkedExit=new MainForm((_,_,_)=>Task.FromResult(parked));
+        UiAssert(!parkedExit.QuitClient().GetAwaiter().GetResult() && !parkedExit.IsDisposed,"QUIT_ACCEPTED_A_PARKED_ADAPTER");
+        var shared=(JsonObject)parked.DeepClone();shared["window_detached"]=true;
+        using var secondaryWindow=new MainForm((_,_,_)=>Task.FromResult(shared));
+        UiAssert(secondaryWindow.QuitClient().GetAwaiter().GetResult() && secondaryWindow.IsDisposed,"DETACHED_WINDOW_WAITED_FOR_OTHER_OWNER");
+        shared["ok"]=false;
+        using var unconfirmedDetach=new MainForm((_,_,_)=>Task.FromResult(shared));
+        UiAssert(!unconfirmedDetach.QuitClient().GetAwaiter().GetResult() && !unconfirmedDetach.IsDisposed,"UNCONFIRMED_SHARED_WINDOW_DETACH_ALLOWED_EXIT");
         Console.WriteLine("EXPLICIT_UI_QUIT_REQUESTS_FIXED_SERVICE_OPERATION_AND_REFUSES_UNVERIFIED_DISCONNECT=PASS");
         foreach(uint closeMessage in new[]{0x0010u,0x0112u}){
             var closeCalls=new List<string>();
@@ -956,11 +967,10 @@ internal static class ProductTests
                     var measured=TextRenderer.MeasureText(label.Text,label.Font,new Size(Math.Max(1,label.ClientSize.Width-label.Padding.Horizontal),0),TextFormatFlags.WordBreak);
                     UiAssert(measured.Height<=label.ClientSize.Height-label.Padding.Vertical,"CLIENT_STATUS_OR_METRIC_TEXT_CLIPPED_"+label.Name+"_"+size.Width+"_"+mode);
                 }
-                var buttons=new[]{UiButton(form,"connect"),UiButton(form,"disconnect")};
-                foreach(var button in buttons){
-                    var measured=TextRenderer.MeasureText(button.Text,button.Font);
-                    UiAssert(measured.Width<=button.Width-16*form.DeviceDpi/96 && measured.Height<=button.Height-6*form.DeviceDpi/96,"CLIENT_PRIMARY_ACTION_TEXT_CLIPPED_"+button.Name);
-                }
+                var button=UiDescendants(content).OfType<Button>().Single(item=>item.Name is "connect" or "disconnect");
+                UiAssert(button.Name==(mode=="disconnected"?"connect":"disconnect"),"CLIENT_ACTION_DISAGREES_WITH_CONNECTION_STATE");
+                var actionSize=TextRenderer.MeasureText(button.Text,button.Font);
+                UiAssert(actionSize.Width<=button.Width-16*form.DeviceDpi/96 && actionSize.Height<=button.Height-6*form.DeviceDpi/96,"CLIENT_PRIMARY_ACTION_TEXT_CLIPPED_"+button.Name);
                 UiRecoveryReachable(form,"HIG_TEXT_"+size.Width+"_"+mode);
             }
             Directory.CreateDirectory("dist/review");using var image=new Bitmap(form.Width,form.Height);form.DrawToBitmap(image,new Rectangle(Point.Empty,form.Size));image.Save($"dist/review/proxy-hig-client-{size.Width}x{size.Height}-dpi-{form.DeviceDpi}.png");
@@ -996,21 +1006,31 @@ internal static class ProductTests
         var ready=UiReady(source);ready["transport"]="wireguard-udp";
         foreach(var size in new[]{new Size(900,600),new Size(1220,820)}){
             TaskCompletionSource<JsonObject>? response=null;bool armed=false;
-            using var form=new MainForm((command,_,_)=>armed && command is "Connect" or "Disconnect"?response!.Task:Task.FromResult((JsonObject)ready.DeepClone()));
+            var requests=new List<string>();
+            using var form=new MainForm((command,_,_)=>{
+                if(armed && command is "Connect" or "Disconnect"){requests.Add(command);return response!.Task;}
+                return Task.FromResult((JsonObject)ready.DeepClone());
+            });
             UiShow(form);form.Size=size;form.PerformLayout();Application.DoEvents();
             var viewport=(StableViewport)UiDescendants(form).Single(c=>c.Name=="viewport");
+            var toggle=UiButton(form,"connect");
             foreach(string command in new[]{"Connect","Disconnect"}){
                 viewport.AutoScrollPosition=Point.Empty;Application.DoEvents();
-                var button=UiButton(form,command=="Connect"?"connect":"disconnect");button.Focus();Application.DoEvents();
+                var button=UiButton(form,command=="Connect"?"connect":"disconnect");
+                UiAssert(ReferenceEquals(button,toggle),"CONNECTION_TOGGLE_CONTROL_REPLACED");
+                button.Focus();Application.DoEvents();
                 var before=viewport.AutoScrollPosition;response=new(TaskCreationOptions.RunContinuationsAsynchronously);armed=true;
                 button.PerformClick();Application.DoEvents();
                 UiAssert(!button.Enabled && viewport.AutoScrollPosition==before,"CONNECT_OR_DISCONNECT_FOCUS_SCROLLED_VIEWPORT");
                 // User wheel/scrollbar movement remains available while pending.
                 viewport.AutoScrollPosition=new Point(0,Math.Abs(before.Y)+45);Application.DoEvents();var userPosition=viewport.AutoScrollPosition;
                 var state=(JsonObject)ready.DeepClone();state["mode"]=command=="Connect"?"connected":"disconnected";state["intent"]=command=="Connect";state["guard"]=command=="Connect";state["tun_permitted"]=command=="Connect";state["core_pid"]=command=="Connect"?123U:0U;
-                response.SetResult(state);UiPumpUntil(()=>UiButton(form,"disconnect").Enabled,"TOGGLE_PENDING_UI_NEVER_COMPLETED");armed=false;
+                state["adapter_parked"]=command=="Disconnect";
+                response.SetResult(state);UiPumpUntil(()=>toggle.Enabled && toggle.Name==(command=="Connect"?"disconnect":"connect"),"TOGGLE_PENDING_UI_NEVER_COMPLETED");armed=false;
                 UiAssert(viewport.AutoScrollPosition==userPosition,"TOGGLE_COMPLETION_OVERWROTE_USER_SCROLL_POSITION");
             }
+            UiAssert(requests.SequenceEqual(new[]{"Connect","Disconnect"}),"CONNECTION_TOGGLE_DISPATCHED_WRONG_ACTION");
+            UiAssert(UiDescendants(form).Single(c=>c.Name=="connection-status").Text.Contains("当前直连"),"PARKED_ADAPTER_DISPLAYED_AS_CONNECTED");
             viewport.AutoScrollPosition=Point.Empty;Application.DoEvents();
             var nav=UiDescendants(form).OfType<Button>().Single(b=>b.Text=="诊断与测试");nav.PerformClick();Application.DoEvents();
             UiAssert(viewport.AutoScrollPosition.Y<0,"EXPLICIT_SECTION_NAVIGATION_NO_LONGER_SCROLLS");
@@ -1063,7 +1083,8 @@ internal static class ProductTests
         usernameBox.Text="synthetic-user";passwordBox.Text="synthetic-password";
         UiDescendants(form).OfType<Button>().Single(c=>c.Text=="登录").PerformClick();
         UiPumpUntil(()=>shell.Visible && !gate.Visible,"SUCCESSFUL_LOGIN_DID_NOT_OPEN_DASHBOARD");
-        UiAssert(commands.SequenceEqual(new[]{"Status","LoginRemembered"}) && passwordBox.Text.Length==0,"LOGIN_WAS_REPEATED_OR_PASSWORD_RETAINED_IN_UI");
+        UiPumpUntil(()=>commands.Contains("Prepare"),"REGISTERED_LOGIN_DID_NOT_PREPARE_WINDOW");
+        UiAssert(commands.SequenceEqual(new[]{"Status","LoginRemembered","Prepare"}) && passwordBox.Text.Length==0,"LOGIN_WAS_REPEATED_OR_PASSWORD_RETAINED_IN_UI");
         var version=UiDescendants(form).Single(c=>c.Name=="app-version");
         UiAssert(UiContrast(version.ForeColor,version.BackColor)>=4.5 && form.Text=="Proxy","PUBLIC_BRANDING_OR_VERSION_CONTRAST_INCORRECT");
         var tools=UiDescendants(form).Single(c=>c.Name=="toolsContent");UiAssert(!tools.Visible,"DIAGNOSTICS_NOT_COLLAPSED_BY_DEFAULT");
@@ -1183,15 +1204,20 @@ internal static class ProductTests
         UiAssert(CompatibilityDiagnostics.LoopbackPorts("https://secret.example/path?token=hidden").Length==0,"COMPATIBILITY_PROXY_PARSE_EXPORTED_REMOTE_ENDPOINT");
         foreach(int recoveryResult in new[]{0,3,4}){
             var helper=new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);var recoveryCalls=new List<string>();
-            using var recoveringForm=new MainForm((command,_,_)=>{recoveryCalls.Add(command);return Task.FromResult((JsonObject)ready.DeepClone());},budget,budget,_=>helper.Task);
+            var recoveryStatus=new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            bool checkingResult=false;
+            using var recoveringForm=new MainForm((command,_,_)=>{recoveryCalls.Add(command);return checkingResult && command=="Status"?recoveryStatus.Task:Task.FromResult((JsonObject)ready.DeepClone());},budget,budget,_=>helper.Task);
             UiShow(recoveringForm);recoveryCalls.Clear();Task recovery=recoveringForm.RecoverDirect();UiPumpFor(20);
             int heartbeat=0;recoveringForm.BeginInvoke((Action)(()=>heartbeat++));UiPumpUntil(()=>heartbeat==1,"RECOVERY_BLOCKED_UI_HEARTBEAT");
             UiAssert(!UiButton(recoveringForm,"emergency-recovery").Enabled,"RECOVERY_ALLOWED_DUPLICATE_UAC");
             Task<bool> pendingClose=recoveringForm.QuitClient();UiPumpUntil(()=>pendingClose.IsCompleted,"RECOVERY_CLOSE_DID_NOT_RETURN");
             UiAssert(!pendingClose.Result && !recoveringForm.IsDisposed && !recoveryCalls.Contains("Quit"),"RECOVERY_CLOSE_RACED_SERVICE_RESTART");
-            helper.SetResult(recoveryResult);UiPumpUntil(()=>recovery.IsCompleted,"RECOVERY_RESULT_DID_NOT_RECONCILE");
+            checkingResult=true;helper.SetResult(recoveryResult);UiPumpUntil(()=>recoveryCalls.Contains("Status"),"RECOVERY_RESULT_SKIPPED_STATUS");
+            Task<bool> verifyingClose=recoveringForm.QuitClient();UiPumpUntil(()=>verifyingClose.IsCompleted,"RECOVERY_VERIFICATION_CLOSE_STUCK");
+            UiAssert(!verifyingClose.Result && !recoveringForm.IsDisposed && !recoveryCalls.Contains("Quit"),"RECOVERY_CLOSE_RACED_FINAL_STATUS");
+            recoveryStatus.SetResult((JsonObject)ready.DeepClone());UiPumpUntil(()=>recovery.IsCompleted,"RECOVERY_RESULT_DID_NOT_RECONCILE");
             UiAssert(recovery.IsCompletedSuccessfully && recoveryCalls.Contains("Status"),"RECOVERY_RESULT_SKIPPED_FRESH_STATUS");
-            UiAssert(UiDescendants(recoveringForm).OfType<Button>().Single(button=>button.Text=="断开并恢复直连").Enabled,"RECOVERY_LEFT_ACTIONS_DISABLED");
+            UiAssert(UiButton(recoveringForm,"connect").Enabled,"RECOVERY_LEFT_ACTIONS_DISABLED");
             Task<bool> closed=recoveringForm.QuitClient();UiPumpUntil(()=>closed.IsCompleted,"POST_RECOVERY_QUIT_STUCK");
             UiAssert(closed.Result && recoveringForm.IsDisposed,"POST_RECOVERY_SAFE_QUIT_DID_NOT_CLOSE");
         }
@@ -1344,11 +1370,11 @@ internal static class ProductTests
     }
     private sealed class Fixture:ServiceBase
     {
-        private readonly bool _recoveryOnly;
-        internal Fixture(bool recoveryOnly=false){_recoveryOnly=recoveryOnly;ServiceName=Name;AutoLog=false;}
+        private readonly Func<Task> _run;
+        internal Fixture(Func<Task>? run=null){_run=run??ProductTests.Run;ServiceName=Name;AutoLog=false;}
         protected override void OnStart(string[] args)=>Task.Run(async()=>{
             bool success=false;string result;
-            try{if(_recoveryOnly)await RunRecoveryOnly();else await ProductTests.Run();success=true;result=string.Join('\n',Evidence)+"\nRESULT=PASS\n";}
+            try{await _run();success=true;result=string.Join('\n',Evidence)+"\nRESULT=PASS\n";}
             catch(Exception e){result=string.Join('\n',Evidence)+"\nRESULT=FAIL\nCATEGORY="+e.GetType().Name+"\nSTAGE="+e.Message.Replace('\n',' ')+"\n";}
             finally{if(!success)Rescue();}
             File.WriteAllText(Path.Combine(Root,"result.txt"),result);Stop();
@@ -1517,6 +1543,38 @@ internal static class ProductTests
         }finally{
             await Stop(creator);
             Platform.WriteAtomic(statePath,original);NativeGuard.Apply(uuPaths);
+        }
+    }
+    // Runs as the same disposable SYSTEM service used for recovery acceptance.
+    // No account, WireGuard peer, network request or packet session is created.
+    private static async Task RunParkedOffline()
+    {
+        Require(!NativeGuard.TunPresent && NativeGuard.ConfirmedAbsent,"REAL_SYSTEM_HOLDER_TEST_STARTS_WITH_NO_ADAPTER_OR_WFP_FILTER");
+        using var core=new CoreProcess();
+        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        Process? observed=null;
+        try{
+            await core.PrepareHolder(deadline.Token);
+            observed=Process.GetProcessById(checked((int)core.Pid));
+            ulong luid=TunReceipt.VerifyRetained(observed);
+            Require(luid!=0 && luid==NativeGuard.TunLuid() && core.StrictParked && NativeGuard.TunParked(luid) &&
+                !core.TunActive && !core.HandshakeReplyReceived && core.NativePort is null && NativeGuard.ConfirmedAbsent,
+                "REAL_SYSTEM_HOLDER_STRICT_EMPTY_WITH_EXACT_PROCESS_AND_RECEIPT");
+            // Check that delayed Windows IP/route/DNS auto-configuration did not
+            // invalidate a transient post-PnP empty observation.
+            await Task.Delay(750,deadline.Token);
+            Require(core.StrictParked && !observed.HasExited && TunReceipt.VerifyRetained(observed)==luid,
+                "REAL_SYSTEM_HOLDER_REMAINS_STRICTLY_EMPTY");
+        }catch{
+            Evidence.Add("ACTUAL_OFFLINE_HOLDER_STAGE="+core.SafeStage);
+            throw;
+        }finally{
+            await core.Stop();
+            await VpnRuntime.EnsureTunnelRemoved();
+            bool exited=observed is null || observed.HasExited;
+            observed?.Dispose();
+            Require(!core.Running && exited && !NativeGuard.TunPresent && NativeGuard.ConfirmedAbsent,
+                "REAL_SYSTEM_PARKED_HOLDER_EXITED_AND_ADAPTER_REMOVED");
         }
     }
     private static async Task RunRecoveryOnly()

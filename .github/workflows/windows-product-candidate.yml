@@ -179,6 +179,11 @@ jobs:
         shell: pwsh
         timeout-minutes: 6
         run: ./clients/windows/product/ci/acceptance.ps1
+      - name: Verify empty Windows adapter holder and cleanup without an account
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./clients/windows/product/ci/recovery-acceptance.ps1 -ParkOnly
       - name: Focused real SYSTEM prepared-orphan startup and UAC recovery
         if: env.ORACLE_ACCEPTANCE_SCOPE == 'endpoint-migration' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh

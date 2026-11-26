@@ -257,6 +257,61 @@ API OpTunPresence(DWORD *present){
  }
  FreeMibTable(table);*present=found?1:0;return NO_ERROR;
 }
+/* An exact independent Off-state check for the creator receipt. This check
+ * grants no ownership. It deliberately rejects OS-created local addresses
+ * and routes that the separate dormant-orphan recovery check permits. */
+static BOOL parked_identity(ULONG64 expected){
+ MIB_IF_TABLE2 *table=NULL;
+ if(GetIfTable2(&table)!=NO_ERROR||!table)return FALSE;
+ ULONG matches=0;BOOL ok=TRUE;
+ for(ULONG i=0;i<table->NumEntries&&ok;i++){
+  const MIB_IF_ROW2 *entry=&table->Table[i];
+  int alias=CompareStringOrdinal(entry->Alias,-1,L"OracleProxy",-1,TRUE);
+  if(!alias){ok=FALSE;break;}
+  BOOL guid=memcmp(&entry->InterfaceGuid,&oracle_tun_guid,sizeof(GUID))==0;
+  if(alias==CSTR_EQUAL||guid||entry->InterfaceLuid.Value==expected){
+   matches++;
+   ok=alias==CSTR_EQUAL&&guid&&entry->InterfaceLuid.Value==expected&&
+      entry->Type==IF_TYPE_PROP_VIRTUAL&&entry->OperStatus==IfOperStatusDown&&
+      wcscmp(entry->Description,L"sing-tun Tunnel")==0;
+  }
+ }
+ FreeMibTable(table);return ok&&matches==1;
+}
+static BOOL parked_adapter_addresses(ULONG64 expected){
+ ULONG bytes=15000;
+ for(int attempt=0;attempt<3&&bytes>0&&bytes<=8*1024*1024;attempt++){
+  IP_ADAPTER_ADDRESSES *adapters=HeapAlloc(GetProcessHeap(),0,bytes);
+  if(!adapters)return FALSE;
+  DWORD e=GetAdaptersAddresses(AF_UNSPEC,GAA_FLAG_INCLUDE_ALL_INTERFACES,NULL,adapters,&bytes);
+  ULONG matches=0;BOOL empty=TRUE;
+  if(e==NO_ERROR){
+   for(IP_ADAPTER_ADDRESSES *a=adapters;a;a=a->Next){
+    if(a->Luid.Value!=expected)continue;
+    matches++;
+    if(a->FirstUnicastAddress||a->FirstAnycastAddress||a->FirstMulticastAddress||
+       a->FirstDnsServerAddress||a->FirstDnsSuffix||(a->DnsSuffix&&*a->DnsSuffix))empty=FALSE;
+   }
+  }
+  HeapFree(GetProcessHeap(),0,adapters);
+  if(e==NO_ERROR)return empty&&matches==1;
+  if(e!=ERROR_BUFFER_OVERFLOW)return FALSE;
+ }
+ return FALSE;
+}
+API OpTunParked(ULONG64 expected){
+ if(!expected||!system_only()||!parked_identity(expected))return 0;
+ MIB_UNICASTIPADDRESS_TABLE *addresses=NULL;
+ if(GetUnicastIpAddressTable(AF_UNSPEC,&addresses)!=NO_ERROR||!addresses)return 0;
+ BOOL empty=TRUE;
+ for(ULONG i=0;i<addresses->NumEntries;i++)if(addresses->Table[i].InterfaceLuid.Value==expected){empty=FALSE;break;}
+ FreeMibTable(addresses);if(!empty)return 0;
+ MIB_IPFORWARD_TABLE2 *routes=NULL;
+ if(GetIpForwardTable2(AF_UNSPEC,&routes)!=NO_ERROR||!routes)return 0;
+ for(ULONG i=0;i<routes->NumEntries;i++)if(routes->Table[i].InterfaceLuid.Value==expected){empty=FALSE;break;}
+ FreeMibTable(routes);
+ return empty&&parked_adapter_addresses(expected)&&parked_identity(expected);
+}
 API OpTunDormant(void){
  NET_LUID luid={0};if(ConvertInterfaceAliasToLuid(L"OracleProxy",&luid)!=0)return 0;
  MIB_IF_ROW2 row={0};row.InterfaceLuid=luid;if(GetIfEntry2(&row)!=0||row.OperStatus==IfOperStatusUp)return 0;

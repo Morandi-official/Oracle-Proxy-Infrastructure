@@ -27,6 +27,15 @@ internal static class TunReceipt
         VerifyFileIfPresent(ReceiptPath);
     }
 
+    internal static ulong VerifyRetained(Process creator)
+    {
+        VerifyEnvironment();
+        Owner receipt=Read();
+        if(!OwnedCore(creator,out long started) || creator.HasExited || receipt.Pid!=checked((uint)creator.Id) ||
+            started!=receipt.Started || CurrentLuid()!=receipt.Luid)throw new IOException("TUN_OWNER_IDENTITY_MISMATCH");
+        return receipt.Luid;
+    }
+
     internal static Task RecoverOrphan(CancellationToken cancel=default)=>RecoverOwned(false,cancel);
     internal static Task RecoverDormantOrphan(CancellationToken cancel=default)=>RecoverOwned(true,cancel);
     private static async Task RecoverOwned(bool dormant,CancellationToken cancel)

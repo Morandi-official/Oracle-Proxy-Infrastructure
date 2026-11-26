@@ -35,6 +35,8 @@ internal static class NativeGuard
     internal static uint RouteMask=>Function<ClearDelegate>("OpTunRoutes")();
     internal static bool RoutesReady=>RouteMask==15;
     internal static bool TunPermitted=>Function<ClearDelegate>("OpGuardTunReady")()==1;
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate uint ParkedDelegate(ulong expectedLuid);
+    internal static bool TunParked(ulong expectedLuid)=>expectedLuid!=0 && Function<ParkedDelegate>("OpTunParked")(expectedLuid)==1;
     internal static bool TunDormant=>Function<ClearDelegate>("OpTunDormant")()==1;
     internal static uint QueryTunPresence(out uint present)=>Function<PresenceDelegate>("OpTunPresence")(out present);
     internal static bool TunPresent{

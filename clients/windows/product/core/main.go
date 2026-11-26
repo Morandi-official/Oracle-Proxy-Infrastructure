@@ -7,25 +7,26 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
-	"github.com/sagernet/sing-box/adapter"
-	oracleTun "github.com/sagernet/sing-tun"
-	"github.com/sagernet/sing/service"
-	"github.com/sagernet/sing/service/pause"
 	"io"
 	"os"
-	"strings"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
+	oracleTun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"golang.org/x/sys/windows"
 )
 
 func run() error {
 	check := len(os.Args) == 2 && os.Args[1] == "--check"
 	eagerProbe := len(os.Args) == 2 && os.Args[1] == "--standby-probe"
-	standby := len(os.Args) == 2 && os.Args[1] == "--standby" || eagerProbe
+	holderOnly := len(os.Args) == 2 && os.Args[1] == "--adapter-holder"
+	standby := len(os.Args) == 2 && os.Args[1] == "--standby" || eagerProbe || holderOnly
 	recoveryMode := parseAdapterRecoveryMode(os.Args[1:])
 	recoverAdapter := recoveryMode != recoveryNone
 	if !check && !standby && !recoverAdapter && len(os.Args) != 1 {
@@ -37,11 +38,13 @@ func run() error {
 			return fmt.Errorf("identity")
 		}
 	}
-	if recoverAdapter {
+	if recoverAdapter || holderOnly {
 		var session uint32
 		if windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &session) != nil || session != 0 {
 			return fmt.Errorf("identity")
 		}
+	}
+	if recoverAdapter {
 		request, err := readAdapterRecoveryRequest(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("frame")
@@ -67,18 +70,67 @@ func run() error {
 	}
 	defer oracleTun.ClosePreparedOracleAdapter()
 	input := bufio.NewReaderSize(os.Stdin, 65536)
+	// An explicitly attached UI may prepare only the process-owned Wintun handle.
+	if holderOnly {
+		// The SYSTEM service sends HOLD only after assigning this process to
+		// its kill-on-close job. EOF during launch cannot create an adapter.
+		if err := authorizeHolderStart(input); err != nil {
+			return err
+		}
+		if err := oracleTun.PrepareOracleAdapter(); err != nil {
+			return fmt.Errorf("create")
+		}
+	}
+	serve := func(resumed bool) (bool, error) {
+		return runPeerGeneration(input, check, standby, eagerProbe || resumed, resumed)
+	}
+	err := serveAdapterLifetimes(input, holderOnly, serve, checkedAdapterAudit(oracleTun.ParkOracleAdapter), checkedAdapterAudit(oracleTun.VerifyParkedOracleAdapter), func() {
+		// Both pipes are ordered separately. The parent consumes this stderr
+		// fence and stdout receipt before it arms a new proof in the same PID.
+		fmt.Fprintln(os.Stderr, "PARK_FENCE")
+		fmt.Println("PARKED")
+	})
+	if err == nil && !check {
+		fmt.Println("CLOSED")
+	}
+	return err
+}
+
+// Preserve one fixed native reason when the host cannot retain an empty device.
+func checkedAdapterAudit(audit func() error) func() error {
+	return func() error {
+		err := audit()
+		if err != nil {
+			reason := "PARK_QUERY_FAILED"
+			switch code := err.Error(); code {
+			case "PARK_CREATOR_MISSING", "PARK_IP_QUERY_FAILED", "PARK_IP_NOT_EMPTY",
+				"PARK_ROUTE_QUERY_FAILED", "PARK_ROUTE_NOT_EMPTY", "PARK_DNS_NOT_EMPTY",
+				"PARK_INTERFACE_QUERY_FAILED", "PARK_ADMIN_IDENTITY_FAILED", "PARK_ADMIN_CHANGE_FAILED",
+				"ORPHAN_IDENTITY_FAILED", "DORMANT_IP_QUERY_FAILED", "DORMANT_IP_NOT_EMPTY",
+				"DORMANT_ROUTE_QUERY_FAILED", "DORMANT_ROUTE_NOT_EMPTY", "DORMANT_DNS_QUERY_FAILED", "DORMANT_DNS_NOT_EMPTY",
+				"DORMANT_ROUTE_PROTOCOL_NOT_LOCAL", "DORMANT_ROUTE_NEXT_HOP_UNSAFE", "DORMANT_ROUTE_DESTINATION_UNSAFE":
+				reason = code
+			}
+			fmt.Fprintln(os.Stderr, "PARK_AUDIT_FAILED", reason)
+		}
+		return err
+	}
+}
+
+// Each invocation owns one complete transport lifetime. No Box, key, SOCKS
+// credential, probe or peer is reachable from the sessionless command loop.
+func runPeerGeneration(input *bufio.Reader, check, standby, eagerProbe, resumed bool) (park bool, result error) {
 	line, err := input.ReadSlice('\n')
 	if err != nil || len(line) > 65536 {
-		return fmt.Errorf("frame")
+		clear(line)
+		return false, fmt.Errorf("frame")
 	}
 	ctx := productContext()
 	ctx = pause.WithDefaultManager(service.ContextWithDefaultRegistry(ctx))
 	options, err := json.UnmarshalExtendedContext[option.Options](ctx, line)
-	for i := range line {
-		line[i] = 0
-	}
+	clear(line)
 	if err != nil {
-		return fmt.Errorf("configuration")
+		return false, fmt.Errorf("configuration")
 	}
 	var tun option.Inbound
 	if standby {
@@ -86,7 +138,7 @@ func run() error {
 		for _, inbound := range options.Inbounds {
 			if inbound.Type == "tun" {
 				if tun.Type != "" || inbound.Tag != "device" {
-					return fmt.Errorf("configuration")
+					return false, fmt.Errorf("configuration")
 				}
 				tun = inbound
 			} else {
@@ -94,7 +146,7 @@ func run() error {
 			}
 		}
 		if tun.Type == "" {
-			return fmt.Errorf("configuration")
+			return false, fmt.Errorf("configuration")
 		}
 		options.Inbounds = inbounds
 	}
@@ -102,104 +154,102 @@ func run() error {
 	// independent. Join creation before READY and before any deferred close.
 	// No route, address, packet session or user traffic is activated here.
 	var adapterReady func() error
-	if standby && !check {
+	if standby && !check && !resumed {
 		adapterReady = beginAdapterPreparation(oracleTun.PrepareOracleAdapter)
 		defer func() { _ = adapterReady() }()
 	}
 	instance, err := box.New(box.Options{Context: ctx, Options: options})
 	if err != nil {
-		return fmt.Errorf("create")
+		return false, fmt.Errorf("create")
 	}
 	if check {
 		fmt.Println("CONFIG_VALID")
-		return nil
+		return false, nil
 	}
+	defer func() {
+		if closeErr := instance.Close(); closeErr != nil && result == nil {
+			result = fmt.Errorf("close")
+		}
+	}()
 	if err = instance.Start(); err != nil {
-		return fmt.Errorf("start")
+		return false, fmt.Errorf("start")
 	}
 	// Only the attested parent uses this private startup mode. SOCKS is
 	// credential protected; ordinary TUN routing remains inactive.
-	stopProof := func() {}
 	if eagerProbe {
 		if endpoint, ok := instance.Endpoint().Get("oracle-wireguard"); ok {
-			stopProof = startInitialHTTP3(ctx, endpoint)
+			stopProof := startInitialHTTP3(ctx, endpoint)
 			defer stopProof()
 		}
 		fmt.Println("PROBE_READY")
 	}
-	if standby {
+	if adapterReady != nil {
 		err = adapterReady()
 		if err != nil {
-			instance.Close()
-			return fmt.Errorf("create")
+			return false, fmt.Errorf("create")
 		}
 	}
 	fmt.Println("READY")
+	if !standby {
+		_, _ = io.Copy(io.Discard, io.LimitReader(input, 1))
+		return false, nil
+	}
+	return serveStandbyTun(input, ctx, instance, tun)
+}
+
+func serveStandbyTun(input *bufio.Reader, ctx context.Context, instance *box.Box, tun option.Inbound) (park bool, result error) {
 	var tunScope *adapter.Scope
-	if standby {
-		// This pipe is inherited only by the authenticated SYSTEM parent. These
-		// two fixed operations cannot select programs, routes or destinations.
-		for {
-			frame, readErr := input.ReadSlice('\n')
-			if readErr != nil || len(frame) > 16 {
-				break
+	defer func() {
+		if tunScope != nil {
+			if err := tunScope.Close(); err != nil && result == nil {
+				result = fmt.Errorf("close")
 			}
-			switch strings.TrimSuffix(strings.TrimSuffix(string(frame), "\n"), "\r") {
-			case "ACTIVATE":
-				if tunScope != nil {
-					fmt.Println("TUN_ACTIVE")
-					continue
-				}
+		}
+	}()
+	for {
+		command, err := readCoreCommand(input)
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		switch command {
+		case "ACTIVATE":
+			if tunScope == nil {
 				logger := instance.LogFactory().NewLogger("standby-tun")
-				entry, createErr := productInbounds().Create(ctx, instance.Router(), logger, tun.Tag, tun.Type, tun.Options)
-				if createErr != nil {
-					instance.Close()
-					return fmt.Errorf("start")
+				entry, err := productInbounds().Create(ctx, instance.Router(), logger, tun.Tag, tun.Type, tun.Options)
+				if err != nil {
+					return false, fmt.Errorf("start")
 				}
 				lifecycle, ok := entry.(adapter.Lifecycle)
 				if !ok {
-					instance.Close()
-					return fmt.Errorf("start")
+					return false, fmt.Errorf("start")
 				}
 				tunScope = adapter.NewScope(ctx, logger)
 				for _, stage := range adapter.ListStartStages {
-					if startErr := tunScope.Start("device", lifecycle, stage); startErr != nil {
-						tunScope.Close()
-						instance.Close()
-						return fmt.Errorf("start")
+					if err := tunScope.Start("device", lifecycle, stage); err != nil {
+						return false, fmt.Errorf("start")
 					}
 				}
-				fmt.Println("TUN_ACTIVE")
-			case "DEACTIVATE":
-				if tunScope != nil {
-					if tunScope.Close() != nil {
-						instance.Close()
-						return fmt.Errorf("close")
-					}
-					tunScope = nil
-				}
-				fmt.Println("STANDBY_READY")
-			default:
-				if tunScope != nil {
-					tunScope.Close()
-				}
-				instance.Close()
-				return fmt.Errorf("frame")
 			}
+			fmt.Println("TUN_ACTIVE")
+		case "DEACTIVATE":
+			if tunScope != nil {
+				if err := tunScope.Close(); err != nil {
+					return false, fmt.Errorf("close")
+				}
+				tunScope = nil
+			}
+			fmt.Println("STANDBY_READY")
+		case "PARK":
+			return true, nil
+		default:
+			return false, fmt.Errorf("frame")
 		}
-		if tunScope != nil {
-			tunScope.Close()
-		}
-	} else {
-		_, _ = io.Copy(io.Discard, io.LimitReader(input, 1))
 	}
-	stopProof()
-	if err = instance.Close(); err != nil {
-		return fmt.Errorf("close")
-	}
-	fmt.Println("CLOSED")
-	return nil
 }
+
 func main() {
 	if err := run(); err != nil {
 		stage := "CORE_UNKNOWN_FAILED"

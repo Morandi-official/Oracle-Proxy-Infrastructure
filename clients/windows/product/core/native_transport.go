@@ -51,6 +51,7 @@ type nativeConn struct {
 	attempt         int
 	sentIndex       int
 	lastInit        []byte
+	readers         sync.WaitGroup
 	once            sync.Once
 	eventMu         sync.Mutex
 	events          map[string]int
@@ -95,7 +96,9 @@ func newNativeConn(sockets []net.Conn, ports []uint16) *nativeConn {
 		if bufferErr != nil {
 			fmt.Fprintf(os.Stderr, "NATIVE_UDP_%d_SOCKET_BUFFER_ERROR_%d\n", ports[i], nativeError(bufferErr))
 		}
+		c.readers.Add(1)
 		go func(i int, s net.Conn) {
+			defer c.readers.Done()
 			for {
 				var b *[4096]byte
 				select {
@@ -361,6 +364,9 @@ func (c *nativeConn) Close() error {
 		for _, s := range c.sockets {
 			s.Close()
 		}
+		// A parked process must have drained every old socket reader and
+		// its diagnostic events before the next peer can be constructed.
+		c.readers.Wait()
 	})
 	return nil
 }

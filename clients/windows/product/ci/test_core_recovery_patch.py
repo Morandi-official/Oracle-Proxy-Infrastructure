@@ -268,4 +268,144 @@ func localRoute4(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,Destinat
                                   text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90)
             self.assertEqual(result.returncode,0,result.stdout)
 
+    def test_parked_adapter_requires_zero_native_tables_and_complete_identity(self):
+        start = vendor.PARKED.index('func verifyOracleParkedEmpty(')
+        end = vendor.PARKED.index('var oracleSetIfEntry', start)
+        source = vendor.PARKED[start:end].replace('winipcfg.', '').replace('windows.', '')
+        harness = '''package parked
+import "fmt"
+type LUID uint64
+const AF_UNSPEC=0
+const GAAFlagIncludeAll=1
+type row struct { InterfaceLUID LUID }
+type adapter struct {
+    LUID LUID
+    FirstUnicastAddress, FirstAnycastAddress, FirstMulticastAddress, FirstDNSServerAddress, FirstDNSSuffix *int
+    suffix string
+}
+func (a *adapter) DNSSuffix() string {return a.suffix}
+var ips,routes []row
+var entries []*adapter
+var ipErr,routeErr,adapterErr error
+var identityCalls,failOnIdentity int
+func verifyOracleRecoveryIdentity(luid LUID) error {
+    identityCalls++
+    if luid!=7 || identityCalls==failOnIdentity {return fmt.Errorf("IDENTITY")}
+    return nil
+}
+func GetUnicastIPAddressTable(int)([]row,error){return ips,ipErr}
+func GetIPForwardTable2(int)([]row,error){return routes,routeErr}
+func GetAdaptersAddresses(int,int)([]*adapter,error){return entries,adapterErr}
+'''
+        tests = '''package parked
+import ("fmt"; "testing")
+func TestLiteralOff(t *testing.T) {
+    value:=1
+    for _,tc:=range []struct{name string; change func(); want bool}{
+        {"empty",func(){},true},
+        {"foreign entries",func(){ips=[]row{{8}};routes=[]row{{8}};entries=append(entries,&adapter{LUID:8,FirstDNSServerAddress:&value})},true},
+        {"link local row on own interface",func(){ips=[]row{{7}}},false},
+        {"local multicast route on own interface",func(){routes=[]row{{7}}},false},
+        {"unicast metadata",func(){entries[0].FirstUnicastAddress=&value},false},
+        {"anycast metadata",func(){entries[0].FirstAnycastAddress=&value},false},
+        {"multicast membership",func(){entries[0].FirstMulticastAddress=&value},false},
+        {"dns server",func(){entries[0].FirstDNSServerAddress=&value},false},
+        {"dns suffix list",func(){entries[0].FirstDNSSuffix=&value},false},
+        {"dns suffix",func(){entries[0].suffix="example.test"},false},
+        {"missing exact record",func(){entries=nil},false},
+        {"duplicate exact record",func(){entries=append(entries,entries[0])},false},
+        {"ambiguous snapshot",func(){entries=append(entries,nil)},false},
+        {"unicast read error",func(){ipErr=fmt.Errorf("io")},false},
+        {"route read error",func(){routeErr=fmt.Errorf("io")},false},
+        {"adapter read error",func(){adapterErr=fmt.Errorf("io")},false},
+        {"owner changed before audit",func(){failOnIdentity=1},false},
+        {"owner changed during audit",func(){failOnIdentity=2},false},
+    } {
+        ips=nil; routes=nil; entries=[]*adapter{{LUID:7}}
+        ipErr=nil;routeErr=nil;adapterErr=nil;identityCalls=0;failOnIdentity=0
+        tc.change()
+        if got:=verifyOracleParkedEmpty(7)==nil; got!=tc.want {t.Fatalf("%s: got %v",tc.name,got)}
+    }
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'parked.go').write_text(harness + source)
+            (root / 'parked_test.go').write_text(tests)
+            env = dict(os.environ, GO111MODULE='off', GOWORK='off', GOPROXY='off', GOTOOLCHAIN='local')
+            for variable in ('GOOS', 'GOARCH'):
+                env.pop(variable, None)
+            result = subprocess.run(['go', 'test', 'parked.go', 'parked_test.go'], cwd=root,
+                                    capture_output=True, text=True, env=env, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_parked_admin_change_writes_only_exact_roundtripped_index(self):
+        start = vendor.PARKED.index('func setOracleParkedAdmin(')
+        source = vendor.PARKED[start:].replace('winipcfg.', '').replace('windows.', '')
+        harness = '''package parked
+import ("fmt"; "unsafe")
+type LUID uint64
+type NetIfAdminStatus uint32
+const NetIfAdminStatusDown NetIfAdminStatus = 2
+var oracleParkedAdminDown bool
+type MibIfRow struct { Index,AdminStatus uint32 }
+type iface struct { InterfaceLUID LUID; InterfaceIndex uint32; AdminStatus NetIfAdminStatus }
+var current iface
+var roundTrip LUID
+var writeCount,identityCalls int
+var procFailure,writeFailure,wrongReadback,postIdentityFailure bool
+func (luid LUID) Interface() (*iface,error) {row:=current;return &row,nil}
+func LUIDFromIndex(idx uint32)(LUID,error){if idx!=42{return 0,fmt.Errorf("index")}; return roundTrip,nil}
+func verifyOracleRecoveryIdentity(luid LUID)error{
+    identityCalls++
+    if luid!=7||(postIdentityFailure && identityCalls==2){return fmt.Errorf("identity")}
+    return nil
+}
+type testProc struct{}
+var oracleSetIfEntry=testProc{}
+func (testProc)Find()error{if procFailure{return fmt.Errorf("unavailable")};return nil}
+func (testProc)Call(ptr uintptr)(uintptr,uintptr,error){
+    req:=(*MibIfRow)(unsafe.Pointer(ptr));writeCount++
+    if req.Index!=42||writeFailure{return 1,0,nil}
+    if !wrongReadback{current.AdminStatus=NetIfAdminStatus(req.AdminStatus)}
+    return 0,0,nil
+}
+'''
+        tests = '''package parked
+import "testing"
+func TestExactOwner(t *testing.T) {
+    for _,tc:=range []struct{name string; change func(); want bool; writes int}{
+        {"correct disable",func(){},true,1},
+        {"wrong source state",func(){current.AdminStatus=2},false,0},
+        {"invalid index",func(){current.InterfaceIndex=0},false,0},
+        {"foreign LUID",func(){current.InterfaceLUID=8},false,0},
+        {"index reassigned",func(){roundTrip=8},false,0},
+        {"missing API",func(){procFailure=true},false,0},
+        {"OS rejected write",func(){writeFailure=true},false,1},
+        {"different state after write",func(){wrongReadback=true},false,1},
+        {"identity lost after write",func(){postIdentityFailure=true},false,1},
+    }{
+        current=iface{7,42,1};roundTrip=7;identityCalls=0;writeCount=0
+        writeFailure=false;procFailure=false;wrongReadback=false;postIdentityFailure=false
+        oracleParkedAdminDown=false
+        tc.change()
+        got:=setOracleParkedAdmin(7,1,2)==nil
+        if oracleParkedAdminDown!=(tc.writes==1 && !writeFailure){t.Fatalf("%s: restore witness",tc.name)}
+        if got!=tc.want||writeCount!=tc.writes{t.Fatalf("%s: ok=%v writes=%d",tc.name,got,writeCount)}
+    }
+    current=iface{7,42,2};roundTrip=7;identityCalls=0;postIdentityFailure=false
+    if err:=setOracleParkedAdmin(7,2,1);err!=nil||current.AdminStatus!=1{t.Fatal(err)}
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'admin.go').write_text(harness + source)
+            (root / 'admin_test.go').write_text(tests)
+            env = dict(os.environ, GO111MODULE='off', GOWORK='off', GOPROXY='off', GOTOOLCHAIN='local')
+            for variable in ('GOOS', 'GOARCH'):
+                env.pop(variable, None)
+            result = subprocess.run(['go', 'test', 'admin.go', 'admin_test.go'], cwd=root,
+                                    capture_output=True, text=True, env=env, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 if __name__=='__main__':unittest.main()

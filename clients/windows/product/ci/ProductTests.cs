@@ -1416,7 +1416,10 @@ internal static class ProductTests
         await p.StandardInput.WriteLineAsync(config.ToJsonString());await p.StandardInput.FlushAsync();
         try{
             if(await p.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))!="READY")throw new IOException("SYNTHETIC_CORE_START_FAILED");
-            if(createsTun){TunReceipt.Record(p);Require(File.Exists(TunReceipt.ReceiptPath),"FRESH_SYSTEM_TUN_CREATOR_RECEIPT_RECORDED");}
+            if(createsTun){
+                if(standby)TunReceipt.RecordPrepared(p);else TunReceipt.Record(p);
+                Require(File.Exists(TunReceipt.ReceiptPath),"FRESH_SYSTEM_TUN_CREATOR_RECEIPT_RECORDED");
+            }
             return p;
         }catch{await Stop(p);throw;}
     }
@@ -1562,11 +1565,38 @@ internal static class ProductTests
         string offPath=Path.Combine(Platform.StateRoot,"state.dpapi");
         if(!File.Exists(offPath))off.Save();
         byte[] originalState=File.ReadAllBytes(offPath);
+        await ExerciseNeverParkedCreator(originalState);
         await ExerciseOfflineHolder(crash:true);
         // Reopen the same fixed adapter identity from scratch; leaked disabled
         // bindings or an unrecovered device must not become the next baseline.
         await ExerciseOfflineHolder(crash:false);
         Require(File.ReadAllBytes(offPath).AsSpan().SequenceEqual(originalState),"REAL_SYSTEM_HOLDER_CRASH_PRESERVED_DURABLE_OFF_STATE");
+    }
+
+    private static async Task ExerciseNeverParkedCreator(byte[] offState)
+    {
+        // A fresh standby can die after publishing READY, before its first
+        // activation or park. Its configuration has no peer or socket listener.
+        var config=new JsonObject{["inbounds"]=new JsonArray(new JsonObject{
+            ["type"]="tun",["tag"]="device",["interface_name"]="OracleProxy"
+        })};
+        Process? creator=null;
+        try{
+            creator=await Launch(config,standby:true);
+            ulong luid=NativeGuard.TunLuid();
+            using var serviceKey=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SYSTEM\CurrentControlSet\Services\OracleProxyService");
+            Require(luid!=0 && NativeGuard.TunDormant && VpnRuntime.TunnelInactive() &&
+                serviceKey is not null && serviceKey.GetValue("OracleProxyOriginalWintunBindings") is null &&
+                OffUnchanged(offState),"REAL_OFF_NEVER_PARKED_CREATOR_HAS_NO_BINDING_TRANSACTION");
+            creator.Kill(true);
+            await creator.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(8));
+            Require(NativeGuard.TunLuid()==luid && NativeGuard.TunDormant &&
+                File.Exists(TunReceipt.ReceiptPath),"REAL_OFF_NEVER_PARKED_CRASH_HAS_EXACT_CREATOR_RECEIPT");
+            await VpnRuntime.RecoverStoppedTunnel(CancellationToken.None);
+            Require(!NativeGuard.TunPresent && serviceKey?.GetValue("OracleProxyOriginalWintunBindings") is null && OffUnchanged(offState),
+                "REAL_OFF_NEVER_PARKED_CRASH_RECOVERS_WITHOUT_CHANGING_BINDINGS");
+        }finally{await Stop(creator);}
     }
 
     private static async Task ExerciseOfflineHolder(bool crash)
@@ -1705,6 +1735,7 @@ internal static class ProductTests
                 Require(response.IsSuccessStatusCode,"REAL_STANDBY_AUTHENTICATED_SOCKS_ESTABLISHES_ENCRYPTED_WIREGUARD");
             }
             var switchTimer=Stopwatch.StartNew();NativeGuard.Apply(uuPaths);
+            TunReceipt.ConsumePrepared(client);
             await client.StandardInput.WriteLineAsync("ACTIVATE");await client.StandardInput.FlushAsync();
             Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="TUN_ACTIVE","REAL_PRIVATE_CORE_ACTIVATE_ACKNOWLEDGED");
             NativeGuard.AuthorizeTun((uint)client.Id);

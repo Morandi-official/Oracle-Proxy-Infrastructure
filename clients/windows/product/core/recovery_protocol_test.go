@@ -12,8 +12,11 @@ func TestAdapterRecoveryModeIsFixedAndSeparate(t *testing.T) {
 	if parseAdapterRecoveryMode([]string{"--recover-dormant-adapter"}) != recoveryDormant {
 		t.Fatal("dormant mode unavailable")
 	}
+	if parseAdapterRecoveryMode([]string{"--recover-prepared-adapter"}) != recoveryPrepared {
+		t.Fatal("fixed prepared recovery argv refused")
+	}
 	for _, arguments := range [][]string{
-		nil, {"--recover"}, {"--recover-adapter=123"},
+		nil, {"--recover"}, {"--recover-prepared-adapter", "true"}, {"--recover-prepared-adapter", "--recover-dormant-adapter"}, {"--recover-adapter=123"},
 		{"--recover-adapter", "--recover-dormant-adapter"},
 		{"--recover-dormant-adapter", "OracleProxy"},
 		{"--recover-dormant-adapter", "--guid", recoveryGUID},

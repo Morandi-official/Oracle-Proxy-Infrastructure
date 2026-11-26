@@ -115,11 +115,11 @@ func bindingRestoreResult(status uintptr) error {
 
 // Only the dedicated dormant recovery child may call this after its ordinary
 // restore failed specifically at the exact NetCfg/PnP identity stage.
-func dormantDepartureEvidence(previous, fresh uint64, original error) error {
-	if (fresh == 0) != (original != nil) {
+func dormantDepartureEvidence(previous, fresh uint64, original error, preparedOnly bool) error {
+	if (fresh == 0 && !preparedOnly) != (original != nil) {
 		return bindingRestoreFailure("DORMANT_DEVICE_QUERY_FAILED")
 	}
-	if fresh == 0 {
+	if fresh == 0 && !preparedOnly {
 		typed, ok := original.(bindingRestoreFailure)
 		if !ok || (typed != "PARK_RESTORE_IDENTITY" && typed != "PARK_RESTORE_PNP") {
 			return original
@@ -129,7 +129,11 @@ func dormantDepartureEvidence(previous, fresh uint64, original error) error {
 	if previous == 0 || adapterBindingLibrary.departed == 0 {
 		return errors.New("PARK_BINDINGS_LOAD_FAILED")
 	}
-	status, _, _ := syscall.SyscallN(adapterBindingLibrary.departed, uintptr(previous), uintptr(fresh))
+	var phase uintptr
+	if preparedOnly {
+		phase = 1
+	}
+	status, _, _ := syscall.SyscallN(adapterBindingLibrary.departed, uintptr(previous), uintptr(fresh), phase)
 	switch status {
 	case 0:
 		return nil

@@ -12,19 +12,37 @@ internal static class TunReceipt
 {
     internal const string AdapterGuid="62e2af98-7089-6f2c-246b-4a5960cfc978";
     internal static string ReceiptPath=>Path.Combine(Platform.StateRoot,"tun-owner.json");
-    private sealed record Owner(ulong Luid,uint Pid,long Started);
+    private sealed record Owner(ulong Luid,uint Pid,long Started,bool PreparedOnly);
 
-    // The caller must have observed READY from a newly launched --standby core.
-    // That private path calls CreateAdapter and refuses a preexisting adapter.
-    internal static void Record(Process creator)
+    // Only the newly created standalone standby arm may record a pristine phase.
+    // A signed-out parked holder already changed bindings before acknowledging.
+    internal static void Record(Process creator)=>Record(creator,false);
+    internal static void RecordPrepared(Process creator)=>Record(creator,true);
+    private static void Record(Process creator,bool preparedOnly)
     {
         VerifyEnvironment();
         if(!OwnedCore(creator,out long started) || creator.HasExited)throw new IOException("TUN_OWNER_CREATOR_NOT_VERIFIED");
-        ulong luid=CurrentLuid();
+        Save(new(CurrentLuid(),checked((uint)creator.Id),started,preparedOnly));
+    }
+    private static void Save(Owner owner)
+    {
         VerifyFileIfPresent(ReceiptPath);VerifyFileIfPresent(ReceiptPath+".pending");
         Platform.WriteAtomic(ReceiptPath,JsonSerializer.SerializeToUtf8Bytes(new{
-            schema=1,guid=AdapterGuid,luid,creator_pid=checked((uint)creator.Id),creator_started_at_filetime=started}));
+            schema=2,guid=AdapterGuid,luid=owner.Luid,creator_pid=owner.Pid,
+            creator_started_at_filetime=owner.Started,prepared_only=owner.PreparedOnly}));
         VerifyFileIfPresent(ReceiptPath);
+    }
+    // Revoke the no-journal proof before the first command capable of changing
+    // the native adapter. A crash on either side of the pipe then fails closed.
+    internal static void ConsumePrepared(Process creator)
+    {
+        var owner=Read();
+        if(!owner.PreparedOnly || creator.HasExited || owner.Pid!=checked((uint)creator.Id) ||
+           !GetProcessTimes(creator.SafeHandle,out long started,out _,out _,out _) ||
+           started!=owner.Started || CurrentLuid()!=owner.Luid)throw new IOException("TUN_OWNER_IDENTITY_MISMATCH");
+        var consumed=owner with{PreparedOnly=false};
+        Save(consumed);
+        if(Read()!=consumed)throw new IOException("TUN_OWNER_RECEIPT_INVALID");
     }
 
     internal static ulong VerifyRetained(Process creator)
@@ -55,7 +73,7 @@ internal static class TunReceipt
         Platform.VerifyBundle(Platform.Root);VerifyRecoveryMode(dormant);
         var start=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,
             RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(dormant?"--recover-dormant-adapter":"--recover-adapter");
+        start.ArgumentList.Add(dormant?(owner.PreparedOnly?"--recover-prepared-adapter":"--recover-dormant-adapter"):"--recover-adapter");
         using var child=Process.Start(start)??throw new IOException("TUN_OWNER_HELPER_START_FAILED");
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancel);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
@@ -217,14 +235,21 @@ internal static class TunReceipt
             var value=document.RootElement;var names=new HashSet<string>(StringComparer.Ordinal);
             if(value.ValueKind!=JsonValueKind.Object)throw new IOException("TUN_OWNER_RECEIPT_INVALID");
             foreach(var item in value.EnumerateObject())if(!names.Add(item.Name))throw new IOException("TUN_OWNER_RECEIPT_INVALID");
+            bool preparedOnly=false;
+            if(!value.TryGetProperty("schema",out var version) || !version.TryGetInt32(out int schema) ||
+                schema is not (1 or 2))throw new IOException("TUN_OWNER_RECEIPT_INVALID");
+            if(schema==2){
+                if(!names.Remove("prepared_only") || !value.TryGetProperty("prepared_only",out var phase) ||
+                    phase.ValueKind is not (JsonValueKind.True or JsonValueKind.False))throw new IOException("TUN_OWNER_RECEIPT_INVALID");
+                preparedOnly=phase.GetBoolean();
+            }
             if(!names.SetEquals(new[]{"schema","guid","luid","creator_pid","creator_started_at_filetime"}) ||
-                !value.GetProperty("schema").TryGetInt32(out int schema) || schema!=1 ||
                 value.GetProperty("guid").ValueKind!=JsonValueKind.String || value.GetProperty("guid").GetString()!=AdapterGuid ||
                 !value.GetProperty("luid").TryGetUInt64(out ulong luid) || luid==0 ||
                 !value.GetProperty("creator_pid").TryGetUInt32(out uint pid) || pid==0 || pid>int.MaxValue ||
                 !value.GetProperty("creator_started_at_filetime").TryGetInt64(out long started) || started<=0)
                 throw new IOException("TUN_OWNER_RECEIPT_INVALID");
-            return new(luid,pid,started);
+            return new(luid,pid,started,preparedOnly);
         }catch(Exception error)when(error is JsonException or InvalidOperationException){throw new IOException("TUN_OWNER_RECEIPT_INVALID",error);}
     }
     private static void VerifyCreatorExited(Owner owner)

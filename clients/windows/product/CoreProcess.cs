@@ -66,6 +66,8 @@ internal sealed class CoreProcess : IDisposable
     private readonly object _proofLock=new();
     private long _proofStarted;
     private volatile bool _parked;
+    private readonly object _receiptLock=new();
+    private Process? _freshPreparedOwner;
     private ulong _parkedLuid;
     internal bool WasParked=>_parked;
     internal bool Parked=>_parked && Running;
@@ -132,7 +134,7 @@ internal sealed class CoreProcess : IDisposable
         // Only the cold standby preparation guarantees fresh CreateAdapter;
         // never manufacture ownership from a by-name OpenAdapter fallback.
         MarkStart("adapter_ready_ms");
-        if(standby && !resume)TunReceipt.Record(owned);
+        if(standby && !resume){lock(_receiptLock){TunReceipt.RecordPrepared(owned);_freshPreparedOwner=owned;}}
         MarkStart("receipt_ms");
         Volatile.Write(ref _safeStage,"READY");
     }
@@ -226,20 +228,32 @@ internal sealed class CoreProcess : IDisposable
     {
         if(Parked)return;
         if(!StandbyCapable || !Running)throw new IOException("CORE_NOT_READY");
+        Process owner=_process!;
+        ConsumeFreshPreparedReceipt(owner);
         NativeGuard.SuspendTun();EndPeer();_parkFailure=null;_parkCounts.Clear();
         _parkFence=new(TaskCreationOptions.RunContinuationsAsynchronously);
-        Process owner=_process!;
         await owner.StandardInput.WriteLineAsync("PARK");await owner.StandardInput.FlushAsync();
         await AcceptPark(owner,_stop.Token);
         _parkedLuid=TunReceipt.VerifyRetained(owner);
         if(!NativeGuard.TunParked(_parkedLuid))throw new IOException("TUN_PARK_AUDIT_FAILED");
         _parked=true;
     }
+    private void ConsumeFreshPreparedReceipt(Process owner)
+    {
+        lock(_receiptLock){
+            if(_freshPreparedOwner is null)return;
+            if(!ReferenceEquals(_freshPreparedOwner,owner))throw new IOException("TUN_OWNER_IDENTITY_MISMATCH");
+            TunReceipt.ConsumePrepared(owner);
+            _freshPreparedOwner=null;
+        }
+    }
     private async Task CoreCommand(string command,string expected)
     {
         if(!Running || !StandbyCapable)throw new IOException("CORE_NOT_READY");
-        await _process!.StandardInput.WriteLineAsync(command);await _process.StandardInput.FlushAsync();
-        string? response=await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5),_stop.Token);
+        Process owner=_process!;
+        ConsumeFreshPreparedReceipt(owner);
+        await owner.StandardInput.WriteLineAsync(command);await owner.StandardInput.FlushAsync();
+        string? response=await owner.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5),_stop.Token);
         if(response is null)throw new IOException(await ParkFailureAfterEof("CORE_TRANSITION_FAILED",_stop.Token));
         if(response!=expected)throw new IOException("CORE_TRANSITION_FAILED");
     }
@@ -290,6 +304,7 @@ internal sealed class CoreProcess : IDisposable
             try{await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));}
             catch{_process.Kill(true);await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));}
         }
+        lock(_receiptLock){_freshPreparedOwner=null;}
         _process.Dispose();_process=null;StandbyCapable=false;TunActive=false;
         _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"NOT_STARTED");
         if(_job!=IntPtr.Zero){CloseHandle(_job);_job=IntPtr.Zero;}

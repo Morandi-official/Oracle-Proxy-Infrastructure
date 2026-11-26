@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Promote the already signed Android 0.2.0 candidate. No build or signing credentials.
 set -euo pipefail
+trap 'echo "Android release verification failed at script line $LINENO" >&2' ERR
 export LC_ALL=C
 export GH_REPO=Morandi-official/Oracle-Proxy-Infrastructure
 [[ ${GITHUB_REPOSITORY:?} == "$GH_REPO" ]]
@@ -33,7 +34,7 @@ api "actions/runs/$run/attempts/1/jobs?per_page=100" | jq -e '
     [.steps[] | select(.conclusion != "success") | .name] ==
       ["Verify production account and VPN using the signed APK"])' >/dev/null
 
-api actions/jobs/139925274365/logs > production.log
+gh api --allow-escape-sequences "repos/$GH_REPO/actions/jobs/139925274365/logs" > production.log
 [[ $(grep -c 'Error in ' production.log) == 1 ]]
 grep -Fq 'Error in signedAppAgainstProduction(' production.log
 grep -Fq 'Tests run: 1,  Failures: 1' production.log
@@ -47,7 +48,7 @@ grep -Fq 'ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=1673,1170,1578,1228,1123
 api "actions/artifacts/$artifact" | jq -e --arg digest "sha256:$archive_sha" --arg sha "$source_sha" \
   --argjson run "$run" '.name == "owner-signed-android" and .digest == $digest and
     .expired == false and .workflow_run.id == $run and .workflow_run.head_sha == $sha' >/dev/null
-api "actions/artifacts/$artifact/zip" > signed.zip
+gh api --allow-escape-sequences "repos/$GH_REPO/actions/artifacts/$artifact/zip" > signed.zip
 echo "$archive_sha  signed.zip" | sha256sum -c -
 [[ $(unzip -Z1 signed.zip | sort) == $'Proxy-Android.apk\nSHA256SUMS.txt\nversion.txt' ]]
 for file in "$apk" SHA256SUMS.txt version.txt; do unzip -p signed.zip "$file" > "$file"; done
@@ -118,3 +119,10 @@ if [[ $draft == true ]]; then
 fi
 api "releases/$release_id" | jq -er --arg tag "$tag" --arg sha "$source_sha" '
   select(.tag_name == $tag and .target_commitish == $sha and .draft == false and .prerelease) | .html_url'
+for file in "$apk" SHA256SUMS.txt; do
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --retry 4 --retry-all-errors --connect-timeout 8 --max-time 60 \
+    "https://github.com/$GH_REPO/releases/download/$tag/$file" --output "public-$file"
+  cmp "$file" "public-$file"
+done
+echo 'Both public release downloads match the tested files.'

@@ -11,6 +11,27 @@ import sys
 
 TARGET = Path(__file__).resolve().parents[1] / 'core/vendor/github.com/sagernet/sing-tun/tun_windows.go'
 PREIMAGE = 'b0e7348b6fee66dbef5fe0851585d10ce2c07691c353cd14b3af4383ab09bb5c'
+WINTUN_TARGET = TARGET.parent / 'internal/wintun/wintun_windows.go'
+WINTUN_PREIMAGE = 'b20c036332f305d8a6e207becd05b9763a8868e78682101922e388111cceb985'
+WINTUN_WITNESS = r'''// ObserveOracleAdapterCreate enables one fixed timing witness on the
+// bundled Wintun. No native diagnostic text leaves the callback.
+func ObserveOracleAdapterCreate() {
+	// Wintun passes a DWORD64 timestamp in one argument slot on Windows x64.
+	if unsafe.Sizeof(uintptr(0)) != 8 || procWintunSetLogger.Find() != nil {
+		return
+	}
+	syscall.SyscallN(procWintunSetLogger.Addr(), windows.NewCallback(oracleAdapterCreateLogger))
+}
+
+func oracleAdapterCreateLogger(level uint32, _ uint64, message *uint16) uintptr {
+	const wintunLogInfo = 0
+	if level == wintunLogInfo && message != nil && windows.UTF16PtrToString(message) == "Creating adapter" {
+		_, _ = os.Stderr.WriteString("ADAPTER_PNP_BEGIN\n")
+	}
+	return 0
+}
+
+'''
 CACHE = '''// Oracle Proxy keeps only its own unconfigured, sessionless adapter between
 // explicit Off and On. This avoids repeated Windows PnP removal/creation.
 var oracleAdapterMutex sync.Mutex
@@ -50,6 +71,7 @@ func PrepareOracleAdapter() error {
 	if prepared { return nil }
 	fmt.Fprintln(os.Stderr, "ADAPTER_CREATE_BEGIN")
 	started := time.Now()
+	wintun.ObserveOracleAdapterCreate()
 	adapter, err := wintun.CreateAdapter("OracleProxy", TunnelType, generateGUIDByDeviceName("OracleProxy"))
 	fmt.Fprintln(os.Stderr, "ADAPTER_CREATE_MS", time.Since(started).Milliseconds())
 	if err != nil { return err }
@@ -437,10 +459,23 @@ def patched(original):
     return (source[:start] + BODY + source[end:]).encode('utf-8')
 
 
+def patched_wintun(original):
+    if hashlib.sha256(original).hexdigest() != WINTUN_PREIMAGE:
+        raise ValueError('PINNED_WINTUN_BINDING_SOURCE_REQUIRED')
+    source = original.decode('utf-8')
+    source = source.replace('import (\n', 'import (\n\t"os"\n', 1)
+    marker = '\tprocWintunCreateAdapter'
+    source = source.replace(marker, '\tprocWintunSetLogger               = modwintun.NewProc("WintunSetLogger")\n' + marker, 1)
+    return source.replace('func closeAdapter(', WINTUN_WITNESS + 'func closeAdapter(', 1).encode('utf-8')
+
+
 def main():
     if sys.argv[1:]:
         raise ValueError('NO_ARGUMENTS_SUPPORTED')
-    TARGET.write_bytes(patched(TARGET.read_bytes()))
+    tun = patched(TARGET.read_bytes())
+    wintun = patched_wintun(WINTUN_TARGET.read_bytes())
+    TARGET.write_bytes(tun)
+    WINTUN_TARGET.write_bytes(wintun)
     print('PINNED_WINDOWS_ROUTE_CREATION_PATCH=PASS')
 
 

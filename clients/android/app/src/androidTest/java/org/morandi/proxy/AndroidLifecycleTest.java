@@ -122,6 +122,29 @@ public final class AndroidLifecycleTest {
             await("disconnected presence", controller, () -> api.events.contains("presence:disconnected"));
             assertEquals(200, Integer.parseInt(httpStatus(null, HOST, 18081, "GET", "/key", "", 2_000)));
 
+            int previousV4Proofs = verified4.get();
+            int previousV6Proofs = verified6.get();
+            instrumentation.waitForIdleSync();
+            attemptedClosedPort.set(false);
+            tap(instrumentation, activity, R.id.connect);
+            await("verified reconnect", controller, () -> "connected".equals(controller.snapshot().mode));
+            assertEquals(HOST + ":51820", controller.snapshot().endpoint);
+            assertNotNull(controller.lastConnectTiming());
+            assertEquals(1, controller.lastConnectTiming().attempts);
+            assertFalse("A same-network reconnect skips the previously failed port", attemptedClosedPort.get());
+            assertTrue("Reconnect needs a new IPv4 proof", verified4.get() > previousV4Proofs);
+            assertTrue("Reconnect needs a new IPv6 proof", verified6.get() > previousV6Proofs);
+            tap(instrumentation, activity, R.id.disconnect);
+            await("reconnect disconnect", controller, () -> "disconnected".equals(controller.snapshot().mode)
+                    && !engine.isUp() && !hasVpnRoute(context));
+
+            api.policyDisabled = true;
+            tap(instrumentation, activity, R.id.connect);
+            await("fresh policy denies connection", controller, () -> "disconnected".equals(controller.snapshot().mode)
+                    && controller.snapshot().message.contains("账号当前不可用"));
+            assertFalse("Service preparation must never activate a tunnel before policy", engine.isUp());
+            assertFalse(hasVpnRoute(context));
+
             tap(instrumentation, activity, R.id.nav_account);
             tap(instrumentation, activity, R.id.logout);
             UiObject2 confirmLogout = ui.wait(Until.findObject(By.res("android", "button1")), 7_000);
@@ -215,6 +238,7 @@ public final class AndroidLifecycleTest {
 
     private static final class FixtureApi extends ClientApi {
         private final List<String> events = Collections.synchronizedList(new ArrayList<>());
+        private volatile boolean policyDisabled;
         private boolean registered;
         private String clientPublicKey;
         private final String serverPublicKey;
@@ -269,7 +293,8 @@ public final class AndroidLifecycleTest {
                     .put("egress_ipv4_candidates", new JSONArray().put(V4));
             return new JSONObject().put("ok", true).put("schema", 1)
                     .put("observed_at", System.currentTimeMillis() / 1000)
-                    .put("account", new JSONObject().put("status", "active").put("username", "fixture"))
+                    .put("account", new JSONObject().put("status", policyDisabled ? "disabled" : "active")
+                            .put("username", "fixture"))
                     .put("device", device)
                     .put("devices", new JSONArray().put(device))
                     .put("registration", new JSONObject().put("status", registered ? "registered" : "confirmation_required")

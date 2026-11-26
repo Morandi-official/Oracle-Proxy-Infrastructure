@@ -84,17 +84,21 @@ if [[ "$mode" == production ]]; then
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
     download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
     timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)|CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK))_MS=[0-9]+;TARGET_MS=1000;UNDER_TARGET=[01]$'
+    login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
+    login_phases+=',STREAM_OPEN_MS:[0-9]+,UPLOAD_MS:[0-9]+,RESPONSE_HEADERS_MS:[0-9]+,RESPONSE_BODY_MS:[0-9]+$'
     families='^ANDROID_PERF_VERIFIED_FAMILIES=[12]$'
     proof='^ANDROID_PERF_EXIT_PROOF_(FIRST|RECONNECT)=IPV4:(h3|https);IPV6:(h3|https|blocked);H3_CANDIDATE=[01]$'
-    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+;EXIT_PROOF_MS:[0-9]+;ATTEMPTS:[0-9]+$'
+    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+'
+    phases+=';NETWORK_DISCOVERY_MS:[0-9]+;NETWORK_BIND_MS:[0-9]+;EXIT_PROOF_MS:[0-9]+;ATTEMPTS:[0-9]+$'
     latency='^ANDROID_PERF_HTTPS_(DIRECT|WIREGUARD_UDP)_(FRESH|REUSED)_SAMPLES_MS=([0-9]+,){19}[0-9]+'
     latency+=';N=20;MEDIAN_MS=[0-9]+;P95_MS=[0-9]+;UNDER_500MS=[0-9]+;HOST=www[.]cloudflare[.]com'
     latency+=';PATH=/cdn-cgi/trace;ENDPOINT=[0-9.]+;ADDRESS_FAMILY=IPv4;PROTOCOL=HTTP_1_1$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
-        grep -E -e "$download" -e "$timing" -e "$families" -e "$proof" -e "$phases" -e "$latency" |
+        grep -E -e "$download" -e "$timing" -e "$login_phases" -e "$families" -e "$proof" -e "$phases" -e "$latency" |
         tee "$working_dir/performance.txt"
     for metric in DOWNLOAD_DIRECT_BYTES DOWNLOAD_WIREGUARD_UDP_BYTES PERF_VERIFIED_FAMILIES \
         PERF_LOGIN_FRESH_MS PERF_LOGIN_SAVED_CONTROLLER_MS PERF_LOGIN_WARM_MS \
+        PERF_LOGIN_FRESH_PHASES PERF_LOGIN_WARM_PHASES \
         PERF_CONNECT_FIRST_CLICK_MS PERF_CONNECT_AFTER_CONSENT_MS PERF_CONNECT_RECONNECT_CLICK_MS \
         PERF_EXIT_PROOF_FIRST PERF_EXIT_PROOF_RECONNECT \
         PERF_CONNECT_PHASES_FIRST PERF_CONNECT_PHASES_RECONNECT \

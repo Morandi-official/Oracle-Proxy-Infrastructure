@@ -35,6 +35,8 @@ final class CloudflareExitProbe {
     private static final String ORIGIN6 = "[2606:4700:4700::1111]";
     private static final int MAX_TRACE_BYTES = 8_192;
     private static final long HTTPS_HEDGE_MS = 100;
+    private static volatile String lastHttp3Exit4 = "";
+    private static volatile String lastHttp3Exit6 = "";
 
     static final class Proof {
         final String address;
@@ -48,6 +50,11 @@ final class CloudflareExitProbe {
 
     private CloudflareExitProbe() { }
 
+    static void rememberVerifiedProtocols(Proof ipv4, Proof ipv6) {
+        lastHttp3Exit4 = "h3".equals(ipv4.protocol) ? ipv4.address : "";
+        lastHttp3Exit6 = ipv6 != null && "h3".equals(ipv6.protocol) ? ipv6.address : "";
+    }
+
     static Proof verify(Context context, Network vpn, String expected, boolean ipv6, long timeoutMs)
             throws IOException {
         long deadline = SystemClock.elapsedRealtime() + timeoutMs;
@@ -56,7 +63,11 @@ final class CloudflareExitProbe {
         if (!BuildConfig.H3_EXIT_PROOF_ENABLED || !platformSupported()) {
             return https.run(deadline);
         }
-        return PlatformHttp3.hedge(context, vpn, url, expected, ipv6, deadline, https);
+        // Race both transports immediately until this process has accepted
+        // an actual H3 proof for the expected exit on this address family.
+        String verifiedHttp3 = ipv6 ? lastHttp3Exit6 : lastHttp3Exit4;
+        long hedgeDelay = expected.equals(verifiedHttp3) ? HTTPS_HEDGE_MS : 0;
+        return PlatformHttp3.hedge(context, vpn, url, expected, ipv6, deadline, hedgeDelay, https);
     }
 
     private static boolean platformSupported() {
@@ -193,15 +204,15 @@ final class CloudflareExitProbe {
         }
 
         static Proof hedge(Context context, Network vpn, String url, String expected, boolean ipv6,
-                           long deadline, HttpsTrial https) throws IOException {
+                           long deadline, long hedgeDelay, HttpsTrial https) throws IOException {
             ExecutorService worker = Executors.newFixedThreadPool(2);
             ExecutorCompletionService<Proof> completed = new ExecutorCompletionService<>(worker);
             H3Trial quic = new H3Trial();
             Future<Proof> fast = completed.submit(() -> quic.run(context, vpn, url, expected, ipv6, deadline));
             Future<Proof> fallback = null;
             try {
-                Future<Proof> first = completed.poll(Math.min(HTTPS_HEDGE_MS, remaining(deadline)),
-                        TimeUnit.MILLISECONDS);
+                Future<Proof> first = hedgeDelay == 0 ? null
+                        : completed.poll(Math.min(hedgeDelay, remaining(deadline)), TimeUnit.MILLISECONDS);
                 if (first != null) {
                     try {
                         return first.get();

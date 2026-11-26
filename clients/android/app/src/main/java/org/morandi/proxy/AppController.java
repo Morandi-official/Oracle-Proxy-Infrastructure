@@ -218,20 +218,53 @@ public final class AppController {
     }
 
     public void connect() {
+        long requestedAt = SystemClock.elapsedRealtime();
         long requested = intent.incrementAndGet();
-        worker.execute(() -> connectInternal(requested));
+        worker.execute(() -> connectInternal(requested, requestedAt));
     }
 
-    private void connectInternal(long requested) {
+    private volatile ConnectionTiming lastConnectTiming;
+
+    static final class ConnectionTiming {
+        final long totalMs;
+        final long policyMs;
+        final long serviceWaitMs;
+        final long nativeStartMs;
+        final long networkWaitMs;
+        final long exitProofMs;
+        final int attempts;
+
+        ConnectionTiming(long totalMs, long policyMs, TunnelEngine.AttemptTiming attempt) {
+            this.totalMs = totalMs;
+            this.policyMs = policyMs;
+            this.serviceWaitMs = attempt.serviceWaitMs;
+            this.nativeStartMs = attempt.nativeStartMs;
+            this.networkWaitMs = attempt.networkWaitMs;
+            this.exitProofMs = attempt.exitProofMs;
+            this.attempts = attempt.attempts;
+        }
+    }
+
+    ConnectionTiming lastConnectTiming() {
+        return lastConnectTiming;
+    }
+
+    private void connectInternal(long requested, long requestedAt) {
         if (requested != intent.get() || token.isEmpty() || "connected".equals(mode)) {
             return;
         }
+        lastConnectTiming = null;
         mode = "connecting";
         message = "";
         busy = true;
         publish();
         try {
+            // The foreground service can start while HTTPS refreshes the
+            // policy. Only the fresh policy permits a native TUN activation.
+            engine.prepareConnection();
+            long policyStarted = SystemClock.elapsedRealtime();
             refreshPolicy();
+            long policyMs = SystemClock.elapsedRealtime() - policyStarted;
             if (requested != intent.get()) {
                 return;
             }
@@ -264,6 +297,8 @@ public final class AppController {
             endpoint = result.endpoint;
             ipv4 = result.ipv4;
             ipv6 = result.ipv6 == null ? "" : result.ipv6;
+            lastConnectTiming = new ConnectionTiming(
+                    SystemClock.elapsedRealtime() - requestedAt, policyMs, result.timing);
             mode = "connected";
             verifyAfter = SystemClock.elapsedRealtime() + EXIT_CHECK_INTERVAL;
             reportPresence("connected");
@@ -390,6 +425,9 @@ public final class AppController {
             }
         } finally {
             publish();
+            if (token.isEmpty()) {
+                presenceWorker.execute(api::warmLoginConnection);
+            }
         }
     }
 

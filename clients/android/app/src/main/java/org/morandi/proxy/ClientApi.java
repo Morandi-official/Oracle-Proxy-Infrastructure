@@ -15,16 +15,19 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 import javax.net.ssl.HttpsURLConnection;
 
 class ClientApi {
     private static final String ORIGIN = "https://vpn-admin.morandi.dpdns.org";
+    private static final String LOGIN_WARMUP_PATH = "/api/client/quic-certificate";
     private static final List<String> ACTIONS = Arrays.asList(
             "authenticate", "enroll", "state", "presence", "logout", "device-delete");
     private static final int RESPONSE_LIMIT = 65_536;
 
     private final ConnectivityManager connectivity;
+    private Network reusablePhysicalNetwork;
 
     ClientApi() {
         connectivity = null;
@@ -43,10 +46,11 @@ class ClientApi {
         }
 
         URL url = new URL(ORIGIN + "/api/client/" + action);
-        Network controlNetwork = physicalNetwork();
+        Network controlNetwork = controlNetwork();
         HttpsURLConnection connection = (HttpsURLConnection) (controlNetwork == null
                 ? url.openConnection(Proxy.NO_PROXY)
                 : controlNetwork.openConnection(url, Proxy.NO_PROXY));
+        boolean responseConsumed = false;
         try {
             connection.setInstanceFollowRedirects(false);
             connection.setUseCaches(false);
@@ -77,24 +81,69 @@ class ClientApi {
                 throw new ApiError("API_UNAVAILABLE");
             }
             boolean success = status >= 200 && status < 300;
-            try (InputStream stream = success ? connection.getInputStream() : connection.getErrorStream()) {
-                JSONObject response = readObject(stream);
-                if (!success) {
-                    String code = response.optString("error");
-                    if (!code.matches("[A-Z][A-Z0-9_]{1,63}")) {
-                        code = status == 401 ? "LOGIN_REQUIRED" : "API_UNAVAILABLE";
-                    }
-                    throw new ApiError(code);
-                }
-                return response;
+            InputStream responseStream = success ? connection.getInputStream() : connection.getErrorStream();
+            JSONObject response;
+            try (InputStream stream = responseStream) {
+                response = readObject(stream);
             }
+            // Closing the drained body returns the connection to Android's pool.
+            responseConsumed = responseStream != null;
+            if (!success) {
+                String code = response.optString("error");
+                if (!code.matches("[A-Z][A-Z0-9_]{1,63}")) {
+                    code = status == 401 ? "LOGIN_REQUIRED" : "API_UNAVAILABLE";
+                }
+                throw new ApiError(code);
+            }
+            return response;
         } finally {
-            connection.disconnect();
+            if (!responseConsumed) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    void warmLoginConnection() {
+        HttpsURLConnection connection = null;
+        boolean responseConsumed = false;
+        try {
+            Network network = controlNetwork();
+            if (network == null) {
+                return;
+            }
+            connection = (HttpsURLConnection) network.openConnection(
+                    new URL(ORIGIN + LOGIN_WARMUP_PATH), Proxy.NO_PROXY);
+            connection.setInstanceFollowRedirects(false);
+            connection.setUseCaches(false);
+            connection.setConnectTimeout(1_500);
+            connection.setReadTimeout(1_500);
+            if (connection.getResponseCode() == 200) {
+                try (InputStream response = connection.getInputStream()) {
+                    readObject(response);
+                }
+                responseConsumed = true;
+            }
+        } catch (Exception ignored) {
+            // Login does not wait for this anonymous request and sends credentials only once.
+        } finally {
+            if (connection != null && !responseConsumed) {
+                connection.disconnect();
+            }
         }
     }
 
     static boolean validToken(String token) {
         return token.matches("[A-Za-z0-9_-]{43}");
+    }
+
+    private synchronized Network controlNetwork() {
+        Network selected = physicalNetwork();
+        // Android's HTTP connection pool belongs to the Network instance, not its netId.
+        // Retain that instance only while ConnectivityManager still selects this network.
+        if (!Objects.equals(reusablePhysicalNetwork, selected)) {
+            reusablePhysicalNetwork = selected;
+        }
+        return reusablePhysicalNetwork;
     }
 
     private Network physicalNetwork() {

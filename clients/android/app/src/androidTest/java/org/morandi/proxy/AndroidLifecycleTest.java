@@ -49,6 +49,7 @@ import java.util.function.BooleanSupplier;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -142,9 +143,11 @@ public final class AndroidLifecycleTest {
         AppController controller = new AppController(context, api, engine);
         AppController.installForTest(controller);
         AtomicBoolean attemptedClosedPort = new AtomicBoolean();
+        AtomicReference<AppController.State> trying = new AtomicReference<>();
         AppController.Listener observer = state -> {
             if ((HOST + ":443").equals(state.endpoint)) {
                 attemptedClosedPort.set(true);
+                trying.set(state);
             }
         };
         controller.observe(observer);
@@ -162,6 +165,9 @@ public final class AndroidLifecycleTest {
             tap(instrumentation, activity, R.id.device_confirm);
             await("enrollment", controller, () -> controller.snapshot().registered && !controller.snapshot().busy);
             assertEquals("0123456789ab", controller.snapshot().deviceId);
+            AtomicReference<View> connectionButton = new AtomicReference<>();
+            instrumentation.runOnMainSync(() -> connectionButton.set(activity.findViewById(R.id.connect)));
+            assertNotNull(connectionButton.get());
 
             assertNotNull("A newly installed app asks for VPN consent", VpnService.prepare(context));
             PolicyGate deniedPolicy = new PolicyGate();
@@ -218,6 +224,10 @@ public final class AndroidLifecycleTest {
             assertTrue(engine.isUp());
             assertTrue(hasVpnRoute(context));
             assertTrue("The closed UDP port was tried before connecting", attemptedClosedPort.get());
+            assertSame("Progress and verification share the same account snapshot", trying.get().devices, connected.devices);
+            assertSame(trying.get().ports, connected.ports);
+            instrumentation.runOnMainSync(() -> assertSame("One connection action retains focus",
+                    connectionButton.get(), activity.findViewById(R.id.disconnect)));
             assertEquals(HOST + ":51820", connected.endpoint);
             assertEquals(InetAddress.getByName(V4), InetAddress.getByName(connected.verifiedIpv4));
             assertEquals(InetAddress.getByName(V6), InetAddress.getByName(connected.verifiedIpv6));
@@ -270,6 +280,9 @@ public final class AndroidLifecycleTest {
             assertNotNull("Logout confirmation was shown", confirmLogout);
             confirmLogout.click();
             await("logout", controller, () -> !controller.snapshot().signedIn && !controller.snapshot().busy);
+            assertTrue(controller.snapshot().devices.isEmpty());
+            assertTrue(controller.snapshot().ports.isEmpty());
+            assertTrue(controller.snapshot().deviceId.isEmpty());
             assertTrue(api.events.contains("logout"));
             assertFalse(engine.isUp());
         } finally {

@@ -134,6 +134,7 @@ public final class TunnelEngine {
     private TunnelProfile.Candidate connected;
     private CompletableFuture<Long> preparedServiceStart;
     private CompletableFuture<Network> preparedUnderlay;
+    private CompletableFuture<NetworkChanges> preparedNetworkChanges;
     private Network lastVerifiedUnderlay;
     private TunnelProfile.Candidate lastVerifiedCandidate;
     private long lastVerifiedAt;
@@ -203,6 +204,9 @@ public final class TunnelEngine {
                 return 0L;
             }
         });
+        // A passive callback receives no packets and installs no routes. Let its Binder
+        // registration overlap the fresh account read and foreground-service startup.
+        preparedNetworkChanges = CompletableFuture.supplyAsync(NetworkChanges::new);
         // Port ordering can use this read while policy and profile work proceed.
         // A first connection without a verified port hint can start even if
         // Android has not yet answered the physical-network Binder calls.
@@ -258,8 +262,11 @@ public final class TunnelEngine {
         loadBackend(deadline, callback);
         long backendWaitMs = SystemClock.elapsedRealtime() - backendStarted;
         Network beforeService = underlayRead == null ? null : underlayRead.getNow(null);
-        Network underlay = lastVerifiedCandidate == null && underlayRead != null ? beforeService
-                : currentUnderlay(connectivity, beforeService);
+        // Only an ordering hint is reused. Keys, allowed ports, routes and fresh
+        // public egress evidence always come from this authorized attempt.
+        boolean recheck = underlayRead == null || (lastVerifiedCandidate != null
+                && (beforeService == null || !beforeService.equals(connectivity.getActiveNetwork())));
+        Network underlay = recheck ? currentUnderlay(connectivity, beforeService) : beforeService;
         Network attemptUnderlay = underlay;
         int firstAttemptedPort = 0;
         int attempts = 0;
@@ -288,7 +295,7 @@ public final class TunnelEngine {
             timing.firstAttemptedPort = firstAttemptedPort;
             timing.orderingUnderlay = underlay;
             timing.backendWaitMs = backendWaitMs;
-            try (NetworkChanges changes = new NetworkChanges()) {
+            try (NetworkChanges changes = takePreparedNetworkChanges()) {
                 long serviceStarted = SystemClock.elapsedRealtime();
                 long serviceDeadline = finishServiceRequest();
                 boolean overlappedStart = serviceDeadline != 0;
@@ -319,7 +326,7 @@ public final class TunnelEngine {
                 // Android starts publishing the new TUN inside GoBackend.setState.
                 // Observe that exact new network while native initialization finishes.
                 // Neither a successful setState nor a probe alone can commit a connection.
-                Set<Network> existing = new HashSet<>(Arrays.asList(connectivity.getAllNetworks()));
+                Set<Network> existing = changes.existingBeforeActivation();
                 CountDownLatch nativeReady = new CountDownLatch(1);
                 AtomicBoolean verifying = new AtomicBoolean(true);
                 BooleanSupplier active = () -> verifying.get() && !callback.cancelled()
@@ -380,6 +387,13 @@ public final class TunnelEngine {
         }
         throw new IOException(callback.cancelled() ? "VPN_CONNECT_CANCELLED"
                 : "VPN_EXIT_NOT_VERIFIED");
+    }
+
+    private NetworkChanges takePreparedNetworkChanges() {
+        CompletableFuture<NetworkChanges> pending = preparedNetworkChanges;
+        if (pending == null) return new NetworkChanges();
+        preparedNetworkChanges = null;
+        return pending.join();
     }
 
     private void loadBackend(long deadline, Callback callback) throws IOException {
@@ -516,6 +530,12 @@ public final class TunnelEngine {
 
     public synchronized void disconnect() throws IOException {
         finishServiceRequest();
+        if (preparedNetworkChanges != null) {
+            // Registration may still be returning from Binder. Close that exact callback
+            // once it completes, including when policy is denied or the tap is cancelled.
+            preparedNetworkChanges.thenAccept(NetworkChanges::close);
+            preparedNetworkChanges = null;
+        }
         preparedUnderlay = null;
         profile = null;
         connected = null;
@@ -591,6 +611,7 @@ public final class TunnelEngine {
             if (!active.getAsBoolean() || !up || !matches(vpn, target)) {
                 return null;
             }
+            // Give devices that hide VPN ownership their normal post-UP proof budget.
             probeDeadline = Math.min(deadline, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS);
         }
         long proofStarted = SystemClock.elapsedRealtime();
@@ -928,6 +949,16 @@ public final class TunnelEngine {
         @Override public synchronized void onLost(Network network) {
             available.remove(network);
             signal();
+        }
+
+        Set<Network> existingBeforeActivation() {
+            Set<Network> existing = new HashSet<>(Arrays.asList(connectivity.getAllNetworks()));
+            synchronized (this) {
+                // Include callback entries even when a disappearing old VPN has already
+                // dropped out of the Binder snapshot and its onLost event is pending.
+                existing.addAll(available.keySet());
+            }
+            return existing;
         }
 
         synchronized VpnNetwork matching(TunnelProfile target, Set<Network> excluded) {

@@ -47,6 +47,7 @@ public final class MainActivity extends Activity {
     private AppController controller;
     private AppController.State state;
     private boolean consentPending;
+    private boolean renderedConsentPending;
     private long consentRequest;
     private ProxyVpnService.ConsentBinding consentBinding;
     private long consentResultNanos;
@@ -73,10 +74,9 @@ public final class MainActivity extends Activity {
     private TextView connectionEndpoint;
     private TextView verifiedIpv4;
     private TextView verifiedIpv6;
-    private View connectionMarker;
+    private GradientDrawable connectionMarker;
     private LinearLayout portPanel;
-    private Button connectAction;
-    private Button disconnectAction;
+    private Button connectionAction;
     private Button portAction;
     private Button loginAction;
     private Button confirmAction;
@@ -155,7 +155,9 @@ public final class MainActivity extends Activity {
     }
 
     private void render(AppController.State value, boolean first) {
+        if (!first && state == value && consentPending == renderedConsentPending) return;
         state = value;
+        renderedConsentPending = consentPending;
         boolean login = !value.signedIn;
         boolean sessionPending = value.signedIn && orEmpty(value.username).isEmpty();
         boolean registration = value.signedIn && !sessionPending && !value.registered;
@@ -417,11 +419,13 @@ public final class MainActivity extends Activity {
         LinearLayout statusRow = new LinearLayout(this);
         statusRow.setGravity(Gravity.CENTER_VERTICAL);
         statusRow.setOrientation(LinearLayout.HORIZONTAL);
-        connectionMarker = new View(this);
-        connectionMarker.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        View marker = new View(this);
+        connectionMarker = shape(statusColor(state.mode), 12, null);
+        marker.setBackground(connectionMarker);
+        marker.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         LinearLayout.LayoutParams dot = new LinearLayout.LayoutParams(dp(10), dp(10));
         dot.rightMargin = dp(10);
-        statusRow.addView(connectionMarker, dot);
+        statusRow.addView(marker, dot);
         connectionStatus = heading("", 25);
         connectionStatus.setId(R.id.connection_status);
         connectionStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -431,10 +435,11 @@ public final class MainActivity extends Activity {
         connectionFeedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         add(control, connectionFeedback, 8);
 
-        connectAction = button("连接", R.id.connect, true, this::requestConnect);
-        disconnectAction = button("断开并恢复直连", R.id.disconnect, false, controller::disconnect);
-        add(control, connectAction, 18);
-        add(control, disconnectAction, 18);
+        connectionAction = button("连接", R.id.connect, true, () -> {
+            if (disconnectActionAvailable()) controller.disconnect();
+            else requestConnect();
+        });
+        add(control, connectionAction, 18);
 
         LinearLayout details = card(body, 14);
         add(details, heading("连接详情", 18), 0);
@@ -451,24 +456,32 @@ public final class MainActivity extends Activity {
 
     private void updateConnection() {
         updateText(connectionStatus, statusLabel(state.mode));
-        connectionMarker.setBackground(shape(statusColor(state.mode), 12, null));
+        int markerColor = statusColor(state.mode);
+        if (connectionMarker.getColor().getDefaultColor() != markerColor) connectionMarker.setColor(markerColor);
         showFeedback(connectionFeedback, messageLabel(state.message));
 
-        boolean active = isConnected() || isWorking() || isProtected();
-        disconnectAction.setVisibility(active ? View.VISIBLE : View.GONE);
-        disconnectAction.setEnabled(!isDisconnecting());
-        updateText(disconnectAction, isProtected() ? "再次断开 VPN" : "断开并恢复直连");
-        connectAction.setVisibility(active ? View.GONE : View.VISIBLE);
-        connectAction.setEnabled(!state.busy && !consentPending);
-        updateText(connectAction, consentPending ? "等待 VPN 授权…" : "连接");
+        boolean active = disconnectActionAvailable();
+        int actionId = active ? R.id.disconnect : R.id.connect;
+        if (connectionAction.getId() != actionId) connectionAction.setId(actionId);
+        connectionAction.setEnabled(active ? !isDisconnecting() : !state.busy && !consentPending);
+        String label = active ? (isProtected() ? "再次断开 VPN" : "断开并恢复直连")
+                : (consentPending ? "等待 VPN 授权…" : "连接");
+        updateText(connectionAction, label);
 
         updateText(connectionEndpoint, printable(state.endpoint));
         updateText(verifiedIpv4, printable(state.verifiedIpv4));
         updateText(verifiedIpv6, printable(state.verifiedIpv6));
         portPanel.setVisibility(state.ports == null || state.ports.isEmpty() ? View.GONE : View.VISIBLE);
-        updateText(portAction, portLabel(state.preferredPort));
-        portAction.setContentDescription("UDP 端口，" + portLabel(state.preferredPort));
+        String port = portLabel(state.preferredPort);
+        if (!port.contentEquals(portAction.getText())) {
+            portAction.setText(port);
+            portAction.setContentDescription("UDP 端口，" + port);
+        }
         portAction.setEnabled(!state.busy && !active && !consentPending);
+    }
+
+    private boolean disconnectActionAvailable() {
+        return isConnected() || isWorking() || isProtected();
     }
 
     private void requestConnect() {

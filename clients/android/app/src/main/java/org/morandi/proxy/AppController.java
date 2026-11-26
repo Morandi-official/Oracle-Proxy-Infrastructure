@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
@@ -26,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class AppController {
@@ -49,10 +51,12 @@ public final class AppController {
     private final ExecutorService connectionPolicyWorker = Executors.newSingleThreadExecutor();
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicLong intent = new AtomicLong();
+    private final AtomicBoolean notificationPending = new AtomicBoolean();
     private final String defaultDeviceName;
 
     // All mutable session and VPN state is owned by the single worker.
     private JSONObject accountState;
+    private AccountDetails accountDetails = AccountDetails.EMPTY;
     private String token = "";
     private String privateKey = "";
     private String accountSlot = "";
@@ -117,7 +121,7 @@ public final class AppController {
         this.engine = engine;
         vault = new PrivateStore(context);
         defaultDeviceName = deviceName(Build.MODEL);
-        visible = new State(null, defaultDeviceName, "disconnected", "", "", "", "", 0, false, false);
+        visible = new State(accountDetails, defaultDeviceName, "disconnected", "", "", "", "", 0, false, false);
         engine.setRevocationListener(() -> worker.execute(() -> {
             if ("connected".equals(mode) && !engine.isUp()) {
                 loseConnection("VPN 已由系统断开。需要时可重新连接。", true);
@@ -680,6 +684,7 @@ public final class AppController {
         update.remove("token");
         update.remove("token_expires_at");
         accountState = update;
+        accountDetails = new AccountDetails(update);
         policyAt = SystemClock.elapsedRealtime();
         refreshAfter = policyAt + STATE_INTERVAL;
         if (!localPreparationScheduled && registered() && "active".equals(account().optString("status"))) {
@@ -815,6 +820,7 @@ public final class AppController {
         token = "";
         tokenExpiresAt = 0;
         accountState = null;
+        accountDetails = AccountDetails.EMPTY;
         accountSlot = "";
         privateKey = "";
         remember = false;
@@ -891,9 +897,11 @@ public final class AppController {
     }
 
     private void publish() {
-        visible = new State(accountState, defaultDeviceName, mode, message, endpoint, ipv4, ipv6,
+        visible = new State(accountDetails, defaultDeviceName, mode, message, endpoint, ipv4, ipv6,
                 preferredPort, !token.isEmpty(), busy);
+        if (!notificationPending.compareAndSet(false, true)) return;
         main.post(() -> {
+            notificationPending.set(false);
             State state = visible;
             for (Listener listener : listeners) {
                 listener.onState(state);
@@ -977,26 +985,50 @@ public final class AppController {
         public final List<Device> devices;
         public final List<Integer> ports;
 
-        private State(JSONObject data, String deviceName, String mode, String message, String endpoint,
+        private State(AccountDetails account, String deviceName, String mode, String message, String endpoint,
                       String ipv4, String ipv6, int port, boolean signedIn, boolean busy) {
-            JSONObject account = object(data, "account");
-            JSONObject registration = object(data, "registration");
-            JSONObject cycle = object(account, "cycle");
-            this.username = account.optString("username");
-            this.accountStatus = account.optString("status");
+            username = account.username;
+            accountStatus = account.accountStatus;
+            deviceId = account.deviceId;
+            registered = account.registered;
+            periodLabel = account.periodLabel;
+            expiresLabel = account.expiresLabel;
+            usedBytes = account.usedBytes;
+            quotaBytes = account.quotaBytes;
+            devices = account.devices;
+            ports = account.ports;
             this.mode = mode;
             this.message = message;
             this.endpoint = endpoint;
             this.verifiedIpv4 = ipv4;
             this.verifiedIpv6 = ipv6;
-            this.deviceId = registration.optString("device_id");
             this.defaultDeviceName = deviceName;
             this.signedIn = signedIn;
-            this.registered = "registered".equals(registration.optString("status"));
             this.busy = busy;
-            this.usedBytes = Math.max(0, account.optLong("used_bytes", 0));
-            this.quotaBytes = account.optLong("limit_bytes", -1);
             this.preferredPort = port;
+        }
+    }
+
+    // Connection progress changes independently of the latest account response.
+    private static final class AccountDetails {
+        private static final Pattern DEVICE_ID = Pattern.compile("[a-f0-9]{12}");
+        static final AccountDetails EMPTY = new AccountDetails(null);
+        final String username, accountStatus, deviceId, periodLabel, expiresLabel;
+        final boolean registered;
+        final long usedBytes, quotaBytes;
+        final List<Device> devices;
+        final List<Integer> ports;
+
+        AccountDetails(JSONObject data) {
+            JSONObject account = object(data, "account");
+            JSONObject registration = object(data, "registration");
+            JSONObject cycle = object(account, "cycle");
+            username = account.optString("username");
+            accountStatus = account.optString("status");
+            deviceId = registration.optString("device_id");
+            registered = "registered".equals(registration.optString("status"));
+            usedBytes = Math.max(0, account.optLong("used_bytes", 0));
+            quotaBytes = account.optLong("limit_bytes", -1);
             this.ports = advertisedPorts(data == null ? null : data.optJSONObject("tunnel"));
             String begin = date(cycle.opt("start_at"));
             String end = date(cycle.opt("end_at"));
@@ -1012,7 +1044,7 @@ public final class AppController {
                         continue;
                     }
                     String id = item.optString("id");
-                    if (id.matches("[a-f0-9]{12}")) {
+                    if (DEVICE_ID.matcher(id).matches()) {
                         active.add(new Device(id, item.optString("name", "未命名设备"), item.optBoolean("current")));
                     }
                 }

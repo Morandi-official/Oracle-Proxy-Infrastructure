@@ -212,8 +212,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir previous-android
-          gh release download tailscale-v0.1.1 --pattern Proxy-Android.apk --dir previous-android
-          printf '%s  %s\n' f205dce12415bf0805fb663fce6e6a16cd56878448585fd6fed932e7d4e52e57 \
+          gh release download wireguard-android-v0.1.0 --pattern Proxy-Android.apk --dir previous-android
+          printf '%s  %s\n' 1c477913fb61ecc2e30cabd0c0dedc2b31fef3cad6ee489ed302231e7b6cd258 \
             previous-android/Proxy-Android.apk | sha256sum -c -
       - name: Validate the exact APK after an in-place upgrade
         env:
@@ -225,6 +225,8 @@ jobs:
 
   production-emulator:
     needs: signed-release
+    outputs:
+      latency_met: ${{ steps.production.outputs.latency_met }}
     runs-on: ubuntu-24.04
     timeout-minutes: 22
     environment: windows-client-acceptance
@@ -248,7 +250,8 @@ jobs:
         with:
           name: owner-signed-instrumentation
           path: owner-signed-instrumentation
-      - name: Verify production account and VPN using the signed APK
+      - id: production
+        name: Verify production account and VPN using the signed APK
         env:
           ANDROID_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
           ANDROID_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
@@ -260,7 +263,8 @@ jobs:
   publish:
     needs: [build, signed-emulator, production-emulator]
     if: >-
-      github.ref == 'refs/heads/main' && (needs.build.outputs.publish_on_push == 'true' ||
+      github.ref == 'refs/heads/main' && needs.production-emulator.outputs.latency_met == 'true' &&
+      ((github.event_name == 'push' && needs.build.outputs.publish_on_push == 'true') ||
       (github.event_name == 'workflow_dispatch' && inputs.publish))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -283,4 +287,4 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           gh release create "wireguard-android-v$version" Proxy-Android.apk SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "Proxy WireGuard Android $version" --latest=false \
-            --notes 'The owner-signed APK passed in-place upgrade and WireGuard tunnel tests on Android API 29 and 36. A fresh installation passed production remembered login, WireGuard egress and bounded direct/VPN download checks. Requires Android 10 or later.'
+            --notes 'The signed APK passed a v0.1.0 upgrade and WireGuard tests on Android API 29 and 36. In the production acceptance run, the first system VPN confirmation and five reconnects reached verified egress within 1.5 seconds each. Requires Android 10 or later.'

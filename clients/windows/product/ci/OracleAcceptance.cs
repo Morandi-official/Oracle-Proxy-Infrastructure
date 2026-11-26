@@ -288,7 +288,7 @@ internal static class OracleAcceptance
         }finally{window?.Finish(complete);}
     }
     private static async Task MeasureNetwork(OracleNetworkPerformance.Target[] targets,IReadOnlySet<string> allowedExits,
-        bool tunneled,uint expectedCore=0)
+        bool tunneled,uint expectedCore=0,OracleNetworkPerformance.TransferOrigin? origin=null)
     {
         bool PathMatches(JsonObject state)=>state["mode"]?.GetValue<string>()==(tunneled?"connected":"disconnected") &&
             state["intent"]?.GetValue<bool>()==tunneled && state["guard"]?.GetValue<bool>()==tunneled &&
@@ -304,8 +304,22 @@ internal static class OracleAcceptance
         // small STUN packets rather than another bulk transfer.
         var window=new OracleNetworkPerformance.TransferWindow();
         await Task.WhenAll(SampleDownload(route,window),OracleNetworkPerformance.Measure(targets,allowedExits,tunneled,index,window));
-        if(tunneled)await OracleNetworkPerformance.MeasureTransfers(targets,allowedExits,index);
+        if(tunneled)await OracleNetworkPerformance.MeasureTransfers(targets,allowedExits,index,
+            origin??throw new InvalidOperationException("TUNNELED_TRANSFER_ORIGIN_REQUIRED"),tunneled:true);
         Check(PathMatches(await Send("Status")),"REAL_NETWORK_RTT_"+route+"_STATE_AFTER");
+    }
+
+    private static async Task MeasureDirectTransferAfterDisconnect(OracleNetworkPerformance.Target[] targets,
+        IReadOnlySet<string> allowedExits,string directExit,OracleNetworkPerformance.TransferOrigin origin)
+    {
+        await Send("Disconnect");await StoppedService();
+        Check(await ExitIp()==directExit,"REAL_PERF_DISCONNECT_RESTORES_PHYSICAL_EXIT");
+        if(origin.Address is null)return;
+        try{
+            await OracleNetworkPerformance.MeasureTransfers(targets,allowedExits,PhysicalIndex(),origin,tunneled:false);
+        }catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException or SocketException){
+            Console.WriteLine("WINDOWS_PERF_DIRECT_TRANSFER_CONTROL_UNAVAILABLE="+error.GetType().Name);
+        }
     }
     // Failure evidence from the existing attested session only. Both account
     // data and peer counters are the service's most recent server observation.
@@ -661,8 +675,16 @@ internal static class OracleAcceptance
             phase="TUNNELED_NETWORK";
             await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:true);
             var meterStart=await Send("Status");
-            try{await MeasureNetwork(networkTargets,allowed,tunneled:true,connected["core_pid"]!.GetValue<uint>());}
-            catch{await ReportNetworkFailure(meterStart);throw;}
+            var transferOrigin=new OracleNetworkPerformance.TransferOrigin();
+            try{await MeasureNetwork(networkTargets,allowed,tunneled:true,connected["core_pid"]!.GetValue<uint>(),transferOrigin);}
+            catch{
+                string failedAssertion=_lastAssertion;
+                await ReportNetworkFailure(meterStart);
+                try{await MeasureDirectTransferAfterDisconnect(networkTargets,allowed,directExit,transferOrigin);}
+                catch(Exception error){Console.WriteLine("WINDOWS_PERF_FAILED_RUN_DIRECT_CONTROL_UNAVAILABLE="+error.GetType().Name);}
+                finally{_lastAssertion=failedAssertion;}
+                throw;
+            }
             phase="BROWSER";
             await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
             var meterEnd=await Send("Status");
@@ -673,8 +695,7 @@ internal static class OracleAcceptance
                 last?["sample_ms"]?.GetValue<long>()>start && first["rx_bytes"]?.GetValue<long>() is long rx && rx>=0 &&
                 first["tx_bytes"]?.GetValue<long>() is long tx && tx>=0 && last?["rx_bytes"]?.GetValue<long>()>rx && last?["tx_bytes"]?.GetValue<long>()>tx,
                 "REAL_LOCAL_TUN_COUNTERS_ADVANCE_IN_BOTH_DIRECTIONS_DURING_BROWSER_TRAFFIC");
-            await Send("Disconnect");await StoppedService();
-            Check(await ExitIp()==directExit,"REAL_PERF_DISCONNECT_RESTORES_PHYSICAL_EXIT");
+            await MeasureDirectTransferAfterDisconnect(networkTargets,allowed,directExit,transferOrigin);
             await Send("AttachClient");
             phase="DEVICE_RETIREMENT";
             var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));

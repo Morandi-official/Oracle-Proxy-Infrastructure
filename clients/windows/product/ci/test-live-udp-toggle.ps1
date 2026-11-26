@@ -4,21 +4,59 @@ if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type @'
 using System;
+using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 public static class ProxyGuiCloseButton {
+ private static readonly Guid OwnedGuid=new Guid("62e2af98-7089-6f2c-246b-4a5960cfc978");
  [DllImport("iphlpapi.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
  private static extern uint ConvertInterfaceAliasToLuid(string alias, out ulong luid);
+ [DllImport("iphlpapi.dll", ExactSpelling=true)]
+ private static extern uint ConvertInterfaceLuidToGuid(ref ulong luid, out Guid guid);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)]
+ private static extern IntPtr LoadLibraryExW(string path, IntPtr reserved, uint flags);
+ [DllImport("kernel32.dll", CharSet=CharSet.Ansi, ExactSpelling=true, SetLastError=true)]
+ private static extern IntPtr GetProcAddress(IntPtr library, string name);
+ [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+ private delegate uint QueryPresence(out uint present);
+ private static QueryPresence queryPresence;
+ public static void Initialize() {
+  if(!Environment.Is64BitProcess) throw new InvalidOperationException("LIVE_X64_FIXTURE_REQUIRED");
+  string path=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"OracleProxy","Proxy.Guard.dll");
+  IntPtr module=LoadLibraryExW(path,IntPtr.Zero,0x800); // LOAD_LIBRARY_SEARCH_SYSTEM32
+  if(module==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+  IntPtr procedure=GetProcAddress(module,"OpTunPresence");
+  if(procedure==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+  queryPresence=(QueryPresence)Marshal.GetDelegateForFunctionPointer(procedure,typeof(QueryPresence));
+ }
+ public static bool AdapterPresent() {
+  // This export reads GetIfTable2 and compares every row's alias and GUID.
+  // An error or incomplete inventory must never be reported as absence.
+  uint present;uint rc=queryPresence(out present);
+  if(rc!=0) throw new Win32Exception((int)rc);
+  if(present>1) throw new InvalidOperationException("LIVE_ADAPTER_PRESENCE_INVALID");
+  return present==1;
+ }
  public static ulong AdapterLuid() {
-  ulong luid; uint rc=ConvertInterfaceAliasToLuid("OracleProxy",out luid);
-  if(rc==0 && luid!=0) return luid;
-  if(rc==2 || rc==1168) return 0;
-  throw new InvalidOperationException("LIVE_ADAPTER_QUERY_FAILED");
+  ulong luid;uint rc=ConvertInterfaceAliasToLuid("OracleProxy",out luid);
+  if(rc!=0){
+   if(!AdapterPresent()) return 0;
+   // Ordinary GUI startup can create the adapter between the two snapshots.
+   rc=ConvertInterfaceAliasToLuid("OracleProxy",out luid);
+   if(rc!=0) throw new Win32Exception((int)rc);
+  }
+  if(luid==0) throw new InvalidOperationException("LIVE_ADAPTER_LUID_INVALID");
+  Guid guid;rc=ConvertInterfaceLuidToGuid(ref luid,out guid);
+  if(rc!=0) throw new Win32Exception((int)rc);
+  if(guid!=OwnedGuid) throw new InvalidOperationException("LIVE_ADAPTER_GUID_MISMATCH");
+  return luid;
  }
  [DllImport("user32.dll", SetLastError=true)]
  public static extern bool PostMessage(IntPtr hwnd,uint message,IntPtr wParam,IntPtr lParam);
 }
 '@
 . (Join-Path $PSScriptRoot 'adapter-binding-witness.ps1')
+[ProxyGuiCloseButton]::Initialize()
 $otherBindings=@(Get-OtherAdapterBindingState)
 $launch=[Diagnostics.Stopwatch]::StartNew()
 $gui=Start-Process -FilePath $Client -PassThru
@@ -238,18 +276,43 @@ try {
    $retainedLuid=$activeLuid
   }
  }
- $script:stage='close-window'
+ $script:stage='close-window-owner'
+ $closeLuid=[ProxyGuiCloseButton]::AdapterLuid()
+ if(!$lastCore -or !$closeLuid -or (!$CloseConnectedOnly -and $closeLuid -ne $retainedLuid)){throw 'LIVE_GUI_X_OWNER_IDENTITY_MISSING'}
  Service-Witness 'BEFORE'
+ $script:stage='close-window-message'
  $gui.Refresh()
  if(![ProxyGuiCloseButton]::PostMessage($gui.MainWindowHandle,0x0112,[IntPtr]0xF060,[IntPtr]::Zero)){throw 'LIVE_GUI_CLOSE_BUTTON_MESSAGE_FAILED'}
+ $script:stage='close-window-exit'
  if(!$gui.WaitForExit(15000)){throw 'LIVE_GUI_X_DID_NOT_CLOSE'}
+ Write-Host 'ACTUAL_X_GUI_PROCESS_EXITED=PASS'
+ $script:stage='close-service'
  $watch=[Diagnostics.Stopwatch]::StartNew()
- while((Get-Service OracleProxyService).Status -ne 'Stopped' -and $watch.Elapsed.TotalSeconds -lt 15){Start-Sleep -Milliseconds 20}
- if((Get-Service OracleProxyService).Status -ne 'Stopped'){throw 'LIVE_GUI_X_LEFT_BACKEND'}
- if([ProxyGuiCloseButton]::AdapterLuid() -ne 0 -or @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object {
-  $_.Name -eq 'OracleProxy' -or [guid]$_.InterfaceGuid -eq [guid]'62e2af98-7089-6f2c-246b-4a5960cfc978'
- }).Count){throw 'LIVE_GUI_X_LEFT_ADAPTER'}
- if(@(Get-Process -ErrorAction Stop | Where-Object {$_.Id -eq $lastCore -or $_.ProcessName -eq 'Proxy.Core'}).Count){throw 'LIVE_GUI_X_LEFT_HOLDER'}
+ while((Get-Service OracleProxyService -ErrorAction Stop).Status -ne 'Stopped' -and $watch.Elapsed.TotalSeconds -lt 15){Start-Sleep -Milliseconds 20}
+ if((Get-Service OracleProxyService -ErrorAction Stop).Status -ne 'Stopped'){throw 'LIVE_GUI_X_LEFT_BACKEND'}
+ Write-Host 'ACTUAL_X_SERVICE_STOPPED=PASS'
+ $script:stage='close-ip-helper'
+ if([ProxyGuiCloseButton]::AdapterPresent()){throw 'LIVE_GUI_X_LEFT_ADAPTER'}
+ Write-Host 'ACTUAL_X_IP_HELPER_ADAPTER_ABSENT=PASS'
+ $script:stage='close-netadapter'
+ $ownedGuid=[guid]'62e2af98-7089-6f2c-246b-4a5960cfc978'
+ $inventory=@(Get-NetAdapter -IncludeHidden -ErrorAction Stop)
+ if(!$inventory.Count){throw 'LIVE_GUI_X_ADAPTER_INVENTORY_EMPTY'}
+ foreach($nic in $inventory){
+  if($nic.Name -eq 'OracleProxy' -or $nic.NetLuid -eq $closeLuid){throw 'LIVE_GUI_X_LEFT_ADAPTER'}
+  if($null -ne $nic.InterfaceGuid -and [string]$nic.InterfaceGuid -ne ''){
+   $id=[guid]::Empty
+   if(![guid]::TryParse([string]$nic.InterfaceGuid,[ref]$id)){throw 'LIVE_GUI_X_ADAPTER_INVENTORY_INVALID'}
+   if($id -eq $ownedGuid){throw 'LIVE_GUI_X_LEFT_ADAPTER'}
+  }
+ }
+ Write-Host 'ACTUAL_X_CIM_ADAPTER_ABSENT=PASS'
+ $script:stage='close-holder'
+ # A materialized CIM snapshot avoids racing properties on unrelated processes
+ # that exit while Get-Process is being enumerated. Both identities must be gone.
+ if(@(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $lastCore OR Name = 'Proxy.Core.exe'" -ErrorAction Stop).Count){throw 'LIVE_GUI_X_LEFT_HOLDER'}
+ Write-Host 'ACTUAL_X_CORE_PROCESS_ABSENT=PASS'
+ $script:stage='close-other-bindings'
  Assert-OtherAdapterBindingState $otherBindings
  Write-Host 'ACTUAL_PRODUCT_GUI_CLOSED_WITHOUT_SERVICE_HOLDER_OR_ADAPTER=PASS'
  if(!$connectTargetMet){
@@ -259,9 +322,15 @@ try {
   exit 17
  }
 } catch {
+ $cause=$_.Exception.GetBaseException()
+ $line=$_.InvocationInfo.ScriptLineNumber
+ if($line -is [int] -and $line -gt 0){Write-Host "ACTUAL_PROXY_GUI_FAILURE_LINE=$line"}
+ $type=$cause.GetType().FullName
+ if($type -match '^[A-Za-z0-9_.]{1,120}$'){Write-Host "ACTUAL_PROXY_GUI_FAILURE_TYPE=$type"}
+ if($cause -is [ComponentModel.Win32Exception]){Write-Host "ACTUAL_PROXY_GUI_FAILURE_NATIVE_CODE=$($cause.NativeErrorCode)"}
  Park-FailureWitness
  Write-Host "ACTUAL_PROXY_GUI_FAILURE_STAGE=$script:stage"
- $code=if($_.Exception.Message -match '^[A-Z_]{1,80}$'){$_.Exception.Message}else{'TEST_RUNTIME_EXCEPTION'}
+ $code=if($cause.Message -cmatch '^[A-Z_]{1,80}$'){$cause.Message}else{'TEST_RUNTIME_EXCEPTION'}
  Write-Host "ACTUAL_PROXY_GUI_FAILURE_CODE=$code"
  Exit-FailureWitness
  throw

@@ -158,7 +158,7 @@ internal static class OracleNetworkPerformance
         if(window?.HasFailedBlock==true){
             var attempts=samples.Where(s=>window.DuringFailedBlock(s.Sent)).ToArray();
             Console.WriteLine("WINDOWS_PERF_FAILED_BLOCK_STUN="+JsonSerializer.Serialize(new{
-                condition=window.Condition,endpoint=target.Host,attempts_started=attempts.Length,
+                route=tunneled?"wireguard":"direct",condition=window.Condition,endpoint=target.Host,attempts_started=attempts.Length,
                 verified_replies_before_failure=attempts.Count(s=>s.RttMs.HasValue && window.DuringFailedBlock(s.Finished)),
                 verified_replies_total=attempts.Count(s=>s.RttMs.HasValue)
             }));
@@ -200,37 +200,64 @@ internal static class OracleNetworkPerformance
         if(actual!=expectedIndex){Console.WriteLine("WINDOWS_PERF_NETWORK_ROUTE_MISMATCH=true");throw new IOException("WINDOWS_PERF_NETWORK_ROUTE_MISMATCH");}
     }
 
-    internal static async Task MeasureTransfers(IReadOnlyList<Target> targets,IReadOnlySet<string> allowedExits,int index)
+    private const string TransferHost="speed.cloudflare.com";
+
+    internal sealed class TransferOrigin
     {
-        const string origin="speed.cloudflare.com";
+        internal IPAddress? Address { get; private set; }
+        internal async Task<IPAddress> ResolveOnce(CancellationToken cancel)
+        {
+            if(Address is not null)return Address;
+            var addresses=await Dns.GetHostAddressesAsync(TransferHost,AddressFamily.InterNetwork,cancel);
+            return Address=addresses.FirstOrDefault() ?? throw new IOException("TRANSFER_ORIGIN_DNS_UNAVAILABLE");
+        }
+    }
+
+    internal static async Task MeasureTransfers(IReadOnlyList<Target> targets,IReadOnlySet<string> allowedExits,
+        int index,TransferOrigin origin,bool tunneled)
+    {
+        string route=tunneled?"wireguard":"direct";
         const int blocks=12, blockSize=128*1024;
         // Fixed payload (1.5 MiB per direction) on the low-quota acceptance peer.
         // A single shared HTTPS connection carries repeated real transfers. Its
         // authenticated warm-up is outside both workload windows.
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var cancel=deadline.Token;
-        var addresses=await Dns.GetHostAddressesAsync(origin,AddressFamily.InterNetwork,cancel);
-        if(addresses.FirstOrDefault() is not IPAddress address)throw new IOException("TRANSFER_ORIGIN_DNS_UNAVAILABLE");
+        var address=await origin.ResolveOnce(cancel);
+        int tcpAttempts=0;
         using var handler=new SocketsHttpHandler{UseProxy=false,UseCookies=false,AllowAutoRedirect=false};
         handler.ConnectCallback=async(context,token)=>{
-            if(context.DnsEndPoint.Host!=origin || context.DnsEndPoint.Port!=443)throw new IOException("TRANSFER_ORIGIN_CHANGED");
+            if(context.DnsEndPoint.Host!=TransferHost || context.DnsEndPoint.Port!=443)throw new IOException("TRANSFER_ORIGIN_CHANGED");
             AssertInterface(address,index);
+            Interlocked.Increment(ref tcpAttempts);
             var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp){NoDelay=true};
             try{
                 await socket.ConnectAsync(address,443,token);
                 return new NetworkStream(socket,ownsSocket:true);
             }catch{socket.Dispose();throw;}
         };
-        using var client=new HttpClient(handler){BaseAddress=new Uri("https://"+origin),MaxResponseContentBufferSize=blockSize+1};
+        using var client=new HttpClient(handler){BaseAddress=new Uri("https://"+TransferHost),MaxResponseContentBufferSize=blockSize+1};
         using(var warm=await client.GetAsync("/__down?bytes=1",cancel)){
             warm.EnsureSuccessStatusCode();
             if((await warm.Content.ReadAsByteArrayAsync(cancel)).Length!=1)throw new IOException("TRANSFER_WARMUP_SIZE");
+            string? edge=null;
+            if(warm.Headers.TryGetValues("CF-Ray",out var rays)){
+                var parts=rays.FirstOrDefault()?.Split('-');
+                if(parts is [_,string suffix] && suffix.Length==3 && suffix.All(c=>c is >= 'A' and <= 'Z'))edge=suffix;
+            }
+            Console.WriteLine("WINDOWS_PERF_TRANSFER_ORIGIN="+JsonSerializer.Serialize(new{
+                route,destination_ipv4=address.ToString(),warmup_edge=edge,http_version=warm.Version.ToString()
+            }));
         }
         byte[] payload=RandomNumberGenerator.GetBytes(blockSize);
-        foreach(bool upload in new[]{false,true}){
-            var window=new TransferWindow(upload?"during_upload_requests":"during_download_requests");
-            await Task.WhenAll(Measure(targets,allowedExits,true,index,window),
-                TransferBlocks(client,window,address,index,upload,payload,blocks,cancel));
+        try{
+            foreach(bool upload in new[]{false,true}){
+                var window=new TransferWindow(upload?"during_upload_requests":"during_download_requests");
+                await Task.WhenAll(Measure(targets,allowedExits,tunneled,index,window),
+                    TransferBlocks(client,window,address,index,route,upload,payload,blocks,cancel));
+            }
+        }finally{
+            Console.WriteLine("WINDOWS_PERF_TRANSFER_POOL="+JsonSerializer.Serialize(new{route,tcp_connect_attempts=tcpAttempts}));
         }
     }
 
@@ -251,7 +278,7 @@ internal static class OracleNetworkPerformance
     }
 
     private static async Task TransferBlocks(HttpClient client,TransferWindow window,IPAddress address,int index,
-        bool upload,byte[] payload,int blocks,CancellationToken cancel)
+        string route,bool upload,byte[] payload,int blocks,CancellationToken cancel)
     {
         var durations=new List<double>(blocks);
         var receiveBuffer=new byte[16*1024];
@@ -308,7 +335,7 @@ internal static class OracleNetworkPerformance
                     phase=content?.Copied==true?"body_copied_waiting_for_headers":content?.Started==true?"write_request_body":"connect_or_send_headers";
                 }
                 Console.WriteLine("WINDOWS_PERF_TRANSFER_FAILURE="+JsonSerializer.Serialize(new{
-                    direction=upload?"upload":"download",block=durations.Count+1,phase,
+                    direction=upload?"upload":"download",route,block=durations.Count+1,phase,
                     error_category=error is OperationCanceledException?(cancel.IsCancellationRequested?"series_deadline":blockToken.IsCancellationRequested?"block_deadline":"operation_cancelled"):
                         error.GetType().Name,http_status=status,http_error=(error as HttpRequestException)?.HttpRequestError.ToString(),
                     socket_error=error.GetBaseException() is SocketException socket?socket.SocketErrorCode.ToString():null,
@@ -320,7 +347,7 @@ internal static class OracleNetworkPerformance
         }finally{
             window.Finish(complete);
             Console.WriteLine("WINDOWS_PERF_TRANSFER="+JsonSerializer.Serialize(new{
-                direction=upload?"upload":"download",route="wireguard",blocks_expected=blocks,blocks_completed=durations.Count,
+                direction=upload?"upload":"download",route,blocks_expected=blocks,blocks_completed=durations.Count,
                 bytes_per_block=payload.Length,completion_ms=durations.Select(ms=>Math.Round(ms,2)),
                 goodput_mbps=durations.Select(ms=>Math.Round(payload.Length*8/(ms*1000),2)),complete
             }));

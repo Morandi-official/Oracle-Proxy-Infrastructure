@@ -1,0 +1,66 @@
+--- a/clients/windows/product/core/vendor/github.com/sagernet/sing-box/transport/wireguard/client_bind.go
++++ b/clients/windows/product/core/vendor/github.com/sagernet/sing-box/transport/wireguard/client_bind.go
+@@ -7,0 +8 @@
++	"sync/atomic"
+@@ -33 +34 @@
+-	conn                *wireConn
++	conn                atomic.Pointer[wireConn]
+@@ -55 +56 @@
+-	serverConn := c.conn
++	serverConn := c.conn.Load()
+@@ -71 +72 @@
+-	serverConn = c.conn
++	serverConn = c.conn.Load()
+@@ -85,3 +86,6 @@
+-		c.conn = &wireConn{
+-			PacketConn: bufio.NewUnbindPacketConn(udpConn),
+-			done:       make(chan struct{}),
++		serverConn = &wireConn{
++			conn: udpConn,
++			// Snapshot the same remote address as the connected packet adapter
++			// did, including when a transport later changes its winning port.
++			endpoint: remoteEndpoint(M.SocksaddrFromNet(udpConn.RemoteAddr()).Unwrap().AddrPort()),
++			done:     make(chan struct{}),
+@@ -94 +98 @@
+-		c.conn = &wireConn{
++		serverConn = &wireConn{
+@@ -99 +103,2 @@
+-	return c.conn, nil
++	c.conn.Store(serverConn)
++	return serverConn, nil
+@@ -126 +131 @@
+-	n, addr, err := udpConn.ReadFrom(packets[0])
++	n, endpoint, err := udpConn.readEndpoint(packets[0])
+@@ -142 +147 @@
+-	eps[0] = remoteEndpoint(M.SocksaddrFromNet(addr).Unwrap().AddrPort())
++	eps[0] = endpoint
+@@ -158 +163 @@
+-	common.Close(common.PtrOrNil(c.conn))
++	common.Close(common.PtrOrNil(c.conn.Load()))
+@@ -216,3 +221,16 @@
+-	conn   net.Conn
+-	access sync.Mutex
+-	done   chan struct{}
++	conn     net.Conn
++	endpoint conn.Endpoint
++	access   sync.Mutex
++	done     chan struct{}
++}
++
++func (w *wireConn) readEndpoint(p []byte) (int, conn.Endpoint, error) {
++	if w.conn != nil {
++		n, err := w.conn.Read(p)
++		return n, w.endpoint, err
++	}
++	n, addr, err := w.PacketConn.ReadFrom(p)
++	if err != nil {
++		return n, nil, err
++	}
++	return n, remoteEndpoint(M.SocksaddrFromNet(addr).Unwrap().AddrPort()), nil
+@@ -236 +254,5 @@
+-	w.PacketConn.Close()
++	if w.conn != nil {
++		w.conn.Close()
++	} else {
++		w.PacketConn.Close()
++	}

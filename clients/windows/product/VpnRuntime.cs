@@ -86,7 +86,7 @@ internal sealed partial class VpnRuntime : IDisposable
         _interactiveAuthenticated=_secret.GuiAuthenticated && _secret.UiClients.Any(x=>x.Alive()==true);
         var recent=RecentAccountProof.Restore(_secret.RecentAccountState,_secret.RecentAccountScope,_secret.Token,_secret.PublicKey,
             _secret.UiClients.Any(x=>x.Alive()==true),SessionAuthorized,_secret.ConnectIntent,_secret.RecoveryRequired,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        if(recent is not null){_state=recent;_received=DateTimeOffset.FromUnixTimeSeconds(recent["observed_at"]!.GetValue<long>());_recentAccountRestored=true;_nextRefresh=DateTimeOffset.UtcNow.AddSeconds(1);}
+        if(recent is not null){_state=recent;_received=DateTimeOffset.FromUnixTimeSeconds(recent["observed_at"]!.GetValue<long>());_recentAccountRestored=true;}
         _carriers.Observe(CarrierMemory.Scope(_state));
         _nextNetworkCheck=DateTimeOffset.UtcNow.AddSeconds(1);
         // Independent protected-state reads may overlap the first full image
@@ -152,6 +152,8 @@ internal sealed partial class VpnRuntime : IDisposable
                     if(_probePending?.IsCompleted==true)await CompleteEgressProbe();
                     if(_secret.Token.Length>0 && _refreshPending is null && DateTimeOffset.UtcNow>=_nextRefresh){
                         _refreshToken=_secret.Token;_refreshPending=_api.Call("presence",_refreshToken,new JsonObject{["mode"]=DeviceRegistration.ReportMode(_mode,DeviceRegistration.Confirmed(_state),_secret.RecoveryRequired),["transport"]=_mode=="connected" && _secret.ConnectIntent && NativeGuard.TunPermitted?"wireguard-udp":null});_nextRefresh=DateTimeOffset.UtcNow.AddSeconds(5);
+                        // Publish the completed refresh without waiting for the next maintenance tick.
+                        _=_refreshPending.ContinueWith(_=>_wake.Pulse(),CancellationToken.None,TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
                     }
                     if((_secret.ConnectIntent && !_secret.RecoveryRequired) || Preparing){
                         if(!ActivePolicy()){

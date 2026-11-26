@@ -224,7 +224,8 @@ func verifyOracleParkedEmpty(luid winipcfg.LUID) error {
 	for _, route := range routes {
 		if route.InterfaceLUID == luid { return fmt.Errorf("PARK_ROUTE_NOT_EMPTY") }
 	}
-	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)
+	// Match the native Off-state audit, including adapters without an active IP binding.
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAllInterfaces)
 	if err != nil { return fmt.Errorf("PARK_INTERFACE_QUERY_FAILED") }
 	matches := 0
 	for _, entry := range adapters {

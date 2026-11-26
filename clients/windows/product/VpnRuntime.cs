@@ -412,6 +412,7 @@ internal sealed partial class VpnRuntime : IDisposable
             }
             case "AttachConnect":case "Connect":{
                 _prepareRetryAfter=default;
+                var commandStarted=System.Diagnostics.Stopwatch.GetTimestamp();
                 var timer=System.Diagnostics.Stopwatch.StartNew();_connectMs=null;
                 _switchTimings=new JsonObject{
                     ["adapter_preparing_at_click"]=_holderPreparation is {IsCompleted:false},
@@ -419,7 +420,7 @@ internal sealed partial class VpnRuntime : IDisposable
                 if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
                 // A parked peer has no lease, handshake or continuing account
                 // observations. Acquire an authoritative policy on every reuse.
-                if(_core.Parked || _holderPreparation is not null || _state is null){
+                if(_core.WasParked || _holderPreparation is not null || (!_secret.ConnectIntent && _windowControlled) || _state is null){
                     await Refresh();
                     if(_holderPreparation is not null){
                         // Authorization can overlap any local PnP already in flight.
@@ -434,7 +435,7 @@ internal sealed partial class VpnRuntime : IDisposable
                 if(_core.Running && _mode=="connected" && _secret.ConnectIntent)break;
                 if(_secret.ConnectIntent && _core.Running && NativeGuard.TunPermitted){_nextProbe=default;break;}
                 _windowControlled=command=="AttachConnect" && client?.ProductWindow==true;
-                _clickStarted=System.Diagnostics.Stopwatch.GetTimestamp();_readyMs=null;
+                _clickStarted=commandStarted;_readyMs=null;
                 bool warm=WarmReady;
                 bool reusable=_core.Running && !_core.Parked && !_core.TunActive && ActivePolicy() && _runningProfile==Profile();
                 if(!_secret.ConnectIntent && !reusable && !_core.Parked){await StopCore();_probeFailures=0;}

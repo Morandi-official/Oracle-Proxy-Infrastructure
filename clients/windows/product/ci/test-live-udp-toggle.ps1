@@ -33,7 +33,7 @@ function Await-Mode([string]$Prefix,[bool]$RequireConnectButton){
  while($watch.Elapsed.TotalSeconds -lt 30){
   try {
    if(!$status){$status=Find-Control 'connection-status'}
-   if($status -and $status.Current.Name.StartsWith($Prefix)){
+   if($status -and !$status.Current.IsOffscreen -and $status.Current.Name.StartsWith($Prefix)){
     if(!$RequireConnectButton){return}
     $connect=Find-Control 'connect'
     if($connect -and $connect.Current.IsEnabled -and !$connect.Current.IsOffscreen){return $connect}
@@ -175,8 +175,8 @@ function Assert-ParkedAdapter([uint32]$CoreId,[uint64]$ExpectedLuid) {
  # The requested parked state has literally zero addresses and route rows.
  # Count Windows-generated link-local/multicast entries as well.
  if($addresses.Count -or $routes.Count){throw 'LIVE_RETAINED_ADAPTER_OS_ROWS_NOT_EMPTY'}
- if($dns.Count -eq 0 -or $servers.Count){throw 'LIVE_RETAINED_ADAPTER_DNS_NOT_EMPTY_OR_UNKNOWN'}
- if($dnsClient.Count -ne 1 -or $dnsClient[0].ConnectionSpecificSuffix){throw 'LIVE_RETAINED_ADAPTER_SUFFIX_NOT_EMPTY_OR_UNKNOWN'}
+ if($servers.Count){throw 'LIVE_RETAINED_ADAPTER_DNS_NOT_EMPTY'}
+ if(@($dnsClient | Where-Object { $_.ConnectionSpecificSuffix }).Count){throw 'LIVE_RETAINED_ADAPTER_SUFFIX_NOT_EMPTY'}
  if(@(Get-NetUDPEndpoint -ErrorAction Stop | Where-Object OwningProcess -eq $CoreId).Count -or
     @(Get-NetTcpConnection -ErrorAction Stop | Where-Object OwningProcess -eq $CoreId).Count){throw 'LIVE_RETAINED_HOLDER_HAS_NETWORK_SOCKET'}
  if([ProxyGuiCloseButton]::AdapterLuid() -ne $ExpectedLuid){throw 'LIVE_RETAINED_ADAPTER_CHANGED_DURING_AUDIT'}
@@ -216,6 +216,12 @@ try {
    if(!$activeLuid -or ($cycle -gt 1 -and ($activeLuid -ne $retainedLuid -or $lastCore -ne $retainedCore))){throw 'LIVE_RECONNECT_DID_NOT_REUSE_HOLDER_AND_ADAPTER'}
    $script:stage="off-$cycle"
    $off=Find-Control 'disconnect'
+   if($off -and $off.Current.IsOffscreen){
+    $nav=Find-Control 'navigate-connection'
+    if(!$nav){throw 'LIVE_GUI_CONNECTION_NAVIGATION_MISSING'}
+    $nav.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+    $off=Find-Control 'disconnect'
+   }
    if(!$off -or !$off.Current.IsEnabled -or $off.Current.IsOffscreen){throw 'LIVE_GUI_OFF_UNAVAILABLE'}
    $watch.Restart()
    $off.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()

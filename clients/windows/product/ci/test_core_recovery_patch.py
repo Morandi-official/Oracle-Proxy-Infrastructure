@@ -276,7 +276,7 @@ func localRoute4(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,Destinat
 import "fmt"
 type LUID uint64
 const AF_UNSPEC=0
-const GAAFlagIncludeAll=1
+const GAAFlagIncludeAllInterfaces=0x100
 type row struct { InterfaceLUID LUID }
 type adapter struct {
     LUID LUID
@@ -295,7 +295,10 @@ func verifyOracleRecoveryIdentity(luid LUID) error {
 }
 func GetUnicastIPAddressTable(int)([]row,error){return ips,ipErr}
 func GetIPForwardTable2(int)([]row,error){return routes,routeErr}
-func GetAdaptersAddresses(int,int)([]*adapter,error){return entries,adapterErr}
+func GetAdaptersAddresses(family,flags int)([]*adapter,error){
+    if family!=AF_UNSPEC || flags!=GAAFlagIncludeAllInterfaces {return nil,fmt.Errorf("unexpected enumeration scope")}
+    return entries,adapterErr
+}
 '''
         tests = '''package parked
 import ("fmt"; "testing")

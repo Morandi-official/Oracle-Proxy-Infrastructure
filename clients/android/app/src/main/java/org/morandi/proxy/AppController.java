@@ -35,6 +35,7 @@ public final class AppController {
     private static final long RESTORE_INTERVAL = 5_000;
     private static final long EXIT_CHECK_INTERVAL = 45_000;
     private static final long POLICY_TIMEOUT = 90_000;
+    private static final long CONSENT_POLICY_MAX_AGE_MS = 5_000;
     private static final long SESSION_EXTENSION = TimeUnit.DAYS.toSeconds(30);
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT);
     private static AppController instance;
@@ -71,10 +72,18 @@ public final class AppController {
 
     private volatile State visible;
     private volatile LoginTiming lastLoginTiming;
+    private ConsentPolicy consentPolicy;
 
     record LoginTiming(long queueMs, long identityMs, long authenticateMs, long sessionMs) {}
 
-    private record ConnectionPolicy(JSONObject state, long requestMs) {}
+    private record ConnectionPolicy(JSONObject state, long startedAt, long requestMs) {
+        boolean freshForConsent() {
+            return SystemClock.elapsedRealtime() - startedAt <= CONSENT_POLICY_MAX_AGE_MS;
+        }
+    }
+
+    private record ConsentPolicy(long requested, String session, JSONObject previousState,
+                                 Future<ConnectionPolicy> read) {}
 
     LoginTiming lastLoginTiming() {
         return lastLoginTiming;
@@ -230,23 +239,60 @@ public final class AppController {
         });
     }
 
-    public void reportConsentDenied() {
+    long prepareVpnConsent() {
+        long requested = intent.incrementAndGet();
         worker.execute(() -> {
-            if ("disconnected".equals(mode) || "protected".equals(mode)) {
+            if (requested != intent.get()) {
+                return;
+            }
+            discardConsentPolicy();
+            if (registered() && !token.isEmpty() && tokenExpiresAt > epochSeconds()) {
+                String session = token;
+                // This same-click HTTPS read only prepares policy. Android consent
+                // still gates service startup, routing and every exit probe.
+                Future<ConnectionPolicy> read = presenceWorker.submit(() -> {
+                    if (requested != intent.get()) {
+                        throw new IOException("VPN_CONNECT_CANCELLED");
+                    }
+                    return requestConnectionPolicy(session);
+                });
+                consentPolicy = new ConsentPolicy(requested, session, accountState, read);
+            }
+            engine.prepareLocalComponents();
+        });
+        return requested;
+    }
+
+    void finishVpnConsent(long consentRequest, boolean granted) {
+        long previous = intent.get();
+        // Restoring an activity in a new process can return a valid system result
+        // without any in-memory prefetch. The attempt uses a normal fresh read.
+        if ((previous != 0 && consentRequest != 0 && previous != consentRequest)
+                || !intent.compareAndSet(previous, previous + 1)) {
+            return;
+        }
+        long requested = previous + 1;
+        long requestedAt = SystemClock.elapsedRealtime();
+        worker.execute(() -> {
+            if (requested != intent.get()) {
+                return;
+            }
+            if (granted && registered() && !token.isEmpty()) {
+                connectInternal(requested, requestedAt, consentRequest);
+                return;
+            }
+            discardConsentPolicy();
+            if (!granted && ("disconnected".equals(mode) || "protected".equals(mode))) {
                 message = "系统未授权 VPN。需要连接时，请允许 Android 的 VPN 请求。";
                 publish();
             }
         });
     }
 
-    void prepareVpnConsent() {
-        worker.execute(engine::prepareLocalComponents);
-    }
-
     public void connect() {
         long requestedAt = SystemClock.elapsedRealtime();
         long requested = intent.incrementAndGet();
-        worker.execute(() -> connectInternal(requested, requestedAt));
+        worker.execute(() -> connectInternal(requested, requestedAt, 0));
     }
 
     private volatile ConnectionTiming lastConnectTiming;
@@ -257,6 +303,7 @@ public final class AppController {
         final long queueMs;
         final long preparationMs;
         final long policyWaitMs;
+        final long consentPolicyAgeMs;
         final long backendWaitMs;
         final long serviceWaitMs;
         final long nativeStartMs;
@@ -277,12 +324,13 @@ public final class AppController {
         final Network verifiedUnderlay;
 
         ConnectionTiming(long totalMs, long policyMs, long queueMs, long preparationMs,
-                         long policyWaitMs, TunnelEngine.AttemptTiming attempt) {
+                         long policyWaitMs, long consentPolicyAgeMs, TunnelEngine.AttemptTiming attempt) {
             this.totalMs = totalMs;
             this.policyMs = policyMs;
             this.queueMs = queueMs;
             this.preparationMs = preparationMs;
             this.policyWaitMs = policyWaitMs;
+            this.consentPolicyAgeMs = consentPolicyAgeMs;
             this.backendWaitMs = attempt.backendWaitMs;
             this.serviceWaitMs = attempt.serviceWaitMs;
             this.nativeStartMs = attempt.nativeStartMs;
@@ -308,7 +356,7 @@ public final class AppController {
         return lastConnectTiming;
     }
 
-    private void connectInternal(long requested, long requestedAt) {
+    private void connectInternal(long requested, long requestedAt, long consentRequest) {
         if (requested != intent.get() || token.isEmpty() || "connected".equals(mode)) {
             return;
         }
@@ -321,11 +369,10 @@ public final class AppController {
         Future<ConnectionPolicy> policy = null;
         try {
             String session = requirePolicySession();
-            policy = connectionPolicyWorker.submit(() -> {
-                long policyStarted = SystemClock.elapsedRealtime();
-                JSONObject update = api.call("state", session, null);
-                return new ConnectionPolicy(update, SystemClock.elapsedRealtime() - policyStarted);
-            });
+            ConnectionPolicy freshPolicy = consumeConsentPolicy(consentRequest, session);
+            if (freshPolicy == null) {
+                policy = connectionPolicyWorker.submit(() -> requestConnectionPolicy(session));
+            }
             // Android service setup and the fresh HTTPS request can proceed concurrently.
             // The worker still applies the response before activating the TUN.
             long preparationStarted = SystemClock.elapsedRealtime();
@@ -334,11 +381,19 @@ public final class AppController {
             if (requested != intent.get()) {
                 return;
             }
-            ConnectionPolicy freshPolicy = awaitConnectionPolicy(policy);
+            if (freshPolicy != null && !freshPolicy.freshForConsent()) {
+                freshPolicy = null;
+                policy = connectionPolicyWorker.submit(() -> requestConnectionPolicy(session));
+            }
+            if (freshPolicy == null) {
+                freshPolicy = awaitConnectionPolicy(policy);
+            }
             long policyWaitMs = SystemClock.elapsedRealtime() - policyWaitStarted;
             if (requested != intent.get()) {
                 return;
             }
+            long consentPolicyAgeMs = policy == null
+                    ? SystemClock.elapsedRealtime() - freshPolicy.startedAt() : -1;
             applyPolicy(freshPolicy.state());
             if (!registered() || tunnel() == null) {
                 throw new ClientApi.ApiError("DEVICE_CONFIRMATION_REQUIRED");
@@ -372,7 +427,7 @@ public final class AppController {
             lastConnectTiming = new ConnectionTiming(
                     SystemClock.elapsedRealtime() - requestedAt, freshPolicy.requestMs(),
                     startedAt - requestedAt, policyWaitStarted - preparationStarted,
-                    policyWaitMs, result.timing);
+                    policyWaitMs, consentPolicyAgeMs, result.timing);
             mode = "connected";
             verifyAfter = SystemClock.elapsedRealtime() + EXIT_CHECK_INTERVAL;
             reportPresence("connected");
@@ -389,6 +444,43 @@ public final class AppController {
             }
             busy = false;
             publish();
+        }
+    }
+
+    private ConnectionPolicy requestConnectionPolicy(String session) throws Exception {
+        long startedAt = SystemClock.elapsedRealtime();
+        JSONObject update = api.call("state", session, null);
+        return new ConnectionPolicy(update, startedAt, SystemClock.elapsedRealtime() - startedAt);
+    }
+
+    private ConnectionPolicy consumeConsentPolicy(long requested, String session) throws InterruptedException {
+        ConsentPolicy prepared = consentPolicy;
+        if (prepared == null) {
+            return null;
+        }
+        try {
+            // A pending or expired speculative request must never delay the regular
+            // post-consent read. Reuse only a response started within five seconds,
+            // for this exact click/session with no intervening account update.
+            if (prepared.requested() == requested && prepared.session().equals(session)
+                    && prepared.previousState() == accountState && prepared.read().isDone()) {
+                ConnectionPolicy policy = awaitConnectionPolicy(prepared.read());
+                return policy.freshForConsent() ? policy : null;
+            }
+        } catch (InterruptedException interrupted) {
+            throw interrupted;
+        } catch (Exception ignored) {
+            // A prefetch failure is handled by the ordinary authorized read.
+        } finally {
+            discardConsentPolicy();
+        }
+        return null;
+    }
+
+    private void discardConsentPolicy() {
+        if (consentPolicy != null) {
+            consentPolicy.read().cancel(true);
+            consentPolicy = null;
         }
     }
 
@@ -640,6 +732,7 @@ public final class AppController {
     }
 
     private boolean stopEngine() {
+        discardConsentPolicy();
         try {
             engine.disconnect();
             if (engine.isUp()) {

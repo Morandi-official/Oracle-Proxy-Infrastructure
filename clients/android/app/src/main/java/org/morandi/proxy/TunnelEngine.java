@@ -7,9 +7,13 @@ import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.net.RouteInfo;
 import android.net.VpnService;
+import android.os.Build;
+import android.os.Process;
 import android.os.SystemClock;
 
+import com.wireguard.android.backend.BackendException;
 import com.wireguard.android.backend.GoBackend;
 import com.wireguard.android.backend.Statistics;
 import com.wireguard.android.backend.Tunnel;
@@ -21,12 +25,13 @@ import com.wireguard.crypto.KeyPair;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -204,7 +209,9 @@ public final class TunnelEngine {
 
     public synchronized Result connect(JSONObject payload, String privateKey, int preferredPort,
                                        Callback callback) throws IOException {
-        if (VpnService.prepare(context) != null) {
+        // Preparation already checked consent. GoBackend checks it again
+        // immediately before creating the TUN for every native UP.
+        if ((preparedServiceDeadline == 0 || up) && VpnService.prepare(context) != null) {
             throw new IOException("VPN_PERMISSION_REQUIRED");
         }
         TunnelProfile target = TunnelProfile.read(payload, preferredPort, allowPrivateTestAddresses);
@@ -265,9 +272,15 @@ public final class TunnelEngine {
                     // If Android rejected the early launch, use the normal
                     // foreground-service start after authorization has completed.
                     disconnect();
+                    if (VpnService.prepare(context) != null) {
+                        throw new IOException("VPN_PERMISSION_REQUIRED");
+                    }
                     ProxyVpnService.awaitStart(ProxyVpnService.requestStart(context), callback);
                 }
                 serviceDeadline = 0;
+                if (callback.cancelled()) {
+                    throw new IOException("VPN_CONNECT_CANCELLED");
+                }
                 long nativeStarted = SystemClock.elapsedRealtime();
                 timing.serviceWaitMs = nativeStarted - serviceStarted;
                 timing.nativeActivationElapsedMs = nativeStarted;
@@ -298,9 +311,14 @@ public final class TunnelEngine {
                 trace("candidate error " + error.getClass().getSimpleName());
                 disconnect();
                 serviceDeadline = 0;
-                if (error instanceof IOException &&
-                        "VPN_SERVICE_START_FAILED".equals(error.getMessage())) {
-                    throw new IOException("VPN_SERVICE_START_FAILED");
+                if (error instanceof BackendException backendError
+                        && backendError.getReason() == BackendException.Reason.VPN_NOT_AUTHORIZED) {
+                    throw new IOException("VPN_PERMISSION_REQUIRED");
+                }
+                if (error instanceof IOException
+                        && ("VPN_PERMISSION_REQUIRED".equals(error.getMessage())
+                        || "VPN_SERVICE_START_FAILED".equals(error.getMessage()))) {
+                    throw new IOException(error.getMessage());
                 }
                 continue;
             }
@@ -470,11 +488,10 @@ public final class TunnelEngine {
             return null;
         }
         timing.networkBindingMs = SystemClock.elapsedRealtime() - bindingStarted;
-        changes.close();
         long proofStarted = SystemClock.elapsedRealtime();
         timing.networkWaitMs = proofStarted - detectionStarted;
         trace("Android VPN network ready");
-        Result result = verifyExits(target, candidate, vpn, probeDeadline, callback, timing);
+        Result result = verifyExits(target, candidate, vpn, probeDeadline, callback, timing, changes);
         if (result != null) {
             timing.exitProofMs = SystemClock.elapsedRealtime() - proofStarted;
         }
@@ -548,7 +565,8 @@ public final class TunnelEngine {
     }
 
     private Result verifyExits(TunnelProfile target, TunnelProfile.Candidate candidate, Network vpn,
-                               long probeDeadline, Callback callback, AttemptTiming timing)
+                               long probeDeadline, Callback callback, AttemptTiming timing,
+                               NetworkChanges changes)
             throws InterruptedException {
         boolean dualStack = !target.ipv6Exit.isEmpty();
         ExecutorService executor = Executors.newFixedThreadPool(dualStack ? 2 : 1);
@@ -559,6 +577,7 @@ public final class TunnelEngine {
         Future<FamilyProof> v6 = !dualStack ? null : completed.submit(
                 () -> verifyFamily(vpn, target.ipv6Exit, true, probeDeadline, startedAt, callback));
         try {
+            changes.close();
             FamilyProof ipv4 = null;
             FamilyProof ipv6 = null;
             while (up && !cancelled(callback)) {
@@ -652,22 +671,39 @@ public final class TunnelEngine {
 
     private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback,
                                  Network previousNetwork, NetworkChanges changes) throws InterruptedException {
+        long nextReadback = 0;
         while (up && !cancelled(callback)) {
-            Network ready = findNetwork(target, previousNetwork);
+            Network ready = changes.matching(target, previousNetwork);
             if (ready != null) {
                 return ready;
             }
-            long remaining = deadline - SystemClock.elapsedRealtime();
-            if (remaining <= 0) {
+            long now = SystemClock.elapsedRealtime();
+            if (now >= deadline) {
                 break;
             }
-            changes.await(Math.min(remaining, CANCELLATION_CHECK_MS));
+            if (now >= nextReadback) {
+                // Some devices omit or delay VPN callback metadata. Read back
+                // the same checks without polling Binder on every callback.
+                ready = findNetwork(target, previousNetwork);
+                if (ready != null) {
+                    return ready;
+                }
+                nextReadback = SystemClock.elapsedRealtime() + CANCELLATION_CHECK_MS;
+                continue;
+            }
+            changes.await(Math.min(deadline, nextReadback) - now);
         }
         return null;
     }
 
+    private static final class NetworkMetadata {
+        NetworkCapabilities capabilities;
+        LinkProperties links;
+    }
+
     private final class NetworkChanges extends ConnectivityManager.NetworkCallback implements AutoCloseable {
         private final Semaphore changes = new Semaphore(0);
+        private final Map<Network, NetworkMetadata> available = new HashMap<>();
         private boolean watching;
 
         NetworkChanges() {
@@ -690,24 +726,46 @@ public final class TunnelEngine {
             }
         }
 
-        @Override public void onAvailable(Network network) {
+        @Override public synchronized void onAvailable(Network network) {
+            available.put(network, new NetworkMetadata());
             signal();
         }
 
-        @Override public void onLinkPropertiesChanged(Network network, LinkProperties links) {
-            signal();
+        @Override public synchronized void onLinkPropertiesChanged(Network network, LinkProperties links) {
+            NetworkMetadata metadata = available.get(network);
+            if (metadata != null) {
+                metadata.links = links;
+                signal();
+            }
         }
 
-        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
-            signal();
+        @Override public synchronized void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+            NetworkMetadata metadata = available.get(network);
+            if (metadata != null) {
+                metadata.capabilities = capabilities;
+                signal();
+            }
         }
 
         @Override public void onBlockedStatusChanged(Network network, boolean blocked) {
             signal();
         }
 
-        @Override public void onLost(Network network) {
+        @Override public synchronized void onLost(Network network) {
+            available.remove(network);
             signal();
+        }
+
+        synchronized Network matching(TunnelProfile target, Network previousNetwork) {
+            for (Map.Entry<Network, NetworkMetadata> entry : available.entrySet()) {
+                NetworkMetadata metadata = entry.getValue();
+                if (!entry.getKey().equals(previousNetwork)
+                        && isCandidateVpn(metadata.capabilities)
+                        && matchesRoutesAndAddresses(metadata.links, target)) {
+                    return entry.getKey();
+                }
+            }
+            return null;
         }
 
         void await(long timeoutMs) throws InterruptedException {
@@ -729,29 +787,58 @@ public final class TunnelEngine {
     private Network findNetwork(TunnelProfile target, Network previousNetwork) {
         // Use this VPN's new network and profile, not the underlying Android default.
         Network active = connectivity.getActiveNetwork();
-        if (active != null && !active.equals(previousNetwork) && matches(active, target.interfaceAddresses)) {
+        if (active != null && !active.equals(previousNetwork) && matches(active, target)) {
             return active;
         }
         for (Network candidate : connectivity.getAllNetworks()) {
-            if (!candidate.equals(previousNetwork) && matches(candidate, target.interfaceAddresses)) {
+            if (!candidate.equals(active) && !candidate.equals(previousNetwork) && matches(candidate, target)) {
                 return candidate;
             }
         }
         return null;
     }
 
-    private boolean matches(Network network, Set<InetAddress> addresses) {
+    private boolean matches(Network network, TunnelProfile target) {
         NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
-        LinkProperties links = connectivity.getLinkProperties(network);
-        if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                || links == null) {
+        return isCandidateVpn(capabilities)
+                && matchesRoutesAndAddresses(connectivity.getLinkProperties(network), target);
+    }
+
+    private static boolean isCandidateVpn(NetworkCapabilities capabilities) {
+        if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
             return false;
         }
-        Set<InetAddress> found = new HashSet<>();
-        for (LinkAddress address : links.getLinkAddresses()) {
-            found.add(address.getAddress());
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return true;
         }
-        return found.containsAll(addresses);
+        int owner = capabilities.getOwnerUid();
+        return owner < 0 || owner == Process.myUid();
+    }
+
+    private static boolean matchesRoutesAndAddresses(LinkProperties links, TunnelProfile target) {
+        if (links == null) {
+            return false;
+        }
+        List<LinkAddress> actual = links.getLinkAddresses();
+        for (InetAddress expected : target.interfaceAddresses) {
+            int prefix = expected instanceof Inet4Address ? 32 : 128;
+            if (actual.stream().noneMatch(address -> expected.equals(address.getAddress())
+                    && address.getPrefixLength() == prefix)) {
+                return false;
+            }
+        }
+        boolean ipv4Default = false;
+        boolean ipv6Default = false;
+        for (RouteInfo route : links.getRoutes()) {
+            if (route.isDefaultRoute()) {
+                if (route.getDestination().getAddress() instanceof Inet4Address) {
+                    ipv4Default = true;
+                } else {
+                    ipv6Default = true;
+                }
+            }
+        }
+        return ipv4Default && ipv6Default == !target.ipv6Exit.isEmpty();
     }
 
     private static boolean cancelled(Callback callback) {

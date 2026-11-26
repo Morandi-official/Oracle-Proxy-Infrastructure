@@ -1,4 +1,4 @@
-name: Check exact rc47 production Windows download path
+name: Compare the released WireGuard Windows 0.1.0 path
 on:
   pull_request:
     paths: ['ops/windows-throughput/**', '.github/workflows/windows-throughput-review.yml']
@@ -12,7 +12,7 @@ jobs:
   sample:
     runs-on: windows-2022
     environment: ${{ github.event_name == 'push' && 'windows-client-acceptance' || 'windows-product-build' }}
-    timeout-minutes: 9
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,9 +26,9 @@ jobs:
         if: github.event_name == 'push'
         with:
           github-token: ${{ github.token }}
-          run-id: 45341845901
-          name: Proxy-0.3.0-rc47-win-x64-unsigned-acceptance-candidate
-          path: dist/rc47-evidence
+          run-id: 45615984671
+          name: Proxy-WireGuard-0.1.0-win-x64-unsigned-acceptance-candidate
+          path: dist/wg010-evidence
       - name: Measure the accepted Windows bundle against the production endpoint
         if: github.event_name == 'push'
         shell: pwsh
@@ -39,13 +39,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){throw 'Preexisting product service refused'}
           if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting product directory refused'}
-          $evidence = Get-Content dist/rc47-evidence/BUILD.json -Raw | ConvertFrom-Json
-          if($evidence.source_revision -ne 'd384fd077a992d6713de41c5ded766f463fc4f63' -or !$evidence.real_oracle_acceptance_passed){throw 'Wrong accepted build'}
-          $package = 'Proxy-0.3.0-rc47-win-x64-d384fd077a99.zip'
-          $checksum = (Get-Content dist/rc47-evidence/SHA256SUMS.txt | Where-Object { $_.EndsWith("  $package") })
-          if(!$checksum -or (Get-FileHash "dist/rc47-evidence/$package").Hash -ne ($checksum -split '  ')[0]){throw 'Artifact hash mismatch'}
-          Expand-Archive "dist/rc47-evidence/$package" -DestinationPath dist/rc47-payload
-          $exe = (Resolve-Path dist/rc47-payload/Proxy.exe).Path
+          $evidence = Get-Content dist/wg010-evidence/BUILD.json -Raw | ConvertFrom-Json
+          if($evidence.source_revision -ne '0045ed5eeb91ad41f41b860cb4b549949b864b8c' -or !$evidence.real_oracle_acceptance_passed){throw 'Wrong accepted build'}
+          $package = 'Proxy-0.1.0-win-x64-0045ed5eeb91.zip'
+          $checksum = (Get-Content dist/wg010-evidence/SHA256SUMS.txt | Where-Object { $_.EndsWith("  $package") })
+          if(!$checksum -or (Get-FileHash "dist/wg010-evidence/$package").Hash -ne ($checksum -split '  ')[0]){throw 'Artifact hash mismatch'}
+          Expand-Archive "dist/wg010-evidence/$package" -DestinationPath dist/wg010-payload
+          $exe = (Resolve-Path dist/wg010-payload/Proxy.exe).Path
           $owner = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           try {
             $setup = Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru

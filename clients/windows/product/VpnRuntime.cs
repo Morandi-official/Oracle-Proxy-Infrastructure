@@ -513,6 +513,7 @@ internal sealed partial class VpnRuntime : IDisposable
         try{
             _stage="DISCONNECT";
             if(keepPrepared)await StopAccountObservation();
+            _disconnectTimings["account_observation_stopped_ms"]=timer.ElapsedMilliseconds;
             bool keep=keepPrepared && !_secret.RecoveryRequired && SessionAuthorized && DeviceRegistration.Confirmed(_state) &&
                 _state?["account"]?["status"]?.GetValue<string>()=="active" && _core.Running && _core.StandbyCapable;
             _stage="DISCONNECT_DEACTIVATE";

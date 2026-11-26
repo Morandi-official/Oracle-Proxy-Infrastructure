@@ -27,32 +27,41 @@ internal static class BrowserRouteAcceptance
         var start=new ProcessStartInfo(edge){UseShellExecute=false,CreateNoWindow=true};
         foreach(string arg in new[]{"--headless=new","--no-proxy-server","--disable-extensions","--no-first-run","--disable-background-networking","--disable-component-update","--remote-debugging-port=0","--user-data-dir="+profile,"about:blank"})start.ArgumentList.Add(arg);
         using var browser=Process.Start(start)??throw new IOException("BROWSER_START_FAILED");
+        string phase="DEBUG_PORT",host="local";
         try{
             string portFile=Path.Combine(profile,"DevToolsActivePort");int port=0;
             for(int i=0;i<150;i++){try{if(File.Exists(portFile)&&int.TryParse(File.ReadLines(portFile).FirstOrDefault(),out port)&&port>1024)break;}catch(IOException){}await Task.Delay(100);}
             if(port<=1024)throw new IOException("BROWSER_DEBUG_NOT_READY");
+            phase="DEBUG_ATTACH";
             using var http=new HttpClient(new HttpClientHandler{UseProxy=false}){Timeout=TimeSpan.FromSeconds(5)};
             var pages=JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{port}/json/list"))!.AsArray();
             var uri=new Uri(pages.OfType<JsonObject>().First(x=>x["type"]?.GetValue<string>()=="page")["webSocketDebuggerUrl"]!.GetValue<string>());
             if(!uri.IsLoopback || uri.Port!=port)throw new IOException("BROWSER_DEBUG_IDENTITY_INVALID");
             using var ws=new ClientWebSocket();await ws.ConnectAsync(uri,CancellationToken.None);int id=1;
             foreach(string url in new[]{"https://www.ipcece.com/ip/","https://browserleaks.com/webrtc","https://vpn-admin.morandi.dpdns.org/privacy-check/"}){
+                host=new Uri(url).Host;phase="NAVIGATE";
                 var nav=await Cdp(ws,id++,"Page.navigate",new(){["url"]=url});
                 string error=nav["errorText"]?.GetValue<string>()??"";
-                if(error.Length>0){Console.WriteLine("BROWSER_HOST="+new Uri(url).Host+" ERROR="+(error.StartsWith("net::ERR_")?error:"navigation_failed"));throw new IOException("BROWSER_NAVIGATION_FAILED");}
+                if(error.Length>0){
+                    bool fixedCode=error.Length<=80 && error.StartsWith("net::ERR_",StringComparison.Ordinal) && error[9..].All(c=>c is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_');
+                    Console.WriteLine("BROWSER_HOST="+host+" ERROR="+(fixedCode?error:"navigation_failed"));
+                    throw new IOException("BROWSER_NAVIGATION_FAILED");
+                }
+                phase="DOCUMENT_READY";
                 bool ready=false;
                 for(int n=0;n<80;n++){
                     var page=await Cdp(ws,id++,"Runtime.evaluate",new(){["expression"]="JSON.stringify({url:location.href,ready:document.readyState})",["returnByValue"]=true});
                     var state=JsonNode.Parse(page["result"]!["value"]!.GetValue<string>())!;
                     string actual=state["url"]!.GetValue<string>();
                     if(actual.StartsWith("chrome-error:") || actual.StartsWith("edge-error:"))throw new IOException("BROWSER_ERROR_DOCUMENT");
-                    if(Uri.TryCreate(actual,UriKind.Absolute,out var actualUri)&&actualUri.Host==new Uri(url).Host&&state["ready"]?.GetValue<string>()=="complete"){ready=true;break;}
+                    if(Uri.TryCreate(actual,UriKind.Absolute,out var actualUri)&&actualUri.Host==host&&state["ready"]?.GetValue<string>()=="complete"){ready=true;break;}
                     await Task.Delay(250);
                 }
                 if(!ready)throw new IOException("BROWSER_DOCUMENT_NOT_READY");
-                Console.WriteLine("BROWSER_DOCUMENT_HOST="+new Uri(url).Host+" LOADED=PASS");
+                Console.WriteLine("BROWSER_DOCUMENT_HOST="+host+" LOADED=PASS");
             }
             // Actual ICE gathering in ordinary Edge, no camera/microphone grant.
+            phase="ICE_GATHER";
             var ice=await Cdp(ws,id++,"Runtime.evaluate",new(){["awaitPromise"]=true,["returnByValue"]=true,["expression"]="""
                 new Promise(resolve=>{const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.cloudflare.com:3478'},{urls:'stun:stun.l.google.com:19302'}]});const ips=[];let done=false;function finish(){if(done)return;done=true;pc.close();resolve(ips);}pc.onicecandidate=e=>{if(!e.candidate){finish();return;}if(e.candidate.type==='srflx'&&e.candidate.address)ips.push(e.candidate.address);};pc.createDataChannel('probe');pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(finish);setTimeout(finish,12000);})
                 """});
@@ -61,6 +70,14 @@ internal static class BrowserRouteAcceptance
             Console.WriteLine("BROWSER_WEBRTC_PUBLIC_CANDIDATE_COUNT="+addresses.Length);
             if(!all)throw new IOException("BROWSER_WEBRTC_UNEXPECTED_PUBLIC_EXIT");
             Console.WriteLine("BROWSER_WEBRTC="+(addresses.Length>0?"VPN_PUBLIC_EXIT_VERIFIED":"INCONCLUSIVE_NO_PUBLIC_CANDIDATES"));
+        }catch(Exception error){
+            string category=error.Message switch {
+                "BROWSER_FRAME_INVALID" or "BROWSER_CDP_FAILED" or "BROWSER_DEBUG_NOT_READY" or "BROWSER_DEBUG_IDENTITY_INVALID" or
+                "BROWSER_NAVIGATION_FAILED" or "BROWSER_ERROR_DOCUMENT" or "BROWSER_DOCUMENT_NOT_READY" or "BROWSER_WEBRTC_UNEXPECTED_PUBLIC_EXIT"=>error.Message,
+                _=>error.GetType().Name
+            };
+            Console.WriteLine($"BROWSER_FAILURE_PHASE={phase};HOST={host};CATEGORY={category}");
+            throw;
         }finally{
             if(!browser.HasExited){browser.Kill(true);await browser.WaitForExitAsync();}
             try{Directory.Delete(profile,true);}catch(IOException){}catch(UnauthorizedAccessException){}

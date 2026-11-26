@@ -115,16 +115,36 @@ func PrepareOracleAdapter() error {
 // Called only after fresh CreateAdapter, or this process's own session End.
 // The read-only empty audit never grants ownership and never opens by name.
 func oraclePreparedDNSAbsent(luid winipcfg.LUID) bool {
-	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)
-	if err != nil { return false }
+	return oraclePreparedDNSProblem(luid) == ""
+}
+
+func oraclePreparedDNSProblem(luid winipcfg.LUID) string {
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAllInterfaces)
+	if err != nil { return "PARK_INTERFACE_QUERY_FAILED" }
 	matches := 0
+	reason := ""
 	for _, entry := range adapters {
-		if entry == nil { return false }
+		if entry == nil { return "PARK_INTERFACE_QUERY_FAILED" }
 		if entry.LUID != luid { continue }
 		matches++
-		if entry.FirstDNSServerAddress != nil || entry.FirstDNSSuffix != nil || entry.DNSSuffix() != "" { return false }
+		reason = oracleAdapterDNSProblem(entry)
 	}
-	return matches == 1
+	if matches != 1 { return "PARK_INTERFACE_QUERY_FAILED" }
+	return reason
+}
+
+func oracleAdapterDNSProblem(entry *winipcfg.IPAdapterAddresses) string {
+	if entry.FirstDNSServerAddress != nil { return "PARK_DNS_SERVER_PRESENT" }
+	if entry.DNSSuffix() != "" { return "PARK_DNS_SUFFIX_PRESENT" }
+	// GAA can return allocated list nodes whose UTF-16 suffix is empty.
+	// Inspect every value, fail closed on an unexpectedly long or cyclic list.
+	visited := 0
+	for suffix := entry.FirstDNSSuffix; suffix != nil; suffix = suffix.Next {
+		if visited >= 256 { return "PARK_DNS_LIST_INVALID" }
+		if suffix.String() != "" { return "PARK_DNS_SUFFIX_PRESENT" }
+		visited++
+	}
+	return ""
 }
 
 func (t *NativeTun) prepareOracleAdapter() error {
@@ -184,14 +204,27 @@ func ParkOracleAdapter() (err error) {
 	// the separate full-table readback below always decides.
 	err = verifyOracleParkedEmpty(luid)
 	if err == nil { return nil }
-	if err.Error() != "PARK_IP_NOT_EMPTY" && err.Error() != "PARK_ROUTE_NOT_EMPTY" { return err }
-	if !oraclePreparedDNSAbsent(luid) { return fmt.Errorf("PARK_DNS_NOT_EMPTY") }
+	if !oracleParkedConfigPresent(err) { return err }
+	dns := oraclePreparedDNSProblem(luid)
+	var clearErr error
+	switch dns {
+	case "":
+	case "PARK_DNS_SERVER_PRESENT", "PARK_DNS_SUFFIX_PRESENT":
+		// Clear only our held creator's fixed GUID. Never change a default DNS
+		// setting or touch another interface. Some drivers reject this write
+		// while disconnected, so require independent readback after admin Down.
+		clearErr = clearOracleParkedDNS(luid)
+		if clearErr != nil && clearErr.Error() != "PARK_DNS4_CLEAR_FAILED" && clearErr.Error() != "PARK_DNS6_CLEAR_FAILED" { return clearErr }
+	default:
+		return fmt.Errorf("%s", dns)
+	}
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
 	if err := luid.FlushIPAddresses(windows.AF_UNSPEC); err != nil { return fmt.Errorf("PARK_IP_QUERY_FAILED") }
 	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
 	_ = luid.FlushRoutes(windows.AF_UNSPEC)
 	err = verifyOracleParkedEmpty(luid)
 	if err == nil { return nil }
-	if err.Error() != "PARK_IP_NOT_EMPTY" && err.Error() != "PARK_ROUTE_NOT_EMPTY" { return err }
+	if !oracleParkedConfigPresent(err) { return err }
 
 	// Windows can preserve or regenerate automatic multicast/local rows
 	// even after an exact flush. Disable only this creator's NDIS interface,
@@ -200,9 +233,42 @@ func ParkOracleAdapter() (err error) {
 	for try := 0; try < 6; try++ {
 		err = verifyOracleParkedEmpty(luid)
 		if err == nil { return nil }
+		if !oracleParkedConfigPresent(err) { return err }
 		if try != 5 { time.Sleep(20 * time.Millisecond) }
 	}
+	if clearErr != nil && (err.Error() == "PARK_DNS_SERVER_PRESENT" || err.Error() == "PARK_DNS_SUFFIX_PRESENT") { return clearErr }
 	return err
+}
+
+func oracleParkedConfigPresent(err error) bool {
+	switch err.Error() {
+	case "PARK_IP_NOT_EMPTY", "PARK_ROUTE_NOT_EMPTY", "PARK_DNS_SERVER_PRESENT", "PARK_DNS_SUFFIX_PRESENT":
+		return true
+	}
+	return false
+}
+
+func clearOracleParkedDNS(luid winipcfg.LUID) error {
+	empty, err := windows.UTF16PtrFromString("")
+	if err != nil { return fmt.Errorf("PARK_DNS4_CLEAR_FAILED") }
+	var firstError error
+	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
+		if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+		settings := &winipcfg.DnsInterfaceSettings{
+			Version: winipcfg.DnsInterfaceSettingsVersion1,
+			Flags: winipcfg.DnsInterfaceSettingsFlagNameserver | winipcfg.DnsInterfaceSettingsFlagSearchList | winipcfg.DnsInterfaceSettingsFlagDomain,
+			NameServer: empty, SearchList: empty, Domain: empty,
+		}
+		reason := "PARK_DNS4_CLEAR_FAILED"
+		if family == windows.AF_INET6 {
+			settings.Flags |= winipcfg.DnsInterfaceSettingsFlagIPv6
+			reason = "PARK_DNS6_CLEAR_FAILED"
+		}
+		if err := winipcfg.SetInterfaceDnsSettings(*generateGUIDByDeviceName("OracleProxy"), settings); err != nil && firstError == nil {
+			firstError = fmt.Errorf("%s", reason)
+		}
+	}
+	return firstError
 }
 
 func VerifyParkedOracleAdapter() error {
@@ -235,9 +301,7 @@ func verifyOracleParkedEmpty(luid winipcfg.LUID) error {
 		if entry.FirstUnicastAddress != nil || entry.FirstAnycastAddress != nil || entry.FirstMulticastAddress != nil {
 			return fmt.Errorf("PARK_IP_NOT_EMPTY")
 		}
-		if entry.FirstDNSServerAddress != nil || entry.FirstDNSSuffix != nil || entry.DNSSuffix() != "" {
-			return fmt.Errorf("PARK_DNS_NOT_EMPTY")
-		}
+		if reason := oracleAdapterDNSProblem(entry); reason != "" { return fmt.Errorf("%s", reason) }
 	}
 	if matches != 1 { return fmt.Errorf("PARK_INTERFACE_QUERY_FAILED") }
 	return verifyOracleRecoveryIdentity(luid)

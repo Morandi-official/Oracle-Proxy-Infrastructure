@@ -278,6 +278,15 @@ static BOOL parked_identity(ULONG64 expected){
  }
  FreeMibTable(table);return ok&&matches==1;
 }
+static BOOL parked_dns_empty(const IP_ADAPTER_ADDRESSES *adapter){
+ if(adapter->FirstDnsServerAddress||(adapter->DnsSuffix&&*adapter->DnsSuffix))return FALSE;
+ ULONG visited=0;
+ for(const IP_ADAPTER_DNS_SUFFIX *suffix=adapter->FirstDnsSuffix;suffix;suffix=suffix->Next){
+  if(visited>=256||suffix->String[0]!=L'\0')return FALSE;
+  visited++;
+ }
+ return TRUE;
+}
 static BOOL parked_adapter_addresses(ULONG64 expected){
  ULONG bytes=15000;
  for(int attempt=0;attempt<3&&bytes>0&&bytes<=8*1024*1024;attempt++){
@@ -290,7 +299,7 @@ static BOOL parked_adapter_addresses(ULONG64 expected){
     if(a->Luid.Value!=expected)continue;
     matches++;
     if(a->FirstUnicastAddress||a->FirstAnycastAddress||a->FirstMulticastAddress||
-       a->FirstDnsServerAddress||a->FirstDnsSuffix||(a->DnsSuffix&&*a->DnsSuffix))empty=FALSE;
+       !parked_dns_empty(a))empty=FALSE;
    }
   }
   HeapFree(GetProcessHeap(),0,adapters);

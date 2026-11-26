@@ -66,12 +66,40 @@ func generateGUIDByDeviceName(name string) {}
         start=vendor.CACHE.index('func oraclePreparedDNSAbsent(')
         end=vendor.CACHE.index('func (t *NativeTun) prepareOracleAdapter()',start)
         helper=vendor.CACHE[start:end].replace('winipcfg.LUID','uint64').replace(
-            'winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAll)','getAdapters()')
-        source='package check\nimport "errors"\ntype entry struct { LUID uint64; FirstDNSServerAddress,FirstDNSSuffix *int; domain string }\nfunc (e *entry) DNSSuffix() string { return e.domain }\nvar rows []*entry\nvar failure error\nfunc getAdapters()([]*entry,error){return rows,failure}\n'+helper
-        tests='package check\nimport "testing"\nfunc TestExactEmptyDNSSnapshot(t *testing.T){\n tests:=[]struct{name string;rows []*entry;err bool;want bool}{\n  {"one clean owned adapter",[]*entry{{LUID:7}},false,true},\n  {"unrelated dirty adapter ignored",[]*entry{{LUID:8,FirstDNSServerAddress:new(int)},{LUID:7}},false,true},\n  {"no owned snapshot",[]*entry{{LUID:8}},false,false},\n  {"duplicate owned snapshots",[]*entry{{LUID:7},{LUID:7}},false,false},\n  {"nil snapshot is ambiguous",[]*entry{nil,{LUID:7}},false,false},\n  {"query failure",nil,true,false},\n  {"DNS server present",[]*entry{{LUID:7,FirstDNSServerAddress:new(int)}},false,false},\n  {"DNS suffix list present",[]*entry{{LUID:7,FirstDNSSuffix:new(int)}},false,false},\n  {"DNS domain present",[]*entry{{LUID:7,domain:"example.invalid"}},false,false},\n }\n for _,test:=range tests {t.Run(test.name,func(t *testing.T){rows=test.rows;failure=nil;if test.err {failure=errors.New("native query")};if got:=oraclePreparedDNSAbsent(7);got!=test.want {t.Fatal("unsafe DNS empty conclusion")}})}\n}\n'
-        # A separate source file supplies errors for the generated native shim.
-        source=source.replace('import "errors"','')
-        tests=tests.replace('import "testing"','import("testing";"errors")')
+            'winipcfg.IPAdapterAddresses','entry').replace(
+            'winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAllInterfaces)','getAdapters()')
+        source='''package check
+type suffix struct {Next *suffix; value string}
+func (s *suffix) String() string { return s.value }
+type entry struct {LUID uint64; FirstDNSServerAddress *int; FirstDNSSuffix *suffix; domain string}
+func (e *entry) DNSSuffix() string {return e.domain}
+var rows []*entry
+var failure error
+func getAdapters()([]*entry,error){return rows,failure}
+'''+helper
+        tests='''package check
+import ("errors";"testing")
+func TestExactEmptyDNSSnapshot(t *testing.T){
+    cycle:=&suffix{};cycle.Next=cycle
+    for _,tc:=range []struct{name string;rows []*entry;err bool;reason string}{
+        {"one clean owned adapter",[]*entry{{LUID:7}},false,""},
+        {"unrelated dirty adapter ignored",[]*entry{{LUID:8,FirstDNSServerAddress:new(int)},{LUID:7}},false,""},
+        {"no owned snapshot",[]*entry{{LUID:8}},false,"PARK_INTERFACE_QUERY_FAILED"},
+        {"duplicate owned snapshots",[]*entry{{LUID:7,FirstDNSServerAddress:new(int)},{LUID:7}},false,"PARK_INTERFACE_QUERY_FAILED"},
+        {"nil snapshot",[]*entry{nil,{LUID:7}},false,"PARK_INTERFACE_QUERY_FAILED"},
+        {"query failure",nil,true,"PARK_INTERFACE_QUERY_FAILED"},
+        {"DNS server",[]*entry{{LUID:7,FirstDNSServerAddress:new(int)}},false,"PARK_DNS_SERVER_PRESENT"},
+        {"blank suffix nodes",[]*entry{{LUID:7,FirstDNSSuffix:&suffix{Next:&suffix{}}}},false,""},
+        {"nonempty trailing suffix",[]*entry{{LUID:7,FirstDNSSuffix:&suffix{Next:&suffix{value:"example.invalid"}}}},false,"PARK_DNS_SUFFIX_PRESENT"},
+        {"DNS suffix cycle",[]*entry{{LUID:7,FirstDNSSuffix:cycle}},false,"PARK_DNS_LIST_INVALID"},
+        {"DNS domain",[]*entry{{LUID:7,domain:"example.invalid"}},false,"PARK_DNS_SUFFIX_PRESENT"},
+    } {
+        rows=tc.rows;failure=nil
+        if tc.err {failure=errors.New("native query")}
+        if got:=oraclePreparedDNSProblem(7);got!=tc.reason || oraclePreparedDNSAbsent(7)!=(tc.reason==""){t.Fatalf("%s: %q",tc.name,got)}
+    }
+}
+'''
         go=shutil.which('go')
         self.assertIsNotNone(go,'Go is required for the native snapshot boundary test')
         with tempfile.TemporaryDirectory() as directory:
@@ -268,10 +296,109 @@ func localRoute4(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,Destinat
                                   text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90)
             self.assertEqual(result.returncode,0,result.stdout)
 
+    def test_park_dns_cleanup_and_down_require_readback_on_same_creator(self):
+        source = vendor.PARKED.split('func ParkOracleAdapter()', 1)[1].split('func VerifyParkedOracleAdapter()', 1)[0]
+        source = 'func ParkOracleAdapter()' + source
+        source = source.replace('windows.', '').replace('winipcfg.', '')
+        declarations = '''package parkflow
+import ("fmt"; "sync"; "time")
+type LUID uint64
+const AF_INET=2
+const AF_INET6=23
+const AF_UNSPEC=0
+const NetIfAdminStatusUp=1
+const NetIfAdminStatusDown=2
+const DnsInterfaceSettingsVersion1=1
+const DnsInterfaceSettingsFlagNameserver=2
+const DnsInterfaceSettingsFlagSearchList=4
+const DnsInterfaceSettingsFlagDomain=32
+const DnsInterfaceSettingsFlagIPv6=1
+type AddressFamily int
+type DnsInterfaceSettings struct {Version,Flags int; NameServer,SearchList,Domain *uint16}
+type creator struct{}
+func (*creator) LUID() uint64{return 7}
+var oracleAdapterMutex sync.Mutex
+var oraclePreparedAdapter *creator
+var oracleStrictlyParked bool
+var initialDNS,currentDNS,downResult string
+var clearFailureFlags,writeCalls,downCalls,identityCalls,failIdentityAt,readbacks int
+var clearImmediately bool
+func UTF16PtrFromString(value string)(*uint16,error){if value!=""{panic("unexpected DNS setting")};return new(uint16),nil}
+func generateGUIDByDeviceName(name string)*int{ if name!="OracleProxy"{panic("unexpected target")};v:=42;return &v}
+func checkLUID(l LUID){if l!=7 {panic("touched other adapter")}}
+func verifyOracleDormantEmpty(l LUID)error{checkLUID(l);return nil}
+func verifyOracleRecoveryIdentity(l LUID)error{
+    checkLUID(l);identityCalls++
+    if failIdentityAt==identityCalls{return fmt.Errorf("ORPHAN_IDENTITY_FAILED")}
+    return nil
+}
+func verifyOracleParkedEmpty(l LUID)error{
+    checkLUID(l);readbacks++;if currentDNS!=""{return fmt.Errorf("%s",currentDNS)};return nil
+}
+func oraclePreparedDNSProblem(l LUID)string{checkLUID(l);return initialDNS}
+func(l LUID) FlushIPAddresses(f int)error{checkLUID(l);if f!=AF_UNSPEC{panic("wrong family")};return nil}
+func(l LUID) FlushRoutes(f int)error{checkLUID(l);if f!=AF_UNSPEC{panic("wrong family")};return nil}
+func SetInterfaceDnsSettings(guid int, s *DnsInterfaceSettings)error{
+    if guid!=42||s.Version!=1||s.NameServer==nil||*s.NameServer!=0||s.SearchList==nil||*s.SearchList!=0||s.Domain==nil||*s.Domain!=0 {panic("unscoped or nonempty write")}
+    wanted:=2|4|32
+    if writeCalls==1{wanted|=1}
+    if wanted!=s.Flags{panic("unexpected DNS flags")}
+    writeCalls++
+    if s.Flags==clearFailureFlags{return fmt.Errorf("write failed")}
+    if writeCalls==2 && clearImmediately{currentDNS=""}
+    return nil
+}
+func setOracleParkedAdmin(l LUID,from,to int)error{
+    checkLUID(l);if from!=1||to!=2{panic("unexpected admin change")};downCalls++;currentDNS=downResult;return nil
+}
+'''
+        cases = '''package parkflow
+import "testing"
+func TestOwnedCleanupAndIndependentVerification(t *testing.T){
+    const server="PARK_DNS_SERVER_PRESENT"
+    const suffix="PARK_DNS_SUFFIX_PRESENT"
+    for _,tc:=range []struct{name,initial,input,afterDown,want string; clearNow bool; failFlags,failAt,writes,disables int}{
+        {"already empty","","","","",false,0,0,0,0},
+        {"configured suffix clears on exact write",suffix,suffix,"", "",true,0,0,2,0},
+        {"default servers cleared by admin-down",server,server,"","",false,0,0,2,1},
+        {"IPv6 clear refused; actual Down still empty",server,server,"","",false,39,0,2,1},
+        {"IPv4 clear refused and still present",server,server,server,"PARK_DNS4_CLEAR_FAILED",false,38,0,2,1},
+        {"IPv6 clear refused and still present",server,server,server,"PARK_DNS6_CLEAR_FAILED",false,39,0,2,1},
+        {"DNS still present despite successful calls",server,server,server,server,false,0,0,2,1},
+        {"malformed DNS while address rows exist","PARK_DNS_LIST_INVALID","PARK_IP_NOT_EMPTY","","PARK_DNS_LIST_INVALID",false,0,0,0,0},
+        {"ambiguous GAA ownership","PARK_INTERFACE_QUERY_FAILED","PARK_IP_NOT_EMPTY","","PARK_INTERFACE_QUERY_FAILED",false,0,0,0,0},
+        {"identity lost before second family",server,server,"","ORPHAN_IDENTITY_FAILED",false,0,2,1,0},
+    }{
+        t.Run(tc.name,func(t *testing.T){
+            oraclePreparedAdapter=&creator{};oracleStrictlyParked=false;initialDNS=tc.initial;currentDNS=tc.input;downResult=tc.afterDown
+            clearImmediately=tc.clearNow;clearFailureFlags=tc.failFlags;failIdentityAt=tc.failAt
+            writeCalls=0;downCalls=0;identityCalls=0;readbacks=0
+            err:=ParkOracleAdapter();got:="";if err!=nil{got=err.Error()}
+            if got!=tc.want || oracleStrictlyParked!=(tc.want=="") || writeCalls!=tc.writes || downCalls!=tc.disables || readbacks==0{
+                t.Fatalf("got %q parked=%v writes=%d disables=%d independent-readbacks=%d",got,oracleStrictlyParked,writeCalls,downCalls,readbacks)
+            }
+        })
+    }
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'park.go').write_text(declarations + source)
+            (root / 'park_test.go').write_text(cases)
+            env = dict(os.environ, GO111MODULE='off', GOWORK='off', GOPROXY='off', GOTOOLCHAIN='local')
+            for key in ('GOOS', 'GOARCH'):
+                env.pop(key, None)
+            result = subprocess.run(['go', 'test', 'park.go', 'park_test.go'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_parked_adapter_requires_zero_native_tables_and_complete_identity(self):
         start = vendor.PARKED.index('func verifyOracleParkedEmpty(')
         end = vendor.PARKED.index('var oracleSetIfEntry', start)
-        source = vendor.PARKED[start:end].replace('winipcfg.', '').replace('windows.', '')
+        dns_start = vendor.CACHE.index('func oracleAdapterDNSProblem(')
+        dns_end = vendor.CACHE.index('func (t *NativeTun) prepareOracleAdapter()', dns_start)
+        source = (vendor.CACHE[dns_start:dns_end] + vendor.PARKED[start:end]).replace(
+            'winipcfg.IPAdapterAddresses', 'adapter').replace('winipcfg.', '').replace('windows.', '')
         harness = '''package parked
 import "fmt"
 type LUID uint64
@@ -280,9 +407,12 @@ const GAAFlagIncludeAllInterfaces=0x100
 type row struct { InterfaceLUID LUID }
 type adapter struct {
     LUID LUID
-    FirstUnicastAddress, FirstAnycastAddress, FirstMulticastAddress, FirstDNSServerAddress, FirstDNSSuffix *int
+    FirstUnicastAddress, FirstAnycastAddress, FirstMulticastAddress, FirstDNSServerAddress *int
+    FirstDNSSuffix *suffixNode
     suffix string
 }
+type suffixNode struct {Next *suffixNode; value string}
+func (s *suffixNode) String() string {return s.value}
 func (a *adapter) DNSSuffix() string {return a.suffix}
 var ips,routes []row
 var entries []*adapter
@@ -313,7 +443,8 @@ func TestLiteralOff(t *testing.T) {
         {"anycast metadata",func(){entries[0].FirstAnycastAddress=&value},false},
         {"multicast membership",func(){entries[0].FirstMulticastAddress=&value},false},
         {"dns server",func(){entries[0].FirstDNSServerAddress=&value},false},
-        {"dns suffix list",func(){entries[0].FirstDNSSuffix=&value},false},
+        {"blank suffix list",func(){entries[0].FirstDNSSuffix=&suffixNode{Next:&suffixNode{}}},true},
+        {"dns suffix list",func(){entries[0].FirstDNSSuffix=&suffixNode{Next:&suffixNode{value:"local"}}},false},
         {"dns suffix",func(){entries[0].suffix="example.test"},false},
         {"missing exact record",func(){entries=nil},false},
         {"duplicate exact record",func(){entries=append(entries,entries[0])},false},

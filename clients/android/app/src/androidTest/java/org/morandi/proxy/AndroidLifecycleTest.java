@@ -44,6 +44,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 @RunWith(AndroidJUnit4.class)
 public final class AndroidLifecycleTest {
@@ -213,11 +214,23 @@ public final class AndroidLifecycleTest {
     }
 
     private static void enter(Instrumentation instrumentation, MainActivity activity, int id, String value) {
-        instrumentation.runOnMainSync(() -> {
-            EditText view = activity.findViewById(id);
-            assertNotNull(view);
-            view.setText(value);
-        });
+        long deadline = SystemClock.elapsedRealtime() + 5_000;
+        AtomicBoolean entered = new AtomicBoolean();
+        do {
+            instrumentation.runOnMainSync(() -> {
+                EditText field = activity.findViewById(id);
+                if (field != null && field.isShown()) {
+                    field.setText(value);
+                    entered.set(true);
+                }
+            });
+            if (entered.get()) {
+                return;
+            }
+            // The controller publishes before the Activity handles the update.
+            SystemClock.sleep(25);
+        } while (SystemClock.elapsedRealtime() < deadline);
+        fail("Expected visible field " + activity.getResources().getResourceEntryName(id));
     }
 
     private static void tap(Instrumentation instrumentation, MainActivity activity, int id) {

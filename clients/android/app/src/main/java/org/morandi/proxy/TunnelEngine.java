@@ -45,6 +45,7 @@ import java.util.concurrent.TimeoutException;
 public final class TunnelEngine {
     private static final long VERIFY_DEADLINE_MS = 6_500;
     private static final long VPN_NETWORK_WAIT_MS = 1_500;
+    private static final long VPN_CALLBACK_GRACE_MS = 50;
     private static final long CONNECT_DEADLINE_MS = 48_000;
     private static final long PORT_HINT_LIFETIME_MS = 10 * 60_000;
     private static final long CANCELLATION_CHECK_MS = 80;
@@ -171,8 +172,11 @@ public final class TunnelEngine {
         return up;
     }
 
-    synchronized void prepareConnection() {
-        if (up || preparedServiceDeadline != 0 || VpnService.prepare(context) != null) {
+    synchronized void prepareConnection(boolean hasSystemConsentResult) {
+        // A just-completed system consent activity already granted permission.
+        // GoBackend rechecks immediately before establishing the TUN.
+        if (up || preparedServiceDeadline != 0
+                || (!hasSystemConsentResult && VpnService.prepare(context) != null)) {
             return;
         }
         preparedUnderlay = currentUnderlay(connectivity, null);
@@ -187,10 +191,11 @@ public final class TunnelEngine {
     }
 
     synchronized void prepareLocalComponents() {
-        // Safe during system consent. Neither component starts a service,
-        // attaches a TUN or makes an exit request.
+        // Safe during system consent. Preparation stays local and does not
+        // display a notification, start a service, attach a TUN or probe.
         prepareBackend();
         CloudflareExitProbe.prepare(context);
+        ProxyVpnService.prepareNotification(context);
     }
 
     private void prepareBackend() {
@@ -606,7 +611,6 @@ public final class TunnelEngine {
                     return null;
                 }
                 recordProofTimings(timing, ipv4, ipv6, handshake);
-                CloudflareExitProbe.rememberVerifiedProtocols(ipv4.proof, ipv6 == null ? null : ipv6.proof);
                 return new Result(candidate.endpoint(), ipv4.proof.address,
                         ipv6 == null ? "" : ipv6.proof.address, timing);
             }
@@ -671,10 +675,13 @@ public final class TunnelEngine {
 
     private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback,
                                  Network previousNetwork, NetworkChanges changes) throws InterruptedException {
-        long nextReadback = 0;
+        long nextReadback = callback != null && changes.isWatching()
+                ? SystemClock.elapsedRealtime() + VPN_CALLBACK_GRACE_MS
+                : 0;
         while (up && !cancelled(callback)) {
             Network ready = changes.matching(target, previousNetwork);
             if (ready != null) {
+                trace("Android VPN discovered by callback");
                 return ready;
             }
             long now = SystemClock.elapsedRealtime();
@@ -686,6 +693,7 @@ public final class TunnelEngine {
                 // the same checks without polling Binder on every callback.
                 ready = findNetwork(target, previousNetwork);
                 if (ready != null) {
+                    trace("Android VPN discovered by readback");
                     return ready;
                 }
                 nextReadback = SystemClock.elapsedRealtime() + CANCELLATION_CHECK_MS;
@@ -705,6 +713,10 @@ public final class TunnelEngine {
         private final Semaphore changes = new Semaphore(0);
         private final Map<Network, NetworkMetadata> available = new HashMap<>();
         private boolean watching;
+
+        boolean isWatching() {
+            return watching;
+        }
 
         NetworkChanges() {
             try {

@@ -13,6 +13,7 @@ import android.os.SystemClock;
 import com.wireguard.android.backend.GoBackend;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ProxyVpnService extends GoBackend.VpnService {
     private static final String CHANNEL = "proxy_vpn";
@@ -22,9 +23,30 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     private static final long START_TIMEOUT_MS = 2_500;
     private static final long STOP_TIMEOUT_MS = 1_500;
     private static final Object LIFECYCLE = new Object();
+    private static final AtomicBoolean PREPARING_NOTIFICATION = new AtomicBoolean();
+    private static volatile Notification notificationTemplate;
     private static ProxyVpnService live;
     private static boolean startFailed;
     private boolean foreground;
+
+    static void prepareNotification(Context context) {
+        if (notificationTemplate != null || !PREPARING_NOTIFICATION.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            new Thread(() -> {
+                try {
+                    notification(context);
+                } catch (RuntimeException ignored) {
+                    // Service startup can build the notification normally.
+                } finally {
+                    PREPARING_NOTIFICATION.set(false);
+                }
+            }, "ProxyNotificationPreparation").start();
+        } catch (RuntimeException ignored) {
+            PREPARING_NOTIFICATION.set(false);
+        }
+    }
 
     static long requestPreparation(Context context) throws IOException {
         return requestStart(context, false);
@@ -121,7 +143,7 @@ public final class ProxyVpnService extends GoBackend.VpnService {
             return START_NOT_STICKY;
         }
         try {
-            Notification notification = notification();
+            Notification notification = notification(this).clone();
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(NOTIFICATION, notification,
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
@@ -142,18 +164,22 @@ public final class ProxyVpnService extends GoBackend.VpnService {
         return START_NOT_STICKY;
     }
 
-    private Notification notification() {
-        NotificationManager notifications = getSystemService(NotificationManager.class);
+    private static Notification notification(Context context) {
+        Notification prepared = notificationTemplate;
+        if (prepared != null) {
+            return prepared;
+        }
+        NotificationManager notifications = context.getSystemService(NotificationManager.class);
         NotificationChannel channel = new NotificationChannel(CHANNEL, "VPN 连接",
                 NotificationManager.IMPORTANCE_LOW);
         notifications.createNotificationChannel(channel);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
-        Intent open = new Intent(this, MainActivity.class)
+        Intent open = new Intent(context, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent openAction = PendingIntent.getActivity(this, 0, open, flags);
-        Intent disconnect = new Intent(this, ProxyVpnService.class).setAction(DISCONNECT);
-        PendingIntent disconnectAction = PendingIntent.getService(this, 1, disconnect, flags);
-        return new Notification.Builder(this, CHANNEL)
+        PendingIntent openAction = PendingIntent.getActivity(context, 0, open, flags);
+        Intent disconnect = new Intent(context, ProxyVpnService.class).setAction(DISCONNECT);
+        PendingIntent disconnectAction = PendingIntent.getService(context, 1, disconnect, flags);
+        Notification built = new Notification.Builder(context, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_lock_lock)
                 .setContentTitle("Proxy")
                 .setContentText("VPN 服务运行中")
@@ -163,6 +189,8 @@ public final class ProxyVpnService extends GoBackend.VpnService {
                 .setVisibility(Notification.VISIBILITY_PRIVATE)
                 .addAction(new Notification.Action.Builder(null, "断开", disconnectAction).build())
                 .build();
+        notificationTemplate = built;
+        return built;
     }
 
     @Override public void onDestroy() {

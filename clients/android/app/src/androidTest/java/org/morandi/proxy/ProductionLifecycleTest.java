@@ -150,6 +150,8 @@ public final class ProductionLifecycleTest {
                     && !engine.isUp() && vpnNetwork(context) == null);
             long[] reconnectNanos = new long[PREAUTHORIZED_CONNECT_SAMPLES];
             for (int sample = 0; sample < reconnectNanos.length; sample++) {
+                // Only the final production connection is used for sustained transfers.
+                ProxyVpnService.captureCarrierInodesForTest = sample == reconnectNanos.length - 1;
                 assertTrue("Android VPN consent still valid", VpnService.prepare(context) == null);
                 try (VisibleConnectionTiming reconnect =
                              new VisibleConnectionTiming("RECONNECT_" + (sample + 1), instrumentation,
@@ -191,6 +193,7 @@ public final class ProductionLifecycleTest {
             assertTrue("Every preauthorized tap to visible verified VPN must complete within 1000 ms",
                     underTarget == reconnectNanos.length);
         } finally {
+            ProxyVpnService.captureCarrierInodesForTest = false;
             active.disconnect();
             if (activity != null) {
                 instrumentation.runOnMainSync(activity::finish);

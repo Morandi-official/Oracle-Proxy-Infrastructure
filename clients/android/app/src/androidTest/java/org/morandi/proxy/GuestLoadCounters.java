@@ -3,18 +3,20 @@ package org.morandi.proxy;
 import android.app.UiAutomation;
 import android.net.LinkProperties;
 import android.os.ParcelFileDescriptor;
+import android.os.Process;
 import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.StringJoiner;
 
-/** Read-only instrumentation. These are aggregate guest counters for the load interval. */
+/** Read-only guest and protected WireGuard socket counters for a transfer interval. */
 final class GuestLoadCounters implements AutoCloseable {
     private static final String[] COUNTERS = {
             "Udp.InErrors", "Udp.RcvbufErrors", "Udp.SndbufErrors", "Udp.InCsumErrors",
@@ -27,30 +29,34 @@ final class GuestLoadCounters implements AutoCloseable {
     private final LinkProperties physical;
     private final String direction;
     private final Map<String, Long> before;
+    private final long[] carrierInodes;
 
     GuestLoadCounters(UiAutomation automation, LinkProperties vpn, LinkProperties physical, boolean upload) {
         this.automation = automation;
         this.vpn = vpn;
         this.physical = physical;
         direction = upload ? "UPLOAD" : "DOWNLOAD";
+        carrierInodes = ProxyVpnService.carrierInodesForTest();
         before = snapshot();
     }
 
     private Map<String, Long> snapshot() {
-        // Both paths are fixed. Never copy raw proc or shell output into logs.
+        // All paths are fixed. Never copy raw proc or shell output into logs.
         try {
-            ParcelFileDescriptor handle = automation.executeShellCommand("cat /proc/net/snmp /proc/net/dev");
+            ParcelFileDescriptor handle = automation.executeShellCommand(
+                    "cat /proc/net/snmp /proc/net/dev /proc/net/udp /proc/net/udp6");
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                     new ParcelFileDescriptor.AutoCloseInputStream(handle), StandardCharsets.US_ASCII))) {
                 return read(reader, vpn == null ? null : vpn.getInterfaceName(),
-                        physical == null ? null : physical.getInterfaceName());
+                        physical == null ? null : physical.getInterfaceName(), carrierInodes, Process.myUid());
             }
         } catch (IOException | RuntimeException denied) {
             return Collections.emptyMap();
         }
     }
 
-    static Map<String, Long> read(BufferedReader reader, String tunnel, String physical) throws IOException {
+    static Map<String, Long> read(BufferedReader reader, String tunnel, String physical,
+                                  long[] carrier, int uid) throws IOException {
         Map<String, Long> values = new HashMap<>();
         Map<String, String[]> headers = new HashMap<>();
         String line;
@@ -73,6 +79,17 @@ final class GuestLoadCounters implements AutoCloseable {
                 String label = name.equals(tunnel) ? "Tun" : "Nic";
                 number(values, label + ".RxDrop", fields[3]);
                 number(values, label + ".TxDrop", fields[11]);
+                number(values, label + ".TxPackets", fields[9]);
+            } else if (!name.isEmpty() && Character.isDigit(name.charAt(0)) && fields.length == 12
+                    && fields[6].equals(Integer.toString(uid))) {
+                // Kernel udp{,6} prints UID, inode and socket drops at these positions.
+                // Only the actual service-owned socket inode and its family qualify.
+                boolean v6 = fields[0].indexOf(':') == 32;
+                int family = v6 ? 1 : 0;
+                if ((v6 || fields[0].indexOf(':') == 8) && carrier[family] > 0
+                        && fields[8].equals(Long.toString(carrier[family]))) {
+                    number(values, v6 ? "Carrier6.Drops" : "Carrier4.Drops", fields[11]);
+                }
             }
         }
         return values;
@@ -100,5 +117,10 @@ final class GuestLoadCounters implements AutoCloseable {
         detail.add("NIC_MTU=" + (physical == null ? -1 : physical.getMtu()));
         for (String key : COUNTERS) detail.add(key + "=" + delta(before, after, key));
         Log.i("ProxySpeedAcceptance", "ANDROID_PERF_GUEST_LOAD_" + direction + "=" + detail);
+        boolean same = Arrays.equals(carrierInodes, ProxyVpnService.carrierInodesForTest());
+        Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CARRIER_" + direction
+                + "=V4_SOCKET_DROPS:" + (same ? delta(before, after, "Carrier4.Drops") : -1)
+                + ";V6_SOCKET_DROPS:" + (same ? delta(before, after, "Carrier6.Drops") : -1)
+                + ";TUN_TX_PACKETS:" + delta(before, after, "Tun.TxPackets"));
     }
 }

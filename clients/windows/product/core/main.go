@@ -50,13 +50,13 @@ func run() error {
 			return fmt.Errorf("frame")
 		}
 		if recoveryMode == recoveryDormant {
-			err = oracleTun.RecoverDormantOracleAdapter(request.LUID)
+			err = oracleTun.RecoverDormantOracleAdapter(request.LUID, restoreAdapterBindings)
 		} else {
-			err = oracleTun.RecoverOracleAdapter(request.LUID)
+			err = oracleTun.RecoverOracleAdapter(request.LUID, restoreAdapterBindings)
 		}
 		if err != nil {
 			switch err.Error() {
-			case "ORPHAN_IDENTITY_FAILED", "ORPHAN_IP_CLEANUP_FAILED", "ORPHAN_ROUTE_CLEANUP_FAILED", "ORPHAN_DNS_CLEANUP_FAILED", "ORPHAN_RECREATE_FAILED", "ORPHAN_VERIFY_FAILED":
+			case "PARK_BINDINGS_LOAD_FAILED", "PARK_BINDINGS_RESTORE_FAILED", "ORPHAN_IDENTITY_FAILED", "ORPHAN_IP_CLEANUP_FAILED", "ORPHAN_ROUTE_CLEANUP_FAILED", "ORPHAN_DNS_CLEANUP_FAILED", "ORPHAN_RECREATE_FAILED", "ORPHAN_VERIFY_FAILED":
 				fmt.Fprintln(os.Stderr, err.Error())
 			case "DORMANT_IP_QUERY_FAILED", "DORMANT_IP_NOT_EMPTY", "DORMANT_ROUTE_QUERY_FAILED", "DORMANT_ROUTE_NOT_EMPTY", "DORMANT_DNS_QUERY_FAILED", "DORMANT_DNS_NOT_EMPTY", "DORMANT_RECREATE_FAILED", "DORMANT_VERIFY_FAILED":
 				fmt.Fprintln(os.Stderr, err.Error())
@@ -84,7 +84,8 @@ func run() error {
 	serve := func(resumed bool) (bool, error) {
 		return runPeerGeneration(input, check, standby, eagerProbe || resumed, resumed)
 	}
-	err := serveAdapterLifetimes(input, holderOnly, serve, checkedAdapterAudit(oracleTun.ParkOracleAdapter), checkedAdapterAudit(oracleTun.VerifyParkedOracleAdapter), func() {
+	park := func() error { return oracleTun.ParkOracleAdapter(parkAdapterBindings, restoreAdapterBindings) }
+	err := serveAdapterLifetimes(input, holderOnly, serve, checkedAdapterAudit(park), checkedAdapterAudit(oracleTun.VerifyParkedOracleAdapter), func() {
 		// Both pipes are ordered separately. The parent consumes this stderr
 		// fence and stdout receipt before it arms a new proof in the same PID.
 		fmt.Fprintln(os.Stderr, "PARK_FENCE")
@@ -106,7 +107,7 @@ func checkedAdapterAudit(audit func() error) func() error {
 			case "PARK_CREATOR_MISSING", "PARK_IP_QUERY_FAILED", "PARK_IP_NOT_EMPTY",
 				"PARK_ROUTE_QUERY_FAILED", "PARK_ROUTE_NOT_EMPTY", "PARK_DNS_NOT_EMPTY",
 				"PARK_DNS_SERVER_PRESENT", "PARK_DNS_SUFFIX_PRESENT", "PARK_DNS4_CLEAR_FAILED", "PARK_DNS6_CLEAR_FAILED", "PARK_DNS_LIST_INVALID",
-				"PARK_INTERFACE_QUERY_FAILED", "PARK_ADMIN_IDENTITY_FAILED", "PARK_ADMIN_CHANGE_FAILED",
+				"PARK_INTERFACE_QUERY_FAILED", "PARK_BINDINGS_LOAD_FAILED", "PARK_BINDINGS_DISABLE_FAILED", "PARK_BINDINGS_RESTORE_FAILED",
 				"ORPHAN_IDENTITY_FAILED", "DORMANT_IP_QUERY_FAILED", "DORMANT_IP_NOT_EMPTY",
 				"DORMANT_ROUTE_QUERY_FAILED", "DORMANT_ROUTE_NOT_EMPTY", "DORMANT_DNS_QUERY_FAILED", "DORMANT_DNS_NOT_EMPTY",
 				"DORMANT_ROUTE_PROTOCOL_NOT_LOCAL", "DORMANT_ROUTE_NEXT_HOP_UNSAFE", "DORMANT_ROUTE_DESTINATION_UNSAFE":
@@ -155,8 +156,15 @@ func runPeerGeneration(input *bufio.Reader, check, standby, eagerProbe, resumed 
 	// independent. Join creation before READY and before any deferred close.
 	// No route, address, packet session or user traffic is activated here.
 	var adapterReady func() error
-	if standby && !check && !resumed {
-		adapterReady = beginAdapterPreparation(oracleTun.PrepareOracleAdapter)
+	if standby && !check {
+		prepare := oracleTun.PrepareOracleAdapter
+		if resumed {
+			// The authenticated fresh config is already parsed. Restore the
+			// exact protocol paths while the new private peer/probe starts.
+			// User routes/TUN can be enabled only after both paths are ready.
+			prepare = checkedAdapterAudit(oracleTun.ResumeOracleAdapterBindings)
+		}
+		adapterReady = beginAdapterPreparation(prepare)
 		defer func() { _ = adapterReady() }()
 	}
 	instance, err := box.New(box.Options{Context: ctx, Options: options})

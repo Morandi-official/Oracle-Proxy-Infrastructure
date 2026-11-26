@@ -15,6 +15,8 @@ $test=(Resolve-Path './dist/product-tests/OracleProxy.Product.Tests.exe').Path
 New-Item -ItemType Directory $root | Out-Null
 Set-Content "$root/authorized" 'DISPOSABLE_GITHUB_ONLY'
 if($ParkOnly){
+ . (Join-Path $PSScriptRoot 'adapter-binding-witness.ps1')
+ $otherBindings=@(Get-OtherAdapterBindingState)
  $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 }else{
  if(Get-LocalUser OracleProxyOwner -ErrorAction SilentlyContinue){throw 'Preexisting fixture owner refused'}
@@ -45,7 +47,18 @@ New-ItemProperty 'HKLM:/SYSTEM/CurrentControlSet/Services/OracleProxyCandidateFi
 Start-Service OracleProxyCandidateFixture
 $fixturePid=(Get-CimInstance Win32_Service -Filter "Name='OracleProxyCandidateFixture'").ProcessId
 $result=Join-Path $root 'result.txt'
-for($i=0;$i -lt 150 -and !(Test-Path $result);$i++){Start-Sleep -Seconds 1}
+$observed=$false
+for($i=0;$i -lt 150 -and !(Test-Path $result);$i++){
+ if($ParkOnly -and !$observed -and (Test-Path -LiteralPath "$root/park-ready")){
+  try{
+   $luid=[uint64](Get-Content -LiteralPath "$root/park-ready" -Raw)
+   Assert-OwnedIpBindings $luid $false
+   Assert-OtherAdapterBindingState $otherBindings
+   $observed=$true
+  }finally{Set-Content "$root/park-observed" 'DONE'}
+ }
+ Start-Sleep -Seconds 1
+}
 if(!(Test-Path $result)){throw 'Focused recovery fixture timed out; SYSTEM watchdog retained'}
 $body=Get-Content -Raw $result
 Write-Host $body
@@ -54,5 +67,9 @@ if($body -notmatch 'RESULT=PASS' -or !$body.Contains($expected)){throw 'Real SYS
 if($fixturePid){Wait-Process -Id $fixturePid -Timeout 10 -ErrorAction SilentlyContinue}
 $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
 if($remove.ExitCode -ne 0){throw 'Focused recovery fixture uninstall failed'}
-if($ParkOnly){Write-Host 'REAL_OFFLINE_EMPTY_ADAPTER_HOLDER=PASS'}
+if($ParkOnly){
+ if(!$observed -or !$body.Contains('REAL_SYSTEM_CRASHED_PARKED_HOLDER_REMOVED_BY_ORDINARY_RECOVERY=PASS')){throw 'Parked crash recovery was not observed'}
+ Assert-OtherAdapterBindingState $otherBindings
+ Write-Host 'REAL_OFFLINE_EMPTY_ADAPTER_HOLDER=PASS'
+}
 else{Write-Host 'FOCUSED_REAL_SYSTEM_DORMANT_STARTUP_AND_UAC_RECOVERY=PASS'}

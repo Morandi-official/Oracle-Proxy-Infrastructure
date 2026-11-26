@@ -40,6 +40,28 @@ internal sealed class CoreProcess : IDisposable
         }
         _parkCounts[fields[1]]=string.Join(" ",counts.Select(n=>n.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
+    internal bool RecordParkFailure(string line)
+    {
+        const string prefix="PARK_AUDIT_FAILED ";
+        if(!line.StartsWith(prefix,StringComparison.Ordinal))return false;
+        string reason=line[prefix.Length..];
+        if(reason is "PARK_QUERY_FAILED" or "PARK_CREATOR_MISSING" or "PARK_IP_QUERY_FAILED" or "PARK_IP_NOT_EMPTY" or
+            "PARK_ROUTE_QUERY_FAILED" or "PARK_ROUTE_NOT_EMPTY" or "PARK_DNS_NOT_EMPTY" or "PARK_INTERFACE_QUERY_FAILED" or
+            "PARK_DNS_SERVER_PRESENT" or "PARK_DNS_SUFFIX_PRESENT" or "PARK_DNS4_CLEAR_FAILED" or "PARK_DNS6_CLEAR_FAILED" or "PARK_DNS_LIST_INVALID" or
+            "PARK_BINDINGS_LOAD_FAILED" or "PARK_BINDINGS_DISABLE_FAILED" or "PARK_BINDINGS_RESTORE_FAILED" or
+            "PARK_ADMIN_IDENTITY_FAILED" or "PARK_ADMIN_CHANGE_FAILED" or "ORPHAN_IDENTITY_FAILED" or "DORMANT_IP_QUERY_FAILED" or
+            "DORMANT_IP_NOT_EMPTY" or "DORMANT_ROUTE_QUERY_FAILED" or "DORMANT_ROUTE_NOT_EMPTY" or "DORMANT_DNS_QUERY_FAILED" or
+            "DORMANT_DNS_NOT_EMPTY" or "DORMANT_ROUTE_PROTOCOL_NOT_LOCAL" or "DORMANT_ROUTE_NEXT_HOP_UNSAFE" or "DORMANT_ROUTE_DESTINATION_UNSAFE")
+            _parkFailure=reason;
+        return true;
+    }
+    private async Task<string> ParkFailureAfterEof(string fallback,CancellationToken cancel)
+    {
+        // The child's stdout and stderr close independently. Wait for its fixed
+        // diagnostic when an activation or park command encounters stdout EOF.
+        if(_stderrDrained is not null)await Task.WhenAny(_stderrDrained.Task,Task.Delay(1000,cancel));
+        return _parkFailure ?? fallback;
+    }
     private CancellationTokenSource? _proofCancel;
     private readonly object _proofLock=new();
     private long _proofStarted;
@@ -105,7 +127,7 @@ internal sealed class CoreProcess : IDisposable
         catch(TimeoutException error){throw new IOException("CORE_READY_TIMEOUT",error);}
         if(ready!="READY"){
             try{await owned.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));}catch{}
-            throw new IOException(SafeStage.StartsWith("CORE_",StringComparison.Ordinal)?SafeStage:"CORE_START_FAILED");
+            throw new IOException(_parkFailure ?? (SafeStage.StartsWith("CORE_",StringComparison.Ordinal)?SafeStage:"CORE_START_FAILED"));
         }
         // Only the cold standby preparation guarantees fresh CreateAdapter;
         // never manufacture ownership from a by-name OpenAdapter fallback.
@@ -130,17 +152,7 @@ internal sealed class CoreProcess : IDisposable
             if(line.Data is null){drained.TrySetResult();return;}
             if(!ReferenceEquals(_process,owned))return;
             if(line.Data.StartsWith("PARK_COUNTS ",StringComparison.Ordinal)){RecordParkCounts(line.Data);return;}
-            if(line.Data.StartsWith("PARK_AUDIT_FAILED ",StringComparison.Ordinal)){
-                string reason=line.Data["PARK_AUDIT_FAILED ".Length..];
-                if(reason is "PARK_QUERY_FAILED" or "PARK_CREATOR_MISSING" or "PARK_IP_QUERY_FAILED" or "PARK_IP_NOT_EMPTY" or
-                    "PARK_ROUTE_QUERY_FAILED" or "PARK_ROUTE_NOT_EMPTY" or "PARK_DNS_NOT_EMPTY" or "PARK_INTERFACE_QUERY_FAILED" or
-                    "PARK_DNS_SERVER_PRESENT" or "PARK_DNS_SUFFIX_PRESENT" or "PARK_DNS4_CLEAR_FAILED" or "PARK_DNS6_CLEAR_FAILED" or "PARK_DNS_LIST_INVALID" or
-                    "PARK_ADMIN_IDENTITY_FAILED" or "PARK_ADMIN_CHANGE_FAILED" or "ORPHAN_IDENTITY_FAILED" or "DORMANT_IP_QUERY_FAILED" or
-                    "DORMANT_IP_NOT_EMPTY" or "DORMANT_ROUTE_QUERY_FAILED" or "DORMANT_ROUTE_NOT_EMPTY" or "DORMANT_DNS_QUERY_FAILED" or
-                    "DORMANT_DNS_NOT_EMPTY" or "DORMANT_ROUTE_PROTOCOL_NOT_LOCAL" or "DORMANT_ROUTE_NEXT_HOP_UNSAFE" or "DORMANT_ROUTE_DESTINATION_UNSAFE")
-                    _parkFailure=reason;
-                return;
-            }
+            if(RecordParkFailure(line.Data))return;
             if(line.Data=="PARK_FENCE"){_parkFence?.TrySetResult();return;}
             if(_nativeEvidence.Record(line.Data))return;
             if(line.Data=="ADAPTER_EMPTY_AUDITED"){_startTimings["empty_audited"]=1;return;}
@@ -201,10 +213,7 @@ internal sealed class CoreProcess : IDisposable
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);
         deadline.CancelAfter(TimeSpan.FromSeconds(20));
         if(await owner.StandardOutput.ReadLineAsync(deadline.Token)!="PARKED"){
-            // A failing child's stderr and stdout close independently. Read
-            // the fixed audit reason even when its stdout EOF arrived first.
-            if(_stderrDrained is not null)await Task.WhenAny(_stderrDrained.Task,Task.Delay(1000,deadline.Token));
-            throw new IOException(_parkFailure ?? "CORE_PARK_FAILED");
+            throw new IOException(await ParkFailureAfterEof("CORE_PARK_FAILED",deadline.Token));
         }
         // stderr is an independent ordered stream. Drain its prior generation
         // before publishing Off or arming another H3/handshake observer.
@@ -230,7 +239,9 @@ internal sealed class CoreProcess : IDisposable
     {
         if(!Running || !StandbyCapable)throw new IOException("CORE_NOT_READY");
         await _process!.StandardInput.WriteLineAsync(command);await _process.StandardInput.FlushAsync();
-        if(await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5),_stop.Token)!=expected)throw new IOException("CORE_TRANSITION_FAILED");
+        string? response=await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5),_stop.Token);
+        if(response is null)throw new IOException(await ParkFailureAfterEof("CORE_TRANSITION_FAILED",_stop.Token));
+        if(response!=expected)throw new IOException("CORE_TRANSITION_FAILED");
     }
     internal async Task Activate(){await CoreCommand("ACTIVATE","TUN_ACTIVE");TunActive=true;}
     internal async Task Deactivate(){NativeGuard.SuspendTun();await CoreCommand("DEACTIVATE","STANDBY_READY");TunActive=false;}

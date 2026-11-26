@@ -117,9 +117,9 @@ jobs:
       - name: Verify embedded Wintun bytes against official signed x64 release
         shell: pwsh
         run: ./clients/windows/product/ci/verify-wintun.ps1
-      - name: Compile owned native WFP boundary with Windows SDK
-        shell: cmd
-        run: cl.exe /nologo /LD /O2 /W4 /guard:cf /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\product\Proxy.Guard.dll /DYNAMICBASE /NXCOMPAT /Brepro
+      - name: Compile the pinned WFP and adapter binding DLL
+        shell: pwsh
+        run: ./clients/windows/product/ci/build-native-guard.ps1 -OutputDirectory ./dist/product
       - name: Embed immutable native payload hashes and compile self-contained Windows client
         shell: pwsh
         working-directory: clients/windows/product
@@ -157,6 +157,11 @@ jobs:
           dotnet publish ./ci/OracleProxy.BadUpgrade.csproj -c Release -p:DebugType=None -o ../../../dist/bad-upgrade
           if($LASTEXITCODE -ne 0){throw 'Bad upgrade fixture build failed'}
           Copy-Item ../../../dist/product/Proxy.Core.exe,../../../dist/product/Proxy.Guard.dll ../../../dist/bad-upgrade
+      - name: Verify empty Windows adapter holder and cleanup without an account
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        timeout-minutes: 4
+        run: ./clients/windows/product/ci/recovery-acceptance.ps1 -ParkOnly
       - name: Two-core service reader and control scheduling regression
         shell: pwsh
         env:
@@ -179,11 +184,6 @@ jobs:
         shell: pwsh
         timeout-minutes: 6
         run: ./clients/windows/product/ci/acceptance.ps1
-      - name: Verify empty Windows adapter holder and cleanup without an account
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        shell: pwsh
-        timeout-minutes: 4
-        run: ./clients/windows/product/ci/recovery-acceptance.ps1 -ParkOnly
       - name: Focused real SYSTEM prepared-orphan startup and UAC recovery
         if: env.ORACLE_ACCEPTANCE_SCOPE == 'endpoint-migration' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh

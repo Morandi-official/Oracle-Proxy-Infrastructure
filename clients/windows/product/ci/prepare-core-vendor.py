@@ -36,57 +36,55 @@ CACHE = '''// Oracle Proxy keeps only its own unconfigured, sessionless adapter 
 // explicit Off and On. This avoids repeated Windows PnP removal/creation.
 var oracleAdapterMutex sync.Mutex
 var oraclePreparedAdapter *wintun.Adapter
-var oracleStrictlyParked, oracleParkedAdminDown bool
+var oracleStrictlyParked bool
+var oracleRestoreBindings func(uint64) error
 
 func openOracleAdapter(name string) (*wintun.Adapter, error) {
 	if name == "OracleProxy" {
 		oracleAdapterMutex.Lock()
-		prepared := oraclePreparedAdapter
-		parked, wasDown := oracleStrictlyParked, oracleParkedAdminDown
-		oraclePreparedAdapter = nil
-		oracleStrictlyParked, oracleParkedAdminDown = false, false
-		oracleAdapterMutex.Unlock()
-		if prepared != nil {
-			luid := winipcfg.LUID(prepared.LUID())
-			if parked {
-				if err := verifyOracleParkedEmpty(luid); err != nil { closeOracleCreator(prepared, wasDown); return nil, err }
-			}
-			if wasDown {
-				if err := setOracleParkedAdmin(luid, winipcfg.NetIfAdminStatusDown, winipcfg.NetIfAdminStatusUp); err != nil {
-					closeOracleCreator(prepared, wasDown)
-					return nil, err
-				}
-			}
-			return prepared, nil
+		// Only a fresh validated RESUME generation can convert a parked
+		// creator into an activatable adapter. A direct open cannot do so.
+		if oracleStrictlyParked || oracleRestoreBindings != nil {
+			oracleAdapterMutex.Unlock()
+			return nil, fmt.Errorf("PARK_BINDINGS_RESTORE_FAILED")
 		}
+		prepared := oraclePreparedAdapter
+		oraclePreparedAdapter = nil
+		oracleAdapterMutex.Unlock()
+		if prepared != nil { return prepared, nil }
 	}
-	adapter, err := wintun.CreateAdapter(name, TunnelType, generateGUIDByDeviceName(name))
 	// A cold caller must never adopt an unrelated same-name adapter.
-	return adapter, err
+	return wintun.CreateAdapter(name, TunnelType, generateGUIDByDeviceName(name))
 }
 
-func closeOracleCreator(owned *wintun.Adapter, wasDisabled bool) {
-	if wasDisabled {
-		// Restore only the administrative state changed by this creator before
-		// deleting its device, including EOF and a failed post-disable audit.
-		luid := winipcfg.LUID(owned.LUID())
-		row, err := luid.Interface()
-		if err != nil || row.AdminStatus != winipcfg.NetIfAdminStatusUp {
-			if setOracleParkedAdmin(luid, winipcfg.NetIfAdminStatusDown, winipcfg.NetIfAdminStatusUp) != nil {
-				fmt.Fprintln(os.Stderr, "PARK_ADMIN_RESTORE_FAILED")
-			}
-		}
+func ResumeOracleAdapterBindings() error {
+	oracleAdapterMutex.Lock()
+	defer oracleAdapterMutex.Unlock()
+	if !oracleStrictlyParked || oraclePreparedAdapter == nil { return fmt.Errorf("PARK_CREATOR_MISSING") }
+	luid := winipcfg.LUID(oraclePreparedAdapter.LUID())
+	if err := verifyOracleParkedEmpty(luid); err != nil { return err }
+	if oracleRestoreBindings != nil {
+		if err := oracleRestoreBindings(uint64(luid)); err != nil { return err }
 	}
-	owned.Close()
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	oracleRestoreBindings = nil
+	oracleStrictlyParked = false
+	return nil
 }
 
 func ClosePreparedOracleAdapter() {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
 	if oraclePreparedAdapter != nil {
-		closeOracleCreator(oraclePreparedAdapter, oracleParkedAdminDown)
+		if oracleRestoreBindings != nil {
+			if err := oracleRestoreBindings(oraclePreparedAdapter.LUID()); err != nil {
+				fmt.Fprintln(os.Stderr, "PARK_AUDIT_FAILED PARK_BINDINGS_RESTORE_FAILED")
+			}
+		}
+		oracleRestoreBindings = nil
+		oraclePreparedAdapter.Close()
 		oraclePreparedAdapter = nil
-		oracleStrictlyParked, oracleParkedAdminDown = false, false
+		oracleStrictlyParked = false
 	}
 }
 
@@ -191,10 +189,11 @@ func (t *NativeTun) prepareOracleAdapter() error {
 PARKED = '''// ParkOracleAdapter may be called only after the owner has ended its TUN
 // session and closed the whole proxy instance. No supplied interface ID is
 // accepted. An existing same-name adapter can never acquire this authority.
-func ParkOracleAdapter() (err error) {
+func ParkOracleAdapter(park, restore func(uint64) error) (err error) {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
 	defer func() { oracleStrictlyParked = err == nil }()
+	if park == nil || restore == nil || oracleRestoreBindings != nil { return fmt.Errorf("PARK_BINDINGS_LOAD_FAILED") }
 	if oraclePreparedAdapter == nil { return fmt.Errorf("PARK_CREATOR_MISSING") }
 	luid := winipcfg.LUID(oraclePreparedAdapter.LUID())
 	if err := verifyOracleDormantEmpty(luid); err != nil { return err }
@@ -202,54 +201,44 @@ func ParkOracleAdapter() (err error) {
 	// interface. PARKED requires none. Flush while the parent still holds WFP.
 	// FlushIPAddresses may report success after an individual Delete failed;
 	// the separate full-table readback below always decides.
-	err = verifyOracleParkedEmpty(luid)
-	if err == nil { return nil }
-	oracleLogParkedCounts(luid, "before")
-	if !oracleParkedConfigPresent(err) { return err }
-	dns := oraclePreparedDNSProblem(luid)
 	var clearErr error
-	switch dns {
-	case "":
-	case "PARK_DNS_SERVER_PRESENT", "PARK_DNS_SUFFIX_PRESENT":
-		// Clear only our held creator's fixed GUID. Never change a default DNS
-		// setting or touch another interface. Some drivers reject this write
-		// while disconnected, so require independent readback after admin Down.
-		clearErr = clearOracleParkedDNS(luid)
-		if clearErr != nil && clearErr.Error() != "PARK_DNS4_CLEAR_FAILED" && clearErr.Error() != "PARK_DNS6_CLEAR_FAILED" { return clearErr }
-	default:
-		return fmt.Errorf("%s", dns)
-	}
-	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
-	if err := luid.FlushIPAddresses(windows.AF_UNSPEC); err != nil { return fmt.Errorf("PARK_IP_QUERY_FAILED") }
-	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
-	_ = luid.FlushRoutes(windows.AF_UNSPEC)
-	err = verifyOracleParkedEmpty(luid)
-	if err == nil { return nil }
-	oracleLogParkedCounts(luid, "flushed")
-	if !oracleParkedConfigPresent(err) { return err }
-
-	// Windows can preserve or regenerate automatic multicast/local rows
-	// even after an exact flush. Disable only this creator's NDIS interface,
-	// retaining the Wintun handle. Unsupported drivers fall back to full close.
-	if err := setOracleParkedAdmin(luid, winipcfg.NetIfAdminStatusUp, winipcfg.NetIfAdminStatusDown); err != nil { return err }
-	// Windows publishes IP Helper table changes asynchronously after SetIfEntry.
-	// Return on the first strict success or ownership/query failure. The running
-	// child remains under the parent's kill-on-close job throughout this wait.
-	started := time.Now()
-	deadline := started.Add(800 * time.Millisecond)
-	for {
+	if err = verifyOracleParkedEmpty(luid); err != nil {
+		oracleLogParkedCounts(luid, "before")
+		if !oracleParkedConfigPresent(err) { return err }
+		dns := oraclePreparedDNSProblem(luid)
+		switch dns {
+		case "":
+		case "PARK_DNS_SERVER_PRESENT", "PARK_DNS_SUFFIX_PRESENT":
+			// Clear only our held creator's fixed GUID. Never change a default DNS
+			// setting or touch another interface. Some drivers reject this write
+			// while disconnected, so require independent readback after admin Down.
+			clearErr = clearOracleParkedDNS(luid)
+			if clearErr != nil && clearErr.Error() != "PARK_DNS4_CLEAR_FAILED" && clearErr.Error() != "PARK_DNS6_CLEAR_FAILED" { return clearErr }
+		default:
+			return fmt.Errorf("%s", dns)
+		}
+		if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+		if err := luid.FlushIPAddresses(windows.AF_UNSPEC); err != nil { return fmt.Errorf("PARK_IP_QUERY_FAILED") }
+		if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+		_ = luid.FlushRoutes(windows.AF_UNSPEC)
 		err = verifyOracleParkedEmpty(luid)
-		if err == nil { return nil }
-		if !oracleParkedConfigPresent(err) { oracleLogParkedCounts(luid, "down"); return err }
-		remaining := time.Until(deadline)
-		if remaining <= 0 { break }
-		pause := 20 * time.Millisecond
-		if time.Since(started) >= 100 * time.Millisecond { pause = 100 * time.Millisecond }
-		if remaining < pause { pause = remaining }
-		time.Sleep(pause)
+		if err != nil {
+			oracleLogParkedCounts(luid, "flushed")
+			if !oracleParkedConfigPresent(err) { return err }
+		}
 	}
-	oracleLogParkedCounts(luid, "down")
-	if clearErr != nil && (err.Error() == "PARK_DNS_SERVER_PRESENT" || err.Error() == "PARK_DNS_SUFFIX_PRESENT") { return clearErr }
+	// Even with no assigned IP/route, Windows can retain stack-owned multicast
+	// memberships and fallback DNS servers. Unbind only the creator's two IP
+	// protocol paths. Native code journals the previous graph before mutation.
+	// Arm the same-LUID restore BEFORE attempting either path or its readback.
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	oracleRestoreBindings = restore
+	if err := park(uint64(luid)); err != nil { return err }
+	err = verifyOracleParkedEmpty(luid)
+	if err != nil {
+		oracleLogParkedCounts(luid, "down")
+		if clearErr != nil && (err.Error() == "PARK_DNS_SERVER_PRESENT" || err.Error() == "PARK_DNS_SUFFIX_PRESENT") { return clearErr }
+	}
 	return err
 }
 
@@ -371,43 +360,22 @@ func verifyOracleParkedEmpty(luid winipcfg.LUID) error {
 	return verifyOracleRecoveryIdentity(luid)
 }
 
-var oracleSetIfEntry = windows.NewLazySystemDLL("iphlpapi.dll").NewProc("SetIfEntry")
-
-func setOracleParkedAdmin(luid winipcfg.LUID, from, to winipcfg.NetIfAdminStatus) error {
-	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
-	row, err := luid.Interface()
-	if err != nil || row.InterfaceLUID != luid || row.InterfaceIndex == 0 || row.AdminStatus != from {
-		return fmt.Errorf("PARK_ADMIN_IDENTITY_FAILED")
-	}
-	back, err := winipcfg.LUIDFromIndex(row.InterfaceIndex)
-	if err != nil || back != luid { return fmt.Errorf("PARK_ADMIN_IDENTITY_FAILED") }
-	// SetIfEntry takes the native ifIndex. Hold the exact creator handle,
-	// fence its immutable GUID/LUID and round-trip the index before writing.
-	request := windows.MibIfRow{Index: row.InterfaceIndex, AdminStatus: uint32(to)}
-	if oracleSetIfEntry.Find() != nil { return fmt.Errorf("PARK_ADMIN_CHANGE_FAILED") }
-	status, _, _ := oracleSetIfEntry.Call(uintptr(unsafe.Pointer(&request)))
-	if status != 0 { return fmt.Errorf("PARK_ADMIN_CHANGE_FAILED") }
-	// Only ParkOracleAdapter writes Down, under oracleAdapterMutex. Remember
-	// a successful OS write even if the following independent readback fails.
-	if to == winipcfg.NetIfAdminStatusDown { oracleParkedAdminDown = true }
-	after, err := luid.Interface()
-	if err != nil || after.InterfaceLUID != luid || after.InterfaceIndex != row.InterfaceIndex || after.AdminStatus != to {
-		return fmt.Errorf("PARK_ADMIN_CHANGE_FAILED")
-	}
-	return verifyOracleRecoveryIdentity(luid)
-}
 '''
 RECOVERY = '''// RecoverOracleAdapter is reachable only through the pinned SYSTEM recovery
 // child. Its parent supplies a protected fresh-creation receipt after proving
 // the creator exited. This function independently fences every mutation to the
 // fixed GUID, exact LUID, alias, type and down state. It never opens an adapter
 // by name, deletes a driver, or accepts a general interface target.
-func RecoverOracleAdapter(value uint64) error {
+func RecoverOracleAdapter(value uint64, restore func(uint64) error) error {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
-	if value == 0 || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
+	if value == 0 || restore == nil || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
 	luid := winipcfg.LUID(value)
 	if err := verifyOracleRecoveryIdentity(luid); err != nil { return err }
+	// The service already attested the dead creator and its receipt. Native
+	// restore touches only a matching durable owner+PnP journal; no journal
+	// is an idempotent read-only result. Never remove an unrestored device.
+	if err := restore(value); err != nil { return err }
 	flushErr := flushOracleRecoveryInterface(luid)
 	if flushErr != nil && flushErr.Error() == "ORPHAN_IDENTITY_FAILED" { return flushErr }
 	absent, err := oracleRecoveryAbsent()
@@ -526,12 +494,16 @@ DORMANT_RECOVERY = '''// RecoverDormantOracleAdapter handles only a dead creator
 // guarded recovery it never removes addresses, routes or DNS. Native snapshots
 // must prove only Windows-generated local address/route metadata remains
 // before a fresh Create is attempted. A Down row alone never permits recovery.
-func RecoverDormantOracleAdapter(value uint64) error {
+func RecoverDormantOracleAdapter(value uint64, restore func(uint64) error) error {
 	oracleAdapterMutex.Lock()
 	defer oracleAdapterMutex.Unlock()
-	if value == 0 || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
+	if value == 0 || restore == nil || oraclePreparedAdapter != nil { return fmt.Errorf("ORPHAN_IDENTITY_FAILED") }
 	luid := winipcfg.LUID(value)
 	if err := verifyOracleDormantEmpty(luid); err != nil { return err }
+	// The service already attested the dead creator and its receipt. Native
+	// restore touches only a matching durable owner+PnP journal; no journal
+	// is an idempotent read-only result. Never remove an unrestored device.
+	if err := restore(value); err != nil { return err }
 	// A live/existing device or packet session must cause Create to collide.
 	// Never open/adopt it. Only this successful fresh Create grants a creator
 	// handle that this helper may close; no packet session is started here.

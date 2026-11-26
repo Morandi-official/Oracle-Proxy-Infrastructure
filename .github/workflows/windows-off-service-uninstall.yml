@@ -27,8 +27,7 @@ jobs:
           # No Go/core download, tunnel, account or network test. This dummy is
           # hash-pinned solely for Install/Off/Remove and is NEVER executed/shipped.
           [IO.File]::WriteAllText((Join-Path $PWD "$out/Proxy.Core.exe"),'OFF_ONLY_NON_EXECUTABLE_FIXTURE')
-          cl.exe /nologo /LD /O2 /D_WIN32_WINNT=0x0A00 /DUNICODE /D_UNICODE clients\windows\product\native\guard.c /link /OUT:dist\off-service-fixture\Proxy.Guard.dll
-          if($LASTEXITCODE -ne 0){throw 'Native boundary compile failed'}
+          ./clients/windows/product/ci/build-native-guard.ps1 -OutputDirectory $out
           $pins='./clients/windows/product/BuildPins.cs'
           $body=(Get-Content -Raw $pins).Replace('BUILD_MUST_PIN_CORE',(Get-FileHash "$out/Proxy.Core.exe").Hash.ToLowerInvariant()).Replace('BUILD_MUST_PIN_GUARD',(Get-FileHash "$out/Proxy.Guard.dll").Hash.ToLowerInvariant())
           [IO.File]::WriteAllText((Resolve-Path $pins),$body)

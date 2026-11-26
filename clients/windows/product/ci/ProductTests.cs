@@ -157,6 +157,18 @@ internal static class ProductTests
             if(await TunReceipt.ReadErrors(untrusted,CancellationToken.None) is not null)return 1;
         }
         Console.WriteLine("DORMANT_ROUTE_DIAGNOSTIC_CODES_REQUIRE_EXACT_ALLOWLISTED_LINES=PASS");
+        foreach(string reason in new[]{"PARK_BINDINGS_LOAD_FAILED","PARK_BINDINGS_DISABLE_FAILED","PARK_BINDINGS_RESTORE_FAILED"}){
+            using var core=new CoreProcess();
+            foreach(string malformed in new[]{reason,"prefix PARK_AUDIT_FAILED "+reason,"PARK_AUDIT_FAILED "+reason+" extra",
+                         "PARK_AUDIT_FAILED "+reason.ToLowerInvariant(),"PARK_AUDIT_FAILED PARK_BINDINGS_UNKNOWN"}){
+                core.RecordParkFailure(malformed);
+                if(core.SafeStage!="NOT_STARTED")return 1;
+            }
+            if(!core.RecordParkFailure("PARK_AUDIT_FAILED "+reason) || core.SafeStage!=reason)return 1;
+            core.RecordParkFailure("PARK_AUDIT_FAILED UNEXPECTED_PRIVATE_DATA");
+            if(core.SafeStage!=reason)return 1;
+        }
+        Console.WriteLine("PARK_BINDING_FAILURES_REQUIRE_EXACT_PUBLIC_STDERR_CODES=PASS");
         using var client=new HttpClient(new SlowTrace(true)){Timeout=Timeout.InfiniteTimeSpan};
         bool reply=false;var ready=Task.Run(async()=>{await Task.Delay(500);Volatile.Write(ref reply,true);});
         long elapsed=await EgressProbe.Verify(client,3,()=>Volatile.Read(ref reply),CancellationToken.None);await ready;
@@ -1550,6 +1562,20 @@ internal static class ProductTests
     private static async Task RunParkedOffline()
     {
         Require(!NativeGuard.TunPresent && NativeGuard.ConfirmedAbsent,"REAL_SYSTEM_HOLDER_TEST_STARTS_WITH_NO_ADAPTER_OR_WFP_FILTER");
+        var off=DurableState.Load();
+        Require(!off.ConnectIntent && !off.RecoveryRequired && string.IsNullOrEmpty(off.Token),"REAL_SYSTEM_HOLDER_STARTS_SIGNED_OUT_AND_OFF");
+        string offPath=Path.Combine(Platform.StateRoot,"state.dpapi");
+        if(!File.Exists(offPath))off.Save();
+        byte[] originalState=File.ReadAllBytes(offPath);
+        await ExerciseOfflineHolder(crash:true);
+        // Reopen the same fixed adapter identity from scratch; leaked disabled
+        // bindings or an unrecovered device must not become the next baseline.
+        await ExerciseOfflineHolder(crash:false);
+        Require(File.ReadAllBytes(offPath).AsSpan().SequenceEqual(originalState),"REAL_SYSTEM_HOLDER_CRASH_PRESERVED_DURABLE_OFF_STATE");
+    }
+
+    private static async Task ExerciseOfflineHolder(bool crash)
+    {
         using var core=new CoreProcess();
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(25));
         Process? observed=null;
@@ -1565,17 +1591,33 @@ internal static class ProductTests
             await Task.Delay(750,deadline.Token);
             Require(core.StrictParked && !observed.HasExited && TunReceipt.VerifyRetained(observed)==luid,
                 "REAL_SYSTEM_HOLDER_REMAINS_STRICTLY_EMPTY");
+            if(crash){
+                // Let the independent runner inspect the actual parked adapter
+                // while it exists; these files contain only a public test LUID.
+                string ready=Path.Combine(Root,"park-ready");
+                File.WriteAllText(ready+".pending",luid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                File.Move(ready+".pending",ready);
+                while(!File.Exists(Path.Combine(Root,"park-observed")))await Task.Delay(40,deadline.Token);
+                observed.Kill(true);
+                await observed.WaitForExitAsync(deadline.Token);
+            }
         }catch{
             Evidence.Add("ACTUAL_OFFLINE_HOLDER_STAGE="+core.SafeStage);
             foreach(string counts in core.ParkCounts)Evidence.Add("ACTUAL_OFFLINE_HOLDER_COUNTS="+counts);
             throw;
         }finally{
             await core.Stop();
-            await VpnRuntime.EnsureTunnelRemoved();
-            bool exited=observed is null || observed.HasExited;
-            observed?.Dispose();
-            Require(!core.Running && exited && !NativeGuard.TunPresent && NativeGuard.ConfirmedAbsent,
-                "REAL_SYSTEM_PARKED_HOLDER_EXITED_AND_ADAPTER_REMOVED");
+            try{
+                if(crash){
+                    await VpnRuntime.AuditStoppedTunnel(VpnRuntime.EnsureTunnelRemoved,
+                        ()=>VpnRuntime.RecoverStoppedTunnel(CancellationToken.None));
+                }else{
+                    await VpnRuntime.EnsureTunnelRemoved();
+                }
+                bool exited=observed is null || observed.HasExited;
+                Require(!core.Running && exited && !NativeGuard.TunPresent && NativeGuard.ConfirmedAbsent,
+                    crash?"REAL_SYSTEM_CRASHED_PARKED_HOLDER_REMOVED_BY_ORDINARY_RECOVERY":"REAL_SYSTEM_PARKED_HOLDER_EXITED_AND_ADAPTER_REMOVED");
+            }finally{observed?.Dispose();}
         }
     }
     private static async Task RunRecoveryOnly()

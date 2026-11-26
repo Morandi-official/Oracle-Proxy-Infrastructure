@@ -18,6 +18,8 @@ public static class ProxyGuiCloseButton {
  public static extern bool PostMessage(IntPtr hwnd,uint message,IntPtr wParam,IntPtr lParam);
 }
 '@
+. (Join-Path $PSScriptRoot 'adapter-binding-witness.ps1')
+$otherBindings=@(Get-OtherAdapterBindingState)
 $launch=[Diagnostics.Stopwatch]::StartNew()
 $gui=Start-Process -FilePath $Client -PassThru
 function Find-Control([string]$Id){
@@ -163,6 +165,7 @@ function Assert-ParkedAdapter([uint32]$CoreId,[uint64]$ExpectedLuid) {
  if(!$current -or $current -ne $ExpectedLuid){throw 'LIVE_RETAINED_ADAPTER_REPLACED'}
  $adapters=@(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object {$_.Name -eq 'OracleProxy'})
  if($adapters.Count -ne 1 -or [guid]$adapters[0].InterfaceGuid -ne [guid]'62e2af98-7089-6f2c-246b-4a5960cfc978' -or $adapters[0].Status -eq 'Up'){throw 'LIVE_RETAINED_ADAPTER_NOT_DOWN'}
+ Assert-OwnedIpBindings $ExpectedLuid $false
  $idx=$adapters[0].ifIndex
  $addresses=@(Get-NetIPAddress -PolicyStore ActiveStore -ErrorAction Stop | Where-Object InterfaceIndex -eq $idx)
  $routes=@(Get-NetRoute -PolicyStore ActiveStore -ErrorAction Stop | Where-Object InterfaceIndex -eq $idx)
@@ -214,6 +217,7 @@ try {
    $lastCore=Read-CoreWitness $false $cycle
    $activeLuid=[ProxyGuiCloseButton]::AdapterLuid()
    if(!$activeLuid -or ($cycle -gt 1 -and ($activeLuid -ne $retainedLuid -or $lastCore -ne $retainedCore))){throw 'LIVE_RECONNECT_DID_NOT_REUSE_HOLDER_AND_ADAPTER'}
+   Assert-OwnedIpBindings $activeLuid $true
    $script:stage="off-$cycle"
    $off=Find-Control 'disconnect'
    if($off -and $off.Current.IsOffscreen){
@@ -230,6 +234,7 @@ try {
    $retainedCore=Read-CoreWitness $true
    if($retainedCore -ne $lastCore){throw 'LIVE_GUI_OFF_REPLACED_HOLDER'}
    Assert-ParkedAdapter $retainedCore $activeLuid
+   if($cycle -eq 1){Assert-OtherAdapterBindingState $otherBindings}
    $retainedLuid=$activeLuid
   }
  }
@@ -245,6 +250,7 @@ try {
   $_.Name -eq 'OracleProxy' -or [guid]$_.InterfaceGuid -eq [guid]'62e2af98-7089-6f2c-246b-4a5960cfc978'
  }).Count){throw 'LIVE_GUI_X_LEFT_ADAPTER'}
  if(@(Get-Process -ErrorAction Stop | Where-Object {$_.Id -eq $lastCore -or $_.ProcessName -eq 'Proxy.Core'}).Count){throw 'LIVE_GUI_X_LEFT_HOLDER'}
+ Assert-OtherAdapterBindingState $otherBindings
  if(!$connectTargetMet){throw 'LIVE_GUI_VERIFIED_CONNECT_OVER_TARGET'}
  Write-Host 'ACTUAL_PRODUCT_GUI_CLOSED_WITHOUT_SERVICE_HOLDER_OR_ADAPTER=PASS'
 } catch {

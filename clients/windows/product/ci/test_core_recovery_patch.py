@@ -53,7 +53,7 @@ func generateGUIDByDeviceName(name string) {}
             actual=vendor.patched(body)
         self.assertNotIn(b'wintun.OpenAdapter(',actual)
         self.assertIn(b'preserve unchanged source',actual)
-        self.assertIn(b'func RecoverOracleAdapter(value uint64)',actual)
+        self.assertIn(b'func RecoverOracleAdapter(value uint64, restore func(uint64) error)',actual)
         self.assertIn(b'row.OperStatus != winipcfg.IfOperStatusDown',actual)
         self.assertIn(b'row.InterfaceGUID != *expected',actual)
         self.assertIn(b'if absent { return nil }',actual)
@@ -111,11 +111,14 @@ func TestExactEmptyDNSSnapshot(t *testing.T){
             result=subprocess.run([go,'test','./...'],cwd=root,env=env,text=True,capture_output=True,timeout=60)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
-    def test_dormant_recovery_is_read_only_until_own_fresh_creation(self):
+    def test_dormant_recovery_rolls_back_only_native_journal_before_owned_recreation(self):
         source=vendor.DORMANT_RECOVERY
         self.assertEqual(source.count('wintun.CreateAdapter('),1)
         self.assertEqual(source.count('created.Close()'),1)
-        self.assertLess(source.index('verifyOracleDormantEmpty(luid)'),source.index('wintun.CreateAdapter('))
+        self.assertLess(source.index('verifyOracleDormantEmpty(luid)'), source.index('restore(value)'))
+        self.assertLess(source.index('restore(value)'), source.index('wintun.CreateAdapter('))
+        self.assertLess(vendor.RECOVERY.index('verifyOracleRecoveryIdentity(luid)'), vendor.RECOVERY.index('restore(value)'))
+        self.assertLess(vendor.RECOVERY.index('restore(value)'), vendor.RECOVERY.index('flushOracleRecoveryInterface(luid)'))
         self.assertLess(source.index('verifyOracleDormantEmpty(fresh)'),source.index('created.Close()'))
         self.assertLess(source.index('created.Close()'),source.index('oracleRecoveryAbsent()'))
         for forbidden in ('OpenAdapter(','.Delete(','.Flush','SetInterfaceDnsSettings','StartSession(',
@@ -297,20 +300,18 @@ func localRoute4(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,Destinat
             self.assertEqual(result.returncode,0,result.stdout)
 
     def test_park_dns_cleanup_and_down_require_readback_on_same_creator(self):
-        source = vendor.PARKED.split('func ParkOracleAdapter()', 1)[1].split('func VerifyParkedOracleAdapter()', 1)[0]
-        source = 'func ParkOracleAdapter()' + source
+        source = vendor.PARKED.split('func ParkOracleAdapter(', 1)[1].split('func VerifyParkedOracleAdapter()', 1)[0]
+        source = 'func ParkOracleAdapter(' + source
         diag = source.index('// Report only the counts')
         end_diag = source.index('func oracleParkedConfigPresent(', diag)
         source = source[:diag] + 'func oracleLogParkedCounts(l LUID,stage string){checkLUID(l)}\n' + source[end_diag:]
         source = source.replace('windows.', '').replace('winipcfg.', '')
         declarations = '''package parkflow
-import ("fmt"; "sync"; "time")
+import ("fmt"; "sync")
 type LUID uint64
 const AF_INET=2
 const AF_INET6=23
 const AF_UNSPEC=0
-const NetIfAdminStatusUp=1
-const NetIfAdminStatusDown=2
 const DnsInterfaceSettingsVersion1=1
 const DnsInterfaceSettingsFlagNameserver=2
 const DnsInterfaceSettingsFlagSearchList=4
@@ -323,6 +324,7 @@ func (*creator) LUID() uint64{return 7}
 var oracleAdapterMutex sync.Mutex
 var oraclePreparedAdapter *creator
 var oracleStrictlyParked bool
+var oracleRestoreBindings func(uint64) error
 var initialDNS,currentDNS,downResult string
 var clearFailureFlags,writeCalls,downCalls,identityCalls,failIdentityAt,readbacks int
 var clearImmediately bool
@@ -351,9 +353,10 @@ func SetInterfaceDnsSettings(guid int, s *DnsInterfaceSettings)error{
     if writeCalls==2 && clearImmediately{currentDNS=""}
     return nil
 }
-func setOracleParkedAdmin(l LUID,from,to int)error{
-    checkLUID(l);if from!=1||to!=2{panic("unexpected admin change")};downCalls++;currentDNS=downResult;return nil
+func parkBinding(l uint64)error{
+    checkLUID(LUID(l));if oracleRestoreBindings==nil{panic("unarmed rollback")};downCalls++;currentDNS=downResult;return nil
 }
+func restoreBinding(l uint64)error{checkLUID(LUID(l));return nil}
 '''
         cases = '''package parkflow
 import "testing"
@@ -361,9 +364,9 @@ func TestOwnedCleanupAndIndependentVerification(t *testing.T){
     const server="PARK_DNS_SERVER_PRESENT"
     const suffix="PARK_DNS_SUFFIX_PRESENT"
     for _,tc:=range []struct{name,initial,input,afterDown,want string; clearNow bool; failFlags,failAt,writes,disables int}{
-        {"already empty","","","","",false,0,0,0,0},
-        {"configured suffix clears on exact write",suffix,suffix,"", "",true,0,0,2,0},
-        {"default servers cleared by admin-down",server,server,"","",false,0,0,2,1},
+        {"already empty still snapshots enabled family baseline","","","","",false,0,0,0,1},
+        {"configured suffix clears on exact write",suffix,suffix,"", "",true,0,0,2,1},
+        {"default servers cleared by protocol unbind",server,server,"","",false,0,0,2,1},
         {"IPv6 clear refused; actual Down still empty",server,server,"","",false,39,0,2,1},
         {"IPv4 clear refused and still present",server,server,server,"PARK_DNS4_CLEAR_FAILED",false,38,0,2,1},
         {"IPv6 clear refused and still present",server,server,server,"PARK_DNS6_CLEAR_FAILED",false,39,0,2,1},
@@ -373,10 +376,10 @@ func TestOwnedCleanupAndIndependentVerification(t *testing.T){
         {"identity lost before second family",server,server,"","ORPHAN_IDENTITY_FAILED",false,0,2,1,0},
     }{
         t.Run(tc.name,func(t *testing.T){
-            oraclePreparedAdapter=&creator{};oracleStrictlyParked=false;initialDNS=tc.initial;currentDNS=tc.input;downResult=tc.afterDown
+            oraclePreparedAdapter=&creator{};oracleStrictlyParked=false;oracleRestoreBindings=nil;initialDNS=tc.initial;currentDNS=tc.input;downResult=tc.afterDown
             clearImmediately=tc.clearNow;clearFailureFlags=tc.failFlags;failIdentityAt=tc.failAt
             writeCalls=0;downCalls=0;identityCalls=0;readbacks=0
-            err:=ParkOracleAdapter();got:="";if err!=nil{got=err.Error()}
+            err:=ParkOracleAdapter(parkBinding,restoreBinding);got:="";if err!=nil{got=err.Error()}
             if got!=tc.want || oracleStrictlyParked!=(tc.want=="") || writeCalls!=tc.writes || downCalls!=tc.disables || readbacks==0{
                 t.Fatalf("got %q parked=%v writes=%d disables=%d independent-readbacks=%d",got,oracleStrictlyParked,writeCalls,downCalls,readbacks)
             }
@@ -397,7 +400,7 @@ func TestOwnedCleanupAndIndependentVerification(t *testing.T){
 
     def test_parked_adapter_requires_zero_native_tables_and_complete_identity(self):
         start = vendor.PARKED.index('func verifyOracleParkedEmpty(')
-        end = vendor.PARKED.index('var oracleSetIfEntry', start)
+        end = len(vendor.PARKED)
         dns_start = vendor.CACHE.index('func oracleAdapterDNSProblem(')
         dns_end = vendor.CACHE.index('func (t *NativeTun) prepareOracleAdapter()', dns_start)
         source = (vendor.CACHE[dns_start:dns_end] + vendor.PARKED[start:end]).replace(
@@ -476,73 +479,62 @@ func TestLiteralOff(t *testing.T) {
                                     capture_output=True, text=True, env=env, timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_parked_admin_change_writes_only_exact_roundtripped_index(self):
-        start = vendor.PARKED.index('func setOracleParkedAdmin(')
-        source = vendor.PARKED[start:].replace('winipcfg.', '').replace('windows.', '')
-        harness = '''package parked
-import ("fmt"; "unsafe")
-type LUID uint64
-type NetIfAdminStatus uint32
-const NetIfAdminStatusDown NetIfAdminStatus = 2
-var oracleParkedAdminDown bool
-type MibIfRow struct { Index,AdminStatus uint32 }
-type iface struct { InterfaceLUID LUID; InterfaceIndex uint32; AdminStatus NetIfAdminStatus }
-var current iface
-var roundTrip LUID
-var writeCount,identityCalls int
-var procFailure,writeFailure,wrongReadback,postIdentityFailure bool
-func (luid LUID) Interface() (*iface,error) {row:=current;return &row,nil}
-func LUIDFromIndex(idx uint32)(LUID,error){if idx!=42{return 0,fmt.Errorf("index")}; return roundTrip,nil}
-func verifyOracleRecoveryIdentity(luid LUID)error{
-    identityCalls++
-    if luid!=7||(postIdentityFailure && identityCalls==2){return fmt.Errorf("identity")}
-    return nil
-}
-type testProc struct{}
-var oracleSetIfEntry=testProc{}
-func (testProc)Find()error{if procFailure{return fmt.Errorf("unavailable")};return nil}
-func (testProc)Call(ptr uintptr)(uintptr,uintptr,error){
-    req:=(*MibIfRow)(unsafe.Pointer(ptr));writeCount++
-    if req.Index!=42||writeFailure{return 1,0,nil}
-    if !wrongReadback{current.AdminStatus=NetIfAdminStatus(req.AdminStatus)}
-    return 0,0,nil
-}
+    def test_each_creator_is_restored_before_open_or_full_close(self):
+        start = vendor.CACHE.index('var oracleAdapterMutex')
+        end = vendor.CACHE.index('// Create only this process', start)
+        src = vendor.CACHE[start:end].replace('wintun.Adapter', 'creator').replace(
+            'winipcfg.LUID', 'uint64').replace('wintun.CreateAdapter', 'coldCreate')
+        shim = '''package lifecycle
+import ("fmt";"os";"sync")
+type creator struct{luid uint64}
+func(c *creator)LUID()uint64{return c.luid}
+func(c *creator)Close(){if c.luid!=7{panic("wrong creator")};closed++}
+const TunnelType="sing-tun"
+func generateGUIDByDeviceName(name string)string{return name}
+func coldCreate(name,typ,id string)(*creator,error){panic("unexpected cold path")}
+var closed, restores int
+var empty, identity, failRestore bool
+func verifyOracleParkedEmpty(l uint64)error{if l!=7||!empty{return fmt.Errorf("dirty")};return nil}
+func verifyOracleRecoveryIdentity(l uint64)error{if l!=7||!identity{return fmt.Errorf("identity")};return nil}
+func restore(l uint64)error{if l!=7{panic("foreign restore")};restores++;if failRestore{return fmt.Errorf("refused")};return nil}
 '''
-        tests = '''package parked
+        tests = '''package lifecycle
 import "testing"
-func TestExactOwner(t *testing.T) {
-    for _,tc:=range []struct{name string; change func(); want bool; writes int}{
-        {"correct disable",func(){},true,1},
-        {"wrong source state",func(){current.AdminStatus=2},false,0},
-        {"invalid index",func(){current.InterfaceIndex=0},false,0},
-        {"foreign LUID",func(){current.InterfaceLUID=8},false,0},
-        {"index reassigned",func(){roundTrip=8},false,0},
-        {"missing API",func(){procFailure=true},false,0},
-        {"OS rejected write",func(){writeFailure=true},false,1},
-        {"different state after write",func(){wrongReadback=true},false,1},
-        {"identity lost after write",func(){postIdentityFailure=true},false,1},
-    }{
-        current=iface{7,42,1};roundTrip=7;identityCalls=0;writeCount=0
-        writeFailure=false;procFailure=false;wrongReadback=false;postIdentityFailure=false
-        oracleParkedAdminDown=false
-        tc.change()
-        got:=setOracleParkedAdmin(7,1,2)==nil
-        if oracleParkedAdminDown!=(tc.writes==1 && !writeFailure){t.Fatalf("%s: restore witness",tc.name)}
-        if got!=tc.want||writeCount!=tc.writes{t.Fatalf("%s: ok=%v writes=%d",tc.name,got,writeCount)}
-    }
-    current=iface{7,42,2};roundTrip=7;identityCalls=0;postIdentityFailure=false
-    if err:=setOracleParkedAdmin(7,2,1);err!=nil||current.AdminStatus!=1{t.Fatal(err)}
+func fresh() *creator {
+    c:=&creator{7};oraclePreparedAdapter=c;oracleStrictlyParked=true;oracleRestoreBindings=restore
+    closed=0;restores=0;empty=true;identity=true;failRestore=false
+    return c
+}
+func TestExplicitResumeOrClose(t *testing.T){
+    c:=fresh()
+    if _,err:=openOracleAdapter("OracleProxy");err==nil||restores!=0||closed!=0{t.Fatal("opened detached interface without explicit resume")}
+    if err:=ResumeOracleAdapterBindings();err!=nil||restores!=1{t.Fatal(err)}
+    current,err:=openOracleAdapter("OracleProxy");if err!=nil||current!=c||oraclePreparedAdapter!=nil{t.Fatal("new session did not get its own adapter")}
+    ClosePreparedOracleAdapter();if closed!=0||restores!=1{t.Fatal("closed live session or repeated restore")}
+    fresh();empty=false
+    if err:=ResumeOracleAdapterBindings();err==nil||restores!=0{t.Fatal("resumed dirty interface")}
+    ClosePreparedOracleAdapter();if restores!=1||closed!=1{t.Fatal("close failed to restore creator")}
+    fresh();failRestore=true
+    if err:=ResumeOracleAdapterBindings();err==nil||oracleRestoreBindings==nil{t.Fatal("lost partial native transaction")}
+    if _,err:=openOracleAdapter("OracleProxy");err==nil{t.Fatal("opened failed transaction")}
+    failRestore=false;ClosePreparedOracleAdapter();ClosePreparedOracleAdapter()
+    if restores!=2||closed!=1{t.Fatal("failed restore must be retried only on owned close")}
+    fresh();identity=false
+    if err:=ResumeOracleAdapterBindings();err==nil||!oracleStrictlyParked{t.Fatal("lost post-restore identity fence")}
+    ClosePreparedOracleAdapter();if restores!=2||closed!=1{t.Fatal("lost rollback after identity error")}
+    fresh();oracleStrictlyParked=false // Park failed after its native mutation
+    ClosePreparedOracleAdapter();if restores!=1||closed!=1{t.Fatal("lost partial park rollback")}
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / 'admin.go').write_text(harness + source)
-            (root / 'admin_test.go').write_text(tests)
+            (root / 'holder.go').write_text(shim + src)
+            (root / 'holder_test.go').write_text(tests)
             env = dict(os.environ, GO111MODULE='off', GOWORK='off', GOPROXY='off', GOTOOLCHAIN='local')
-            for variable in ('GOOS', 'GOARCH'):
-                env.pop(variable, None)
-            result = subprocess.run(['go', 'test', 'admin.go', 'admin_test.go'], cwd=root,
-                                    capture_output=True, text=True, env=env, timeout=90)
+            env.pop('GOOS', None)
+            env.pop('GOARCH', None)
+            result = subprocess.run(['go', 'test', 'holder.go', 'holder_test.go'], cwd=root, env=env,
+                                    capture_output=True, text=True, timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 if __name__=='__main__':unittest.main()

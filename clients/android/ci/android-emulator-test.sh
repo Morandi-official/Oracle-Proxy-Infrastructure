@@ -20,6 +20,11 @@ cleanup() {
     adb emu kill >/dev/null 2>&1 || true
     if [[ -n "$emulator_pid" ]]; then
         kill "$emulator_pid" 2>/dev/null || true
+        # The emulator can still write AVD state after accepting termination.
+        if ! timeout 8 tail --pid="$emulator_pid" -f /dev/null; then
+            kill -KILL "$emulator_pid" 2>/dev/null || true
+        fi
+        wait "$emulator_pid" 2>/dev/null || true
     fi
     if [[ "$mode" == isolated ]]; then
         sudo ip link del wg-proxy-ci 2>/dev/null || true
@@ -80,15 +85,19 @@ if [[ "$mode" == production ]]; then
     download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
     timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)|CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK))_MS=[0-9]+;TARGET_MS=1000;UNDER_TARGET=[01]$'
     families='^ANDROID_PERF_VERIFIED_FAMILIES=[12]$'
+    proof='^ANDROID_PERF_EXIT_PROOF_(FIRST|RECONNECT)=IPV4:(h3|https);IPV6:(h3|https|blocked);H3_CANDIDATE=[01]$'
+    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+;EXIT_PROOF_MS:[0-9]+;ATTEMPTS:[0-9]+$'
     latency='^ANDROID_PERF_HTTPS_(DIRECT|WIREGUARD_UDP)_(FRESH|REUSED)_SAMPLES_MS=([0-9]+,){19}[0-9]+'
     latency+=';N=20;MEDIAN_MS=[0-9]+;P95_MS=[0-9]+;UNDER_500MS=[0-9]+;HOST=www[.]cloudflare[.]com'
     latency+=';PATH=/cdn-cgi/trace;ENDPOINT=[0-9.]+;ADDRESS_FAMILY=IPv4;PROTOCOL=HTTP_1_1$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
-        grep -E -e "$download" -e "$timing" -e "$families" -e "$latency" |
+        grep -E -e "$download" -e "$timing" -e "$families" -e "$proof" -e "$phases" -e "$latency" |
         tee "$working_dir/performance.txt"
     for metric in DOWNLOAD_DIRECT_BYTES DOWNLOAD_WIREGUARD_UDP_BYTES PERF_VERIFIED_FAMILIES \
         PERF_LOGIN_FRESH_MS PERF_LOGIN_SAVED_CONTROLLER_MS PERF_LOGIN_WARM_MS \
         PERF_CONNECT_FIRST_CLICK_MS PERF_CONNECT_AFTER_CONSENT_MS PERF_CONNECT_RECONNECT_CLICK_MS \
+        PERF_EXIT_PROOF_FIRST PERF_EXIT_PROOF_RECONNECT \
+        PERF_CONNECT_PHASES_FIRST PERF_CONNECT_PHASES_RECONNECT \
         PERF_HTTPS_DIRECT_FRESH_SAMPLES_MS PERF_HTTPS_DIRECT_REUSED_SAMPLES_MS \
         PERF_HTTPS_WIREGUARD_UDP_FRESH_SAMPLES_MS PERF_HTTPS_WIREGUARD_UDP_REUSED_SAMPLES_MS; do
         grep -q "^ANDROID_$metric=" "$working_dir/performance.txt"

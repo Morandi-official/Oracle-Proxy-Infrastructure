@@ -20,14 +20,9 @@ import com.wireguard.crypto.KeyPair;
 
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.InetAddress;
-import java.net.Proxy;
 import java.net.Socket;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -40,17 +35,12 @@ import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-import javax.net.ssl.HttpsURLConnection;
-
 public final class TunnelEngine {
     private static final long VERIFY_DEADLINE_MS = 6_500;
     private static final long VPN_NETWORK_WAIT_MS = 1_500;
     private static final long CONNECT_DEADLINE_MS = 48_000;
     private static final long PORT_HINT_LIFETIME_MS = 10 * 60_000;
     private static final long CANCELLATION_CHECK_MS = 80;
-    private static final int MAX_TRACE_BYTES = 8_192;
-    private static final String TRACE4 = "https://1.1.1.1/cdn-cgi/trace";
-    private static final String TRACE6 = "https://[2606:4700:4700::1111]/cdn-cgi/trace";
 
     public interface Callback {
         void trying(String endpoint);
@@ -81,6 +71,8 @@ public final class TunnelEngine {
         long nativeStartMs;
         long networkWaitMs;
         long exitProofMs;
+        String ipv4ProofProtocol = "";
+        String ipv6ProofProtocol = "";
 
         AttemptTiming(int attempts) {
             this.attempts = attempts;
@@ -118,7 +110,7 @@ public final class TunnelEngine {
     };
 
     public TunnelEngine(Context context) {
-        this(context, TunnelEngine::verifyCloudflare, false);
+        this(context, null, false);
     }
 
     TunnelEngine(Context context, Probe probe, boolean allowPrivateTestAddresses) {
@@ -400,9 +392,10 @@ public final class TunnelEngine {
             return null;
         }
         ExecutorService executor = Executors.newFixedThreadPool(target.ipv6Exit.isEmpty() ? 1 : 2);
-        ExecutorCompletionService<String> completed = new ExecutorCompletionService<>(executor);
-        Future<String> v4 = completed.submit(() -> checkAddress(vpn, candidate.exit, false, remaining));
-        Future<String> v6 = target.ipv6Exit.isEmpty() ? null : completed.submit(
+        ExecutorCompletionService<CloudflareExitProbe.Proof> completed = new ExecutorCompletionService<>(executor);
+        Future<CloudflareExitProbe.Proof> v4 = completed.submit(
+                () -> checkAddress(vpn, candidate.exit, false, remaining));
+        Future<CloudflareExitProbe.Proof> v6 = target.ipv6Exit.isEmpty() ? null : completed.submit(
                 () -> checkAddress(vpn, target.ipv6Exit, true, remaining));
         try {
             int outstanding = v6 == null ? 1 : 2;
@@ -410,19 +403,24 @@ public final class TunnelEngine {
                 long wait = Math.min(CANCELLATION_CHECK_MS, probeDeadline - SystemClock.elapsedRealtime());
                 if (wait > 0 && completed.poll(wait, TimeUnit.MILLISECONDS) != null
                         && --outstanding == 0 && up && !cancelled(callback)) {
-                    String ipv4;
-                    String ipv6;
+                    CloudflareExitProbe.Proof ipv4;
+                    CloudflareExitProbe.Proof ipv6;
                     try {
                         ipv4 = v4.get();
-                        ipv6 = v6 == null ? "" : v6.get();
+                        ipv6 = v6 == null ? null : v6.get();
                     } catch (ExecutionException error) {
                         Throwable cause = error.getCause();
                         trace("exit probe error " + (cause == null ? "unknown" : cause.getClass().getSimpleName())
                                 + ", handshake=" + hasHandshake(candidate));
                         return null;
                     }
-                    return hasHandshake(candidate)
-                            ? new Result(candidate.endpoint(), ipv4, ipv6, timing) : null;
+                    if (!hasHandshake(candidate)) {
+                        return null;
+                    }
+                    timing.ipv4ProofProtocol = ipv4.protocol;
+                    timing.ipv6ProofProtocol = ipv6 == null ? "" : ipv6.protocol;
+                    return new Result(candidate.endpoint(), ipv4.address,
+                            ipv6 == null ? "" : ipv6.address, timing);
                 }
             }
             trace("exit proof deadline, handshake=" + hasHandshake(candidate));
@@ -447,14 +445,17 @@ public final class TunnelEngine {
         }
     }
 
-    private String checkAddress(Network vpn, String expected, boolean ipv6, long timeoutMs)
+    private CloudflareExitProbe.Proof checkAddress(Network vpn, String expected, boolean ipv6, long timeoutMs)
             throws IOException {
+        if (probe == null) {
+            return CloudflareExitProbe.verify(context, vpn, expected, ipv6, timeoutMs);
+        }
         String address = probe.verify(vpn, expected, ipv6, timeoutMs);
         InetAddress actual = TunnelProfile.numeric(address, ipv6, !allowPrivateTestAddresses);
         if (!actual.equals(TunnelProfile.numeric(expected, ipv6, !allowPrivateTestAddresses))) {
             throw new IOException("VPN_EXIT_MISMATCH");
         }
-        return actual.getHostAddress();
+        return new CloudflareExitProbe.Proof(actual.getHostAddress(), "fixture");
     }
 
     private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback, Network previousNetwork)
@@ -543,49 +544,5 @@ public final class TunnelEngine {
 
     private static boolean cancelled(Callback callback) {
         return callback != null && callback.cancelled();
-    }
-
-    private static String verifyCloudflare(Network vpn, String expected, boolean ipv6, long timeoutMs)
-            throws IOException {
-        HttpsURLConnection connection = (HttpsURLConnection) vpn.openConnection(
-                new URL(ipv6 ? TRACE6 : TRACE4), Proxy.NO_PROXY);
-        try {
-            int timeout = (int) Math.max(1, Math.min(timeoutMs, VERIFY_DEADLINE_MS));
-            connection.setConnectTimeout(timeout);
-            connection.setReadTimeout(timeout);
-            connection.setInstanceFollowRedirects(false);
-            connection.setUseCaches(false);
-            connection.setRequestProperty("Connection", "close");
-            if (connection.getResponseCode() != 200) {
-                throw new IOException("VPN_EXIT_PROBE_HTTP_FAILED");
-            }
-            try (InputStream stream = connection.getInputStream();
-                 ByteArrayOutputStream data = new ByteArrayOutputStream()) {
-                byte[] buffer = new byte[1024];
-                int count;
-                while ((count = stream.read(buffer)) != -1) {
-                    if (data.size() + count > MAX_TRACE_BYTES) {
-                        throw new IOException("VPN_EXIT_PROBE_INVALID");
-                    }
-                    data.write(buffer, 0, count);
-                }
-                String match = null;
-                for (String line : new String(data.toByteArray(), StandardCharsets.US_ASCII)
-                        .split("\\r?\\n")) {
-                    if (line.startsWith("ip=")) {
-                        if (match != null) {
-                            throw new IOException("VPN_EXIT_PROBE_INVALID");
-                        }
-                        match = line.substring(3);
-                    }
-                }
-                if (match != null) {
-                    return match;
-                }
-                throw new IOException("VPN_EXIT_PROBE_INVALID");
-            }
-        } finally {
-            connection.disconnect();
-        }
     }
 }

@@ -81,7 +81,6 @@ if [[ "$mode" == production ]]; then
         -e proxyRun "$GITHUB_RUN_ID" org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
         | tee "$working_dir/instrumentation.txt"
     unset user_b64 pass_b64
-    grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
     download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
     timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)|CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK))_MS=[0-9]+;TARGET_MS=1000;UNDER_TARGET=[01]$'
     login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
@@ -97,6 +96,7 @@ if [[ "$mode" == production ]]; then
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
         grep -E -e "$download" -e "$timing" -e "$login_phases" -e "$families" -e "$proof" -e "$phases" -e "$latency" |
         tee "$working_dir/performance.txt"
+    grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
     for metric in DOWNLOAD_DIRECT_BYTES DOWNLOAD_WIREGUARD_UDP_BYTES PERF_VERIFIED_FAMILIES \
         PERF_LOGIN_FRESH_MS PERF_LOGIN_SAVED_CONTROLLER_MS PERF_LOGIN_WARM_MS \
         PERF_LOGIN_FRESH_PHASES PERF_LOGIN_WARM_PHASES \

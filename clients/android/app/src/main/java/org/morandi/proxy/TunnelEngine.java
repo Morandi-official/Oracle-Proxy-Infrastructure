@@ -44,7 +44,6 @@ public final class TunnelEngine {
     private static final long PORT_HINT_LIFETIME_MS = 10 * 60_000;
     private static final long CANCELLATION_CHECK_MS = 80;
     private static final long BIND_RETRY_INITIAL_MS = 20;
-    private static final long BACKEND_PREPARATION_WAIT_MS = 2_500;
     private static final long EXIT_RETRY_BACKOFF_MS = 160;
     private static final long MIN_EXIT_RETRY_BUDGET_MS = 500;
     private static final int MAX_EXIT_PROBE_ATTEMPTS = 3;
@@ -166,6 +165,17 @@ public final class TunnelEngine {
         if (up || preparedServiceDeadline != 0 || VpnService.prepare(context) != null) {
             return;
         }
+        prepareBackend();
+        try {
+            // Starting the notification-bearing service does not install a
+            // TUN, load a server profile or send WireGuard traffic.
+            preparedServiceDeadline = ProxyVpnService.requestPreparation(context);
+        } catch (IOException ignored) {
+            // Connect can start the service normally after policy is available.
+        }
+    }
+
+    private void prepareBackend() {
         if (backend == null && preparedBackend == null) {
             // Library loading can run with the policy request. A GoBackend
             // constructor has no profile and cannot install a VPN or send packets.
@@ -176,13 +186,6 @@ public final class TunnelEngine {
             } catch (RuntimeException ignored) {
                 // The authorized connection path can load the backend normally.
             }
-        }
-        try {
-            // Starting the notification-bearing service does not install a
-            // TUN, load a server profile or send WireGuard traffic.
-            preparedServiceDeadline = ProxyVpnService.requestPreparation(context);
-        } catch (IOException ignored) {
-            // Connect can start the service normally after policy is available.
         }
     }
 
@@ -200,9 +203,9 @@ public final class TunnelEngine {
             serviceDeadline = 0;
         }
         long backendStarted = SystemClock.elapsedRealtime();
-        loadBackend();
+        long deadline = backendStarted + CONNECT_DEADLINE_MS;
+        loadBackend(deadline, callback);
         long backendWaitMs = SystemClock.elapsedRealtime() - backendStarted;
-        long deadline = SystemClock.elapsedRealtime() + CONNECT_DEADLINE_MS;
         Network underlay = currentUnderlay();
         int attempts = 0;
         for (TunnelProfile.Candidate candidate : orderedCandidates(target, preferredPort, underlay)) {
@@ -278,20 +281,35 @@ public final class TunnelEngine {
                 : "VPN_EXIT_NOT_VERIFIED");
     }
 
-    private void loadBackend() throws IOException {
+    private void loadBackend(long deadline, Callback callback) throws IOException {
         if (backend != null) {
             return;
         }
+        prepareBackend();
         try {
-            backend = preparedBackend == null ? new GoBackend(context)
-                    : preparedBackend.get(BACKEND_PREPARATION_WAIT_MS, TimeUnit.MILLISECONDS);
-            preparedBackend = null;
+            if (preparedBackend == null) {
+                backend = new GoBackend(context);
+                return;
+            }
+            while (!callback.cancelled()) {
+                long remaining = deadline - SystemClock.elapsedRealtime();
+                if (remaining <= 0) {
+                    throw new IOException("WIREGUARD_UNAVAILABLE");
+                }
+                try {
+                    backend = preparedBackend.get(Math.min(remaining, CANCELLATION_CHECK_MS),
+                            TimeUnit.MILLISECONDS);
+                    preparedBackend = null;
+                    return;
+                } catch (TimeoutException ignored) {
+                    // Recheck cancellation within the existing connect deadline.
+                }
+            }
+            // A later connection can reuse the single loader if it is still in progress.
+            throw new IOException("VPN_CONNECT_CANCELLED");
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             throw new IOException("VPN_CONNECT_CANCELLED");
-        } catch (TimeoutException error) {
-            // The single loader is still in progress and can be reused.
-            throw new IOException("WIREGUARD_UNAVAILABLE");
         } catch (ExecutionException | RuntimeException | LinkageError error) {
             preparedBackend = null;
             throw new IOException("WIREGUARD_UNAVAILABLE");

@@ -254,7 +254,8 @@ public final class ProductionLifecycleTest {
                 }
             }
             if (total != limit) {
-                throw new IOException();
+                throw new IOException("ANDROID_DOWNLOAD_LENGTH_MISMATCH bytes=" + total
+                        + " elapsed_ms=" + (SystemClock.elapsedRealtime() - start));
             }
             android.util.Log.i("ProxySpeedAcceptance", "ANDROID_DOWNLOAD_" + route + "_BYTES=" + total
                     + ";ELAPSED_MS=" + (SystemClock.elapsedRealtime() - start));

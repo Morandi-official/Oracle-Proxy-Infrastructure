@@ -53,12 +53,21 @@ class Control(QuietHandler):
 
 
 class ExitProof(QuietHandler):
-    def do_GET(self):
+    def setup(self):
+        super().setup()
         source = ipaddress.ip_address(self.client_address[0])
-        if self.path != "/exit" or str(source) not in {CLIENT_IPV4, CLIENT_IPV6}:
+        self.tunnel_source = str(source) in {CLIENT_IPV4, CLIENT_IPV6}
+        self.family = source.version
+        print(f"Fixture TCP IPv{self.family} accepted, tunnel_source={int(self.tunnel_source)}", flush=True)
+
+    def log_request(self, code="-", size="-"):
+        expected_path = getattr(self, "path", "") == "/exit"
+        print(f"Fixture HTTP IPv{self.family} status={code} exit_path={int(expected_path)}", flush=True)
+
+    def do_GET(self):
+        if self.path != "/exit" or not self.tunnel_source:
             self.send_text(403)
             return
-        print(f"Fixture verified an IPv{source.version} tunnel request", flush=True)
         self.send_text(200, self.server.server_address[0] + "\n")
 
 

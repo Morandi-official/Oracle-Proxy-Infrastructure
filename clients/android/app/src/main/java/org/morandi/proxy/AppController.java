@@ -322,6 +322,10 @@ public final class AppController {
         final long networkBindingMs;
         final long ownerWaitMs;
         final int bindFailures;
+        final int firstBindErrno;
+        final int lastBindErrno;
+        final int initiallyBlocked;
+        final int blockedAtBind;
         final long exitProofMs;
         final long handshakeMs;
         final long ipv4ProofMs;
@@ -351,6 +355,10 @@ public final class AppController {
             this.networkBindingMs = attempt.networkBindingMs;
             this.ownerWaitMs = attempt.ownerWaitMs;
             this.bindFailures = attempt.bindFailures;
+            this.firstBindErrno = attempt.firstBindErrno;
+            this.lastBindErrno = attempt.lastBindErrno;
+            this.initiallyBlocked = attempt.initiallyBlocked;
+            this.blockedAtBind = attempt.blockedAtBind;
             this.exitProofMs = attempt.exitProofMs;
             this.handshakeMs = attempt.handshakeMs;
             this.ipv4ProofMs = attempt.ipv4ProofMs;

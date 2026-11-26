@@ -73,6 +73,9 @@ public final class TunnelEngine {
 
     static final class AttemptTiming {
         final int attempts;
+        int firstAttemptedPort;
+        Network orderingUnderlay;
+        Network verifiedUnderlay;
         long backendWaitMs;
         long serviceWaitMs;
         long nativeStartMs;
@@ -108,6 +111,7 @@ public final class TunnelEngine {
     private TunnelProfile.Candidate connected;
     private Network lastProbeNetwork;
     private long preparedServiceDeadline;
+    private Network preparedUnderlay;
     private Network lastVerifiedUnderlay;
     private TunnelProfile.Candidate lastVerifiedCandidate;
     private long lastVerifiedAt;
@@ -165,6 +169,7 @@ public final class TunnelEngine {
         if (up || preparedServiceDeadline != 0 || VpnService.prepare(context) != null) {
             return;
         }
+        preparedUnderlay = currentUnderlay(connectivity, null);
         prepareBackend();
         try {
             // Starting the notification-bearing service does not install a
@@ -199,6 +204,8 @@ public final class TunnelEngine {
         }
         TunnelProfile target = TunnelProfile.read(payload, preferredPort, allowPrivateTestAddresses);
         Key key = parsePrivateKey(privateKey);
+        Network beforeService = preparedUnderlay;
+        preparedUnderlay = null;
         long serviceDeadline = preparedServiceDeadline;
         preparedServiceDeadline = 0;
         if (serviceDeadline == 0 || up) {
@@ -209,7 +216,9 @@ public final class TunnelEngine {
         long deadline = backendStarted + CONNECT_DEADLINE_MS;
         loadBackend(deadline, callback);
         long backendWaitMs = SystemClock.elapsedRealtime() - backendStarted;
-        Network underlay = currentUnderlay();
+        Network underlay = currentUnderlay(connectivity, beforeService);
+        Network attemptUnderlay = underlay;
+        int firstAttemptedPort = 0;
         int attempts = 0;
         for (TunnelProfile.Candidate candidate : orderedCandidates(target, preferredPort, underlay)) {
             if (callback.cancelled()) {
@@ -220,10 +229,21 @@ public final class TunnelEngine {
             }
             callback.trying(candidate.endpoint());
             trace("attempt UDP " + candidate.port);
+            if (firstAttemptedPort == 0) {
+                firstAttemptedPort = candidate.port;
+            }
+            if (attempts != 0) {
+                Network replacement = currentUnderlay(connectivity, attemptUnderlay);
+                if (replacement != null || !isPhysical(capabilities(connectivity, attemptUnderlay))) {
+                    attemptUnderlay = replacement;
+                }
+            }
             // There is no client-side traffic bypass while a full-route TUN is up.
             // Android can restore normal routes between attempts when a TUN is torn down.
             Config config = target.wireGuardConfig(candidate, key);
             AttemptTiming timing = new AttemptTiming(++attempts);
+            timing.firstAttemptedPort = firstAttemptedPort;
+            timing.orderingUnderlay = underlay;
             timing.backendWaitMs = backendWaitMs;
             try {
                 long serviceStarted = SystemClock.elapsedRealtime();
@@ -258,7 +278,8 @@ public final class TunnelEngine {
                     profile = target;
                     connected = candidate;
                     lastVerifiedCandidate = candidate;
-                    lastVerifiedUnderlay = underlay;
+                    lastVerifiedUnderlay = attemptUnderlay;
+                    timing.verifiedUnderlay = attemptUnderlay;
                     lastVerifiedAt = SystemClock.elapsedRealtime();
                     return result;
                 }
@@ -319,11 +340,42 @@ public final class TunnelEngine {
         }
     }
 
-    private Network currentUnderlay() {
+    private static Network currentUnderlay(ConnectivityManager connectivity, Network earlier) {
         Network active = connectivity.getActiveNetwork();
-        NetworkCapabilities capabilities = active == null ? null : connectivity.getNetworkCapabilities(active);
-        return capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                ? active : null;
+        if (isPhysical(capabilities(connectivity, active))) {
+            return active;
+        }
+        // On disconnect, Android can briefly report its old VPN or no
+        // default. Revalidate the observed pre-service physical network
+        // first. These identities only influence port ordering.
+        if (isValidatedInternet(capabilities(connectivity, earlier))) {
+            return earlier;
+        }
+        Network physical = null;
+        for (Network network : connectivity.getAllNetworks()) {
+            if (!isValidatedInternet(capabilities(connectivity, network))) {
+                continue;
+            }
+            if (physical != null) {
+                return null;
+            }
+            physical = network;
+        }
+        return physical;
+    }
+
+    private static NetworkCapabilities capabilities(ConnectivityManager connectivity, Network network) {
+        return network == null ? null : connectivity.getNetworkCapabilities(network);
+    }
+
+    private static boolean isPhysical(NetworkCapabilities capabilities) {
+        return capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+    }
+
+    private static boolean isValidatedInternet(NetworkCapabilities capabilities) {
+        return isPhysical(capabilities)
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
     }
 
     private List<TunnelProfile.Candidate> orderedCandidates(TunnelProfile target, int preferredPort,
@@ -368,6 +420,7 @@ public final class TunnelEngine {
 
     public synchronized void disconnect() throws IOException {
         preparedServiceDeadline = 0;
+        preparedUnderlay = null;
         profile = null;
         connected = null;
         expectedDown = true;

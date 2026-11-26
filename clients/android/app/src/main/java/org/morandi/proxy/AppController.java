@@ -1,6 +1,7 @@
 package org.morandi.proxy;
 
 import android.content.Context;
+import android.net.Network;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -258,6 +259,9 @@ public final class AppController {
         final String ipv4ProofProtocol;
         final String ipv6ProofProtocol;
         final int attempts;
+        final int firstAttemptedPort;
+        final Network orderingUnderlay;
+        final Network verifiedUnderlay;
 
         ConnectionTiming(long totalMs, long policyMs, TunnelEngine.AttemptTiming attempt) {
             this.totalMs = totalMs;
@@ -277,6 +281,9 @@ public final class AppController {
             this.ipv4ProofProtocol = attempt.ipv4ProofProtocol;
             this.ipv6ProofProtocol = attempt.ipv6ProofProtocol;
             this.attempts = attempt.attempts;
+            this.firstAttemptedPort = attempt.firstAttemptedPort;
+            this.orderingUnderlay = attempt.orderingUnderlay;
+            this.verifiedUnderlay = attempt.verifiedUnderlay;
         }
     }
 

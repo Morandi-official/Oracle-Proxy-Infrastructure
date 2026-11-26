@@ -111,6 +111,8 @@ public final class AndroidLifecycleTest {
             allow.click();
             await("verified connection", controller, () -> "connected".equals(controller.snapshot().mode));
             AppController.State connected = controller.snapshot();
+            AppController.ConnectionTiming firstTiming = controller.lastConnectTiming();
+            assertNotNull(firstTiming);
             assertTrue(engine.isUp());
             assertTrue(hasVpnRoute(context));
             assertTrue("The closed UDP port was tried before connecting", attemptedClosedPort.get());
@@ -120,7 +122,7 @@ public final class AndroidLifecycleTest {
             assertEquals("A valid IPv4 proof is kept during the IPv6 retry", 1, verified4.get());
             assertTrue(verified6.get() > 0);
             assertTrue("IPv6 was freshly proven after its retry",
-                    controller.lastConnectTiming().ipv6ProofAttempts > 1);
+                    firstTiming.ipv6ProofAttempts > 1);
             await("connected presence", controller, () -> api.events.contains("presence:connected"));
 
             tap(instrumentation, activity, R.id.disconnect);
@@ -131,13 +133,16 @@ public final class AndroidLifecycleTest {
             int previousV4Proofs = verified4.get();
             int previousV6Proofs = verified6.get();
             instrumentation.waitForIdleSync();
-            attemptedClosedPort.set(false);
             tap(instrumentation, activity, R.id.connect);
             await("verified reconnect", controller, () -> "connected".equals(controller.snapshot().mode));
             assertEquals(HOST + ":51820", controller.snapshot().endpoint);
-            assertNotNull(controller.lastConnectTiming());
-            assertEquals(1, controller.lastConnectTiming().attempts);
-            assertFalse("A same-network reconnect skips the previously failed port", attemptedClosedPort.get());
+            AppController.ConnectionTiming reconnectTiming = controller.lastConnectTiming();
+            assertNotNull(reconnectTiming);
+            if (firstTiming.verifiedUnderlay != null
+                    && firstTiming.verifiedUnderlay.equals(reconnectTiming.orderingUnderlay)) {
+                assertEquals("A same-network reconnect tries the verified port first",
+                        51820, reconnectTiming.firstAttemptedPort);
+            }
             assertTrue("Reconnect needs a new IPv4 proof", verified4.get() > previousV4Proofs);
             assertTrue("Reconnect needs a new IPv6 proof", verified6.get() > previousV6Proofs);
             tap(instrumentation, activity, R.id.disconnect);

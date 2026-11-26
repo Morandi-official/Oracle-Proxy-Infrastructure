@@ -110,6 +110,21 @@ internal static class TunReceipt
     }
     private static string? DiagnosticCode(ReadOnlySpan<byte> line)
     {
+        if(line.SequenceEqual("PARK_BINDINGS_LOAD_FAILED"u8))return "TUN_OWNER_PARK_BINDINGS_LOAD_FAILED";
+        if(line.SequenceEqual("PARK_BINDINGS_RESTORE_FAILED"u8))return "TUN_OWNER_PARK_BINDINGS_RESTORE_FAILED";
+        if(line.SequenceEqual("PARK_RESTORE_ACCESS_DENIED"u8))return "TUN_OWNER_PARK_RESTORE_ACCESS_DENIED";
+        if(line.SequenceEqual("PARK_RESTORE_LOCK_BUSY"u8))return "TUN_OWNER_PARK_RESTORE_LOCK_BUSY";
+        if(line.SequenceEqual("PARK_RESTORE_REBOOT_REQUIRED"u8))return "TUN_OWNER_PARK_RESTORE_REBOOT_REQUIRED";
+        if(line.SequenceEqual("PARK_RESTORE_OWNER"u8))return "TUN_OWNER_PARK_RESTORE_OWNER";
+        if(line.SequenceEqual("PARK_RESTORE_IDENTITY"u8))return "TUN_OWNER_PARK_RESTORE_IDENTITY";
+        if(line.SequenceEqual("PARK_RESTORE_PNP"u8))return "TUN_OWNER_PARK_RESTORE_PNP";
+        if(line.SequenceEqual("PARK_RESTORE_DRIFT"u8))return "TUN_OWNER_PARK_RESTORE_DRIFT";
+        if(line.SequenceEqual("PARK_RESTORE_READBACK"u8))return "TUN_OWNER_PARK_RESTORE_READBACK";
+        if(line.SequenceEqual("PARK_RESTORE_JOURNAL_INVALID"u8))return "TUN_OWNER_PARK_RESTORE_JOURNAL_INVALID";
+        if(line.SequenceEqual("PARK_RESTORE_INVALID_STATE"u8))return "TUN_OWNER_PARK_RESTORE_INVALID_STATE";
+        if(line.SequenceEqual("CORE_INPUT_FAILED"u8))return "TUN_OWNER_CORE_INPUT_FAILED";
+        if(line.SequenceEqual("CORE_IDENTITY_FAILED"u8))return "TUN_OWNER_CORE_IDENTITY_FAILED";
+        if(line.SequenceEqual("CORE_ADAPTER_RECOVERY_FAILED"u8))return "TUN_OWNER_CORE_ADAPTER_RECOVERY_FAILED";
         if(line.SequenceEqual("ORPHAN_IDENTITY_FAILED"u8))return "TUN_OWNER_ORPHAN_IDENTITY_FAILED";
         if(line.SequenceEqual("ORPHAN_IP_CLEANUP_FAILED"u8))return "TUN_OWNER_ORPHAN_IP_CLEANUP_FAILED";
         if(line.SequenceEqual("ORPHAN_ROUTE_CLEANUP_FAILED"u8))return "TUN_OWNER_ORPHAN_ROUTE_CLEANUP_FAILED";

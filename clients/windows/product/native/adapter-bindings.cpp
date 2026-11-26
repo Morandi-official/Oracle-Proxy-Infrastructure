@@ -426,8 +426,11 @@ static DWORD Run(ULONG64 expected,bool restore) {
         if(!strcmp(e.reason,"SYSTEM")) return ERROR_ACCESS_DENIED;
         if(!strcmp(e.reason,"LOCK")) return ERROR_BUSY;
         if(!strcmp(e.reason,"REBOOT")) return ERROR_SUCCESS_REBOOT_REQUIRED;
-        if(!strcmp(e.reason,"OWNER") || !strcmp(e.reason,"DRIFT")) return ERROR_INVALID_OWNER;
-        if(!strcmp(e.reason,"PNP") || !strcmp(e.reason,"IDENTITY")) return ERROR_NOT_FOUND;
+        if(!strcmp(e.reason,"OWNER")) return ERROR_INVALID_OWNER;
+        if(!strcmp(e.reason,"DRIFT")) return ERROR_REVISION_MISMATCH;
+        if(!strcmp(e.reason,"PNP")) return ERROR_DEVICE_NOT_CONNECTED;
+        if(!strcmp(e.reason,"IDENTITY")) return ERROR_NOT_FOUND;
+        if(!strcmp(e.reason,"READBACK")) return ERROR_NO_MATCH;
         if(!strcmp(e.reason,"JOURNAL")) return ERROR_INVALID_DATA;
         return ERROR_INVALID_STATE;
     }catch(...){return ERROR_GEN_FAILURE;}

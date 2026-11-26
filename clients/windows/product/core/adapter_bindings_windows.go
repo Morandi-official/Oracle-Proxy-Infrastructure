@@ -74,8 +74,40 @@ func restoreAdapterBindings(luid uint64) error {
 		return errors.New("PARK_BINDINGS_LOAD_FAILED")
 	}
 	status, _, _ := syscall.SyscallN(adapterBindingLibrary.restore, uintptr(luid))
-	if status != 0 {
-		return errors.New("PARK_BINDINGS_RESTORE_FAILED")
+	return bindingRestoreResult(status)
+}
+
+// Every value returned here is safe to report across the recovery pipe. The
+// result identifies the failing Windows check without recording device or user data.
+type bindingRestoreFailure string
+
+func (code bindingRestoreFailure) Error() string { return string(code) }
+
+func bindingRestoreResult(status uintptr) error {
+	switch syscall.Errno(status) {
+	case windows.ERROR_SUCCESS:
+		return nil
+	case windows.ERROR_ACCESS_DENIED:
+		return bindingRestoreFailure("PARK_RESTORE_ACCESS_DENIED")
+	case windows.ERROR_BUSY:
+		return bindingRestoreFailure("PARK_RESTORE_LOCK_BUSY")
+	case windows.ERROR_SUCCESS_REBOOT_REQUIRED:
+		return bindingRestoreFailure("PARK_RESTORE_REBOOT_REQUIRED")
+	case windows.ERROR_INVALID_OWNER:
+		return bindingRestoreFailure("PARK_RESTORE_OWNER")
+	case windows.ERROR_NOT_FOUND:
+		return bindingRestoreFailure("PARK_RESTORE_IDENTITY")
+	case windows.ERROR_DEVICE_NOT_CONNECTED:
+		return bindingRestoreFailure("PARK_RESTORE_PNP")
+	case windows.ERROR_REVISION_MISMATCH:
+		return bindingRestoreFailure("PARK_RESTORE_DRIFT")
+	case windows.ERROR_NO_MATCH:
+		return bindingRestoreFailure("PARK_RESTORE_READBACK")
+	case windows.ERROR_INVALID_DATA:
+		return bindingRestoreFailure("PARK_RESTORE_JOURNAL_INVALID")
+	case windows.ERROR_INVALID_STATE:
+		return bindingRestoreFailure("PARK_RESTORE_INVALID_STATE")
+	default:
+		return bindingRestoreFailure("PARK_BINDINGS_RESTORE_FAILED")
 	}
-	return nil
 }

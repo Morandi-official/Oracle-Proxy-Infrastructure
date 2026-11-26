@@ -55,6 +55,10 @@ func run() error {
 			err = oracleTun.RecoverOracleAdapter(request.LUID, restoreAdapterBindings)
 		}
 		if err != nil {
+			if reason, ok := err.(bindingRestoreFailure); ok {
+				fmt.Fprintln(os.Stderr, reason)
+				return fmt.Errorf("adapter-recovery")
+			}
 			switch err.Error() {
 			case "PARK_BINDINGS_LOAD_FAILED", "PARK_BINDINGS_RESTORE_FAILED", "ORPHAN_IDENTITY_FAILED", "ORPHAN_IP_CLEANUP_FAILED", "ORPHAN_ROUTE_CLEANUP_FAILED", "ORPHAN_DNS_CLEANUP_FAILED", "ORPHAN_RECREATE_FAILED", "ORPHAN_VERIFY_FAILED":
 				fmt.Fprintln(os.Stderr, err.Error())
@@ -112,6 +116,9 @@ func checkedAdapterAudit(audit func() error) func() error {
 				"DORMANT_ROUTE_QUERY_FAILED", "DORMANT_ROUTE_NOT_EMPTY", "DORMANT_DNS_QUERY_FAILED", "DORMANT_DNS_NOT_EMPTY",
 				"DORMANT_ROUTE_PROTOCOL_NOT_LOCAL", "DORMANT_ROUTE_NEXT_HOP_UNSAFE", "DORMANT_ROUTE_DESTINATION_UNSAFE":
 				reason = code
+			}
+			if native, ok := err.(bindingRestoreFailure); ok {
+				reason = native.Error()
 			}
 			fmt.Fprintln(os.Stderr, "PARK_AUDIT_FAILED", reason)
 		}

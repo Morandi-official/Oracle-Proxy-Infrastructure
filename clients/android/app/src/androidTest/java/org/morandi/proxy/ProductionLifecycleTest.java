@@ -37,6 +37,7 @@ import java.util.function.Predicate;
 
 import javax.net.ssl.HttpsURLConnection;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -73,6 +74,8 @@ public final class ProductionLifecycleTest {
                 }
             }
             reportPasswordPhases("FRESH", enrollment, api);
+            assertEquals("The cold controller still exercises unprepared identity creation",
+                    AppController.IdentitySource.NEW_ON_DEMAND, enrollment.lastLoginTiming().identitySource());
             assertFalse("Release test requires a fresh emulator identity", enrollment.snapshot().registered);
             enrollment.confirmDevice("Android CI " + run);
             await("Production device enrollment", () -> enrollment.snapshot().registered
@@ -98,6 +101,8 @@ public final class ProductionLifecycleTest {
                 warm.report("LOGIN_WARM");
             }
             reportPasswordPhases("WARM", controller, api);
+            assertEquals("Returning Android devices keep their stored identity",
+                    AppController.IdentitySource.STORED, controller.lastLoginTiming().identitySource());
 
             MainActivity screen = (MainActivity) instrumentation.startActivitySync(
                     new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -145,6 +150,8 @@ public final class ProductionLifecycleTest {
                     && !engine.isUp() && vpnNetwork(context) == null);
             long[] reconnectNanos = new long[PREAUTHORIZED_CONNECT_SAMPLES];
             for (int sample = 0; sample < reconnectNanos.length; sample++) {
+                // Only the final production connection is used for sustained transfers.
+                ProxyVpnService.captureCarrierInodesForTest = sample == reconnectNanos.length - 1;
                 assertTrue("Android VPN consent still valid", VpnService.prepare(context) == null);
                 try (VisibleConnectionTiming reconnect =
                              new VisibleConnectionTiming("RECONNECT_" + (sample + 1), instrumentation,
@@ -186,6 +193,7 @@ public final class ProductionLifecycleTest {
             assertTrue("Every preauthorized tap to visible verified VPN must complete within 1000 ms",
                     underTarget == reconnectNanos.length);
         } finally {
+            ProxyVpnService.captureCarrierInodesForTest = false;
             active.disconnect();
             if (activity != null) {
                 instrumentation.runOnMainSync(activity::finish);

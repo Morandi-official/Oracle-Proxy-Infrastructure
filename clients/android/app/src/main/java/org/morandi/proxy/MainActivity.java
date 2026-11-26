@@ -55,6 +55,7 @@ public final class MainActivity extends Activity {
     private boolean showingRegistration;
     private boolean showingSessionPending;
     private boolean watching;
+    private boolean preparingSignIn;
     private int page;
     private Palette palette;
     private LinearLayout frame;
@@ -108,11 +109,13 @@ public final class MainActivity extends Activity {
         watching = true;
         controller.observe(listener);
         render(controller.snapshot(), false);
+        updateSignInPreparation();
     }
 
     @Override
     protected void onStop() {
         watching = false;
+        updateSignInPreparation();
         controller.removeObserver(listener);
         super.onStop();
     }
@@ -176,6 +179,7 @@ public final class MainActivity extends Activity {
                 add(body, authRecovery, 9);
             }
         }
+        updateSignInPreparation();
         boolean recovery = isProtected() || isDisconnecting();
         if (login) {
             loginAction.setEnabled(!state.busy && !recovery);
@@ -198,6 +202,14 @@ public final class MainActivity extends Activity {
             authRecovery.setEnabled(!isDisconnecting());
             updateText(authRecovery, isDisconnecting() ? "正在断开 VPN…" : "再次断开 VPN");
         }
+    }
+
+    private void updateSignInPreparation() {
+        boolean visibleLogin = watching && showingLogin;
+        if (visibleLogin == preparingSignIn) return;
+        preparingSignIn = visibleLogin;
+        if (visibleLogin) controller.prepareSignInIdentity();
+        else controller.discardSignInIdentity();
     }
 
     private void buildShell() {

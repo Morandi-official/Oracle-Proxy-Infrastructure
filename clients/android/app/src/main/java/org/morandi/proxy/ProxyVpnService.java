@@ -17,10 +17,16 @@ import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
+import android.system.ErrnoException;
+import android.system.Os;
 
 import com.wireguard.android.backend.GoBackend;
 
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ProxyVpnService extends GoBackend.VpnService {
@@ -43,6 +49,9 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     private static long requestedGeneration;
     private static boolean startFailed;
     private long foregroundGeneration;
+    static volatile boolean captureCarrierInodesForTest;
+    private long carrierInode4 = -1;
+    private long carrierInode6 = -1;
 
     // Only the explicit, non-exported service component accepts this action. Binding
     // creates the service without invoking onStartCommand or installing a VPN.
@@ -210,6 +219,33 @@ public final class ProxyVpnService extends GoBackend.VpnService {
             if (interrupted) {
                 Thread.currentThread().interrupt();
             }
+        }
+    }
+
+    @Override public boolean protect(int socket) {
+        boolean protectedFromTunnel = super.protect(socket);
+        if (protectedFromTunnel && captureCarrierInodesForTest) {
+            // Pinned GoBackend calls this public service API for its own v4/v6 UDP
+            // sockets. Duplicate briefly so collecting metadata cannot close its FD.
+            try (ParcelFileDescriptor copy = ParcelFileDescriptor.fromFd(socket)) {
+                SocketAddress local = Os.getsockname(copy.getFileDescriptor());
+                if (local instanceof InetSocketAddress address) {
+                    long inode = Os.fstat(copy.getFileDescriptor()).st_ino;
+                    synchronized (LIFECYCLE) {
+                        if (address.getAddress() instanceof Inet4Address) carrierInode4 = inode;
+                        if (address.getAddress() instanceof Inet6Address) carrierInode6 = inode;
+                    }
+                }
+            } catch (IOException | ErrnoException | RuntimeException unavailable) {
+                // Socket protection itself succeeded. Diagnostics are optional.
+            }
+        }
+        return protectedFromTunnel;
+    }
+
+    static long[] carrierInodesForTest() {
+        synchronized (LIFECYCLE) {
+            return live == null ? new long[]{-1, -1} : new long[]{live.carrierInode4, live.carrierInode6};
         }
     }
 

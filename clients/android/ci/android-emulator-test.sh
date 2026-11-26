@@ -148,9 +148,10 @@ if [[ "$mode" == production ]]; then
     body_progress='^ANDROID_PERF_WIREGUARD_UDP_(UPLOAD|DOWNLOAD)_RTT_BODY_BYTES=([0-9]+,){11}[0-9]+$'
     guest='^ANDROID_PERF_GUEST_LOAD_(UPLOAD|DOWNLOAD)=TUN_MTU=(-1|[0-9]+);NIC_MTU=(-1|[0-9]+)'
     guest+='(;[A-Za-z]+[.][A-Za-z]+=(0|[1-9][0-9]*|-1)){15}$'
+    carrier='^ANDROID_PERF_CARRIER_(DOWNLOAD|UPLOAD)=V4_SOCKET_DROPS:(-1|[0-9]+);V6_SOCKET_DROPS:(-1|[0-9]+);TUN_TX_PACKETS:(-1|[0-9]+)$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
         grep -E -e "$download" -e "$timing" -e "$reconnect_series" -e "$visual" -e "$login_phases" -e "$families" -e "$proof" \
-            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" -e "$load" -e "$body_progress" -e "$guest" |
+            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" -e "$load" -e "$body_progress" -e "$guest" -e "$carrier" |
         tee "$working_dir/performance.txt"
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
     for metric in DOWNLOAD_DIRECT_BYTES PERF_LOAD_DOWNLOAD_RATES_MBPS PERF_LOAD_UPLOAD_RATES_MBPS PERF_VERIFIED_FAMILIES \

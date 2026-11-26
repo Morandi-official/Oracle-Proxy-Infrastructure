@@ -101,6 +101,8 @@ public final class ProductionLifecycleTest {
             assertFalse("Direct baseline must precede activation of any VPN",
                     directCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN));
             HttpsLatencyTestProbe latency = new HttpsLatencyTestProbe(direct);
+            InternetRttTestProbe networkLatency = new InternetRttTestProbe(direct);
+            networkLatency.sampleDirect(direct);
             latency.sample(direct, "DIRECT", "");
             sampleDownload(direct, "DIRECT");
 
@@ -123,6 +125,7 @@ public final class ProductionLifecycleTest {
             Network vpn = vpnNetwork(context);
             assertNotNull("Production VPN network is installed", vpn);
             assertTrue("DNS resolves over the VPN network", vpn.getAllByName("www.cloudflare.com").length > 0);
+            networkLatency.sampleTunnel(vpn, controller.snapshot().verifiedIpv4);
             latency.sample(vpn, "WIREGUARD_UDP", controller.snapshot().verifiedIpv4);
             sampleDownload(vpn, "WIREGUARD_UDP");
 

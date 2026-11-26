@@ -93,10 +93,17 @@ if [[ "$mode" == production ]]; then
     adb install -t "$app"
     adb install -t "$test_apk"
     adb shell setprop log.tag.ProxyVpnTiming D
-    adb shell am instrument -w -e class org.morandi.proxy.ProductionLifecycleTest \
-        -e proxyProduction 1 -e proxyUser "$user_b64" -e proxyPass "$pass_b64" \
-        -e proxyRun "$GITHUB_RUN_ID" org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
-        | tee "$working_dir/instrumentation.txt"
+    run_production_test() {
+        adb shell am instrument -w -e class "org.morandi.proxy.ProductionLifecycleTest#$1" \
+            -e proxyProduction 1 -e proxyUser "$user_b64" -e proxyPass "$pass_b64" \
+            -e proxyRun "$GITHUB_RUN_ID" org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
+            | tee "$2"
+    }
+    run_production_test signedAppAgainstProduction "$working_dir/instrumentation.txt"
+    # Run the same signed APK with fresh app data and a new process. No saved key,
+    # authenticated connection pool or in-process JIT state can carry over from headless password login.
+    adb shell pm clear org.morandi.proxy | tr -d '\r' | grep -qx Success
+    run_production_test signedForegroundLogin "$working_dir/foreground-login.txt"
     unset user_b64 pass_b64
     # The app times the real Builder.establish() call. The preceding WireGuard
     # marker also identifies time spent in configuration before the OS call.
@@ -114,15 +121,15 @@ if [[ "$mode" == production ]]; then
         }
         END { if (attempt) printf "ANDROID_PERF_GO_BACKEND_SERVICE_STARTS=%d;UP_ATTEMPTS=%d\n", stock_starts, attempt }'
     download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
-    timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)_MS=[0-9]+;TARGET_MS=1000|'
+    timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM|FOREGROUND)_MS=[0-9]+;TARGET_MS=1000|'
     timing+='CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK)_MS=[0-9]+;TARGET_MS=1000);UNDER_TARGET=[01]$'
     reconnect_series='^ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=([0-9]+,){4}[0-9]+'
     reconnect_series+=';N=5;MEDIAN_MS=[0-9]+;MAX_MS=[0-9]+;UNDER_1000MS=[0-5]$'
-    visual='^ANDROID_PERF_VISUAL_DIAGNOSTICS_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_[1-5])='
+    visual='^ANDROID_PERF_VISUAL_DIAGNOSTICS_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_[1-5]|LOGIN_FOREGROUND)='
     visual+='DOWN_CALL_NS:(-1|[0-9]+);UP_CALL_NS:(-1|[0-9]+);APP_DOWN_DELIVERY_NS:(-1|[0-9]+)'
     visual+=';APP_UP_DELIVERY_NS:(-1|[0-9]+);CONSENT_RESULT_NS:(-1|[0-9]+);FOCUS_GAIN_NS:(-1|[0-9]+)'
     visual+=';FIRST_VERIFIED_DRAW_NS:(-1|[0-9]+);FIRST_DRAW_FOCUSED:(-1|[01]);FOCUSED_DRAW_NS:(-1|[0-9]+)$'
-    login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
+    login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM|FOREGROUND)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
     login_phases+=',STREAM_OPEN_MS:[0-9]+,UPLOAD_MS:[0-9]+,RESPONSE_HEADERS_MS:[0-9]+,RESPONSE_BODY_MS:[0-9]+'
     login_phases+=',NETWORK_SELECT_MS:[0-9]+,CONFIGURE_MS:[0-9]+,OUTPUT_OPEN_MS:[0-9]+'
     login_phases+=',WARMUP_AT_START:(NONE|RUNNING|READY|UNAVAILABLE),WARMUP_AT_OUTPUT:(NONE|RUNNING|READY|UNAVAILABLE)$'
@@ -150,14 +157,18 @@ if [[ "$mode" == production ]]; then
     guest+='(;[A-Za-z]+[.][A-Za-z]+=(0|[1-9][0-9]*|-1)){15}$'
     carrier_options='^ANDROID_PERF_CARRIER_SOCKET_V[46]=RCVBUF_BYTES:(-1|[0-9]+);UDP_GRO:(-1|0|1)$'
     carrier='^ANDROID_PERF_CARRIER_(DOWNLOAD|UPLOAD)=V4_SOCKET_DROPS:(-1|[0-9]+);V6_SOCKET_DROPS:(-1|[0-9]+);TUN_TX_PACKETS:(-1|[0-9]+)$'
+    upload_control='^ANDROID_PERF_UPLOAD_CONTROL_[12]=SAME_IP:(-1|0|1);SAME_POP:(-1|0|1);SAME_PROTOCOL:(-1|0|1);SAME_CIPHER:(-1|0|1)'
+    upload_control+=';VPN_ACK_MS:(-1|[0-9]+);RETRANS:(-1|[0-9]+);SEGS_OUT:(-1|[0-9]+)'
+    upload_control+=';DIRECT_ACK_MS:(-1|[0-9]+);RETRANS:(-1|[0-9]+);SEGS_OUT:(-1|[0-9]+)$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
         grep -E -e "$download" -e "$timing" -e "$reconnect_series" -e "$visual" -e "$login_phases" -e "$families" -e "$proof" \
-            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" -e "$load" -e "$body_progress" -e "$guest" -e "$carrier" -e "$carrier_options" |
+            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" -e "$load" -e "$body_progress" -e "$guest" -e "$carrier" -e "$carrier_options" -e "$upload_control" |
         tee "$working_dir/performance.txt"
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
+    grep -Eq '^OK \(1 test\)' "$working_dir/foreground-login.txt"
     for metric in DOWNLOAD_DIRECT_BYTES PERF_LOAD_DOWNLOAD_RATES_MBPS PERF_LOAD_UPLOAD_RATES_MBPS PERF_VERIFIED_FAMILIES \
         PERF_LOGIN_FRESH_MS PERF_LOGIN_SAVED_CONTROLLER_MS PERF_LOGIN_WARM_MS \
-        PERF_LOGIN_FRESH_PHASES PERF_LOGIN_WARM_PHASES \
+        PERF_LOGIN_FRESH_PHASES PERF_LOGIN_WARM_PHASES PERF_LOGIN_FOREGROUND_MS PERF_LOGIN_FOREGROUND_PHASES \
         PERF_CONNECT_FIRST_CLICK_MS PERF_CONNECT_AFTER_CONSENT_MS PERF_CONNECT_RECONNECT_CLICK_MS \
         PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS \
         PERF_VISUAL_DIAGNOSTICS_FIRST_CLICK PERF_VISUAL_DIAGNOSTICS_AFTER_CONSENT \

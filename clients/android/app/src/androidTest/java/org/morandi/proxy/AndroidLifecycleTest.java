@@ -173,8 +173,12 @@ public final class AndroidLifecycleTest {
             UiDevice ui = UiDevice.getInstance(instrumentation);
             enter(instrumentation, activity, R.id.username, "fixture");
             enter(instrumentation, activity, R.id.password, "fixture-only");
-            tap(instrumentation, activity, R.id.login);
-            await("sign-in", controller, () -> controller.snapshot().signedIn && !controller.snapshot().busy);
+            try (VisibleConnectionTiming login = new VisibleConnectionTiming("FIXTURE_LOGIN", instrumentation,
+                    activity, controller, state -> state.signedIn && !state.busy && !state.registered,
+                    R.id.device_confirm, "确认登记")) {
+                login.tapButton(R.id.login);
+                login.await("Fixture sign-in");
+            }
             assertFalse(controller.snapshot().registered);
             assertEquals("A new device can claim the local foreground preparation",
                     AppController.IdentitySource.NEW_FOREGROUND, controller.lastLoginTiming().identitySource());

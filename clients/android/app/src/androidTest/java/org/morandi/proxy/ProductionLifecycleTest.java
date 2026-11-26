@@ -10,6 +10,7 @@ import android.net.VpnService;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.util.Base64;
+import android.widget.EditText;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -181,9 +182,12 @@ public final class ProductionLifecycleTest {
                     networkLatency.sampleUnderLoad(vpn, controller.snapshot().verifiedIpv4, upload);
                 }
             }
+            MatchedUploadControl uploads = new MatchedUploadControl();
+            MatchedUploadControl.Sample[] vpnUploads = uploads.measure(vpn);
             controller.disconnect();
             await("Final production VPN route removed", () -> "disconnected".equals(controller.snapshot().mode)
                     && !engine.isUp() && vpnNetwork(context) == null);
+            uploads.compareWithDirect(vpnUploads, direct.equals(manager.getActiveNetwork()) ? direct : null);
             controller.removeDevice(controller.snapshot().deviceId);
             await("Dedicated test device removed and signed out", () -> !controller.snapshot().signedIn);
             assertTrue("All idle and loaded VPN RTT samples must reply within 500 ms",
@@ -198,6 +202,53 @@ public final class ProductionLifecycleTest {
             if (activity != null) {
                 instrumentation.runOnMainSync(activity::finish);
             }
+            api.cleanUp(username, password);
+        }
+    }
+
+    @Test
+    public void signedForegroundLogin() throws Exception {
+        Bundle arguments = InstrumentationRegistry.getArguments();
+        Assume.assumeTrue("Dedicated release job only", "1".equals(arguments.getString("proxyProduction")));
+        String username = decode(arguments, "proxyUser");
+        String password = decode(arguments, "proxyPass");
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Context context = instrumentation.getTargetContext();
+        AcceptanceApi api = new AcceptanceApi(context);
+        AppController controller = new AppController(context, api, new TunnelEngine(context));
+        AppController.installForTest(controller);
+        MainActivity screen = (MainActivity) instrumentation.startActivitySync(
+                new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            // Fill the real input fields in process. The credentials never enter shell input,
+            // the clipboard, an accessibility dump, or the timing report.
+            instrumentation.runOnMainSync(() -> {
+                EditText name = screen.findViewById(R.id.username);
+                EditText secret = screen.findViewById(R.id.password);
+                assertNotNull("New installation shows the username field", name);
+                assertNotNull("New installation shows the password field", secret);
+                name.setText(username);
+                secret.setText(password);
+            });
+            Predicate<AppController.State> pending = state -> signedIn(state) && !state.registered
+                    && username.equalsIgnoreCase(state.username);
+            long duration;
+            try (VisibleConnectionTiming tap = new VisibleConnectionTiming("LOGIN_FOREGROUND", instrumentation,
+                    screen, controller, pending, R.id.device_confirm, "确认登记")) {
+                tap.tapButton(R.id.login);
+                duration = tap.await("Login to visible device registration");
+                VisibleConnectionTiming.report("LOGIN_FOREGROUND", duration);
+            }
+            reportPasswordPhases("FOREGROUND", controller, api);
+            assertEquals("Foreground sign-in used a new device identity",
+                    AppController.IdentitySource.NEW_FOREGROUND, controller.lastLoginTiming().identitySource());
+            assertFalse("The pending sign-in did not enroll a device", api.enrollmentAttempted);
+            assertTrue("First visible login must complete within 1000 ms",
+                    duration <= VisibleConnectionTiming.TARGET_NANOS);
+        } finally {
+            instrumentation.runOnMainSync(screen::finish);
+            // Revoke the issued pending session even if a visual/timing assertion failed.
+            // No confirmation of enrollment or VPN connection is part of this test.
             api.cleanUp(username, password);
         }
     }

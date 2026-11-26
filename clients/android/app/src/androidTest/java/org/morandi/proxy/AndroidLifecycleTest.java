@@ -1,5 +1,6 @@
 package org.morandi.proxy;
 
+import android.app.ActivityManager;
 import android.app.Instrumentation;
 import android.content.ComponentName;
 import android.content.Context;
@@ -171,6 +172,11 @@ public final class AndroidLifecycleTest {
                         ui.wait(Until.findObject(By.res("android", "button1")), 7_000));
                 assertTrue("The explicit tap can read policy while awaiting consent",
                         deniedPolicy.requested.await(7, TimeUnit.SECONDS));
+                ActivityManager.RunningServiceInfo warming = ownVpnService(context);
+                if (warming != null) {
+                    assertFalse("Consent prebinding must not start the service", warming.started);
+                    assertFalse("Consent prebinding must not promote a foreground service", warming.foreground);
+                }
                 assertFalse("Consent is required before installing a VPN route", hasVpnRoute(context));
                 UiObject2 deny = ui.wait(Until.findObject(By.res("android", "button2")), 7_000);
                 assertNotNull("The Android VPN consent dialog has a cancel button", deny);
@@ -178,6 +184,8 @@ public final class AndroidLifecycleTest {
                 await("consent cancellation", controller,
                         () -> controller.snapshot().message.contains("系统未授权 VPN"));
                 assertFalse(engine.isUp());
+                await("Cancelled consent releases the bound-only service", controller,
+                        () -> ownVpnService(context) == null);
             } finally {
                 api.policyGate.compareAndSet(deniedPolicy, null);
                 deniedPolicy.respond.countDown();
@@ -310,6 +318,15 @@ public final class AndroidLifecycleTest {
             assertTrue("Control must be enabled", view.isEnabled());
             assertTrue(view.performClick());
         });
+    }
+
+    @SuppressWarnings("deprecation")
+    private static ActivityManager.RunningServiceInfo ownVpnService(Context context) {
+        ActivityManager manager = context.getSystemService(ActivityManager.class);
+        for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
+            if (ProxyVpnService.class.getName().equals(service.service.getClassName())) return service;
+        }
+        return null;
     }
 
     private static void await(String stage, AppController controller, BooleanSupplier predicate) {

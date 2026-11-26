@@ -48,6 +48,7 @@ public final class MainActivity extends Activity {
     private AppController.State state;
     private boolean consentPending;
     private long consentRequest;
+    private ProxyVpnService.ConsentBinding consentBinding;
     private long consentResultNanos;
     private boolean showingLogin;
     private boolean showingRegistration;
@@ -117,6 +118,19 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onDestroy() {
+        releaseConsentBinding();
+        super.onDestroy();
+    }
+
+    private void releaseConsentBinding() {
+        if (consentBinding != null) {
+            consentBinding.close();
+            consentBinding = null;
+        }
+    }
+
+    @Override
     protected void onSaveInstanceState(Bundle out) {
         out.putInt("page", page);
         out.putBoolean("vpnConsentPending", consentPending);
@@ -130,6 +144,7 @@ public final class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != VPN_PERMISSION || !consentPending) return;
         consentPending = false;
+        if (resultCode != RESULT_OK) releaseConsentBinding();
         controller.finishVpnConsent(consentRequest, resultCode == RESULT_OK);
         consentRequest = 0;
         render(controller.snapshot(), false);
@@ -465,6 +480,7 @@ public final class MainActivity extends Activity {
             try {
                 startActivityForResult(request, VPN_PERMISSION);
                 consentRequest = controller.prepareVpnConsent();
+                consentBinding = ProxyVpnService.bindWhileAwaitingConsent(this);
             } catch (android.content.ActivityNotFoundException error) {
                 consentPending = false;
                 consentRequest = 0;

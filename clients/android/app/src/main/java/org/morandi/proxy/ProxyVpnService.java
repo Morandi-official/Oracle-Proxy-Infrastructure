@@ -4,10 +4,16 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.pm.ServiceInfo;
+import android.os.Binder;
 import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.util.Log;
@@ -20,6 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ProxyVpnService extends GoBackend.VpnService {
     private static final String CHANNEL = "proxy_vpn";
     private static final int NOTIFICATION = 7721;
+    private static final String PREPARE_BINDING = "org.morandi.proxy.PREPARE_VPN_BINDING";
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static volatile ConsentBinding consentBinding;
     private static final String START = "org.morandi.proxy.VPN_START";
     private static final String START_GENERATION = "start_generation";
     private static final String FOREGROUND_REQUIRED = "foreground_required";
@@ -34,6 +43,67 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     private static long requestedGeneration;
     private static boolean startFailed;
     private long foregroundGeneration;
+
+    // Only the explicit, non-exported service component accepts this action. Binding
+    // creates the service without invoking onStartCommand or installing a VPN.
+    @Override public IBinder onBind(Intent intent) {
+        if (intent != null && PREPARE_BINDING.equals(intent.getAction())) return new Binder();
+        return super.onBind(intent);
+    }
+
+    static ConsentBinding bindWhileAwaitingConsent(Context context) {
+        // Called from the activity main thread after the system prompt has been launched.
+        releaseConsentBinding();
+        Context application = context.getApplicationContext();
+        ConsentBinding binding = new ConsentBinding(application);
+        try {
+            Intent intent = new Intent(application, ProxyVpnService.class).setAction(PREPARE_BINDING);
+            if (application.bindService(intent, binding, Context.BIND_AUTO_CREATE)) {
+                consentBinding = binding;
+                MAIN.postDelayed(binding.timeout, 10_000);
+                return binding;
+            }
+        } catch (RuntimeException unavailable) {
+            // A device which refuses this optional binding follows standard startup.
+        }
+        binding.close();
+        return null;
+    }
+
+    private static void releaseConsentBinding() {
+        ConsentBinding binding = consentBinding;
+        if (binding == null) return;
+        if (Looper.myLooper() == Looper.getMainLooper()) binding.close();
+        else MAIN.post(binding.timeout);
+    }
+
+    static final class ConsentBinding implements ServiceConnection, AutoCloseable {
+        private final Context context;
+        private final Runnable timeout = this::close;
+        private boolean closed;
+
+        ConsentBinding(Context context) {
+            this.context = context;
+        }
+
+        @Override public void onServiceConnected(ComponentName name, IBinder binder) {}
+        @Override public void onServiceDisconnected(ComponentName name) {}
+        @Override public void onBindingDied(ComponentName name) { close(); }
+        @Override public void onNullBinding(ComponentName name) { close(); }
+
+        @Override public void close() {
+            // All ServiceConnection callbacks and this cleanup run on the main thread.
+            if (closed) return;
+            closed = true;
+            if (consentBinding == this) consentBinding = null;
+            MAIN.removeCallbacks(timeout);
+            try {
+                context.unbindService(this);
+            } catch (IllegalArgumentException alreadyReleased) {
+                // A failed bind may not have registered its ServiceConnection.
+            }
+        }
+    }
 
     static void prepareNotification(Context context) {
         if (notificationTemplate != null || !PREPARING_NOTIFICATION.compareAndSet(false, true)) {
@@ -83,6 +153,9 @@ public final class ProxyVpnService extends GoBackend.VpnService {
             }
         } catch (RuntimeException error) {
             throw new IOException("VPN_SERVICE_START_FAILED");
+        } finally {
+            // Once Android accepts a start request it owns the service lifetime.
+            releaseConsentBinding();
         }
         return deadline;
     }
@@ -108,6 +181,7 @@ public final class ProxyVpnService extends GoBackend.VpnService {
     }
 
     static boolean stop(Context context) {
+        releaseConsentBinding();
         synchronized (LIFECYCLE) {
             requestedGeneration = 0;
             LIFECYCLE.notifyAll();

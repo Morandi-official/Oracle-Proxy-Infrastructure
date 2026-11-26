@@ -26,9 +26,7 @@ import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -265,7 +263,7 @@ public final class AndroidLifecycleTest {
             tap(instrumentation, activity, R.id.disconnect);
             await("disconnect", controller, () -> !engine.isUp() && !hasVpnRoute(context));
             await("disconnected presence", controller, () -> api.events.contains("presence:disconnected"));
-            assertEquals(200, Integer.parseInt(httpStatus(null, HOST, 18081, "GET", "/key", "", 2_000)));
+            assertEquals(200, request(null, HOST, 18081, "GET", "/key", "", 2_000).status());
 
             int previousV4Proofs = verified4.get();
             int previousV6Proofs = verified6.get();
@@ -384,39 +382,26 @@ public final class AndroidLifecycleTest {
 
     private static String http(Network network, String host, int port, String method, String path,
                                String body, long timeout) throws IOException {
-        String response = request(network, host, port, method, path, body, timeout);
-        String status = response.substring(0, response.indexOf("\r\n"));
-        if (!status.startsWith("HTTP/1.0 200") && !status.startsWith("HTTP/1.0 204")) {
-            throw new IOException("Fixture HTTP request was rejected");
+        FixtureHttpResponse response = request(network, host, port, method, path, body, timeout);
+        if (response.status() != 200 && response.status() != 204) {
+            throw new IOException("Fixture HTTP status " + response.status());
         }
-        return response.substring(response.indexOf("\r\n\r\n") + 4).trim();
+        return response.body().trim();
     }
 
-    private static String httpStatus(Network network, String host, int port, String method, String path,
-                                     String body, long timeout) throws IOException {
-        return request(network, host, port, method, path, body, timeout).split(" ", 3)[1];
-    }
-
-    private static String request(Network network, String host, int port, String method, String path,
-                                  String body, long timeout) throws IOException {
-        int timeoutMs = (int) Math.max(250, Math.min(6_000, timeout));
+    private static FixtureHttpResponse request(Network network, String host, int port, String method,
+                                               String path, String body, long timeout) throws IOException {
+        // A local fixture exchange needs its own attempt budget. A single lost request
+        // must not exhaust the real engine's shared 6.5 s deadline for all family retries.
+        int timeoutMs = (int) Math.max(1, Math.min(network == null ? 6_000 : 1_500, timeout));
+        long deadline = SystemClock.elapsedRealtime() + timeoutMs;
         try (Socket socket = network == null ? new Socket() : network.getSocketFactory().createSocket()) {
             socket.connect(new InetSocketAddress(host, port), timeoutMs);
-            socket.setSoTimeout(timeoutMs);
+            socket.setSoTimeout((int) Math.max(1, deadline - SystemClock.elapsedRealtime()));
             String request = method + " " + path + " HTTP/1.0\r\nHost: fixture\r\nContent-Length: "
                     + body.length() + "\r\n\r\n" + body;
             socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
-            try (InputStream stream = socket.getInputStream()) {
-                ByteArrayOutputStream data = new ByteArrayOutputStream();
-                byte[] block = new byte[512];
-                for (int read; (read = stream.read(block)) != -1; ) {
-                    if (data.size() + read > 8_192) {
-                        throw new IOException("Fixture response exceeded limit");
-                    }
-                    data.write(block, 0, read);
-                }
-                return data.toString(StandardCharsets.US_ASCII.name());
-            }
+            return FixtureHttpResponse.read(socket.getInputStream());
         }
     }
 

@@ -26,22 +26,22 @@ def is_ci_retirement(operation, request):
 
 
 def choose():
-    request = json.loads(Path(REQUEST).read_text())
-    review = request.get('operation') == 'preflight' and request.get('request_id') == ENROLLMENT_REVIEW
-    if os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch':
+    manual = os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
+    if manual:
         operation = os.environ.get('REQUESTED_OPERATION', '')
         if operation not in OPERATIONS: raise ValueError('REQUEST_REJECTED')
-        if review and operation == 'deploy': return 'preflight'
-        return operation
-    before = os.environ.get('BEFORE_REVISION', '')
-    if re.fullmatch(r'[a-f0-9]{40}', before) and before != '0' * 40:
-        changed = subprocess.check_output(['git', 'diff', '--name-only', before, 'HEAD'], text=True).splitlines()
-        if changed and all(path.startswith('ops/network/') for path in changed):return 'preflight'
-        # An explicitly updated request may accompany a diagnostics implementation fix.
-        if REQUEST in changed: return parse_request(Path(REQUEST).read_bytes())
-    # A previous, already-applied enrollment request can remain in the tree.
-    # Only explicitly changing the request or dispatching a deployment applies it.
-    if review or enrollment_console_enabled('deploy', request):
+        if operation != 'deploy': return operation
+    else:
+        before = os.environ.get('BEFORE_REVISION', '')
+        if re.fullmatch(r'[a-f0-9]{40}', before) and before != '0' * 40:
+            changed = subprocess.check_output(['git', 'diff', '--name-only', before, 'HEAD'], text=True).splitlines()
+            if changed and all(path.startswith('ops/network/') for path in changed):return 'preflight'
+            # An explicitly updated request may accompany a diagnostics implementation fix.
+            if REQUEST in changed: return parse_request(Path(REQUEST).read_bytes())
+    # Only a potential deployment needs to inspect a standing enrollment request.
+    request = json.loads(Path(REQUEST).read_bytes())
+    review = request.get('operation') == 'preflight' and request.get('request_id') == ENROLLMENT_REVIEW
+    if review or (not manual and enrollment_console_enabled('deploy', request)):
         return 'preflight'
     return 'deploy'
 

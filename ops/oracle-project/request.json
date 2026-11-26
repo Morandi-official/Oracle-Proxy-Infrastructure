@@ -1,4 +1,4 @@
 {
-  "operation": "preflight",
-  "request_id": "native-enrollment-console-source-review"
+  "operation": "deploy",
+  "request_id": "windows-enrollment-console-apply"
 }

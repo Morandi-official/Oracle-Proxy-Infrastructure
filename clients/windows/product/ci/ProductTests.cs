@@ -1014,20 +1014,25 @@ internal static class ProductTests
         foreach(var size in new[]{new Size(900,600),new Size(1220,820)}){
             TaskCompletionSource<JsonObject>? response=null;bool armed=false;
             var requests=new List<string>();
+            Control? status=null;string? statusAtSend=null;
             using var form=new MainForm((command,_,_)=>{
-                if(armed && command is "Connect" or "Disconnect"){requests.Add(command);return response!.Task;}
+                if(armed && command is "Connect" or "Disconnect"){requests.Add(command);statusAtSend=status!.Text;return response!.Task;}
                 return Task.FromResult((JsonObject)ready.DeepClone());
             });
             UiShow(form);form.Size=size;form.PerformLayout();Application.DoEvents();
             var viewport=(StableViewport)UiDescendants(form).Single(c=>c.Name=="viewport");
             var toggle=UiButton(form,"connect");
+            status=UiDescendants(form).Single(c=>c.Name=="connection-status");
             foreach(string command in new[]{"Connect","Disconnect"}){
                 viewport.AutoScrollPosition=Point.Empty;Application.DoEvents();
                 var button=UiButton(form,command=="Connect"?"connect":"disconnect");
                 UiAssert(ReferenceEquals(button,toggle),"CONNECTION_TOGGLE_CONTROL_REPLACED");
                 button.Focus();Application.DoEvents();
                 var before=viewport.AutoScrollPosition;response=new(TaskCreationOptions.RunContinuationsAsynchronously);armed=true;
+                var priorStatus=status.Text;
                 button.PerformClick();Application.DoEvents();
+                UiAssert(statusAtSend==priorStatus && status.Text==(command=="Connect"?"正在连接…":"正在断开…"),
+                    "TOGGLE_MUST_SEND_BEFORE_LAYOUT_AND_SHOW_ONLY_PENDING_UNTIL_RESPONSE");
                 UiAssert(!button.Enabled && viewport.AutoScrollPosition==before,"CONNECT_OR_DISCONNECT_FOCUS_SCROLLED_VIEWPORT");
                 // User wheel/scrollbar movement remains available while pending.
                 viewport.AutoScrollPosition=new Point(0,Math.Abs(before.Y)+45);Application.DoEvents();var userPosition=viewport.AutoScrollPosition;

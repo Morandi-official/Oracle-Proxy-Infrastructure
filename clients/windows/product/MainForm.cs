@@ -532,22 +532,27 @@ internal sealed partial class MainForm : Form
         if(passive)_statusReadSucceeded=false;
         if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
-        bool acquired=false,sentMutation=false;
+        bool acquired=false,sentMutation=false,awaitingResponse=true;
         bool toggle=command is "Connect" or "Disconnect";var operationTimer=System.Diagnostics.Stopwatch.StartNew();
         using var focusScroll=toggle?_viewport.HoldFocusScroll():null;
         if(toggle){_lastUiCommand=command;_lastUiQueueMs=_lastUiAttachMs=_lastUiResponseMs=_lastUiCompleteMs=null;}
         if(!passive){
             _busy=true;
             if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";
-            bool deferFeedback=command=="Connect" && _realService && IsHandleCreated;
-            if(toggle && !deferFeedback){_mode.Text=command=="Connect"?"正在连接…":"正在断开…";_detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";}
-            // Start the service transaction before AutoSize/layout work. Only
-            // pending feedback is deferred; verified Connected still comes from
-            // the real command response and is never displayed optimistically.
-            if(deferFeedback)BeginInvoke((Action)(()=>{if(!IsDisposed && !_closing && _busy && _lastUiCommand=="Connect"){
-                _mode.Text="正在连接…";_detail.Text="正在启用加密连接并核验出口。";RefreshActions();
-            }}));
-            else RefreshActions();
+            void ShowPendingFeedback()
+            {
+                if(toggle){
+                    _mode.Text=command=="Connect"?"正在连接…":"正在断开…";
+                    _detail.Text=command=="Connect"?"正在启用加密连接并核验出口。":"正在停止隧道并核验直连恢复。";
+                }
+                RefreshActions();
+            }
+            // Start the requested service transition before the pending-status
+            // layout. Both final labels are populated from the audited response.
+            if(toggle && IsHandleCreated)BeginInvoke((Action)(()=>{
+                if(!IsDisposed && !_closing && awaitingResponse)ShowPendingFeedback();
+            }));
+            else ShowPendingFeedback();
         }
         try{
             if(passive){if(!_requests.Wait(0))return;acquired=true;}
@@ -560,6 +565,7 @@ internal sealed partial class MainForm : Form
                 if(off["ok"]?.GetValue<bool>()!=true || off["intent"]?.GetValue<bool>()!=false)throw new IOException("SAFE_OFF_NOT_VERIFIED");
             }
             sentMutation=!passive;var state=await SendRequest(command,command is "Login" or "LoginRemembered"?_username.Text:command=="ConfirmDevice"?_deviceName.Text:command=="DeleteDevice"?_deleteDeviceId:null,command is "Login" or "LoginRemembered"?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
+            awaitingResponse=false;
             if(toggle)_lastUiResponseMs=operationTimer.ElapsedMilliseconds;
             if(command is "Login" or "LoginRemembered")_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
@@ -588,7 +594,7 @@ internal sealed partial class MainForm : Form
                 _loginFeedback.Text=_detail.Text;
             }
         }
-        finally{if(toggle)_lastUiCompleteMs=operationTimer.ElapsedMilliseconds;if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
+        finally{awaitingResponse=false;if(toggle)_lastUiCompleteMs=operationTimer.ElapsedMilliseconds;if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
         if(command is "Login" or "LoginRemembered" or "ConfirmDevice" or "DeleteDevice")await StartReadyClient();
     }
     private async Task MaintainUu(bool restore)

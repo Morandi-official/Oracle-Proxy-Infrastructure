@@ -476,6 +476,12 @@ internal static class OracleAcceptance
             if(value is {Length:>0 and <=80} && value.All(c=>char.IsAsciiLetterOrDigit(c) || c=='_'))
                 Console.WriteLine("ACTUAL_PARK_WITNESS_"+field.ToUpperInvariant()+"="+value);
         }
+        if(state["disconnect_timings"] is JsonObject timings){
+            foreach(string phase in new[]{"account_observation_stopped_ms","core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"}){
+                if(timings[phase] is JsonValue value && value.TryGetValue<long>(out var milliseconds) && milliseconds>=0)
+                    Console.WriteLine("ACTUAL_GUI_DISCONNECT_"+phase.ToUpperInvariant()+"="+milliseconds);
+            }
+        }
         if(state["adapter_parked"]?.GetValue<bool>()!=true || state["mode"]?.GetValue<string>()!="disconnected" ||
             state["intent"]?.GetValue<bool>()!=false || state["guard"]?.GetValue<bool>()!=false ||
             state["tun_permitted"]?.GetValue<bool>()!=false || state["tun_route_mask"]?.GetValue<uint>()!=0 ||

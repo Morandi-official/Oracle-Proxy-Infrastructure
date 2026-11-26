@@ -35,6 +35,15 @@ final class PrivateStore {
         return "device." + Base64.encodeToString(digest, Base64.NO_WRAP | Base64.URL_SAFE);
     }
 
+    void warmKey() {
+        try {
+            // Only an empty vault can acquire a new master key during warmup.
+            key(values.getAll().isEmpty());
+        } catch (Exception ignored) {
+            // Login will retry through the normal durable key write.
+        }
+    }
+
     String read(String slot) throws Exception {
         String stored = values.getString(slot, null);
         if (stored == null) {
@@ -87,7 +96,7 @@ final class PrivateStore {
         }
     }
 
-    private static SecretKey key(boolean create) throws Exception {
+    private static synchronized SecretKey key(boolean create) throws Exception {
         KeyStore store = KeyStore.getInstance("AndroidKeyStore");
         store.load(null);
         if (store.getKey(KEY_ALIAS, null) instanceof SecretKey secret) {

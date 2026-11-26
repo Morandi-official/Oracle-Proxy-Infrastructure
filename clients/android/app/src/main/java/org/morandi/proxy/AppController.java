@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -65,6 +66,13 @@ public final class AppController {
     private long verifyAfter;
 
     private volatile State visible;
+    private volatile LoginTiming lastLoginTiming;
+
+    record LoginTiming(long queueMs, long identityMs, long authenticateMs, long sessionMs) {}
+
+    LoginTiming lastLoginTiming() {
+        return lastLoginTiming;
+    }
 
     public interface Listener {
         void onState(State state);
@@ -122,10 +130,13 @@ public final class AppController {
     }
 
     public void login(String username, String password, boolean rememberLogin) {
+        long requestedAt = SystemClock.elapsedRealtime();
         worker.execute(() -> {
             if (!token.isEmpty()) {
                 return;
             }
+            long startedAt = SystemClock.elapsedRealtime();
+            lastLoginTiming = null;
             String normalized = username.trim().toLowerCase(Locale.ROOT);
             if (normalized.isEmpty() || password.isEmpty()) {
                 message = "请输入账号和密码。";
@@ -149,12 +160,14 @@ public final class AppController {
                         .put("public_key", TunnelEngine.publicKey(key))
                         .put("device_name", defaultDeviceName)
                         .put("client_version", VERSION);
+                long identityReadyAt = SystemClock.elapsedRealtime();
                 JSONObject response;
                 try {
                     response = api.call("authenticate", "", request);
                 } finally {
                     request.remove("password");
                 }
+                long authenticatedAt = SystemClock.elapsedRealtime();
                 String issued = response.getString("token");
                 long expiry = response.getLong("token_expires_at");
                 if (!ClientApi.validToken(issued) || expiry <= epochSeconds()) {
@@ -167,6 +180,8 @@ public final class AppController {
                 privateKey = key;
                 remember = rememberLogin;
                 rememberSession();
+                lastLoginTiming = new LoginTiming(startedAt - requestedAt, identityReadyAt - startedAt,
+                        authenticatedAt - identityReadyAt, SystemClock.elapsedRealtime() - authenticatedAt);
             } catch (Exception failure) {
                 if (hasCode(failure, "DEVICE_REVOKED") && !slot.isEmpty()) {
                     erase(slot);
@@ -430,6 +445,7 @@ public final class AppController {
         } finally {
             publish();
             if (token.isEmpty()) {
+                CompletableFuture.runAsync(vault::warmKey);
                 presenceWorker.execute(api::warmLoginConnection);
             }
         }

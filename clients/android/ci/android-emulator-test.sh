@@ -93,8 +93,17 @@ if [[ "$mode" == production ]]; then
     latency='^ANDROID_PERF_HTTPS_(DIRECT|WIREGUARD_UDP)_(FRESH|REUSED)_SAMPLES_MS=([0-9]+,){19}[0-9]+'
     latency+=';N=20;MEDIAN_MS=[0-9]+;P95_MS=[0-9]+;UNDER_500MS=[0-9]+;HOST=www[.]cloudflare[.]com'
     latency+=';PATH=/cdn-cgi/trace;ENDPOINT=[0-9.]+;ADDRESS_FAMILY=IPv4;PROTOCOL=HTTP_1_1$'
+    rtt_sample='(-1|[0-9]+[.][0-9]{3})'
+    rtt="^ANDROID_PERF_UDP_STUN_(DIRECT|WIREGUARD_UDP)_RTT_MS=($rtt_sample,){11}$rtt_sample"
+    rtt+=';N=12;REPLIES=[0-9]+;UNANSWERED=[0-9]+;PROBE_LOSS_PERCENT=[0-9]+[.][0-9]{3}'
+    rtt+=";MEDIAN_MS=$rtt_sample;P95_MS=$rtt_sample;MEAN_ADJACENT_RTT_CHANGE_MS=$rtt_sample"
+    rtt+=';HOST=(stun[.]cloudflare[.]com|stun[.]l[.]google[.]com);ENDPOINT=[0-9.]+;PORT=(3478|19302)'
+    rtt+=';TIMEOUT_MS=1200;VPN_EXIT_VERIFIED=[01]$'
+    rtt_unavailable='^ANDROID_PERF_UDP_STUN_(DIRECT|WIREGUARD_UDP)_STATUS=(DNS_UNAVAILABLE|NO_IPV4_ADDRESS)'
+    rtt_unavailable+=';HOST=(stun[.]cloudflare[.]com|stun[.]l[.]google[.]com);PORT=(3478|19302)$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
-        grep -E -e "$download" -e "$timing" -e "$login_phases" -e "$families" -e "$proof" -e "$phases" -e "$latency" |
+        grep -E -e "$download" -e "$timing" -e "$login_phases" -e "$families" -e "$proof" \
+            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" |
         tee "$working_dir/performance.txt"
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
     for metric in DOWNLOAD_DIRECT_BYTES DOWNLOAD_WIREGUARD_UDP_BYTES PERF_VERIFIED_FAMILIES \
@@ -106,6 +115,12 @@ if [[ "$mode" == production ]]; then
         PERF_HTTPS_DIRECT_FRESH_SAMPLES_MS PERF_HTTPS_DIRECT_REUSED_SAMPLES_MS \
         PERF_HTTPS_WIREGUARD_UDP_FRESH_SAMPLES_MS PERF_HTTPS_WIREGUARD_UDP_REUSED_SAMPLES_MS; do
         grep -q "^ANDROID_$metric=" "$working_dir/performance.txt"
+    done
+    for route in DIRECT WIREGUARD_UDP; do
+        grep -Eq "^ANDROID_PERF_UDP_STUN_${route}_(RTT_MS|STATUS)=.*;HOST=stun[.]cloudflare[.]com;(ENDPOINT=[0-9.]+;)?PORT=3478(;|$)" \
+            "$working_dir/performance.txt"
+        grep -Eq "^ANDROID_PERF_UDP_STUN_${route}_(RTT_MS|STATUS)=.*;HOST=stun[.]l[.]google[.]com;(ENDPOINT=[0-9.]+;)?PORT=19302(;|$)" \
+            "$working_dir/performance.txt"
     done
     echo 'Production Android TLS, enrollment, WireGuard, DNS, disconnect and test-device removal verified.'
     exit 0

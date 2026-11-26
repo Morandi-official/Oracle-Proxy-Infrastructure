@@ -27,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -49,6 +50,12 @@ final class CloudflareExitProbe {
     }
 
     private CloudflareExitProbe() { }
+
+    static void prepare(Context context) {
+        if (BuildConfig.H3_EXIT_PROOF_ENABLED && platformSupported()) {
+            PlatformHttp3.prepareEngine(context);
+        }
+    }
 
     static void rememberVerifiedProtocols(Proof ipv4, Proof ipv6) {
         lastHttp3Exit4 = "h3".equals(ipv4.protocol) ? ipv4.address : "";
@@ -189,7 +196,27 @@ final class CloudflareExitProbe {
     @SuppressLint("NewApi")
     private static final class PlatformHttp3 {
         private static final ExecutorService CALLBACKS = Executors.newSingleThreadExecutor();
-        private static HttpEngine engine;
+        private static final AtomicBoolean PREPARING = new AtomicBoolean();
+        private static volatile HttpEngine engine;
+
+        static void prepareEngine(Context context) {
+            if (engine != null || !PREPARING.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                new Thread(() -> {
+                    try {
+                        engine(context);
+                    } catch (RuntimeException | LinkageError ignored) {
+                        // A later probe keeps its existing HTTPS fallback.
+                    } finally {
+                        PREPARING.set(false);
+                    }
+                }, "ProxyHttp3Preparation").start();
+            } catch (RuntimeException ignored) {
+                PREPARING.set(false);
+            }
+        }
 
         private static synchronized HttpEngine engine(Context context) {
             if (engine == null) {

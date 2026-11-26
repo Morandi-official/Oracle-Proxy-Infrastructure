@@ -173,6 +173,9 @@ public final class TunnelEngine {
         } catch (IOException ignored) {
             // Connect can start the service normally after policy is available.
         }
+        // Prepare the HTTP engine during the policy request. A URL request is
+        // still created only after the fresh authorized VPN can bind sockets.
+        CloudflareExitProbe.prepare(context);
     }
 
     private void prepareBackend() {

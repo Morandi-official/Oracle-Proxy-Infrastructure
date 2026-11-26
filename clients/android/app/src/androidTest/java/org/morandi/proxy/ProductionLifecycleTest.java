@@ -37,6 +37,7 @@ import java.util.function.Predicate;
 
 import javax.net.ssl.HttpsURLConnection;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -73,6 +74,8 @@ public final class ProductionLifecycleTest {
                 }
             }
             reportPasswordPhases("FRESH", enrollment, api);
+            assertEquals("The cold controller still exercises unprepared identity creation",
+                    AppController.IdentitySource.NEW_ON_DEMAND, enrollment.lastLoginTiming().identitySource());
             assertFalse("Release test requires a fresh emulator identity", enrollment.snapshot().registered);
             enrollment.confirmDevice("Android CI " + run);
             await("Production device enrollment", () -> enrollment.snapshot().registered
@@ -98,6 +101,8 @@ public final class ProductionLifecycleTest {
                 warm.report("LOGIN_WARM");
             }
             reportPasswordPhases("WARM", controller, api);
+            assertEquals("Returning Android devices keep their stored identity",
+                    AppController.IdentitySource.STORED, controller.lastLoginTiming().identitySource());
 
             MainActivity screen = (MainActivity) instrumentation.startActivitySync(
                     new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));

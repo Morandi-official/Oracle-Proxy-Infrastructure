@@ -27,10 +27,12 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class AppController {
     private static final String SESSION = "remembered_session";
@@ -54,6 +56,7 @@ public final class AppController {
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicLong intent = new AtomicLong();
     private final AtomicBoolean notificationPending = new AtomicBoolean();
+    private final AtomicReference<FutureTask<KeyPair>> nextSignInIdentity = new AtomicReference<>();
     private final String defaultDeviceName;
 
     // All mutable session and VPN state is owned by the single worker.
@@ -81,7 +84,10 @@ public final class AppController {
     private volatile LoginTiming lastLoginTiming;
     private ConsentPolicy consentPolicy;
 
-    record LoginTiming(long queueMs, long identityMs, long authenticateMs, long sessionMs) {}
+    enum IdentitySource { STORED, NEW_ON_DEMAND, NEW_FOREGROUND }
+
+    record LoginTiming(long queueMs, long identityMs, long authenticateMs, long sessionMs,
+                       IdentitySource identitySource) {}
 
     private record ConnectionPolicy(JSONObject state, long startedAt, long requestMs) {
         boolean freshForConsent() {
@@ -111,6 +117,7 @@ public final class AppController {
     // Same-package instrumentation may install a fixture before launching the activity.
     static synchronized void installForTest(AppController controller) {
         if (instance != null && instance != controller) {
+            instance.discardSignInIdentity();
             instance.presenceWorker.shutdownNow();
             instance.connectionPolicyWorker.shutdownNow();
             instance.worker.shutdownNow();
@@ -152,6 +159,28 @@ public final class AppController {
         listeners.remove(listener);
     }
 
+    void prepareSignInIdentity() {
+        FutureTask<KeyPair> candidate = new FutureTask<>(KeyPair::new);
+        if (!nextSignInIdentity.compareAndSet(null, candidate)) return;
+        // Restore runs first on the controller worker. A saved session does not
+        // need a new device identity even if the login view was briefly shown.
+        worker.execute(() -> {
+            if (nextSignInIdentity.get() != candidate) return;
+            if (!token.isEmpty()) {
+                if (nextSignInIdentity.compareAndSet(candidate, null)) candidate.cancel(false);
+            } else {
+                // This executor is idle at sign-in. Actual login can claim the
+                // task inline if it is still queued when a new slot is found.
+                connectionPolicyWorker.execute(candidate);
+            }
+        });
+    }
+
+    void discardSignInIdentity() {
+        FutureTask<KeyPair> candidate = nextSignInIdentity.getAndSet(null);
+        if (candidate != null) candidate.cancel(false);
+    }
+
     public void login(String username, String password, boolean rememberLogin) {
         long requestedAt = SystemClock.elapsedRealtime();
         worker.execute(() -> {
@@ -169,13 +198,25 @@ public final class AppController {
             busy = true;
             message = "";
             publish();
+            FutureTask<KeyPair> candidate = nextSignInIdentity.getAndSet(null);
             String slot = "";
             try {
                 slot = PrivateStore.accountSlot(normalized);
                 String key = vault.read(slot);
                 String publicKey;
+                IdentitySource source = IdentitySource.STORED;
                 if (key.isEmpty()) {
-                    KeyPair identity = new KeyPair();
+                    KeyPair identity;
+                    if (candidate == null) {
+                        source = IdentitySource.NEW_ON_DEMAND;
+                        identity = new KeyPair();
+                    } else {
+                        // run() claims unfinished work if it has not started;
+                        // get() joins the same calculation if it already has.
+                        source = IdentitySource.NEW_FOREGROUND;
+                        candidate.run();
+                        identity = candidate.get();
+                    }
                     key = identity.getPrivateKey().toBase64();
                     publicKey = identity.getPublicKey().toBase64();
                     vault.write(slot, key);
@@ -209,13 +250,14 @@ public final class AppController {
                 remember = rememberLogin;
                 rememberSession();
                 lastLoginTiming = new LoginTiming(startedAt - requestedAt, identityReadyAt - startedAt,
-                        authenticatedAt - identityReadyAt, SystemClock.elapsedRealtime() - authenticatedAt);
+                        authenticatedAt - identityReadyAt, SystemClock.elapsedRealtime() - authenticatedAt, source);
             } catch (Exception failure) {
                 if (hasCode(failure, "DEVICE_REVOKED") && !slot.isEmpty()) {
                     erase(slot);
                 }
                 message = textFor(failure);
             } finally {
+                if (candidate != null) candidate.cancel(false);
                 busy = false;
                 publish();
             }
@@ -825,6 +867,7 @@ public final class AppController {
     }
 
     private void clearSession(boolean removeKey) {
+        discardSignInIdentity();
         if (removeKey && !accountSlot.isEmpty()) {
             erase(SESSION, accountSlot);
         } else {

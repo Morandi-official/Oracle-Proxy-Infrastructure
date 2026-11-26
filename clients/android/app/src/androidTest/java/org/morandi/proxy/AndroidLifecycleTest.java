@@ -160,6 +160,8 @@ public final class AndroidLifecycleTest {
             tap(instrumentation, activity, R.id.login);
             await("sign-in", controller, () -> controller.snapshot().signedIn && !controller.snapshot().busy);
             assertFalse(controller.snapshot().registered);
+            assertEquals("A new device can claim the local foreground preparation",
+                    AppController.IdentitySource.NEW_FOREGROUND, controller.lastLoginTiming().identitySource());
 
             enter(instrumentation, activity, R.id.device_name, DEVICE_NAME);
             tap(instrumentation, activity, R.id.device_confirm);
@@ -285,6 +287,15 @@ public final class AndroidLifecycleTest {
             assertTrue(controller.snapshot().deviceId.isEmpty());
             assertTrue(api.events.contains("logout"));
             assertFalse(engine.isUp());
+            String priorKey = api.clientPublicKey;
+            enter(instrumentation, activity, R.id.username, "fixture");
+            enter(instrumentation, activity, R.id.password, "fixture-only");
+            tap(instrumentation, activity, R.id.login);
+            await("known-device login", controller, () -> controller.snapshot().signedIn && !controller.snapshot().busy);
+            assertEquals("A prepared candidate cannot replace an enrolled key", priorKey, api.clientPublicKey);
+            assertEquals(AppController.IdentitySource.STORED, controller.lastLoginTiming().identitySource());
+            controller.logout();
+            await("known-device logout", controller, () -> !controller.snapshot().signedIn && !controller.snapshot().busy);
         } finally {
             controller.removeObserver(observer);
             controller.disconnect();
@@ -418,6 +429,10 @@ public final class AndroidLifecycleTest {
                     assertEquals(5, body.length());
                     clientPublicKey = body.getString("public_key");
                     assertEquals(44, clientPublicKey.length());
+                    Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
+                    String stored = new PrivateStore(app).read(PrivateStore.accountSlot("fixture"));
+                    assertFalse("The device key is durable before authentication", stored.isEmpty());
+                    assertEquals(TunnelEngine.publicKey(stored), clientPublicKey);
                     return state().put("token", TEST_TOKEN)
                             .put("token_expires_at", System.currentTimeMillis() / 1000 + 900);
                 case "enroll":

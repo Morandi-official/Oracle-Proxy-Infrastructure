@@ -273,12 +273,15 @@ public final class AppController {
         }
         long requested = previous + 1;
         long requestedAt = SystemClock.elapsedRealtime();
+        // A restored Activity result can start a fresh attempt. Only an
+        // in-process result for the matching click can reuse its system consent.
+        long matchingConsentRequest = consentRequest == previous ? consentRequest : 0;
         worker.execute(() -> {
             if (requested != intent.get()) {
                 return;
             }
             if (granted && registered() && !token.isEmpty()) {
-                connectInternal(requested, requestedAt, consentRequest);
+                connectInternal(requested, requestedAt, matchingConsentRequest);
                 return;
             }
             discardConsentPolicy();
@@ -376,7 +379,7 @@ public final class AppController {
             // Android service setup and the fresh HTTPS request can proceed concurrently.
             // The worker still applies the response before activating the TUN.
             long preparationStarted = SystemClock.elapsedRealtime();
-            engine.prepareConnection();
+            engine.prepareConnection(consentRequest != 0);
             long policyWaitStarted = SystemClock.elapsedRealtime();
             if (requested != intent.get()) {
                 return;

@@ -83,27 +83,33 @@ static void VerifyPnp(std::wstring pnp) {
     DEVINST node=0; ULONG status=0,problem=0;
     if (_wcsnicmp(pnp.c_str(),L"SWD\\WINTUN\\",11) ||
         CM_Locate_DevNodeW(&node,pnp.data(),CM_LOCATE_DEVNODE_NORMAL)!=CR_SUCCESS ||
-        CM_Get_DevNode_Status(&status,&problem,node,0)!=CR_SUCCESS || (status & DN_HAS_PROBLEM)) Fail("PNP");
+        CM_Get_DevNode_Status(&status,&problem,node,0)!=CR_SUCCESS ||
+        (status & (DN_STARTED|DN_HAS_PROBLEM))!=DN_STARTED) Fail("PNP");
 }
 struct Session {
     ComPtr<INetCfg> cfg;
     ComPtr<INetCfgLock> lock;
-    bool locked=false,initialized=false;
-    void acquire() {
+    bool locked=false,initialized=false,pending=false;
+    void create() {
         Ok(CoCreateInstance(CLSID_CNetCfg,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(cfg.GetAddressOf())),"COM");
+    }
+    void acquire() {
+        create();
         Ok(cfg.As(&lock),"COM");
         Text owner;
         Ok(lock->AcquireWriteLock(200,L"Disposable Wintun measurement",&owner.value),"LOCK");
         locked=true;
     }
     void init() { Ok(cfg->Initialize(nullptr),"INIT");initialized=true; }
-    void reinit() { Ok(cfg->Uninitialize(),"READBACK");initialized=false;init(); }
     void finish() {
-        Ok(cfg->Uninitialize(),"READBACK");initialized=false;
-        Ok(lock->ReleaseWriteLock(),"LOCK");locked=false;
+        initialized=false;
+        HRESULT uninit=cfg->Uninitialize(),unlocked=S_OK;
+        if(locked){locked=false;unlocked=lock->ReleaseWriteLock();}
+        lock.Reset();cfg.Reset();
+        Ok(uninit,"READBACK");Ok(unlocked,"LOCK");
     }
     ~Session() {
-        if (initialized) cfg->Uninitialize();
+        if (initialized) { if(pending) cfg->Cancel(); cfg->Uninitialize(); }
         if (locked) lock->ReleaseWriteLock();
     }
 };
@@ -171,47 +177,120 @@ static Bindings ReadPaths(INetCfg* cfg, Receipt& r) {
     if (!ipv4 || !ipv6) Fail("PATH");
     return result;
 }
+// Each timer also records an unsuccessful call. A failed PnP or NetCfg
+// readback must not masquerade as a zero-millisecond successful readback.
+struct Meter {
+    long long& sum;
+    Tick start=Clock::now();
+    ~Meter() { sum+=Elapsed(start); }
+};
 struct Timings {
     const char* phase;
     long long lock=0,identify=0,stage=0,apply=0,readback=0;
+    long long attempts=0,pnp=0,graph=0,finish=0;
     ~Timings(){
+        std::cout<<"SETTLE "<<phase<<' '<<attempts<<' '<<pnp<<' '<<graph<<' '<<finish<<std::endl;
         std::cout<<"PHASE "<<phase<<' '<<lock<<' '<<identify<<' '<<stage<<' '<<apply<<' '<<readback<<std::endl;
     }
 };
-static void Change(Receipt& r, bool restore, bool& mayHaveChanged) {
-    Timings tm{restore?"restore":"before"};Session s;
-    Tick start=Clock::now();s.acquire();tm.lock=Elapsed(start);
-    start=Clock::now();s.init();auto paths=ReadPaths(s.cfg.Get(),r);
-    if(!restore){
-        if(!r.original.empty()) Fail("BASELINE");
-        bool v4=false,v6=false;
-        for(const auto& [id,b]:paths) {
-            r.original.emplace(id,b.enabled);
-            if (b.enabled) {v4|=id[0]==L'4';v6|=id[0]==L'6';}
-        }
-        if (!v4 || !v6) Fail("BASELINE");
+static bool TransientRead(const Failure& failure) {
+    const std::string reason=failure.reason;
+    return reason=="PNP" || reason=="IDENTITY" || reason=="ENUM" || reason=="PATH" ||
+        reason=="INIT" || reason=="READBACK" || reason=="DRIFT";
+}
+static void CheckMap(const Receipt& receipt,const Bindings& current,bool restored){
+    if(current.size()!=receipt.original.size()) Fail("READBACK");
+    for(const auto& [id,b]:current){
+        const auto expected=receipt.original.find(id);
+        if(expected==receipt.original.end() || b.enabled!=(restored && expected->second)) Fail("READBACK");
     }
-    if (paths.size()!=r.original.size()) Fail("DRIFT");
-    for(const auto& [id,b]:paths) if (!r.original.count(id)) Fail("DRIFT");
-    tm.identify=Elapsed(start);
-    start=Clock::now();bool staged=false;
-    try {
-        for(auto& [id,b]:paths){
-            const bool desired=restore && r.original.at(id);
-            if (b.enabled!=desired){Ok(b.path->Enable(desired?TRUE:FALSE),"STAGE");staged=true;}
-        }
-        tm.stage=Elapsed(start);start=Clock::now();
-        if(staged){mayHaveChanged=true;Ok(s.cfg->Apply(),"APPLY");}
-        tm.apply=Elapsed(start);
-    } catch (...) {s.cfg->Cancel();throw;}
-    start=Clock::now();paths.clear();s.reinit();
-    auto verify=ReadPaths(s.cfg.Get(),r);
-    if(verify.size()!=r.original.size()) Fail("READBACK");
-    for(const auto& [id,b]:verify){
-        auto expected=r.original.find(id);
-        if(expected==r.original.end() || b.enabled!=(restore && expected->second)) Fail("READBACK");
+}
+// Apply can asynchronously restart the adapter. Require two matching live
+// observations across a short interval (and another after the fresh graph
+// read), without holding the machine-wide write lock while waiting.
+static void VerifyLive(const Receipt& r) {
+    VerifyPnp(r.pnp);VerifyNic(r.luid);
+}
+static void ReadIndependent(Receipt& r,bool restored) {
+    Session read;read.create();read.init();
+    {
+        auto current=ReadPaths(read.cfg.Get(),r);
+        CheckMap(r,current,restored);
     }
-    verify.clear();s.finish();tm.readback=Elapsed(start);
+    read.finish();
+}
+static void AwaitReadback(Receipt& r,bool restore,Timings& t) {
+    const auto deadline=Clock::now()+std::chrono::milliseconds(2500);
+    for(;;) {
+        ++t.attempts;
+        try {
+            {
+                Meter meter{t.pnp};
+                VerifyLive(r);
+                Sleep(15);
+                VerifyLive(r);
+            }
+            {Meter meter{t.graph};ReadIndependent(r,restore);}
+            {Meter meter{t.pnp};VerifyLive(r);}
+            return;
+        }catch(const Failure& failure){
+            if(!TransientRead(failure) || Clock::now()>=deadline) throw;
+            Meter meter{t.pnp};Sleep(20);
+        }
+    }
+}
+static void Change(Receipt& r, bool restore, bool& mayHaveChanged,const char* phase) {
+    Timings tm{phase};
+    Session writer;
+    {Meter meter{tm.lock};writer.acquire();}
+    bool staged=false;
+    {
+        Bindings paths;
+        {
+            Meter meter{tm.identify};
+            writer.init();
+            paths=ReadPaths(writer.cfg.Get(),r);
+            if(!restore){
+                if(!r.original.empty()) Fail("BASELINE");
+                bool v4=false,v6=false;
+                for(const auto& [id,b]:paths) {
+                    r.original.emplace(id,b.enabled);
+                    if (b.enabled) {v4|=id[0]==L'4';v6|=id[0]==L'6';}
+                }
+                if (!v4 || !v6) Fail("BASELINE");
+            }
+            if (paths.size()!=r.original.size()) Fail("DRIFT");
+            for(const auto& [id,b]:paths) if (!r.original.count(id)) Fail("DRIFT");
+        }
+        {
+            Meter meter{tm.stage};
+            for(auto& [id,b]:paths){
+                const bool desired=restore && r.original.at(id);
+                if(b.enabled!=desired){writer.pending=true;Ok(b.path->Enable(desired?TRUE:FALSE),"STAGE");staged=true;}
+            }
+        }
+    } // Release every derived binding interface before Apply triggers NDIS.
+    if(staged){
+        Meter meter{tm.apply};
+        mayHaveChanged=true;Ok(writer.cfg->Apply(),"APPLY");writer.pending=false;
+    }
+    Meter readback{tm.readback};
+    {Meter meter{tm.finish};writer.finish();}
+    AwaitReadback(r,restore,tm);
+}
+static void Rollback(Receipt& receipt,bool& maybe){
+    // A failed commit/readback may have temporarily removed the IP interfaces.
+    // Wait for the creator's exact live PnP + MIB receipt before opening a
+    // fresh writable graph. Never use another NIC and never guess a path.
+    const auto deadline=Clock::now()+std::chrono::milliseconds(2500);
+    for(;;){
+        try{VerifyLive(receipt);Sleep(15);VerifyLive(receipt);break;}
+        catch(const Failure& failure){
+            if(!TransientRead(failure) || Clock::now()>=deadline) throw;
+            Sleep(20);
+        }
+    }
+    Change(receipt,true,maybe,"rollback");
 }
 int main() {
     HRESULT apartment=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
@@ -221,16 +300,16 @@ int main() {
         Receipt receipt{OwnerLuid(),{},{}};
         bool maybe=false;
         try{
-            Change(receipt,false,maybe);
+            Change(receipt,false,maybe,"before");
             std::cout<<"READBACK 1\nUNBOUND"<<std::endl;
             char command[16]={};
             if(!std::cin.getline(command,sizeof(command)) || std::string(command)!="RESTORE") Fail("PARENT_ENDED");
-            Change(receipt,true,maybe);
+            Change(receipt,true,maybe,"restore");
             maybe=false;
             std::cout<<"RESTORED\nHELPER_COMPLETE"<<std::endl;
         }catch(...){
             if(maybe){
-                try{Change(receipt,true,maybe);}
+                try{Rollback(receipt,maybe);}
                 catch(...){std::cout<<"FAILED_ROLLBACK"<<std::endl;}
             }
             throw;

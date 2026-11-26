@@ -32,9 +32,11 @@ var bindingLabScript string
 var bindingLabNativeSHA256 string
 
 type labSnapshot struct {
-	PNP, Description, Hash string
-	Count                  int
-	Present, Matching      bool
+	PNP, Description, Hash    string
+	TargetHash, TargetOffHash string
+	TargetCount, IP4, IP6     int
+	Count                     int
+	Present, Matching         bool
 }
 
 // Independent CIM/PnP witness. Called before starting the helper, while already unbound,
@@ -63,19 +65,43 @@ func bindingSnapshot(ctx context.Context, luid winipcfg.LUID, stage string, orig
 }
 
 func logBindingPhase(t *testing.T, fields []string) bool {
-	if len(fields) != 7 || fields[0] != "PHASE" || (fields[1] != "before" && fields[1] != "restore") {
+	if len(fields) < 2 || (fields[1] != "before" && fields[1] != "restore" && fields[1] != "rollback") {
 		return false
 	}
-	var times [5]int64
-	for i, v := range fields[2:] {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 || n > 90000 {
+	switch fields[0] {
+	case "PHASE":
+		if len(fields) != 7 {
 			return false
 		}
-		times[i] = n
+	case "SETTLE":
+		if len(fields) != 6 {
+			return false
+		}
+	default:
+		return false
 	}
-	t.Logf("NETCFG_%s LOCK_MS=%d IDENTIFY_MS=%d STAGE_MS=%d APPLY_MS=%d READBACK_MS=%d", fields[1], times[0], times[1], times[2], times[3], times[4])
+	var values [5]int64
+	for i, v := range fields[2:] {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil || n > 90000 {
+			return false
+		}
+		values[i] = int64(n)
+	}
+	if fields[0] == "SETTLE" {
+		t.Logf("NETCFG_SETTLE_%s ATTEMPTS=%d PNP_MS=%d GRAPH_MS=%d FINISH_MS=%d", fields[1], values[0], values[1], values[2], values[3])
+	} else {
+		t.Logf("NETCFG_%s LOCK_MS=%d IDENTIFY_MS=%d STAGE_MS=%d APPLY_MS=%d READBACK_MS=%d", fields[1], values[0], values[1], values[2], values[3], values[4])
+	}
 	return true
+}
+
+// Snapshot the IP Helper tables independently of NetCfg or CIM, including after
+// abnormal helper exit. A missing IP interface does not prove a binding state.
+func logLabIPInterfaces(t *testing.T, luid winipcfg.LUID, stage string) {
+	v4, e4 := luid.IPInterface(windows.AF_INET)
+	v6, e6 := luid.IPInterface(windows.AF_INET6)
+	t.Logf("BIND_LAB_%s_IP_INTERFACE V4=%t V6=%t", stage, e4 == nil && v4 != nil && v4.InterfaceLUID == luid, e6 == nil && v6 != nil && v6.InterfaceLUID == luid)
 }
 
 // Read only this creator's complete GAA record. Never print an address, zone or suffix.
@@ -184,12 +210,18 @@ func TestDisposableOracleBindings(t *testing.T) {
 	if err != nil || len(bindingLabNativeSHA256) != 64 || !strings.EqualFold(fmt.Sprintf("%x", sha256.Sum256(content)), bindingLabNativeSHA256) {
 		t.Fatal("NATIVE_HELPER_DIGEST_MISMATCH")
 	}
+	logLabIPInterfaces(t, luid, "before")
 	original, err := bindingSnapshot(ctx, luid, "before", labSnapshot{})
 	if err != nil || !original.Present || !original.Matching {
 		t.Fatal("CIM_BASELINE_FAILED")
 	}
+	t.Logf("CIM_before_TARGET_BINDINGS ROWS=%d IPV4_ENABLED=%d IPV6_ENABLED=%d", original.TargetCount, original.IP4, original.IP6)
+	if original.TargetCount < 2 || original.IP4 != 1 || original.IP6 != 1 || len(original.TargetHash) != 64 || len(original.TargetOffHash) != 64 || original.TargetHash == original.TargetOffHash {
+		t.Fatal("CIM_TARGET_BASELINE_UNVERIFIED")
+	}
 	t.Logf("BIND_LAB_IDENTITY_before PNP_PRESENT=%t MATCHING_NIC=%t", original.Present, original.Matching)
 	checkWitness := func(stage string) bool {
+		logLabIPInterfaces(t, luid, stage)
 		auditCtx, stopAudit := context.WithTimeout(context.Background(), 15*time.Second)
 		defer stopAudit()
 		auditStarted := time.Now()
@@ -208,9 +240,17 @@ func TestDisposableOracleBindings(t *testing.T) {
 		t.Logf("CIM_%s_OTHER_BINDINGS_UNCHANGED=%t BINDING_ROWS=%d", stage, sameBindings, observed.Count)
 		if !sameBindings {
 			t.Errorf("CIM_%s_OTHER_BINDINGS_CHANGED", stage)
-			return false
 		}
-		return true
+		wantHash, wantEnabled := original.TargetHash, 1
+		if stage == "unbound" {
+			wantHash, wantEnabled = original.TargetOffHash, 0
+		}
+		targetMatches := observed.TargetCount == original.TargetCount && observed.TargetHash == wantHash && observed.IP4 == wantEnabled && observed.IP6 == wantEnabled
+		t.Logf("CIM_%s_TARGET_BINDINGS ROWS=%d IPV4_ENABLED=%d IPV6_ENABLED=%d EXPECTED_CHOICES=%t", stage, observed.TargetCount, observed.IP4, observed.IP6, targetMatches)
+		if !targetMatches {
+			t.Errorf("CIM_%s_TARGET_BINDINGS_UNVERIFIED", stage)
+		}
+		return sameBindings && targetMatches
 	}
 	shell := exec.CommandContext(ctx, binary)
 	shell.Dir = fixture
@@ -239,15 +279,19 @@ func TestDisposableOracleBindings(t *testing.T) {
 		}
 		fields := strings.Fields(line)
 		if logBindingPhase(t, fields) {
-			if phaseReported[fields[1]] {
+			key := fields[0] + "_" + fields[1]
+			if phaseReported[key] {
 				t.Error("NETCFG_DUPLICATE_PHASE")
 			}
-			phaseReported[fields[1]] = true
+			phaseReported[key] = true
 			return true
 		}
 		switch line {
 		case "FAILED_INPUT", "FAILED_SYSTEM", "FAILED_FIXTURE", "FAILED_COM", "FAILED_LOCK", "FAILED_INIT", "FAILED_IDENTITY", "FAILED_PNP", "FAILED_ENUM", "FAILED_PATH", "FAILED_BASELINE", "FAILED_DRIFT", "FAILED_STAGE", "FAILED_APPLY", "FAILED_REBOOT", "FAILED_READBACK", "FAILED_PARENT_ENDED", "FAILED_ROLLBACK", "ROLLBACK_FAILED":
 			t.Log(line)
+		}
+		if len(fields) > 0 && (fields[0] == "SETTLE" || fields[0] == "PHASE") {
+			t.Error("NETCFG_INVALID_PHASE_REPORT")
 		}
 		return false
 	}
@@ -274,7 +318,7 @@ func TestDisposableOracleBindings(t *testing.T) {
 				logLine(line)
 			}
 		}
-		if restored && (!complete || !phaseReported["before"] || !phaseReported["restore"]) {
+		if restored && (!complete || !phaseReported["PHASE_before"] || !phaseReported["PHASE_restore"] || !phaseReported["SETTLE_before"] || !phaseReported["SETTLE_restore"]) {
 			t.Error("NATIVE_COMPLETION_WITNESS_MISSING")
 		}
 		if err := shell.Wait(); err != nil {

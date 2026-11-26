@@ -8,6 +8,10 @@ on:
     paths: ['clients/android/**', '.github/workflows/android-client.yml']
   workflow_dispatch:
     inputs:
+      production_acceptance:
+        description: Verify the signed Android package on production
+        type: boolean
+        default: false
       publish:
         description: Publish a signed APK after Android acceptance
         type: boolean
@@ -109,7 +113,9 @@ jobs:
 
   signed-release:
     needs: [build, emulator]
-    if: github.ref == 'refs/heads/main' && ((github.event_name == 'workflow_dispatch' && inputs.publish) || needs.build.outputs.publish_on_push == 'true')
+    if: >-
+      github.ref == 'refs/heads/main' && (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.production_acceptance)))
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     environment: android-release
@@ -218,7 +224,7 @@ jobs:
             owner-signed-android/Proxy-Android.apk owner-signed-instrumentation/app-release-androidTest.apk
 
   production-emulator:
-    needs: signed-emulator
+    needs: signed-release
     runs-on: ubuntu-24.04
     timeout-minutes: 22
     environment: windows-client-acceptance
@@ -252,7 +258,10 @@ jobs:
             owner-signed-android/Proxy-Android.apk owner-signed-instrumentation/app-release-androidTest.apk production
 
   publish:
-    needs: production-emulator
+    needs: [build, signed-emulator, production-emulator]
+    if: >-
+      github.ref == 'refs/heads/main' && (needs.build.outputs.publish_on_push == 'true' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

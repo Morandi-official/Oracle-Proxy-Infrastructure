@@ -77,11 +77,22 @@ if [[ "$mode" == production ]]; then
         | tee "$working_dir/instrumentation.txt"
     unset user_b64 pass_b64
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
+    download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
+    timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)|CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK))_MS=[0-9]+;TARGET_MS=1000;UNDER_TARGET=[01]$'
+    families='^ANDROID_PERF_VERIFIED_FAMILIES=[12]$'
+    latency='^ANDROID_PERF_HTTPS_(DIRECT|WIREGUARD_UDP)_(FRESH|REUSED)_SAMPLES_MS=([0-9]+,){19}[0-9]+'
+    latency+=';N=20;MEDIAN_MS=[0-9]+;P95_MS=[0-9]+;UNDER_500MS=[0-9]+;HOST=www[.]cloudflare[.]com'
+    latency+=';PATH=/cdn-cgi/trace;ENDPOINT=[0-9.]+;ADDRESS_FAMILY=IPv4;PROTOCOL=HTTP_1_1$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
-        grep -E '^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$' |
-        tee "$working_dir/throughput.txt"
-    grep -q '^ANDROID_DOWNLOAD_DIRECT_BYTES=' "$working_dir/throughput.txt"
-    grep -q '^ANDROID_DOWNLOAD_WIREGUARD_UDP_BYTES=' "$working_dir/throughput.txt"
+        grep -E -e "$download" -e "$timing" -e "$families" -e "$latency" |
+        tee "$working_dir/performance.txt"
+    for metric in DOWNLOAD_DIRECT_BYTES DOWNLOAD_WIREGUARD_UDP_BYTES PERF_VERIFIED_FAMILIES \
+        PERF_LOGIN_FRESH_MS PERF_LOGIN_SAVED_CONTROLLER_MS PERF_LOGIN_WARM_MS \
+        PERF_CONNECT_FIRST_CLICK_MS PERF_CONNECT_AFTER_CONSENT_MS PERF_CONNECT_RECONNECT_CLICK_MS \
+        PERF_HTTPS_DIRECT_FRESH_SAMPLES_MS PERF_HTTPS_DIRECT_REUSED_SAMPLES_MS \
+        PERF_HTTPS_WIREGUARD_UDP_FRESH_SAMPLES_MS PERF_HTTPS_WIREGUARD_UDP_REUSED_SAMPLES_MS; do
+        grep -q "^ANDROID_$metric=" "$working_dir/performance.txt"
+    done
     echo 'Production Android TLS, enrollment, WireGuard, DNS, disconnect and test-device removal verified.'
     exit 0
 fi

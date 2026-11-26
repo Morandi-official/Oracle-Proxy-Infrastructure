@@ -53,8 +53,24 @@ jobs:
             previous_name=$(awk '$1 == "versionName" && $2 == "=" { print $3 }' <<< "$previous")
             current_name=$(awk '$1 == "versionName" && $2 == "=" { print $3 }' app/build.gradle)
             if [[ "$previous_code" =~ ^[1-9][0-9]{0,8}$ && "$current_code" =~ ^[1-9][0-9]{0,8}$ &&
-              "$current_code" -gt "$previous_code" && "$current_name" != "$previous_name" ]]; then
-              publish=true
+              "$current_code" -gt "$previous_code" ]]; then
+              if [[ "$current_name" != "$previous_name" ]]; then
+                publish=true
+              else
+                # A rebuilt candidate with the same version name may follow a
+                # failed acceptance. Published version names stay immutable.
+                version=${current_name//\'/}
+                [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+                if git ls-remote --exit-code --refs origin "refs/tags/wireguard-android-v$version" >/dev/null; then
+                  echo 'This version was already tagged.'
+                else
+                  ref_status=$?
+                  if [[ "$ref_status" != 2 ]]; then
+                    exit "$ref_status"
+                  fi
+                  publish=true
+                fi
+              fi
             fi
           fi
           printf 'publish=%s\n' "$publish" >> "$GITHUB_OUTPUT"

@@ -150,6 +150,16 @@ if [[ "$mode" == production ]]; then
         grep -Eq "^ANDROID_PERF_UDP_STUN_${route}_(RTT_MS|STATUS)=.*;HOST=stun[.]l[.]google[.]com;(ENDPOINT=[0-9.]+;)?PORT=19302(;|$)" \
             "$working_dir/performance.txt"
     done
+    if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+        latency_met=false
+        if grep -Eq '^ANDROID_PERF_CONNECT_AFTER_CONSENT_MS=[1-9][0-9]*;TARGET_MS=1500;UNDER_TARGET=1$' \
+                "$working_dir/performance.txt" &&
+            grep -Eq '^ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=.*;UNDER_1500MS=5$' \
+                "$working_dir/performance.txt"; then
+            latency_met=true
+        fi
+        printf 'latency_met=%s\n' "$latency_met" >> "$GITHUB_OUTPUT"
+    fi
     echo 'Production Android TLS, enrollment, WireGuard, DNS, disconnect and test-device removal verified.'
     exit 0
 fi

@@ -141,7 +141,7 @@ def credentials(value):
     return account,None
 
 
-def issue_session(request,value,explicit):
+def issue_session(request,value,explicit,confirm_device=False):
     account,rejected=credentials(value)
     if rejected is not None:return rejected
     key=value['public_key'];name=valid_name(value['device_name'])
@@ -160,8 +160,15 @@ def issue_session(request,value,explicit):
             ClientSession.objects.filter(expires_at__lte=now).delete()
             if ClientSession.objects.filter(account=current,enrollment_flow=True,reported_mode='pending').exclude(public_key=key).count()>=32:raise ValueError('PENDING_SESSION_LIMIT')
             ClientSession.objects.filter(account=current,public_key=key).delete()
-            ClientSession.objects.create(account=current,public_key=key,token_hash=hashlib.sha256(token.encode()).hexdigest(),expires_at=expiry,enrollment_flow=explicit,proposed_name=name,client_version=version,last_seen_at=now,reported_mode='disconnected' if data['device']['registered'] else 'pending')
+            credential=ClientSession.objects.create(account=current,public_key=key,token_hash=hashlib.sha256(token.encode()).hexdigest(),expires_at=expiry,enrollment_flow=explicit,proposed_name=name,client_version=version,last_seen_at=now,reported_mode='disconnected' if data['device']['registered'] else 'pending')
             Audit.objects.create(actor=f'client:{current.user_id}',action='device.login' if data['device']['registered'] else 'device.confirmation.requested',resource=fingerprint(key))
+        if explicit and confirm_device and data['registration']['requires_confirmation']:
+            try:
+                data=confirm_enrollment(request,credential,name)
+                expiry=credential.expires_at
+            except ValueError as error:
+                if str(error)!='DEVICE_LIMIT_REACHED':raise
+                data['admission_error']='DEVICE_LIMIT_REACHED'
         data.update(token=token,token_expires_at=int(expiry.timestamp()));return response(data)
 
 
@@ -169,7 +176,10 @@ def issue_session(request,value,explicit):
 @require_POST
 def authenticate(request):
     if not native_only(request):return response({'error':'NATIVE_CLIENT_REQUIRED'},403)
-    try:return issue_session(request,payload(request,{'username','password','public_key','device_name','client_version'}),True)
+    # The native Windows login already confirms this device. An opt-in header
+    # carries that decision without changing the request understood by old servers.
+    confirm_device=request.META.get('HTTP_X_ORACLE_CONFIRM_DEVICE')=='true'
+    try:return issue_session(request,payload(request,{'username','password','public_key','device_name','client_version'}),True,confirm_device)
     except (ValueError,TypeError,KeyError) as error:return failed(error)
     except (OSError,TimeoutError,DatabaseError):return response({'error':'CONTROL_SERVICE_UNAVAILABLE'},503)
 
@@ -219,17 +229,24 @@ def enroll(request):
         with management_lock():
             credential=session(request)
             if not credential:return response({'error':'LOGIN_REQUIRED'},401)
-            # Sessions created before this flow have no version/name metadata.
-            version=credential.client_version or 'legacy-upgrade'
-            machine=credential.proposed_name or name
-            Audit.objects.create(actor=f'client:{credential.account.user_id}',action='device.confirmation.submitted',resource=fingerprint(credential.public_key))
-            snapshot=control.call('peer.enroll',actor(request),{'public_key':credential.public_key,'user_id':str(credential.account.user_id),'name':name,'machine_name':machine,'client_version':version,'confirm':True})
-            result=client_state(snapshot,credential.account,credential.public_key,dual_stack=request.META.get('HTTP_X_ORACLE_CLIENT_CAPABILITIES')=='dual-stack-v1')
-            if result['registration']['status']!='registered':raise ValueError('DEVICE_CONFIRMATION_REQUIRED')
-            ClientSession.objects.filter(pk=credential.pk).update(enrollment_flow=True,expires_at=timezone.now()+timedelta(days=30),last_seen_at=timezone.now(),reported_mode='disconnected')
-            return response(result)
+            return response(confirm_enrollment(request,credential,name))
     except (ValueError,TypeError,KeyError) as error:return failed(error)
     except (OSError,TimeoutError,DatabaseError):return response({'error':'CONTROL_SERVICE_UNAVAILABLE'},503)
+
+
+def confirm_enrollment(request,credential,name):
+    # Callers hold the management lock. The pending token has already been
+    # committed, and root still makes the account, ownership and quota decision.
+    version=credential.client_version or 'legacy-upgrade'
+    machine=credential.proposed_name or name
+    Audit.objects.create(actor=f'client:{credential.account.user_id}',action='device.confirmation.submitted',resource=fingerprint(credential.public_key))
+    snapshot=control.call('peer.enroll',actor(request),{'public_key':credential.public_key,'user_id':str(credential.account.user_id),'name':name,'machine_name':machine,'client_version':version,'confirm':True})
+    result=client_state(snapshot,credential.account,credential.public_key,dual_stack=request.META.get('HTTP_X_ORACLE_CLIENT_CAPABILITIES')=='dual-stack-v1')
+    if result['registration']['status']!='registered':raise ValueError('DEVICE_CONFIRMATION_REQUIRED')
+    now=timezone.now();expiry=now+timedelta(days=30)
+    ClientSession.objects.filter(pk=credential.pk).update(enrollment_flow=True,expires_at=expiry,last_seen_at=now,reported_mode='disconnected')
+    credential.expires_at=expiry
+    return result
 
 
 @csrf_exempt

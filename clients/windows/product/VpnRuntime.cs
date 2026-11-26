@@ -289,6 +289,8 @@ internal sealed partial class VpnRuntime : IDisposable
                 // The pipe attachment has authenticated the local client.
                 // WAN recovery belongs to the background account refresh.
                 if(SessionAuthorized && _state is null && _refreshPending is null)_nextRefresh=default;
+                if(client is not null && !SessionAuthorized && !_secret.ConnectIntent && !_secret.RecoveryRequired && NativeGuard.ConfirmedAbsent)
+                    _api.WarmDisconnectedRoute();
                 break;
             case "DeleteDevice":
                 if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");

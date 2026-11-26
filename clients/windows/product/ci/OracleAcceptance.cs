@@ -368,8 +368,15 @@ internal static class OracleAcceptance
             string line=await Console.In.ReadLineAsync()??throw new IOException();
             var credentials=JsonNode.Parse(line)!;
             await Send("AttachClient");
-            RequireSuccess("Login",await ControlPipe.Send("Login",credentials["username"]!.GetValue<string>(),credentials["password"]!.GetValue<string>()));credentials=null;
-            await Send("PreferUdp443");await Send("Connect");await Connected();
+            var timer=Stopwatch.StartNew();
+            var login=RequireSuccess("Login",await ControlPipe.Send("Login",credentials["username"]!.GetValue<string>(),credentials["password"]!.GetValue<string>()));credentials=null;
+            if(login["login_authenticated"]?.GetValue<bool>()==true && login["device_registered"]?.GetValue<bool>()==true)
+                Console.WriteLine("WINDOWS_PERF_LOGIN_FIRST_DEVICE_SERVICE_MS="+timer.ElapsedMilliseconds);
+            await Send("PreferUdp443");timer.Restart();await Send("Connect");var connected=await Connected();
+            if(connected["verified_exit_ip"]?.GetValue<string>() is string ipv4 &&
+                login["network_endpoints"]?["egress_ipv4"] is JsonArray exits && exits.Any(exit=>exit?.GetValue<string>()==ipv4) &&
+                connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10")
+                Console.WriteLine("WINDOWS_PERF_CONNECT_FIRST_DEVICE_SERVICE_MS="+timer.ElapsedMilliseconds);
             Console.WriteLine("CONTROLLER_CONNECTED");Console.Out.Flush();
             await Task.Delay(Timeout.Infinite);return 0;
         }catch{return 1;}
@@ -384,7 +391,12 @@ internal static class OracleAcceptance
         try{
             await controller.StandardInput.WriteLineAsync(new JsonObject{["username"]=username,["password"]=password}.ToJsonString());await controller.StandardInput.FlushAsync();
             using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(80));bool connected=false;
-            while(await controller.StandardOutput.ReadLineAsync(deadline.Token) is string line){if(line=="CONTROLLER_CONNECTED"){connected=true;break;}}
+            while(await controller.StandardOutput.ReadLineAsync(deadline.Token) is string line){
+                if(line=="CONTROLLER_CONNECTED"){connected=true;break;}
+                foreach(string metric in new[]{"WINDOWS_PERF_LOGIN_FIRST_DEVICE_SERVICE_MS=","WINDOWS_PERF_CONNECT_FIRST_DEVICE_SERVICE_MS="})
+                    if(line.StartsWith(metric,StringComparison.Ordinal) && long.TryParse(line.AsSpan(metric.Length),out long duration) && duration>=0)
+                        Console.WriteLine(metric+duration);
+            }
             Check(connected,"LIFETIME_REAL_CONTROLLER_CONNECTED");
             controller.Kill(true);await controller.WaitForExitAsync();await StoppedService();
             Check(!VpnRuntime.TunnelInactive() ? false : await ExitIp()!="152.67.154.225","LIFETIME_CONTROLLER_CRASH_STOPS_BACKGROUND_AND_RESTORES_DIRECT");
@@ -450,8 +462,11 @@ internal static class OracleAcceptance
         try{
             await CrashController(username,password);
             await Send("AttachClient");
+            var loginTimer=Stopwatch.StartNew();
             var login=RequireSuccess("Login",await ControlPipe.Send("Login",username,password));password=null;
+            long loginMs=loginTimer.ElapsedMilliseconds;
             Check(login["device_registered"]?.GetValue<bool>()==true,"MIGRATION_DEVICE_ADMISSION");
+            Console.WriteLine("WINDOWS_PERF_LOGIN_REGISTERED_AFTER_RESTART_SERVICE_MS="+loginMs);
             ownedCiDevice=login["registration"]!["device_id"]!.GetValue<string>();
             Console.WriteLine("CI_OWNED_DEVICE_FINGERPRINT="+ownedCiDevice);
             // Exact identities observed in failed main runs 43574325984,
@@ -468,6 +483,9 @@ internal static class OracleAcceptance
             var expectedEndpoints=JsonNode.Parse(File.ReadAllText("ops/network/endpoints.json"))!.AsObject();
             Check(IngressCatalogMatchesPolicy(login,expectedEndpoints),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();
+            var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
+            IPAddress? performanceTarget=await OraclePerformance.ResolveTarget();
+            await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:false);
             await SampleDownload("DIRECT");
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
             using var runningUu=Process.GetProcessById(int.Parse(Environment.GetEnvironmentVariable("ORACLE_CI_RUNNING_UU_PID")!));
@@ -475,19 +493,22 @@ internal static class OracleAcceptance
                 connected["uu_rejected"]?.GetValue<int>()>0 && connected["uu_verified_programs"]?.GetValue<int>()==0 &&
                 connected["guard"]?.GetValue<bool>()==true && connected["tun_permitted"]?.GetValue<bool>()==true,
                 "REAL_FIRST_CONNECT_WITH_RUNNING_UNVERIFIED_UU_AND_NO_DIRECT_EXCEPTION");
-            var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
             Check(connected["transport_address"]?.GetValue<string>()==primary && connected["transport_port"]?.GetValue<int>()==443 && connected["transport_private_address"]?.GetValue<string>()==login["network_endpoints"]!["private_ipv4"]![primary]!.GetValue<string>() && allowed.Contains(await ExitIp()),"MIGRATION_NORMAL_CONNECT_ACTUAL_PRIMARY_PRIVATE_AND_PORT_WITH_VERIFIED_EXIT");
             // Connection admission already requires the IPv6 exit probe as well.
             Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");
             Check(connected["tun_route_mask"]?.GetValue<uint>()==15,"ORDINARY_ROUTE_BOTH_IPV4_AND_IPV6_HALVES_USE_OWNED_TUN");
+            await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:true);
             await SampleDownload("WIREGUARD_UDP");
             await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
             await LiveGuiUdpToggle();
             // X intentionally clears a non-remembered login. Reauthenticate the
             // same durable key; never allocate a second CI device for GUI timing.
             await Send("AttachClient");
+            loginTimer.Restart();
             var resumed=RequireSuccess("Login",await ControlPipe.Send("Login",username,Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD")));
+            loginMs=loginTimer.ElapsedMilliseconds;
             Check(resumed["registration"]?["device_id"]?.GetValue<string>()==login["registration"]?["device_id"]?.GetValue<string>() && resumed["account"]?["device_count"]?.GetValue<int>()==devices,"LIVE_GUI_TIMING_REUSES_EXISTING_CI_DEVICE_IDENTITY");
+            Console.WriteLine("WINDOWS_PERF_LOGIN_REGISTERED_AFTER_GUI_QUIT_SERVICE_MS="+loginMs);
             await Send("Connect");await Connected();
             var off=await Send("Disconnect");await StoppedService();
             Check(off["core_pid"]?.GetValue<uint>()==0 && off["preparing"]?.GetValue<bool>()==false && await ExitIp()!=primary,"DISCONNECT_STOPS_CORE_AND_SERVICE_AND_RESTORES_DIRECT");
@@ -502,14 +523,17 @@ internal static class OracleAcceptance
             string cache=Path.Combine(Platform.StateRoot,"api-addresses.json");
             const string staleCache="""["152.67.154.225","150.230.113.158"]""";
             Platform.WriteAtomic(cache,System.Text.Encoding.ASCII.GetBytes(staleCache));
+            loginTimer.Restart();
             await Send("AttachClient");
             // A local recent-account snapshot can render first. The rewritten
             // address cache proves a fresh authenticated request also completed.
             var restored=await AwaitAccount(()=>File.ReadAllText(cache)!=staleCache);
+            loginMs=loginTimer.ElapsedMilliseconds;
             Check(restored["registration"]?["device_id"]?.GetValue<string>()==ownedCiDevice &&
                 restored["account"]?["device_count"]?.GetValue<int>()==devices &&
                 restored["network_endpoints"]?["primary"]?.GetValue<string>()==primary,
                 "REAL_COLD_START_RESTORES_REMEMBERED_LOGIN_FROM_PRE_MIGRATION_IP_CACHE");
+            Console.WriteLine("WINDOWS_PERF_REMEMBERED_FRESH_REFRESH_AFTER_COLD_START_MS="+loginMs);
 
             var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));
             Check(deleted["login_authenticated"]?.GetValue<bool>()==false && deleted["account"] is null && deleted["core_pid"]?.GetValue<uint>()==0 && deleted["intent"]?.GetValue<bool>()==false,"MIGRATION_DEVICE_SELF_DELETE_CLEARS_LOGIN_AND_RETIRES_ONLY_THIS_CI_SLOT");

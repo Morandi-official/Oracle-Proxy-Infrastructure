@@ -123,9 +123,9 @@ if [[ "$mode" == production ]]; then
     login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
     login_phases+=',STREAM_OPEN_MS:[0-9]+,UPLOAD_MS:[0-9]+,RESPONSE_HEADERS_MS:[0-9]+,RESPONSE_BODY_MS:[0-9]+$'
     families='^ANDROID_PERF_VERIFIED_FAMILIES=[12]$'
-    proof='^ANDROID_PERF_EXIT_PROOF_(FIRST|RECONNECT)=IPV4:(h3|https);IPV6:(h3|https|blocked);H3_CANDIDATE=[01]$'
-    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;QUEUE_MS:[0-9]+;PREPARATION_MS:[0-9]+;POLICY_WAIT_MS:[0-9]+;CONSENT_POLICY_AGE_MS:(-1|[0-9]+);BACKEND_WAIT_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+'
-    phases+=';NETWORK_DISCOVERY_MS:[0-9]+;NETWORK_BIND_MS:[0-9]+;EXIT_PROOF_MS:[0-9]+;WG_HANDSHAKE_MS:(-1|[0-9]+)'
+    proof='^ANDROID_PERF_EXIT_PROOF_(FIRST|RECONNECT(_[2-5])?)=IPV4:(h3|https);IPV6:(h3|https|blocked);H3_CANDIDATE=[01]$'
+    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT(_[2-5])?)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;QUEUE_MS:[0-9]+;PREPARATION_MS:[0-9]+;POLICY_WAIT_MS:[0-9]+;CONSENT_POLICY_AGE_MS:(-1|[0-9]+);BACKEND_WAIT_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+'
+    phases+=';NETWORK_DISCOVERY_MS:[0-9]+;NETWORK_OWNER_WAIT_MS:[0-9]+;BIND_RECOVERY_MAX_MS:[0-9]+;EMPTY_BIND_FAILURES:[0-9]+;EXIT_PROOF_MS:[0-9]+;WG_HANDSHAKE_MS:(-1|[0-9]+)'
     phases+=';IPV4_PROOF_MS:[0-9]+;IPV4_PROOF_ATTEMPTS:[1-3];IPV6_PROOF_MS:[0-9]+;IPV6_PROOF_ATTEMPTS:[0-3];ATTEMPTS:[0-9]+$'
     latency='^ANDROID_PERF_HTTPS_(DIRECT|WIREGUARD_UDP)_(FRESH|REUSED)_SAMPLES_MS=([0-9]+,){19}[0-9]+'
     latency+=';N=20;MEDIAN_MS=[0-9]+;P95_MS=[0-9]+;UNDER_500MS=[0-9]+;HOST=www[.]cloudflare[.]com'
@@ -140,9 +140,12 @@ if [[ "$mode" == production ]]; then
     rtt_unavailable+=';HOST=(stun[.]cloudflare[.]com|stun[.]l[.]google[.]com);PORT=(3478|19302)$'
     load='^ANDROID_PERF_LOAD_(UPLOAD|DOWNLOAD)_RATES_MBPS=([0-9]+[.][0-9]{2},){2,31}[0-9]+[.][0-9]{2}'
     load+=';N=[0-9]+;BYTES_PER_TRANSFER=2097152;RTT_SAMPLES=12;PROBES_WITH_BODY_PROGRESS=[0-9]+$'
+    body_progress='^ANDROID_PERF_WIREGUARD_UDP_(UPLOAD|DOWNLOAD)_RTT_BODY_BYTES=([0-9]+,){11}[0-9]+$'
+    guest='^ANDROID_PERF_GUEST_LOAD_(UPLOAD|DOWNLOAD)=TUN_MTU=(-1|[0-9]+);NIC_MTU=(-1|[0-9]+)'
+    guest+='(;[A-Za-z]+[.][A-Za-z]+=(0|[1-9][0-9]*|-1)){15}$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
         grep -E -e "$download" -e "$timing" -e "$reconnect_series" -e "$visual" -e "$login_phases" -e "$families" -e "$proof" \
-            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" -e "$load" |
+            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" -e "$load" -e "$body_progress" -e "$guest" |
         tee "$working_dir/performance.txt"
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
     for metric in DOWNLOAD_DIRECT_BYTES PERF_LOAD_DOWNLOAD_RATES_MBPS PERF_LOAD_UPLOAD_RATES_MBPS PERF_VERIFIED_FAMILIES \

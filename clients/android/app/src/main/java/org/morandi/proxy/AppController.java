@@ -320,6 +320,8 @@ public final class AppController {
         final long networkWaitMs;
         final long networkDiscoveryMs;
         final long networkBindingMs;
+        final long ownerWaitMs;
+        final int bindFailures;
         final long exitProofMs;
         final long handshakeMs;
         final long ipv4ProofMs;
@@ -347,6 +349,8 @@ public final class AppController {
             this.networkWaitMs = attempt.networkWaitMs;
             this.networkDiscoveryMs = attempt.networkDiscoveryMs;
             this.networkBindingMs = attempt.networkBindingMs;
+            this.ownerWaitMs = attempt.ownerWaitMs;
+            this.bindFailures = attempt.bindFailures;
             this.exitProofMs = attempt.exitProofMs;
             this.handshakeMs = attempt.handshakeMs;
             this.ipv4ProofMs = attempt.ipv4ProofMs;

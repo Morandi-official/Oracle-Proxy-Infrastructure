@@ -28,7 +28,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -188,71 +187,113 @@ final class CloudflareExitProbe {
     @SuppressLint("NewApi")
     private static final class PlatformHttp3 {
         private static final ExecutorService CALLBACKS = Executors.newSingleThreadExecutor();
-        private static final AtomicBoolean PREPARING = new AtomicBoolean();
         private static volatile HttpEngine engine;
+        private static CompletableFuture<HttpEngine> initialization;
 
-        static void prepareEngine(Context context) {
-            if (engine != null || !PREPARING.compareAndSet(false, true)) {
-                return;
+        private static synchronized CompletableFuture<HttpEngine> prepareEngine(Context context) {
+            if (initialization != null) {
+                return initialization;
             }
+            CompletableFuture<HttpEngine> result = new CompletableFuture<>();
+            initialization = result;
             try {
                 new Thread(() -> {
                     try {
-                        engine(context);
-                    } catch (RuntimeException | LinkageError ignored) {
-                        // A later probe keeps its existing HTTPS fallback.
-                    } finally {
-                        PREPARING.set(false);
+                        HttpEngine built = new HttpEngine.Builder(context.getApplicationContext())
+                                .setEnableQuic(true)
+                                .setEnableHttpCache(HttpEngine.Builder.HTTP_CACHE_DISABLED, 0)
+                                .addQuicHint(ORIGIN4, 443, 443)
+                                .addQuicHint(ORIGIN6, 443, 443)
+                                .build();
+                        engine = built;
+                        result.complete(built);
+                    } catch (RuntimeException | LinkageError error) {
+                        failedInitialization(result, error);
                     }
                 }, "ProxyHttp3Preparation").start();
-            } catch (RuntimeException ignored) {
-                PREPARING.set(false);
+            } catch (RuntimeException error) {
+                failedInitialization(result, error);
             }
+            return result;
         }
 
-        private static synchronized HttpEngine engine(Context context) {
-            if (engine == null) {
-                engine = new HttpEngine.Builder(context.getApplicationContext())
-                        .setEnableQuic(true)
-                        .setEnableHttpCache(HttpEngine.Builder.HTTP_CACHE_DISABLED, 0)
-                        .addQuicHint(ORIGIN4, 443, 443)
-                        .addQuicHint(ORIGIN6, 443, 443)
-                        .build();
+        private static void failedInitialization(CompletableFuture<HttpEngine> result, Throwable error) {
+            synchronized (PlatformHttp3.class) {
+                if (initialization == result) {
+                    initialization = null;
+                }
             }
-            return engine;
+            result.completeExceptionally(error);
+        }
+
+        private static final class H3Trial {
+            private UrlRequest request;
+            private boolean cancelled;
+
+            void start(HttpEngine available, Network vpn, String url, String expected, boolean ipv6,
+                       long deadline, CompletableFuture<Proof> result) {
+                try {
+                    remaining(deadline);
+                    UrlRequest built = available.newUrlRequestBuilder(url, CALLBACKS,
+                            callback(expected, ipv6, result))
+                            .bindToNetwork(vpn)
+                            .setCacheDisabled(true)
+                            .addHeader("Cache-Control", "no-cache, no-store")
+                            .build();
+                    synchronized (this) {
+                        if (cancelled) {
+                            return;
+                        }
+                        remaining(deadline);
+                        request = built;
+                        request.start();
+                    }
+                } catch (IOException | RuntimeException | LinkageError error) {
+                    result.completeExceptionally(new IOException("VPN_EXIT_PROBE_HTTP3_FAILED"));
+                }
+            }
+
+            void cancel() {
+                UrlRequest current;
+                synchronized (this) {
+                    cancelled = true;
+                    current = request;
+                }
+                if (current != null) {
+                    current.cancel();
+                }
+            }
         }
 
         static Proof hedge(Context context, Network vpn, String url, String expected, boolean ipv6,
                            long deadline, HttpsTrial https) throws IOException {
             HttpEngine prepared = engine;
-            if (prepared == null) {
-                // A slow first-time provider initialization must not hold up HTTPS.
-                prepareEngine(context);
-                return https.run(deadline);
-            }
             // HttpEngine is already asynchronous. Let its callback deliver the result
             // directly to the family verifier, and create a worker only for a TLS hedge.
             BlockingQueue<Future<Proof>> finished = new LinkedBlockingQueue<>();
             CompletableFuture<Proof> h3 = new CompletableFuture<>();
             h3.whenComplete((value, failure) -> finished.add(h3));
-            UrlRequest request = null;
+            H3Trial quic = new H3Trial();
+            CompletableFuture<?> pendingStart = null;
             ExecutorService worker = null;
             Future<Proof> fallback = null;
             try {
-                try {
-                    request = prepared.newUrlRequestBuilder(url, CALLBACKS,
-                            callback(expected, ipv6, h3))
-                            .bindToNetwork(vpn)
-                            .setCacheDisabled(true)
-                            .addHeader("Cache-Control", "no-cache, no-store")
-                            .build();
-                    remaining(deadline);
-                    request.start();
-                } catch (RuntimeException | LinkageError unavailable) {
-                    h3.completeExceptionally(new IOException("VPN_EXIT_PROBE_HTTP3_FAILED"));
+                if (prepared == null) {
+                    // Start HTTPS immediately while the shared engine loads. A working
+                    // HTTP/3 route can still win even if TCP is stalled on this VPN.
+                    pendingStart = prepareEngine(context).whenComplete((available, error) -> {
+                        if (error == null) {
+                            quic.start(available, vpn, url, expected, ipv6, deadline, h3);
+                        } else {
+                            h3.completeExceptionally(error);
+                        }
+                    });
+                } else {
+                    quic.start(prepared, vpn, url, expected, ipv6, deadline, h3);
                 }
+                long headStart = prepared == null ? 0 : HTTPS_HEDGE_MS;
                 Future<Proof> first = finished.poll(
-                        Math.min(HTTPS_HEDGE_MS, remaining(deadline)), TimeUnit.MILLISECONDS);
+                        Math.min(headStart, remaining(deadline)), TimeUnit.MILLISECONDS);
                 if (first != null) {
                     try {
                         return first.get();
@@ -283,8 +324,9 @@ final class CloudflareExitProbe {
                 Thread.currentThread().interrupt();
                 throw new IOException("VPN_EXIT_PROBE_CANCELLED");
             } finally {
-                if (request != null) {
-                    request.cancel();
+                quic.cancel();
+                if (pendingStart != null) {
+                    pendingStart.cancel(false);
                 }
                 https.cancel();
                 if (fallback != null) {

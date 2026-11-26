@@ -154,8 +154,8 @@ public final class ProductionLifecycleTest {
                 }
                 if (sample == 0) {
                     VisibleConnectionTiming.report("CONNECT_RECONNECT_CLICK", reconnectNanos[sample]);
-                    reportProofProtocol(controller, "RECONNECT");
                 }
+                reportProofProtocol(controller, sample == 0 ? "RECONNECT" : "RECONNECT_" + (sample + 1));
                 if (sample + 1 < reconnectNanos.length) {
                     controller.disconnect();
                     await("Production VPN route removed after reconnect",
@@ -168,8 +168,12 @@ public final class ProductionLifecycleTest {
             assertNotNull("Final verified VPN is installed for transfer and latency checks", vpn);
             networkLatency.sampleTunnel(vpn, controller.snapshot().verifiedIpv4);
             latency.sample(vpn, "WIREGUARD_UDP", controller.snapshot().verifiedIpv4);
-            networkLatency.sampleUnderLoad(vpn, controller.snapshot().verifiedIpv4, false);
-            networkLatency.sampleUnderLoad(vpn, controller.snapshot().verifiedIpv4, true);
+            for (boolean upload : new boolean[]{false, true}) {
+                try (GuestLoadCounters counters = new GuestLoadCounters(instrumentation.getUiAutomation(),
+                        manager.getLinkProperties(vpn), manager.getLinkProperties(direct), upload)) {
+                    networkLatency.sampleUnderLoad(vpn, controller.snapshot().verifiedIpv4, upload);
+                }
+            }
             controller.disconnect();
             await("Final production VPN route removed", () -> "disconnected".equals(controller.snapshot().mode)
                     && !engine.isUp() && vpnNetwork(context) == null);
@@ -213,7 +217,9 @@ public final class ProductionLifecycleTest {
                 + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";NATIVE_START_MS:" + timing.nativeStartMs
                 + ";NETWORK_WAIT_MS:" + timing.networkWaitMs
                 + ";NETWORK_DISCOVERY_MS:" + timing.networkDiscoveryMs
-                + ";NETWORK_BIND_MS:" + timing.networkBindingMs + ";EXIT_PROOF_MS:" + timing.exitProofMs
+                + ";NETWORK_OWNER_WAIT_MS:" + timing.ownerWaitMs
+                + ";BIND_RECOVERY_MAX_MS:" + timing.networkBindingMs + ";EMPTY_BIND_FAILURES:" + timing.bindFailures
+                + ";EXIT_PROOF_MS:" + timing.exitProofMs
                 + ";WG_HANDSHAKE_MS:" + timing.handshakeMs
                 + ";IPV4_PROOF_MS:" + timing.ipv4ProofMs + ";IPV4_PROOF_ATTEMPTS:" + timing.ipv4ProofAttempts
                 + ";IPV6_PROOF_MS:" + timing.ipv6ProofMs + ";IPV6_PROOF_ATTEMPTS:" + timing.ipv6ProofAttempts

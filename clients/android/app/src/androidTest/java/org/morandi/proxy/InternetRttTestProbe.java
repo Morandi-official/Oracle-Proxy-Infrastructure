@@ -91,6 +91,7 @@ final class InternetRttTestProbe {
     private void sampleTarget(Network network, String route, Target target, InetAddress expected,
                               TransferStabilityTestProbe load) throws IOException {
         int progressSamples = 0;
+        StringJoiner bodyDeltas = new StringJoiner(",");
         long lastProbeEnded = 0;
         long[] roundTrips = new long[SAMPLES];
         byte[] response = new byte[512];
@@ -111,7 +112,11 @@ final class InternetRttTestProbe {
                 long before = load == null ? 0 : load.bodyBytes();
                 roundTrips[index] = roundTrip(socket, request, transaction, response, expected);
                 lastProbeEnded = SystemClock.elapsedRealtimeNanos();
-                if (load != null && load.bodyBytes() > before) progressSamples++;
+                if (load != null) {
+                    long delta = load.bodyBytes() - before;
+                    if (delta > 0) progressSamples++;
+                    bodyDeltas.add(Long.toString(delta));
+                }
                 if (index + 1 < SAMPLES) {
                     SystemClock.sleep(SAMPLE_GAP_MS);
                 }
@@ -125,6 +130,7 @@ final class InternetRttTestProbe {
             }
         }
         if (load != null) {
+            Log.i("ProxySpeedAcceptance", "ANDROID_PERF_" + route + "_RTT_BODY_BYTES=" + bodyDeltas);
             try {
                 load.finish(lastProbeEnded, progressSamples);
             } catch (InterruptedException interrupted) {

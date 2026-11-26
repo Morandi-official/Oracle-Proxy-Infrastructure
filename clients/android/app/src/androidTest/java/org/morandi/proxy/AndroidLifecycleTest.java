@@ -1,7 +1,9 @@
 package org.morandi.proxy;
 
 import android.app.Instrumentation;
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -34,6 +36,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -53,6 +58,61 @@ public final class AndroidLifecycleTest {
     private static final String V4 = "10.77.0.1";
     private static final String V6 = "fd77:4242:77::1";
     private static final String DEVICE_NAME = "Android 验收设备";
+
+    @Test
+    public void stoppingPreparationWaitsForTheSubmittedServiceStart() throws Exception {
+        Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        CountDownLatch startEntered = new CountDownLatch(1);
+        CountDownLatch allowStartReturn = new CountDownLatch(1);
+        AtomicBoolean startReturned = new AtomicBoolean();
+        CountDownLatch stopIssued = new CountDownLatch(1);
+        AtomicBoolean stoppedAfterStart = new AtomicBoolean();
+        Context delayedService = new ContextWrapper(app) {
+            @Override public Context getApplicationContext() { return this; }
+
+            @Override public ComponentName startService(Intent intent) {
+                startEntered.countDown();
+                try {
+                    if (!allowStartReturn.await(8, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("fixture start timed out");
+                    }
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(error);
+                }
+                startReturned.set(true);
+                return intent.getComponent();
+            }
+
+            @Override public boolean stopService(Intent intent) {
+                stoppedAfterStart.set(startReturned.get());
+                stopIssued.countDown();
+                return true;
+            }
+        };
+        TunnelEngine engine = new TunnelEngine(delayedService, null, true);
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> prepare = worker.submit(() -> engine.prepareConnection(true));
+            assertTrue(startEntered.await(5, TimeUnit.SECONDS));
+            prepare.get(2, TimeUnit.SECONDS);
+            CountDownLatch stopping = new CountDownLatch(1);
+            Future<?> teardown = worker.submit(() -> {
+                stopping.countDown();
+                engine.disconnect();
+                return null;
+            });
+            assertTrue(stopping.await(2, TimeUnit.SECONDS));
+            assertFalse("No stop may overtake an in-flight start", stopIssued.await(150, TimeUnit.MILLISECONDS));
+            allowStartReturn.countDown();
+            teardown.get(5, TimeUnit.SECONDS);
+            assertTrue("The start transaction must finish before stopService", stoppedAfterStart.get());
+            assertFalse(engine.isUp());
+        } finally {
+            allowStartReturn.countDown();
+            worker.shutdownNow();
+        }
+    }
 
     @Test
     public void loginEnrollConsentConnectDisconnectAndLogout() throws Exception {

@@ -459,7 +459,7 @@ public final class MainActivity extends Activity {
     private void requestConnect() {
         if (state.busy || consentPending) return;
         Intent request = VpnService.prepare(this);
-        if (request == null) controller.connect();
+        if (request == null) controller.connect(true);
         else {
             consentPending = true;
             try {

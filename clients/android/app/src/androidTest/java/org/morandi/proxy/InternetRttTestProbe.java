@@ -20,7 +20,7 @@ import java.util.Locale;
 import java.util.StringJoiner;
 import java.util.concurrent.TimeUnit;
 
-/** Measures idle UDP round trips without including DNS, TCP, TLS or VPN establishment. */
+/** Times verified STUN replies without including DNS, TCP, TLS or VPN establishment. */
 final class InternetRttTestProbe {
     private static final int SAMPLES = 12;
     private static final int REPLY_TIMEOUT_MS = 1_200;
@@ -29,6 +29,7 @@ final class InternetRttTestProbe {
     private static final int HEADER_BYTES = 20;
 
     private final Target[] targets;
+    private boolean tunnelTargetMet = true;
     private final SecureRandom random = new SecureRandom();
 
     InternetRttTestProbe(Network direct) {
@@ -63,19 +64,34 @@ final class InternetRttTestProbe {
         sample(vpn, "WIREGUARD_UDP", expected);
     }
 
+    boolean tunnelTargetMet() {
+        return tunnelTargetMet;
+    }
+
+    void sampleUnderLoad(Network vpn, String expectedExit, boolean upload) throws Exception {
+        String route = "WIREGUARD_UDP_" + (upload ? "UPLOAD" : "DOWNLOAD");
+        try (TransferStabilityTestProbe load = new TransferStabilityTestProbe(vpn, upload)) {
+            load.start();
+            sampleTarget(vpn, route, targets[0], InetAddresses.parseNumericAddress(expectedExit), load);
+        }
+    }
+
     private void sample(Network network, String route, InetAddress expected) throws IOException {
         for (Target target : targets) {
             if (target.address == null) {
                 Log.i("ProxySpeedAcceptance", "ANDROID_PERF_UDP_STUN_" + route
                         + "_STATUS=" + target.unavailableReason + ";HOST=" + target.host + ";PORT=" + target.port);
+                if (expected != null) throw new IOException("ANDROID_UDP_STUN_TARGET_UNAVAILABLE");
                 continue;
             }
-            sampleTarget(network, route, target, expected);
+            sampleTarget(network, route, target, expected, null);
         }
     }
 
-    private void sampleTarget(Network network, String route, Target target, InetAddress expected)
-            throws IOException {
+    private void sampleTarget(Network network, String route, Target target, InetAddress expected,
+                              TransferStabilityTestProbe load) throws IOException {
+        int progressSamples = 0;
+        long lastProbeEnded = 0;
         long[] roundTrips = new long[SAMPLES];
         byte[] response = new byte[512];
         try (DatagramSocket socket = new DatagramSocket(null)) {
@@ -92,13 +108,30 @@ final class InternetRttTestProbe {
                         .putInt(COOKIE)
                         .put(transaction)
                         .array();
+                long before = load == null ? 0 : load.bodyBytes();
                 roundTrips[index] = roundTrip(socket, request, transaction, response, expected);
+                lastProbeEnded = SystemClock.elapsedRealtimeNanos();
+                if (load != null && load.bodyBytes() > before) progressSamples++;
                 if (index + 1 < SAMPLES) {
                     SystemClock.sleep(SAMPLE_GAP_MS);
                 }
             }
         }
         report(route, target, roundTrips, expected != null);
+        if (expected != null) {
+            // With 12 probes nearest-rank p95 is the maximum. Retain nanosecond precision here.
+            for (long nanos : roundTrips) {
+                if (nanos < 0 || nanos > TimeUnit.MILLISECONDS.toNanos(500)) tunnelTargetMet = false;
+            }
+        }
+        if (load != null) {
+            try {
+                load.finish(lastProbeEnded, progressSamples);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("ANDROID_LOAD_INTERRUPTED", interrupted);
+            }
+        }
     }
 
     private static long roundTrip(DatagramSocket socket, byte[] request, byte[] transaction,

@@ -8,7 +8,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.util.Log;
 
 import com.wireguard.android.backend.GoBackend;
 
@@ -123,6 +125,23 @@ public final class ProxyVpnService extends GoBackend.VpnService {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+
+    @Override public Builder getBuilder() {
+        // Enabled explicitly on the dedicated acceptance emulator.
+        if (!Log.isLoggable("ProxyVpnTiming", Log.DEBUG)) {
+            return super.getBuilder();
+        }
+        return new Builder() {
+            @Override public ParcelFileDescriptor establish() {
+                long started = SystemClock.elapsedRealtimeNanos();
+                try {
+                    return super.establish();
+                } finally {
+                    Log.d("ProxyVpnTiming", "ESTABLISH_NS=" + (SystemClock.elapsedRealtimeNanos() - started));
+                }
+            }
+        };
     }
 
     @Override public void onCreate() {

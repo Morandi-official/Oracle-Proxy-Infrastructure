@@ -65,6 +65,7 @@ public final class AppController {
     private int preferredPort;
     private boolean busy;
     private boolean remember;
+    private boolean localPreparationScheduled;
     private long tokenExpiresAt;
     private long policyAt;
     private long refreshAfter;
@@ -281,7 +282,7 @@ public final class AppController {
                 return;
             }
             if (granted && registered() && !token.isEmpty()) {
-                connectInternal(requested, requestedAt, matchingConsentRequest);
+                connectInternal(requested, requestedAt, matchingConsentRequest, matchingConsentRequest != 0);
                 return;
             }
             discardConsentPolicy();
@@ -293,9 +294,15 @@ public final class AppController {
     }
 
     public void connect() {
+        connect(false);
+    }
+
+    // The foreground activity can pass the result of VpnService.prepare from
+    // this tap. Other callers use connect(), including after process restoration.
+    void connect(boolean permissionCheckedForTap) {
         long requestedAt = SystemClock.elapsedRealtime();
         long requested = intent.incrementAndGet();
-        worker.execute(() -> connectInternal(requested, requestedAt, 0));
+        worker.execute(() -> connectInternal(requested, requestedAt, 0, permissionCheckedForTap));
     }
 
     private volatile ConnectionTiming lastConnectTiming;
@@ -359,7 +366,8 @@ public final class AppController {
         return lastConnectTiming;
     }
 
-    private void connectInternal(long requested, long requestedAt, long consentRequest) {
+    private void connectInternal(long requested, long requestedAt, long consentRequest,
+                                 boolean permissionCheckedForTap) {
         if (requested != intent.get() || token.isEmpty() || "connected".equals(mode)) {
             return;
         }
@@ -379,7 +387,7 @@ public final class AppController {
             // Android service setup and the fresh HTTPS request can proceed concurrently.
             // The worker still applies the response before activating the TUN.
             long preparationStarted = SystemClock.elapsedRealtime();
-            engine.prepareConnection(consentRequest != 0);
+            engine.prepareConnection(permissionCheckedForTap);
             long policyWaitStarted = SystemClock.elapsedRealtime();
             if (requested != intent.get()) {
                 return;
@@ -662,6 +670,13 @@ public final class AppController {
         accountState = update;
         policyAt = SystemClock.elapsedRealtime();
         refreshAfter = policyAt + STATE_INTERVAL;
+        if (!localPreparationScheduled && registered() && "active".equals(account().optString("status"))) {
+            // A restored, already-authorized device has no consent dialog in
+            // which to load these components. Run the local work after this
+            // account operation publishes, before the next connection tap.
+            localPreparationScheduled = true;
+            worker.execute(engine::prepareLocalComponents);
+        }
         if (preferredPort != 0 && !ports().contains(preferredPort)) {
             preferredPort = 0;
         }

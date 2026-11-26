@@ -2,20 +2,22 @@ package org.morandi.proxy;
 
 import android.net.InetAddresses;
 
+import com.wireguard.config.BadConfigException;
 import com.wireguard.config.Config;
+import com.wireguard.config.Interface;
+import com.wireguard.config.Peer;
 import com.wireguard.crypto.Key;
 import com.wireguard.crypto.KeyFormatException;
+import com.wireguard.crypto.KeyPair;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -46,11 +48,11 @@ final class TunnelProfile {
     final List<Candidate> candidates;
     final String ipv6Exit;
     private final List<String> addresses;
-    private final List<String> dns;
+    private final List<InetAddress> dns;
     private final boolean dualStack;
 
     private TunnelProfile(List<String> addresses, Set<InetAddress> interfaceAddresses,
-                          List<String> dns, List<Candidate> candidates, boolean dualStack,
+                          List<InetAddress> dns, List<Candidate> candidates, boolean dualStack,
                           String ipv6Exit) {
         this.addresses = addresses;
         this.interfaceAddresses = interfaceAddresses;
@@ -92,15 +94,16 @@ final class TunnelProfile {
                     tunnel.getJSONArray("allowed_ips"), dualStack ? 2 : 1));
             require(allowed.size() == (dualStack ? 2 : 1) && allowed.contains("0.0.0.0/0")
                     && (!dualStack || allowed.contains("::/0")));
-            List<String> dns = stringList(tunnel.getJSONArray("dns"), 4);
-            require(!dns.isEmpty());
-            for (String address : dns) {
+            List<InetAddress> dns = new ArrayList<>();
+            for (String address : stringList(tunnel.getJSONArray("dns"), 4)) {
                 boolean ipv6 = address.indexOf(':') >= 0;
                 require(dualStack || !ipv6);
                 InetAddress parsed = numeric(address, ipv6, false);
                 require(!parsed.isLoopbackAddress() && !parsed.isAnyLocalAddress()
                         && !parsed.isMulticastAddress() && !parsed.isLinkLocalAddress());
+                dns.add(parsed);
             }
+            require(!dns.isEmpty());
 
             String primary = numeric(tunnel.getString("transport_address"), false, !allowPrivate)
                     .getHostAddress();
@@ -165,17 +168,21 @@ final class TunnelProfile {
     }
 
     Config wireGuardConfig(Candidate candidate, Key key) throws IOException {
-        String body = "[Interface]\nPrivateKey = " + key.toBase64()
-                + "\nAddress = " + String.join(", ", addresses)
-                + "\nDNS = " + String.join(", ", dns)
-                + "\nMTU = " + (dualStack ? 1280 : 1200)
-                + "\n\n[Peer]\nPublicKey = " + candidate.key.toBase64()
-                + "\nAllowedIPs = " + (dualStack ? "0.0.0.0/0, ::/0" : "0.0.0.0/0")
-                + "\nEndpoint = " + candidate.endpoint()
-                + "\nPersistentKeepalive = 25\n";
         try {
-            return Config.parse(new ByteArrayInputStream(body.getBytes(StandardCharsets.US_ASCII)));
-        } catch (Exception error) {
+            Interface network = new Interface.Builder()
+                    .setKeyPair(new KeyPair(key))
+                    .parseAddresses(String.join(", ", addresses))
+                    .addDnsServers(dns)
+                    .setMtu(dualStack ? 1280 : 1200)
+                    .build();
+            Peer peer = new Peer.Builder()
+                    .setPublicKey(candidate.key)
+                    .parseAllowedIPs(dualStack ? "0.0.0.0/0, ::/0" : "0.0.0.0/0")
+                    .parseEndpoint(candidate.endpoint())
+                    .setPersistentKeepalive(25)
+                    .build();
+            return new Config.Builder().setInterface(network).addPeer(peer).build();
+        } catch (BadConfigException error) {
             throw new IOException("INVALID_TUNNEL_PROFILE");
         }
     }

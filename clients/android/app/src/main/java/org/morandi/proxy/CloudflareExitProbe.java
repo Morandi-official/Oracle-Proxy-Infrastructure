@@ -19,14 +19,15 @@ import java.net.Proxy;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -223,33 +224,56 @@ final class CloudflareExitProbe {
 
         static Proof hedge(Context context, Network vpn, String url, String expected, boolean ipv6,
                            long deadline, HttpsTrial https) throws IOException {
-            ExecutorService worker = Executors.newFixedThreadPool(2);
-            ExecutorCompletionService<Proof> completed = new ExecutorCompletionService<>(worker);
-            H3Trial quic = new H3Trial();
-            Future<Proof> fast = completed.submit(() -> quic.run(context, vpn, url, expected, ipv6, deadline));
+            HttpEngine prepared = engine;
+            if (prepared == null) {
+                // A slow first-time provider initialization must not hold up HTTPS.
+                prepareEngine(context);
+                return https.run(deadline);
+            }
+            // HttpEngine is already asynchronous. Let its callback deliver the result
+            // directly to the family verifier, and create a worker only for a TLS hedge.
+            BlockingQueue<Future<Proof>> finished = new LinkedBlockingQueue<>();
+            CompletableFuture<Proof> h3 = new CompletableFuture<>();
+            h3.whenComplete((value, failure) -> finished.add(h3));
+            UrlRequest request = null;
+            ExecutorService worker = null;
             Future<Proof> fallback = null;
             try {
-                Future<Proof> first = completed.poll(
+                try {
+                    request = prepared.newUrlRequestBuilder(url, CALLBACKS,
+                            callback(expected, ipv6, h3))
+                            .bindToNetwork(vpn)
+                            .setCacheDisabled(true)
+                            .addHeader("Cache-Control", "no-cache, no-store")
+                            .build();
+                    remaining(deadline);
+                    request.start();
+                } catch (RuntimeException | LinkageError unavailable) {
+                    h3.completeExceptionally(new IOException("VPN_EXIT_PROBE_HTTP3_FAILED"));
+                }
+                Future<Proof> first = finished.poll(
                         Math.min(HTTPS_HEDGE_MS, remaining(deadline)), TimeUnit.MILLISECONDS);
                 if (first != null) {
                     try {
                         return first.get();
-                    } catch (ExecutionException error) {
-                        // The explicit Network-bound HTTPS proof can still succeed.
+                    } catch (ExecutionException ignored) {
+                        // An unavailable or failed HTTP/3 request needs no hedge delay.
                     }
                 }
-                fallback = completed.submit(() -> https.run(deadline));
+                worker = Executors.newSingleThreadExecutor();
+                ExecutorCompletionService<Proof> tls = new ExecutorCompletionService<>(worker, finished);
+                fallback = tls.submit(() -> https.run(deadline));
                 int outstanding = first == null ? 2 : 1;
                 IOException failure = null;
                 while (outstanding-- > 0) {
-                    Future<Proof> finished = completed.poll(remaining(deadline), TimeUnit.MILLISECONDS);
-                    if (finished == null) {
+                    Future<Proof> next = finished.poll(remaining(deadline), TimeUnit.MILLISECONDS);
+                    if (next == null) {
                         throw new IOException("VPN_EXIT_PROBE_TIMEOUT");
                     }
                     try {
-                        return finished.get();
+                        return next.get();
                     } catch (ExecutionException error) {
-                        if (finished == fallback && error.getCause() instanceof IOException) {
+                        if (next == fallback && error.getCause() instanceof IOException) {
                             failure = (IOException) error.getCause();
                         }
                     }
@@ -259,56 +283,15 @@ final class CloudflareExitProbe {
                 Thread.currentThread().interrupt();
                 throw new IOException("VPN_EXIT_PROBE_CANCELLED");
             } finally {
-                quic.cancel();
+                if (request != null) {
+                    request.cancel();
+                }
                 https.cancel();
-                fast.cancel(true);
                 if (fallback != null) {
                     fallback.cancel(true);
                 }
-                worker.shutdownNow();
-            }
-        }
-
-        private static final class H3Trial {
-            private boolean cancelled;
-            private UrlRequest request;
-
-            Proof run(Context context, Network vpn, String url, String expected, boolean ipv6, long deadline)
-                    throws IOException, InterruptedException {
-                CompletableFuture<Proof> completion = new CompletableFuture<>();
-                UrlRequest current = engine(context).newUrlRequestBuilder(url, CALLBACKS,
-                        callback(expected, ipv6, completion))
-                        .bindToNetwork(vpn)
-                        .setCacheDisabled(true)
-                        .addHeader("Cache-Control", "no-cache, no-store")
-                        .build();
-                try {
-                    synchronized (this) {
-                        if (cancelled) {
-                            throw new IOException("VPN_EXIT_PROBE_CANCELLED");
-                        }
-                        remaining(deadline);
-                        request = current;
-                        current.start();
-                    }
-                    return completion.get(remaining(deadline), TimeUnit.MILLISECONDS);
-                } catch (ExecutionException error) {
-                    throw new IOException("VPN_EXIT_PROBE_HTTP3_FAILED");
-                } catch (TimeoutException error) {
-                    throw new IOException("VPN_EXIT_PROBE_TIMEOUT");
-                } finally {
-                    current.cancel();
-                }
-            }
-
-            void cancel() {
-                UrlRequest current;
-                synchronized (this) {
-                    cancelled = true;
-                    current = request;
-                }
-                if (current != null) {
-                    current.cancel();
+                if (worker != null) {
+                    worker.shutdownNow();
                 }
             }
         }

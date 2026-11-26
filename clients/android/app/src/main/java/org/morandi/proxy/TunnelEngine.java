@@ -29,9 +29,15 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -41,6 +47,8 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 public final class TunnelEngine {
     private static final long VERIFY_DEADLINE_MS = 6_500;
@@ -116,9 +124,8 @@ public final class TunnelEngine {
     private FutureTask<GoBackend> preparedBackend;
     private TunnelProfile profile;
     private TunnelProfile.Candidate connected;
-    private Network lastProbeNetwork;
     private long preparedServiceDeadline;
-    private Network preparedUnderlay;
+    private CompletableFuture<Network> preparedUnderlay;
     private Network lastVerifiedUnderlay;
     private TunnelProfile.Candidate lastVerifiedCandidate;
     private long lastVerifiedAt;
@@ -172,11 +179,11 @@ public final class TunnelEngine {
         return up;
     }
 
-    synchronized void prepareConnection(boolean hasSystemConsentResult) {
-        // A just-completed system consent activity already granted permission.
+    synchronized void prepareConnection(boolean permissionCheckedForTap) {
+        // The activity may have just confirmed permission for this connection tap.
         // GoBackend rechecks immediately before establishing the TUN.
         if (up || preparedServiceDeadline != 0
-                || (!hasSystemConsentResult && VpnService.prepare(context) != null)) {
+                || (!permissionCheckedForTap && VpnService.prepare(context) != null)) {
             return;
         }
         try {
@@ -186,7 +193,11 @@ public final class TunnelEngine {
         } catch (IOException ignored) {
             // Connect can start the service normally after policy is available.
         }
-        preparedUnderlay = currentUnderlay(connectivity, null);
+        // Port ordering can use this read while policy and profile work proceed.
+        // A first connection without a verified port hint can start even if
+        // Android has not yet answered the physical-network Binder calls.
+        preparedUnderlay = CompletableFuture.supplyAsync(() -> currentUnderlay(connectivity, null))
+                .exceptionally(error -> null);
         prepareLocalComponents();
     }
 
@@ -202,7 +213,13 @@ public final class TunnelEngine {
         if (backend == null && preparedBackend == null) {
             // Library loading can run with the policy request. A GoBackend
             // constructor has no profile and cannot install a VPN or send packets.
-            FutureTask<GoBackend> loading = new FutureTask<>(() -> new GoBackend(context));
+            FutureTask<GoBackend> loading = new FutureTask<>(() -> {
+                GoBackend loaded = new GoBackend(context);
+                // Loading the library can return before Go runtime initialization
+                // finishes. Enter JNI without keys, sockets, a service or a TUN.
+                loaded.getVersion();
+                return loaded;
+            });
             try {
                 new Thread(loading, "ProxyWireGuardPreparation").start();
                 preparedBackend = loading;
@@ -221,7 +238,7 @@ public final class TunnelEngine {
         }
         TunnelProfile target = TunnelProfile.read(payload, preferredPort, allowPrivateTestAddresses);
         Key key = parsePrivateKey(privateKey);
-        Network beforeService = preparedUnderlay;
+        CompletableFuture<Network> underlayRead = preparedUnderlay;
         preparedUnderlay = null;
         long serviceDeadline = preparedServiceDeadline;
         preparedServiceDeadline = 0;
@@ -233,10 +250,9 @@ public final class TunnelEngine {
         long deadline = backendStarted + CONNECT_DEADLINE_MS;
         loadBackend(deadline, callback);
         long backendWaitMs = SystemClock.elapsedRealtime() - backendStarted;
-        // With no port hint to validate, the prepared physical-network
-        // snapshot is enough. The VPN route and exit still get fresh proof.
-        Network underlay = lastVerifiedCandidate == null && beforeService != null
-                ? beforeService : currentUnderlay(connectivity, beforeService);
+        Network beforeService = underlayRead == null ? null : underlayRead.getNow(null);
+        Network underlay = lastVerifiedCandidate == null && underlayRead != null ? beforeService
+                : currentUnderlay(connectivity, beforeService);
         Network attemptUnderlay = underlay;
         int firstAttemptedPort = 0;
         int attempts = 0;
@@ -289,17 +305,41 @@ public final class TunnelEngine {
                 if (callback.cancelled()) {
                     throw new IOException("VPN_CONNECT_CANCELLED");
                 }
+                if (attempts == 1 && attemptUnderlay == null && underlayRead != null) {
+                    // Only credit a result observed before this TUN existed.
+                    attemptUnderlay = underlayRead.getNow(null);
+                }
+                // Android starts publishing the new TUN inside GoBackend.setState.
+                // Observe that exact new network while native initialization finishes.
+                // Neither a successful setState nor a probe alone can commit a connection.
+                Set<Network> existing = new HashSet<>(Arrays.asList(connectivity.getAllNetworks()));
+                CountDownLatch nativeReady = new CountDownLatch(1);
+                AtomicBoolean verifying = new AtomicBoolean(true);
+                BooleanSupplier active = () -> verifying.get() && !callback.cancelled()
+                        && (nativeReady.getCount() != 0 || up);
                 long nativeStarted = SystemClock.elapsedRealtime();
                 timing.serviceWaitMs = nativeStarted - serviceStarted;
                 timing.nativeActivationElapsedMs = nativeStarted;
                 timing.nativeActivationWallMs = System.currentTimeMillis();
-                if (backend.setState(tunnel, Tunnel.State.UP, config) != Tunnel.State.UP) {
-                    throw new IOException("VPN_START_FAILED");
+                FutureTask<ExitEvidence> verification = new FutureTask<>(() ->
+                        collectExits(target, candidate, deadline, changes, existing, active, nativeReady, timing));
+                Thread observer = new Thread(verification, "ProxyExitVerification");
+                Result result;
+                try {
+                    observer.start();
+                    if (backend.setState(tunnel, Tunnel.State.UP, config) != Tunnel.State.UP) {
+                        throw new IOException("VPN_START_FAILED");
+                    }
+                    nativeReady.countDown();
+                    changes.signal();
+                    timing.nativeStartMs = SystemClock.elapsedRealtime() - nativeStarted;
+                    trace("native tunnel started");
+                    ExitEvidence evidence = verification.get();
+                    result = verifiedResult(target, candidate, evidence, timing, callback);
+                } finally {
+                    verifying.set(false);
+                    verification.cancel(true);
                 }
-                timing.nativeStartMs = SystemClock.elapsedRealtime() - nativeStarted;
-                trace("native tunnel started");
-                Network previousNetwork = lastProbeNetwork;
-                Result result = verify(target, candidate, deadline, callback, previousNetwork, timing, changes);
                 if (result != null && up && !callback.cancelled()) {
                     profile = target;
                     connected = candidate;
@@ -441,8 +481,11 @@ public final class TunnelEngine {
             return false;
         }
         try (NetworkChanges changes = new NetworkChanges()) {
-            return verify(profile, connected, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS,
-                    null, null, new AttemptTiming(0), changes) != null && up;
+            AttemptTiming timing = new AttemptTiming(0);
+            ExitEvidence evidence = collectExits(profile, connected,
+                    SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS, changes,
+                    Collections.emptySet(), () -> up, null, timing);
+            return verifiedResult(profile, connected, evidence, timing, null) != null;
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             return false;
@@ -476,48 +519,95 @@ public final class TunnelEngine {
         }
     }
 
-    private Result verify(TunnelProfile target, TunnelProfile.Candidate candidate, long deadline,
-                          Callback callback, Network previousNetwork, AttemptTiming timing,
-                          NetworkChanges changes) throws InterruptedException {
+    private static final class ExitEvidence {
+        final Network network;
+        final FamilyProof ipv4;
+        final FamilyProof ipv6;
+        final long deadline;
+
+        ExitEvidence(Network network, FamilyProof ipv4, FamilyProof ipv6, long deadline) {
+            this.network = network;
+            this.ipv4 = ipv4;
+            this.ipv6 = ipv6;
+            this.deadline = deadline;
+        }
+    }
+
+    private ExitEvidence collectExits(TunnelProfile target, TunnelProfile.Candidate candidate, long deadline,
+                                      NetworkChanges changes, Set<Network> existing, BooleanSupplier active,
+                                      CountDownLatch nativeReady, AttemptTiming timing) throws InterruptedException {
         long detectionStarted = SystemClock.elapsedRealtime();
-        long probeDeadline = Math.min(deadline, detectionStarted + VERIFY_DEADLINE_MS);
-        Network vpn = awaitNetwork(target, Math.min(probeDeadline, detectionStarted + VPN_NETWORK_WAIT_MS),
-                callback, previousNetwork, changes);
-        if (vpn == null || cancelled(callback)) {
+        Network vpn = awaitNetwork(target, deadline, existing, active, nativeReady, changes);
+        if (vpn == null || !active.getAsBoolean()) {
             trace("compatible Android VPN network unavailable");
             return null;
         }
         long bindingStarted = SystemClock.elapsedRealtime();
         timing.networkDiscoveryMs = bindingStarted - detectionStarted;
-        lastProbeNetwork = vpn;
-        // Android can publish this VPN before netd permits it to bind a
-        // socket. Keep waiting on the same Network, without sending data.
-        if (!awaitProbeBinding(vpn, probeDeadline, callback, changes)) {
+        long probeDeadline = Math.min(deadline, bindingStarted + VERIFY_DEADLINE_MS);
+        // A new matching network may appear before netd permits sockets to use it.
+        if (!awaitProbeBinding(vpn, probeDeadline, active, changes)) {
             return null;
         }
-        timing.networkBindingMs = SystemClock.elapsedRealtime() - bindingStarted;
+        if (nativeReady != null && nativeReady.getCount() != 0) {
+            // Unknown/hidden ownership (including Android 10) permits local discovery
+            // and an empty socket bind only. Wait for the native UP and recheck routes.
+            NetworkCapabilities caps = connectivity.getNetworkCapabilities(vpn);
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || caps == null
+                    || !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    || caps.getOwnerUid() != Process.myUid()) {
+                while (active.getAsBoolean() && nativeReady.getCount() != 0) {
+                    long remaining = deadline - SystemClock.elapsedRealtime();
+                    if (remaining <= 0) {
+                        return null;
+                    }
+                    nativeReady.await(Math.min(remaining, CANCELLATION_CHECK_MS), TimeUnit.MILLISECONDS);
+                }
+                if (!active.getAsBoolean() || !up || !matches(vpn, target)) {
+                    return null;
+                }
+                probeDeadline = Math.min(deadline, SystemClock.elapsedRealtime() + VERIFY_DEADLINE_MS);
+            }
+        }
         long proofStarted = SystemClock.elapsedRealtime();
+        timing.networkBindingMs = proofStarted - bindingStarted;
         timing.networkWaitMs = proofStarted - detectionStarted;
-        trace("Android VPN network ready");
-        Result result = verifyExits(target, candidate, vpn, probeDeadline, callback, timing, changes);
+        ExitEvidence result = verifyExits(target, candidate, vpn, probeDeadline, active);
         if (result != null) {
             timing.exitProofMs = SystemClock.elapsedRealtime() - proofStarted;
         }
         return result;
     }
 
-    private boolean awaitProbeBinding(Network vpn, long deadline, Callback callback, NetworkChanges changes)
-            throws InterruptedException {
+    private Result verifiedResult(TunnelProfile target, TunnelProfile.Candidate candidate,
+                                  ExitEvidence evidence, AttemptTiming timing, Callback callback) {
+        // Read native statistics only after setState returns. The bound proofs,
+        // routes and peer must still belong to this live, authorized attempt.
+        if (evidence == null || !up || cancelled(callback) || !matches(evidence.network, target)
+                || SystemClock.elapsedRealtime() >= evidence.deadline) {
+            return null;
+        }
+        long handshake = latestHandshake(candidate);
+        if (handshake <= 0 || !up || cancelled(callback)) {
+            return null;
+        }
+        recordProofTimings(timing, evidence.ipv4, evidence.ipv6, handshake);
+        return new Result(candidate.endpoint(), evidence.ipv4.proof.address,
+                evidence.ipv6 == null ? "" : evidence.ipv6.proof.address, timing);
+    }
+
+    private boolean awaitProbeBinding(Network vpn, long deadline, BooleanSupplier active,
+                                      NetworkChanges changes) throws InterruptedException {
         boolean waiting = false;
         long fastUntil = SystemClock.elapsedRealtime() + FAST_BIND_WINDOW_MS;
-        while (up && !cancelled(callback)) {
+        while (active.getAsBoolean()) {
             long remaining = deadline - SystemClock.elapsedRealtime();
             if (remaining <= 0) {
                 break;
             }
             try (Socket socket = new Socket()) {
                 vpn.bindSocket(socket);
-                return up && !cancelled(callback);
+                return active.getAsBoolean();
             } catch (IOException error) {
                 if (!waiting) {
                     trace("Android VPN socket binding not ready");
@@ -549,9 +639,9 @@ public final class TunnelEngine {
     }
 
     private FamilyProof verifyFamily(Network vpn, String expected, boolean ipv6,
-                                     long deadline, long startedAt, Callback callback)
+                                     long deadline, long startedAt, BooleanSupplier active)
             throws IOException, InterruptedException {
-        for (int attempt = 1; attempt <= MAX_EXIT_PROBE_ATTEMPTS && up && !cancelled(callback); attempt++) {
+        for (int attempt = 1; attempt <= MAX_EXIT_PROBE_ATTEMPTS && active.getAsBoolean(); attempt++) {
             long remaining = deadline - SystemClock.elapsedRealtime();
             if (remaining <= 0 || Thread.currentThread().isInterrupted()) {
                 break;
@@ -572,23 +662,20 @@ public final class TunnelEngine {
         throw new IOException("VPN_EXIT_PROBE_TIMEOUT");
     }
 
-    private Result verifyExits(TunnelProfile target, TunnelProfile.Candidate candidate, Network vpn,
-                               long probeDeadline, Callback callback, AttemptTiming timing,
-                               NetworkChanges changes)
-            throws InterruptedException {
+    private ExitEvidence verifyExits(TunnelProfile target, TunnelProfile.Candidate candidate, Network vpn,
+                                     long probeDeadline, BooleanSupplier active) throws InterruptedException {
         boolean dualStack = !target.ipv6Exit.isEmpty();
         ExecutorService executor = Executors.newFixedThreadPool(dualStack ? 2 : 1);
         ExecutorCompletionService<FamilyProof> completed = new ExecutorCompletionService<>(executor);
         long startedAt = SystemClock.elapsedRealtime();
         Future<FamilyProof> v4 = completed.submit(
-                () -> verifyFamily(vpn, candidate.exit, false, probeDeadline, startedAt, callback));
+                () -> verifyFamily(vpn, candidate.exit, false, probeDeadline, startedAt, active));
         Future<FamilyProof> v6 = !dualStack ? null : completed.submit(
-                () -> verifyFamily(vpn, target.ipv6Exit, true, probeDeadline, startedAt, callback));
+                () -> verifyFamily(vpn, target.ipv6Exit, true, probeDeadline, startedAt, active));
         try {
-            changes.close();
             FamilyProof ipv4 = null;
             FamilyProof ipv6 = null;
-            while (up && !cancelled(callback)) {
+            while (active.getAsBoolean()) {
                 long wait = Math.min(CANCELLATION_CHECK_MS, probeDeadline - SystemClock.elapsedRealtime());
                 if (wait <= 0) {
                     break;
@@ -606,23 +693,16 @@ public final class TunnelEngine {
                 if (ipv4 == null || (dualStack && ipv6 == null)) {
                     continue;
                 }
-                if (!up || cancelled(callback) || SystemClock.elapsedRealtime() >= probeDeadline) {
-                    break;
+                if (active.getAsBoolean() && SystemClock.elapsedRealtime() < probeDeadline) {
+                    return new ExitEvidence(vpn, ipv4, ipv6, probeDeadline);
                 }
-                long handshake = latestHandshake(candidate);
-                if (handshake <= 0) {
-                    return null;
-                }
-                recordProofTimings(timing, ipv4, ipv6, handshake);
-                return new Result(candidate.endpoint(), ipv4.proof.address,
-                        ipv6 == null ? "" : ipv6.proof.address, timing);
+                break;
             }
-            trace("exit proof deadline, handshake=" + (latestHandshake(candidate) > 0));
+            trace("exit proof deadline");
             return null;
         } catch (ExecutionException error) {
             Throwable cause = error.getCause();
-            trace("exit probe error " + (cause == null ? "unknown" : cause.getClass().getSimpleName())
-                    + ", handshake=" + (latestHandshake(candidate) > 0));
+            trace("exit probe error " + (cause == null ? "unknown" : cause.getClass().getSimpleName()));
             return null;
         } finally {
             v4.cancel(true);
@@ -676,25 +756,40 @@ public final class TunnelEngine {
         return new CloudflareExitProbe.Proof(actual.getHostAddress(), "fixture");
     }
 
-    private Network awaitNetwork(TunnelProfile target, long deadline, Callback callback,
-                                 Network previousNetwork, NetworkChanges changes) throws InterruptedException {
-        long nextReadback = callback != null && changes.isWatching()
+    private Network awaitNetwork(TunnelProfile target, long deadline, Set<Network> existing,
+                                 BooleanSupplier active, CountDownLatch nativeReady,
+                                 NetworkChanges changes) throws InterruptedException {
+        // Starting discovery early must not spend a slow platform's entire post-UP
+        // discovery budget while the native call is still running.
+        long discoveryDeadline = deadline;
+        boolean nativeDeadlineSet = false;
+        long nextReadback = !existing.isEmpty() && changes.isWatching()
                 ? SystemClock.elapsedRealtime() + VPN_CALLBACK_GRACE_MS
                 : 0;
-        while (up && !cancelled(callback)) {
-            Network ready = changes.matching(target, previousNetwork);
+        while (active.getAsBoolean()) {
+            Network ready = changes.matching(target, existing);
             if (ready != null) {
                 trace("Android VPN discovered by callback");
                 return ready;
             }
             long now = SystemClock.elapsedRealtime();
-            if (now >= deadline) {
+            if (!nativeDeadlineSet && (nativeReady == null || nativeReady.getCount() == 0)) {
+                discoveryDeadline = Math.min(deadline, now + VPN_NETWORK_WAIT_MS);
+                nativeDeadlineSet = true;
+            }
+            if (now >= discoveryDeadline) {
                 break;
+            }
+            if (nativeReady != null && nativeReady.getCount() != 0) {
+                // Native startup is creating this network in ConnectivityService.
+                // Use callbacks here; leave Binder readbacks for the post-UP fallback.
+                changes.await(Math.min(CANCELLATION_CHECK_MS, discoveryDeadline - now));
+                continue;
             }
             if (now >= nextReadback) {
                 // Some devices omit or delay VPN callback metadata. Read back
                 // the same checks without polling Binder on every callback.
-                ready = findNetwork(target, previousNetwork);
+                ready = findNetwork(target, existing);
                 if (ready != null) {
                     trace("Android VPN discovered by readback");
                     return ready;
@@ -702,7 +797,7 @@ public final class TunnelEngine {
                 nextReadback = SystemClock.elapsedRealtime() + CANCELLATION_CHECK_MS;
                 continue;
             }
-            changes.await(Math.min(deadline, nextReadback) - now);
+            changes.await(Math.min(discoveryDeadline, nextReadback) - now);
         }
         return null;
     }
@@ -715,7 +810,7 @@ public final class TunnelEngine {
     private final class NetworkChanges extends ConnectivityManager.NetworkCallback implements AutoCloseable {
         private final Semaphore changes = new Semaphore(0);
         private final Map<Network, NetworkMetadata> available = new HashMap<>();
-        private boolean watching;
+        private volatile boolean watching;
 
         boolean isWatching() {
             return watching;
@@ -771,10 +866,10 @@ public final class TunnelEngine {
             signal();
         }
 
-        synchronized Network matching(TunnelProfile target, Network previousNetwork) {
+        synchronized Network matching(TunnelProfile target, Set<Network> excluded) {
             for (Map.Entry<Network, NetworkMetadata> entry : available.entrySet()) {
                 NetworkMetadata metadata = entry.getValue();
-                if (!entry.getKey().equals(previousNetwork)
+                if (!excluded.contains(entry.getKey())
                         && isCandidateVpn(metadata.capabilities)
                         && matchesRoutesAndAddresses(metadata.links, target)) {
                     return entry.getKey();
@@ -799,14 +894,14 @@ public final class TunnelEngine {
         }
     }
 
-    private Network findNetwork(TunnelProfile target, Network previousNetwork) {
+    private Network findNetwork(TunnelProfile target, Set<Network> excluded) {
         // Use this VPN's new network and profile, not the underlying Android default.
         Network active = connectivity.getActiveNetwork();
-        if (active != null && !active.equals(previousNetwork) && matches(active, target)) {
+        if (active != null && !excluded.contains(active) && matches(active, target)) {
             return active;
         }
         for (Network candidate : connectivity.getAllNetworks()) {
-            if (!candidate.equals(active) && !candidate.equals(previousNetwork) && matches(candidate, target)) {
+            if (!candidate.equals(active) && !excluded.contains(candidate) && matches(candidate, target)) {
                 return candidate;
             }
         }

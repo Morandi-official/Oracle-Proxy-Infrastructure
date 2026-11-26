@@ -202,6 +202,24 @@ func TestOrder(t *testing.T){
             result=subprocess.run([go,'test','./...'],cwd=root,env=env,text=True,capture_output=True,timeout=60)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+    def test_fresh_recovery_full_bindings_and_partial_apply_rollback(self):
+        compiler=shutil.which('g++') or shutil.which('clang++')
+        if not compiler:
+            self.skipTest('Portable C++ compiler unavailable; real PnP acceptance runs on Windows')
+        here=Path(__file__).resolve().parent
+        native=(here.parent/'native'/'adapter-bindings.cpp').read_text()
+        fixture=(here/'fresh-binding-recovery-test.cpp').read_text()
+        maps=native[native.index('static bool MapMatches('):native.index('static bool TransientRead(')]
+        fresh=native[native.index('using FlagMap='):native.index('static DWORD Run(')]
+        fixture=fixture.replace('// INSERT_BINDING_MAP_ROUTINES',maps).replace('// INSERT_FRESH_RECOVERY_ROUTINES',fresh)
+        with tempfile.TemporaryDirectory() as folder:
+            work=Path(folder)
+            (work/'main.cpp').write_text(fixture)
+            for command in ([compiler,'-std=c++17','-Wall','-Wextra','-Werror','main.cpp','-o','recovery.exe'],
+                            [str(work/'recovery.exe')]):
+                result=subprocess.run(command,cwd=work,text=True,capture_output=True,timeout=60)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_dormant_native_snapshot_boundaries_execute_the_patched_audit(self):
         # Run the exact audit algorithm with native-table calls replaced by
         # deterministic snapshots. No Windows driver, interface or network is

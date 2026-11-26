@@ -56,7 +56,7 @@ def verify_unit(host):
     unit = owned(host.UNIT_DIR / name, stat.S_ISREG)
     if unit.read_bytes() != (host.SOURCE / 'deploy' / name).read_bytes():
         raise ValueError('CONSOLE_DEPLOYMENT_UNIT_CHANGED')
-    result = host.command(['systemctl', 'show', '--property=FragmentPath,DropInPaths', name],
+    result = host.command(['systemctl', 'show', '--all', '--property=FragmentPath,DropInPaths', name],
                           capture_output=True, text=True, timeout=8)
     if set(result.stdout.splitlines()) != {f'FragmentPath={unit}', 'DropInPaths='}:
         raise ValueError('CONSOLE_DEPLOYMENT_UNIT_OVERRIDE_PRESENT')

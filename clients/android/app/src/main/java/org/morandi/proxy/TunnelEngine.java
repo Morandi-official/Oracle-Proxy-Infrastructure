@@ -12,6 +12,7 @@ import android.net.VpnService;
 import android.os.Build;
 import android.os.Process;
 import android.os.SystemClock;
+import android.system.ErrnoException;
 
 import com.wireguard.android.backend.BackendException;
 import com.wireguard.android.backend.GoBackend;
@@ -27,7 +28,7 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
-import java.net.Socket;
+import java.net.DatagramSocket;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -100,6 +101,10 @@ public final class TunnelEngine {
         long networkBindingMs;
         long ownerWaitMs;
         int bindFailures;
+        int firstBindErrno;
+        int lastBindErrno;
+        int initiallyBlocked = -1;
+        int blockedAtBind = -1;
         long exitProofMs;
         long ipv4ProofMs;
         long ipv6ProofMs;
@@ -562,6 +567,17 @@ public final class TunnelEngine {
         Network vpn = selected.network();
         long selectedAt = SystemClock.elapsedRealtime();
         timing.networkDiscoveryMs = selectedAt - detectionStarted;
+        long probeDeadline = Math.min(deadline, selectedAt + VERIFY_DEADLINE_MS);
+        // Checking one unconnected socket sends no packets, so this can overlap
+        // native UP even when Android redacts the VPN owner. netd checks the UID
+        // against the netId. The two real transports still bind independently.
+        timing.initiallyBlocked = changes.blockedStatus(vpn);
+        if (!awaitProbeBinding(vpn, probeDeadline, active, changes, timing)) {
+            return null;
+        }
+        long boundAt = SystemClock.elapsedRealtime();
+        timing.networkBindingMs = boundAt - selectedAt;
+        timing.blockedAtBind = changes.blockedStatus(vpn);
         if (nativeReady != null && nativeReady.getCount() != 0 && !selected.ownedByApp()) {
             // Android 10 or redacted ownership only permits early discovery. Wait
             // for this native UP and revalidate the profile before sending anything.
@@ -577,12 +593,9 @@ public final class TunnelEngine {
             }
         }
         long proofStarted = SystemClock.elapsedRealtime();
-        timing.ownerWaitMs = proofStarted - selectedAt;
+        timing.ownerWaitMs = proofStarted - boundAt;
         timing.networkWaitMs = proofStarted - detectionStarted;
-        long probeDeadline = Math.min(deadline, proofStarted + VERIFY_DEADLINE_MS);
-        // Both proof transports bind their own requests to this exact Android
-        // network. Begin with the real probes. An empty socket bind is useful
-        // for recovery only if Android rejected an initial attempt.
+        probeDeadline = Math.min(deadline, proofStarted + VERIFY_DEADLINE_MS);
         ExitEvidence result = verifyExits(target, candidate, vpn, probeDeadline, active);
         if (result != null) {
             timing.exitProofMs = SystemClock.elapsedRealtime() - proofStarted;
@@ -607,28 +620,43 @@ public final class TunnelEngine {
                 evidence.ipv6 == null ? "" : evidence.ipv6.proof.address, timing);
     }
 
-    private static int awaitProbeBinding(Network vpn, long deadline, BooleanSupplier active)
-            throws InterruptedException, IOException {
-        int failures = 0;
+    private static boolean awaitProbeBinding(Network vpn, long deadline, BooleanSupplier active,
+                                             NetworkChanges changes, AttemptTiming timing)
+            throws InterruptedException {
         long fastUntil = SystemClock.elapsedRealtime() + FAST_BIND_WINDOW_MS;
-        while (active.getAsBoolean()) {
-            long remaining = deadline - SystemClock.elapsedRealtime();
-            if (remaining <= 0) {
-                break;
-            }
-            try (Socket socket = new Socket()) {
-                vpn.bindSocket(socket);
-                return failures;
-            } catch (IOException error) {
-                failures++;
-                long now = SystemClock.elapsedRealtime();
-                long retryMs = now < fastUntil ? FAST_BIND_RETRY_MS : CANCELLATION_CHECK_MS;
-                if (now < deadline) {
-                    Thread.sleep(Math.min(retryMs, deadline - now));
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            while (active.getAsBoolean() && SystemClock.elapsedRealtime() < deadline) {
+                try {
+                    vpn.bindSocket(socket);
+                    return active.getAsBoolean();
+                } catch (IOException error) {
+                    int errno = bindingErrno(error);
+                    if (timing.bindFailures++ == 0) {
+                        timing.firstBindErrno = errno;
+                    }
+                    timing.lastBindErrno = errno;
+                    long now = SystemClock.elapsedRealtime();
+                    long retryMs = now < fastUntil ? FAST_BIND_RETRY_MS : CANCELLATION_CHECK_MS;
+                    if (now < deadline) {
+                        changes.await(Math.min(retryMs, deadline - now));
+                    }
                 }
             }
+        } catch (IOException cannotOpenSocket) {
+            return false;
         }
-        throw new IOException("VPN_SOCKET_BIND_UNAVAILABLE");
+        return false;
+    }
+
+    private static int bindingErrno(IOException error) {
+        // Network.bindSocket wraps a native ErrnoException in a SocketException.
+        // Report only its numeric code. Some OEMs do not expose a nested cause.
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ErrnoException nativeError) {
+                return nativeError.errno;
+            }
+        }
+        return -1;
     }
 
     private static final class FamilyProof {
@@ -636,25 +664,18 @@ public final class TunnelEngine {
         final CloudflareExitProbe.Proof proof;
         final long elapsedMs;
         final int attempts;
-        final long bindRecoveryMs;
-        final int bindFailures;
 
-        FamilyProof(boolean ipv6, CloudflareExitProbe.Proof proof, long elapsedMs, int attempts,
-                    long bindRecoveryMs, int bindFailures) {
+        FamilyProof(boolean ipv6, CloudflareExitProbe.Proof proof, long elapsedMs, int attempts) {
             this.ipv6 = ipv6;
             this.proof = proof;
             this.elapsedMs = elapsedMs;
             this.attempts = attempts;
-            this.bindRecoveryMs = bindRecoveryMs;
-            this.bindFailures = bindFailures;
         }
     }
 
     private FamilyProof verifyFamily(Network vpn, String expected, boolean ipv6,
                                      long deadline, long startedAt, BooleanSupplier active)
             throws IOException, InterruptedException {
-        long bindRecoveryMs = 0;
-        int bindFailures = 0;
         for (int attempt = 1; attempt <= MAX_EXIT_PROBE_ATTEMPTS && active.getAsBoolean(); attempt++) {
             long remaining = deadline - SystemClock.elapsedRealtime();
             if (remaining <= 0 || Thread.currentThread().isInterrupted()) {
@@ -662,8 +683,7 @@ public final class TunnelEngine {
             }
             try {
                 CloudflareExitProbe.Proof proof = checkAddress(vpn, expected, ipv6, remaining);
-                return new FamilyProof(ipv6, proof, SystemClock.elapsedRealtime() - startedAt, attempt,
-                        bindRecoveryMs, bindFailures);
+                return new FamilyProof(ipv6, proof, SystemClock.elapsedRealtime() - startedAt, attempt);
             } catch (IOException error) {
                 if (attempt == MAX_EXIT_PROBE_ATTEMPTS
                         || deadline - SystemClock.elapsedRealtime() < MIN_EXIT_RETRY_BUDGET_MS) {
@@ -671,15 +691,7 @@ public final class TunnelEngine {
                 }
                 // Each address family retries its own early failure. A valid
                 // result remains local to this exact handshake and Network.
-                if (attempt == 1) {
-                    long bindStarted = SystemClock.elapsedRealtime();
-                    bindFailures = awaitProbeBinding(vpn, deadline, active);
-                    bindRecoveryMs = SystemClock.elapsedRealtime() - bindStarted;
-                }
-                // A failed empty bind means we have already waited for netd.
-                if (attempt != 1 || bindFailures == 0) {
-                    Thread.sleep(EXIT_RETRY_BACKOFF_MS);
-                }
+                Thread.sleep(EXIT_RETRY_BACKOFF_MS);
             }
         }
         throw new IOException("VPN_EXIT_PROBE_TIMEOUT");
@@ -738,8 +750,6 @@ public final class TunnelEngine {
 
     private static void recordProofTimings(AttemptTiming timing, FamilyProof ipv4, FamilyProof ipv6,
                                            long handshakeWallMs) {
-        timing.networkBindingMs = Math.max(ipv4.bindRecoveryMs, ipv6 == null ? 0 : ipv6.bindRecoveryMs);
-        timing.bindFailures = ipv4.bindFailures + (ipv6 == null ? 0 : ipv6.bindFailures);
         timing.ipv4ProofProtocol = ipv4.proof.protocol;
         timing.ipv4ProofMs = ipv4.elapsedMs;
         timing.ipv4ProofAttempts = ipv4.attempts;
@@ -849,6 +859,7 @@ public final class TunnelEngine {
     private static final class NetworkMetadata {
         NetworkCapabilities capabilities;
         LinkProperties links;
+        int blocked = -1;
     }
 
     private final class NetworkChanges extends ConnectivityManager.NetworkCallback implements AutoCloseable {
@@ -901,8 +912,17 @@ public final class TunnelEngine {
             }
         }
 
-        @Override public void onBlockedStatusChanged(Network network, boolean blocked) {
-            signal();
+        @Override public synchronized void onBlockedStatusChanged(Network network, boolean blocked) {
+            NetworkMetadata metadata = available.get(network);
+            if (metadata != null) {
+                metadata.blocked = blocked ? 1 : 0;
+                signal();
+            }
+        }
+
+        synchronized int blockedStatus(Network network) {
+            NetworkMetadata metadata = available.get(network);
+            return metadata == null ? -1 : metadata.blocked;
         }
 
         @Override public synchronized void onLost(Network network) {

@@ -218,7 +218,9 @@ public final class ProductionLifecycleTest {
                 + ";NETWORK_WAIT_MS:" + timing.networkWaitMs
                 + ";NETWORK_DISCOVERY_MS:" + timing.networkDiscoveryMs
                 + ";NETWORK_OWNER_WAIT_MS:" + timing.ownerWaitMs
-                + ";BIND_RECOVERY_MAX_MS:" + timing.networkBindingMs + ";EMPTY_BIND_FAILURES:" + timing.bindFailures
+                + ";BIND_READY_MS:" + timing.networkBindingMs + ";EMPTY_BIND_FAILURES:" + timing.bindFailures
+                + ";FIRST_BIND_ERRNO:" + timing.firstBindErrno + ";LAST_BIND_ERRNO:" + timing.lastBindErrno
+                + ";BLOCKED_AT_DISCOVERY:" + timing.initiallyBlocked + ";BLOCKED_AT_BIND:" + timing.blockedAtBind
                 + ";EXIT_PROOF_MS:" + timing.exitProofMs
                 + ";WG_HANDSHAKE_MS:" + timing.handshakeMs
                 + ";IPV4_PROOF_MS:" + timing.ipv4ProofMs + ";IPV4_PROOF_ATTEMPTS:" + timing.ipv4ProofAttempts

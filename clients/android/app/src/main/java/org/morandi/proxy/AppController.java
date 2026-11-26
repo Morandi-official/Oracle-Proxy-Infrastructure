@@ -243,12 +243,18 @@ public final class AppController {
     static final class ConnectionTiming {
         final long totalMs;
         final long policyMs;
+        final long backendWaitMs;
         final long serviceWaitMs;
         final long nativeStartMs;
         final long networkWaitMs;
         final long networkDiscoveryMs;
         final long networkBindingMs;
         final long exitProofMs;
+        final long handshakeMs;
+        final long ipv4ProofMs;
+        final long ipv6ProofMs;
+        final int ipv4ProofAttempts;
+        final int ipv6ProofAttempts;
         final String ipv4ProofProtocol;
         final String ipv6ProofProtocol;
         final int attempts;
@@ -256,12 +262,18 @@ public final class AppController {
         ConnectionTiming(long totalMs, long policyMs, TunnelEngine.AttemptTiming attempt) {
             this.totalMs = totalMs;
             this.policyMs = policyMs;
+            this.backendWaitMs = attempt.backendWaitMs;
             this.serviceWaitMs = attempt.serviceWaitMs;
             this.nativeStartMs = attempt.nativeStartMs;
             this.networkWaitMs = attempt.networkWaitMs;
             this.networkDiscoveryMs = attempt.networkDiscoveryMs;
             this.networkBindingMs = attempt.networkBindingMs;
             this.exitProofMs = attempt.exitProofMs;
+            this.handshakeMs = attempt.handshakeMs;
+            this.ipv4ProofMs = attempt.ipv4ProofMs;
+            this.ipv6ProofMs = attempt.ipv6ProofMs;
+            this.ipv4ProofAttempts = attempt.ipv4ProofAttempts;
+            this.ipv6ProofAttempts = attempt.ipv6ProofAttempts;
             this.ipv4ProofProtocol = attempt.ipv4ProofProtocol;
             this.ipv6ProofProtocol = attempt.ipv6ProofProtocol;
             this.attempts = attempt.attempts;

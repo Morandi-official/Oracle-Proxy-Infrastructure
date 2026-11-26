@@ -32,8 +32,10 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public final class TunnelEngine {
     private static final long VERIFY_DEADLINE_MS = 6_500;
@@ -42,6 +44,10 @@ public final class TunnelEngine {
     private static final long PORT_HINT_LIFETIME_MS = 10 * 60_000;
     private static final long CANCELLATION_CHECK_MS = 80;
     private static final long BIND_RETRY_INITIAL_MS = 20;
+    private static final long BACKEND_PREPARATION_WAIT_MS = 2_500;
+    private static final long EXIT_RETRY_BACKOFF_MS = 160;
+    private static final long MIN_EXIT_RETRY_BUDGET_MS = 500;
+    private static final int MAX_EXIT_PROBE_ATTEMPTS = 3;
 
     public interface Callback {
         void trying(String endpoint);
@@ -68,12 +74,20 @@ public final class TunnelEngine {
 
     static final class AttemptTiming {
         final int attempts;
+        long backendWaitMs;
         long serviceWaitMs;
         long nativeStartMs;
         long networkWaitMs;
         long networkDiscoveryMs;
         long networkBindingMs;
         long exitProofMs;
+        long ipv4ProofMs;
+        long ipv6ProofMs;
+        int ipv4ProofAttempts;
+        int ipv6ProofAttempts;
+        long handshakeMs = -1;
+        long nativeActivationWallMs;
+        long nativeActivationElapsedMs;
         String ipv4ProofProtocol = "";
         String ipv6ProofProtocol = "";
 
@@ -90,6 +104,7 @@ public final class TunnelEngine {
     private volatile boolean expectedDown;
     private volatile Runnable onRevocation;
     private GoBackend backend;
+    private FutureTask<GoBackend> preparedBackend;
     private TunnelProfile profile;
     private TunnelProfile.Candidate connected;
     private Network lastProbeNetwork;
@@ -151,6 +166,17 @@ public final class TunnelEngine {
         if (up || preparedServiceDeadline != 0 || VpnService.prepare(context) != null) {
             return;
         }
+        if (backend == null && preparedBackend == null) {
+            // Library loading can run with the policy request. A GoBackend
+            // constructor has no profile and cannot install a VPN or send packets.
+            FutureTask<GoBackend> loading = new FutureTask<>(() -> new GoBackend(context));
+            try {
+                new Thread(loading, "ProxyWireGuardPreparation").start();
+                preparedBackend = loading;
+            } catch (RuntimeException ignored) {
+                // The authorized connection path can load the backend normally.
+            }
+        }
         try {
             // Starting the notification-bearing service does not install a
             // TUN, load a server profile or send WireGuard traffic.
@@ -173,13 +199,9 @@ public final class TunnelEngine {
             disconnect();
             serviceDeadline = 0;
         }
-        if (backend == null) {
-            try {
-                backend = new GoBackend(context);
-            } catch (RuntimeException | LinkageError error) {
-                throw new IOException("WIREGUARD_UNAVAILABLE");
-            }
-        }
+        long backendStarted = SystemClock.elapsedRealtime();
+        loadBackend();
+        long backendWaitMs = SystemClock.elapsedRealtime() - backendStarted;
         long deadline = SystemClock.elapsedRealtime() + CONNECT_DEADLINE_MS;
         Network underlay = currentUnderlay();
         int attempts = 0;
@@ -196,6 +218,7 @@ public final class TunnelEngine {
             // Android can restore normal routes between attempts when a TUN is torn down.
             Config config = target.wireGuardConfig(candidate, key);
             AttemptTiming timing = new AttemptTiming(++attempts);
+            timing.backendWaitMs = backendWaitMs;
             try {
                 long serviceStarted = SystemClock.elapsedRealtime();
                 boolean overlappedStart = serviceDeadline != 0;
@@ -216,6 +239,8 @@ public final class TunnelEngine {
                 serviceDeadline = 0;
                 long nativeStarted = SystemClock.elapsedRealtime();
                 timing.serviceWaitMs = nativeStarted - serviceStarted;
+                timing.nativeActivationElapsedMs = nativeStarted;
+                timing.nativeActivationWallMs = System.currentTimeMillis();
                 if (backend.setState(tunnel, Tunnel.State.UP, config) != Tunnel.State.UP) {
                     throw new IOException("VPN_START_FAILED");
                 }
@@ -251,6 +276,26 @@ public final class TunnelEngine {
         }
         throw new IOException(callback.cancelled() ? "VPN_CONNECT_CANCELLED"
                 : "VPN_EXIT_NOT_VERIFIED");
+    }
+
+    private void loadBackend() throws IOException {
+        if (backend != null) {
+            return;
+        }
+        try {
+            backend = preparedBackend == null ? new GoBackend(context)
+                    : preparedBackend.get(BACKEND_PREPARATION_WAIT_MS, TimeUnit.MILLISECONDS);
+            preparedBackend = null;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new IOException("VPN_CONNECT_CANCELLED");
+        } catch (TimeoutException error) {
+            // The single loader is still in progress and can be reused.
+            throw new IOException("WIREGUARD_UNAVAILABLE");
+        } catch (ExecutionException | RuntimeException | LinkageError error) {
+            preparedBackend = null;
+            throw new IOException("WIREGUARD_UNAVAILABLE");
+        }
     }
 
     private Network currentUnderlay() {
@@ -351,22 +396,11 @@ public final class TunnelEngine {
         long proofStarted = SystemClock.elapsedRealtime();
         timing.networkWaitMs = proofStarted - detectionStarted;
         trace("Android VPN network ready");
-        // An Android network agent is visible slightly before all its routes
-        // are ready. Retry early socket failures on the same VPN within the
-        // original deadline, keeping both address-family checks mandatory.
-        for (int attempt = 0; attempt < 3 && up && !cancelled(callback)
-                && SystemClock.elapsedRealtime() < probeDeadline; attempt++) {
-            Result result = verifyOnce(target, candidate, vpn, probeDeadline, callback, timing);
-            if (result != null) {
-                timing.exitProofMs = SystemClock.elapsedRealtime() - proofStarted;
-                return result;
-            }
-            if (probeDeadline - SystemClock.elapsedRealtime() < 500) {
-                break;
-            }
-            Thread.sleep(160);
+        Result result = verifyExits(target, candidate, vpn, probeDeadline, callback, timing);
+        if (result != null) {
+            timing.exitProofMs = SystemClock.elapsedRealtime() - proofStarted;
         }
-        return null;
+        return result;
     }
 
     private boolean awaitProbeBinding(Network vpn, long deadline, Callback callback, NetworkChanges changes)
@@ -394,47 +428,94 @@ public final class TunnelEngine {
         return false;
     }
 
-    private Result verifyOnce(TunnelProfile target, TunnelProfile.Candidate candidate, Network vpn,
-                              long probeDeadline, Callback callback, AttemptTiming timing)
-            throws InterruptedException {
-        long remaining = probeDeadline - SystemClock.elapsedRealtime();
-        if (remaining <= 0) {
-            return null;
+    private static final class FamilyProof {
+        final boolean ipv6;
+        final CloudflareExitProbe.Proof proof;
+        final long elapsedMs;
+        final int attempts;
+
+        FamilyProof(boolean ipv6, CloudflareExitProbe.Proof proof, long elapsedMs, int attempts) {
+            this.ipv6 = ipv6;
+            this.proof = proof;
+            this.elapsedMs = elapsedMs;
+            this.attempts = attempts;
         }
-        ExecutorService executor = Executors.newFixedThreadPool(target.ipv6Exit.isEmpty() ? 1 : 2);
-        ExecutorCompletionService<CloudflareExitProbe.Proof> completed = new ExecutorCompletionService<>(executor);
-        Future<CloudflareExitProbe.Proof> v4 = completed.submit(
-                () -> checkAddress(vpn, candidate.exit, false, remaining));
-        Future<CloudflareExitProbe.Proof> v6 = target.ipv6Exit.isEmpty() ? null : completed.submit(
-                () -> checkAddress(vpn, target.ipv6Exit, true, remaining));
-        try {
-            int outstanding = v6 == null ? 1 : 2;
-            while (up && !cancelled(callback) && SystemClock.elapsedRealtime() < probeDeadline) {
-                long wait = Math.min(CANCELLATION_CHECK_MS, probeDeadline - SystemClock.elapsedRealtime());
-                if (wait > 0 && completed.poll(wait, TimeUnit.MILLISECONDS) != null
-                        && --outstanding == 0 && up && !cancelled(callback)) {
-                    CloudflareExitProbe.Proof ipv4;
-                    CloudflareExitProbe.Proof ipv6;
-                    try {
-                        ipv4 = v4.get();
-                        ipv6 = v6 == null ? null : v6.get();
-                    } catch (ExecutionException error) {
-                        Throwable cause = error.getCause();
-                        trace("exit probe error " + (cause == null ? "unknown" : cause.getClass().getSimpleName())
-                                + ", handshake=" + hasHandshake(candidate));
-                        return null;
-                    }
-                    if (!hasHandshake(candidate)) {
-                        return null;
-                    }
-                    timing.ipv4ProofProtocol = ipv4.protocol;
-                    timing.ipv6ProofProtocol = ipv6 == null ? "" : ipv6.protocol;
-                    CloudflareExitProbe.rememberVerifiedProtocols(ipv4, ipv6);
-                    return new Result(candidate.endpoint(), ipv4.address,
-                            ipv6 == null ? "" : ipv6.address, timing);
-                }
+    }
+
+    private FamilyProof verifyFamily(Network vpn, String expected, boolean ipv6,
+                                     long deadline, long startedAt, Callback callback)
+            throws IOException, InterruptedException {
+        for (int attempt = 1; attempt <= MAX_EXIT_PROBE_ATTEMPTS && up && !cancelled(callback); attempt++) {
+            long remaining = deadline - SystemClock.elapsedRealtime();
+            if (remaining <= 0 || Thread.currentThread().isInterrupted()) {
+                break;
             }
-            trace("exit proof deadline, handshake=" + hasHandshake(candidate));
+            try {
+                CloudflareExitProbe.Proof proof = checkAddress(vpn, expected, ipv6, remaining);
+                return new FamilyProof(ipv6, proof, SystemClock.elapsedRealtime() - startedAt, attempt);
+            } catch (IOException error) {
+                if (attempt == MAX_EXIT_PROBE_ATTEMPTS
+                        || deadline - SystemClock.elapsedRealtime() < MIN_EXIT_RETRY_BUDGET_MS) {
+                    throw error;
+                }
+                // Each address family retries its own early failure. A valid
+                // result remains local to this exact handshake and Network.
+                Thread.sleep(EXIT_RETRY_BACKOFF_MS);
+            }
+        }
+        throw new IOException("VPN_EXIT_PROBE_TIMEOUT");
+    }
+
+    private Result verifyExits(TunnelProfile target, TunnelProfile.Candidate candidate, Network vpn,
+                               long probeDeadline, Callback callback, AttemptTiming timing)
+            throws InterruptedException {
+        boolean dualStack = !target.ipv6Exit.isEmpty();
+        ExecutorService executor = Executors.newFixedThreadPool(dualStack ? 2 : 1);
+        ExecutorCompletionService<FamilyProof> completed = new ExecutorCompletionService<>(executor);
+        long startedAt = SystemClock.elapsedRealtime();
+        Future<FamilyProof> v4 = completed.submit(
+                () -> verifyFamily(vpn, candidate.exit, false, probeDeadline, startedAt, callback));
+        Future<FamilyProof> v6 = !dualStack ? null : completed.submit(
+                () -> verifyFamily(vpn, target.ipv6Exit, true, probeDeadline, startedAt, callback));
+        try {
+            FamilyProof ipv4 = null;
+            FamilyProof ipv6 = null;
+            while (up && !cancelled(callback)) {
+                long wait = Math.min(CANCELLATION_CHECK_MS, probeDeadline - SystemClock.elapsedRealtime());
+                if (wait <= 0) {
+                    break;
+                }
+                Future<FamilyProof> ready = completed.poll(wait, TimeUnit.MILLISECONDS);
+                if (ready == null) {
+                    continue;
+                }
+                FamilyProof result = ready.get();
+                if (result.ipv6) {
+                    ipv6 = result;
+                } else {
+                    ipv4 = result;
+                }
+                if (ipv4 == null || (dualStack && ipv6 == null)) {
+                    continue;
+                }
+                if (!up || cancelled(callback) || SystemClock.elapsedRealtime() >= probeDeadline) {
+                    break;
+                }
+                long handshake = latestHandshake(candidate);
+                if (handshake <= 0) {
+                    return null;
+                }
+                recordProofTimings(timing, ipv4, ipv6, handshake);
+                CloudflareExitProbe.rememberVerifiedProtocols(ipv4.proof, ipv6 == null ? null : ipv6.proof);
+                return new Result(candidate.endpoint(), ipv4.proof.address,
+                        ipv6 == null ? "" : ipv6.proof.address, timing);
+            }
+            trace("exit proof deadline, handshake=" + (latestHandshake(candidate) > 0));
+            return null;
+        } catch (ExecutionException error) {
+            Throwable cause = error.getCause();
+            trace("exit probe error " + (cause == null ? "unknown" : cause.getClass().getSimpleName())
+                    + ", handshake=" + (latestHandshake(candidate) > 0));
             return null;
         } finally {
             v4.cancel(true);
@@ -445,9 +526,28 @@ public final class TunnelEngine {
         }
     }
 
-    private boolean hasHandshake(TunnelProfile.Candidate candidate) {
+    private static void recordProofTimings(AttemptTiming timing, FamilyProof ipv4, FamilyProof ipv6,
+                                           long handshakeWallMs) {
+        timing.ipv4ProofProtocol = ipv4.proof.protocol;
+        timing.ipv4ProofMs = ipv4.elapsedMs;
+        timing.ipv4ProofAttempts = ipv4.attempts;
+        if (ipv6 != null) {
+            timing.ipv6ProofProtocol = ipv6.proof.protocol;
+            timing.ipv6ProofMs = ipv6.elapsedMs;
+            timing.ipv6ProofAttempts = ipv6.attempts;
+        }
+        // The kernel backend exposes wall-clock handshake time. Ignore the
+        // timing sample if a clock change puts it outside the native attempt.
+        long handshakeOffset = handshakeWallMs - timing.nativeActivationWallMs;
+        if (timing.nativeActivationWallMs != 0 && handshakeOffset >= 0
+                && handshakeOffset <= SystemClock.elapsedRealtime() - timing.nativeActivationElapsedMs) {
+            timing.handshakeMs = handshakeOffset;
+        }
+    }
+
+    private long latestHandshake(TunnelProfile.Candidate candidate) {
         Statistics.PeerStats stats = backend.getStatistics(tunnel).peer(candidate.key);
-        return stats != null && stats.latestHandshakeEpochMillis() > 0;
+        return stats == null ? 0 : stats.latestHandshakeEpochMillis();
     }
 
     private static void trace(String stage) {

@@ -56,10 +56,14 @@ public final class AndroidLifecycleTest {
         Context context = instrumentation.getTargetContext();
         AtomicInteger verified4 = new AtomicInteger();
         AtomicInteger verified6 = new AtomicInteger();
+        AtomicBoolean injectFirstIpv6Failure = new AtomicBoolean(true);
         FixtureApi api = new FixtureApi();
         TunnelEngine engine = new TunnelEngine(context, (network, expected, ipv6, timeout) -> {
             try {
                 String observed = http(network, expected, 18080, "GET", "/exit", "", timeout);
+                if (ipv6 && injectFirstIpv6Failure.compareAndSet(true, false)) {
+                    throw new IOException("FIXTURE_IPV6_RETRY");
+                }
                 (ipv6 ? verified6 : verified4).incrementAndGet();
                 return observed;
             } catch (IOException error) {
@@ -113,8 +117,10 @@ public final class AndroidLifecycleTest {
             assertEquals(HOST + ":51820", connected.endpoint);
             assertEquals(InetAddress.getByName(V4), InetAddress.getByName(connected.verifiedIpv4));
             assertEquals(InetAddress.getByName(V6), InetAddress.getByName(connected.verifiedIpv6));
-            assertTrue(verified4.get() > 0);
+            assertEquals("A valid IPv4 proof is kept during the IPv6 retry", 1, verified4.get());
             assertTrue(verified6.get() > 0);
+            assertTrue("IPv6 was freshly proven after its retry",
+                    controller.lastConnectTiming().ipv6ProofAttempts > 1);
             await("connected presence", controller, () -> api.events.contains("presence:connected"));
 
             tap(instrumentation, activity, R.id.disconnect);

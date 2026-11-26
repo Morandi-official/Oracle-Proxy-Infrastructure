@@ -22,7 +22,7 @@ import javax.net.ssl.HttpsURLConnection;
 
 class ClientApi {
     private static final String ORIGIN = "https://vpn-admin.morandi.dpdns.org";
-    private static final String LOGIN_WARMUP_PATH = "/api/client/quic-certificate";
+    private static final String LOGIN_WARMUP_PATH = "/api/client/state";
     private static final List<String> ACTIONS = Arrays.asList(
             "authenticate", "enroll", "state", "presence", "logout", "device-delete");
     private static final int RESPONSE_LIMIT = 65_536;
@@ -145,11 +145,14 @@ class ClientApi {
             connection.setUseCaches(false);
             connection.setConnectTimeout(1_500);
             connection.setReadTimeout(1_500);
-            if (connection.getResponseCode() == 200) {
-                try (InputStream response = connection.getInputStream()) {
-                    readObject(response);
+            // With no bearer this endpoint returns before fetching account data.
+            // Drain that bounded response so the TLS connection can be reused.
+            if (connection.getResponseCode() == 401) {
+                JSONObject challenge;
+                try (InputStream response = connection.getErrorStream()) {
+                    challenge = readObject(response);
                 }
-                responseConsumed = true;
+                responseConsumed = "LOGIN_REQUIRED".equals(challenge.optString("error"));
             }
         } catch (Exception ignored) {
             // Login does not wait for this anonymous request and sends credentials only once.

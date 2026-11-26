@@ -1,0 +1,80 @@
+--- a/ipv4/batch.go
++++ b/ipv4/batch.go
+@@ -76,7 +76,7 @@
+ 		return 0, errInvalidConn
+ 	}
+ 	switch runtime.GOOS {
+-	case "linux":
++	case "linux", "android":
+ 		n, err := c.RecvMsgs([]socket.Message(ms), flags)
+ 		if err != nil {
+ 			err = &net.OpError{Op: "read", Net: c.PacketConn.LocalAddr().Network(), Source: c.PacketConn.LocalAddr(), Err: err}
+--- a/ipv6/batch.go
++++ b/ipv6/batch.go
+@@ -67,7 +67,7 @@
+ 		return 0, errInvalidConn
+ 	}
+ 	switch runtime.GOOS {
+-	case "linux":
++	case "linux", "android":
+ 		n, err := c.RecvMsgs([]socket.Message(ms), flags)
+ 		if err != nil {
+ 			err = &net.OpError{Op: "read", Net: c.PacketConn.LocalAddr().Network(), Source: c.PacketConn.LocalAddr(), Err: err}
+--- a/internal/socket/rawconn.go
++++ b/internal/socket/rawconn.go
+@@ -8,13 +8,15 @@
+ 	"errors"
+ 	"net"
+ 	"os"
++	"sync/atomic"
+ 	"syscall"
+ )
+ 
+ // A Conn represents a raw connection.
+ type Conn struct {
+-	network string
+-	c       syscall.RawConn
++	network    string
++	c          syscall.RawConn
++	singleRead atomic.Bool
+ }
+ 
+ // tcpConn is an interface implemented by net.TCPConn.
+--- a/internal/socket/socket.go
++++ b/internal/socket/socket.go
+@@ -10,6 +10,7 @@
+ 	"errors"
+ 	"net"
+ 	"runtime"
++	"syscall"
+ 	"unsafe"
+ )
+ 
+@@ -264,7 +265,26 @@
+ //
+ // Only Linux supports this.
+ func (c *Conn) RecvMsgs(ms []Message, flags int) (int, error) {
+-	return c.recvMsgs(ms, flags)
++	if runtime.GOOS != "android" {
++		return c.recvMsgs(ms, flags)
++	}
++	if len(ms) == 0 {
++		return 0, nil
++	}
++	// Keep the original recvmsg path on 32-bit builds and when the device
++	// kernel denies or does not implement recvmmsg. Remember the fallback
++	// on this socket. Delivery and other receive errors remain unmodified.
++	if (runtime.GOARCH == "arm64" || runtime.GOARCH == "amd64") && !c.singleRead.Load() {
++		n, err := c.recvMsgs(ms, flags)
++		if n > 0 || !(errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)) {
++			return n, err
++		}
++		c.singleRead.Store(true)
++	}
++	if err := c.recvMsg(&ms[0], flags); err != nil {
++		return 0, err
++	}
++	return 1, nil
+ }
+ 
+ // SendMsgs wraps sendmmsg system call.

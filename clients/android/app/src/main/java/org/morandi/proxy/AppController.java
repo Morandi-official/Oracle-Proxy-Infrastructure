@@ -117,7 +117,7 @@ public final class AppController {
     // Same-package instrumentation may install a fixture before launching the activity.
     static synchronized void installForTest(AppController controller) {
         if (instance != null && instance != controller) {
-            instance.discardSignInIdentity();
+            instance.discardSignInPreparation();
             instance.presenceWorker.shutdownNow();
             instance.connectionPolicyWorker.shutdownNow();
             instance.worker.shutdownNow();
@@ -159,30 +159,35 @@ public final class AppController {
         listeners.remove(listener);
     }
 
-    void prepareSignInIdentity() {
+    synchronized void prepareSignIn() {
         FutureTask<KeyPair> candidate = new FutureTask<>(KeyPair::new);
         if (!nextSignInIdentity.compareAndSet(null, candidate)) return;
+        ClientApi.LoginWarmup warmup = api.offerLoginWarmup();
         // Restore runs first on the controller worker. A saved session does not
         // need a new device identity even if the login view was briefly shown.
         worker.execute(() -> {
             if (nextSignInIdentity.get() != candidate) return;
             if (!token.isEmpty()) {
+                warmup.cancelPending();
                 if (nextSignInIdentity.compareAndSet(candidate, null)) candidate.cancel(false);
             } else {
                 // This executor is idle at sign-in. Actual login can claim the
                 // task inline if it is still queued when a new slot is found.
                 connectionPolicyWorker.execute(candidate);
+                presenceWorker.execute(() -> api.warmLoginConnection(warmup));
             }
         });
     }
 
-    void discardSignInIdentity() {
+    synchronized void discardSignInPreparation() {
+        api.cancelPendingLoginWarmup();
         FutureTask<KeyPair> candidate = nextSignInIdentity.getAndSet(null);
         if (candidate != null) candidate.cancel(false);
     }
 
     public void login(String username, String password, boolean rememberLogin) {
         long requestedAt = SystemClock.elapsedRealtime();
+        api.cancelPendingLoginWarmup();
         worker.execute(() -> {
             if (!token.isEmpty()) {
                 return;
@@ -692,7 +697,6 @@ public final class AppController {
             publish();
             if (token.isEmpty()) {
                 CompletableFuture.runAsync(vault::warmKey);
-                presenceWorker.execute(api::warmLoginConnection);
             }
         }
     }
@@ -867,7 +871,7 @@ public final class AppController {
     }
 
     private void clearSession(boolean removeKey) {
-        discardSignInIdentity();
+        discardSignInPreparation();
         if (removeKey && !accountSlot.isEmpty()) {
             erase(SESSION, accountSlot);
         } else {

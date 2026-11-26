@@ -69,10 +69,16 @@ jobs:
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.3'
+          cache: false
       - name: Install Android SDK packages
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.0.12077973'
       - name: Build debug and instrumentation APKs
-        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+        run: |
+          gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+          python3 native/build_tunnel.py verify-apk app/build/wireguard-native/tunnel.aar app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: android-test-apks
@@ -137,7 +143,14 @@ jobs:
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
-      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.3'
+          cache: false
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.0.12077973'
+      - name: Verify and compile the WireGuard libraries before loading signing credentials
+        run: gradle --no-daemon :app:prepareWireGuardTunnel
       - name: Build owner-signed Android APK and matching test APK
         env:
           ANDROID_SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_SIGNING_KEYSTORE_B64 }}
@@ -159,6 +172,8 @@ jobs:
           gradle --no-daemon -PproxyTestRelease=true :app:assembleRelease :app:assembleReleaseAndroidTest
           tools="$ANDROID_HOME/build-tools/36.0.0"
           "$tools/apksigner" verify --min-sdk-version 29 --print-certs app/build/outputs/apk/release/app-release.apk
+          python3 native/build_tunnel.py verify-apk app/build/wireguard-native/tunnel.aar app/build/outputs/apk/release/app-release.apk
+          "$tools/zipalign" -c -P 16 -v 4 app/build/outputs/apk/release/app-release.apk
           mkdir release
           version=$("$tools/aapt" dump badging app/build/outputs/apk/release/app-release.apk |
             sed -n "1s/.*versionName='\([0-9.]*\)'.*/\1/p")

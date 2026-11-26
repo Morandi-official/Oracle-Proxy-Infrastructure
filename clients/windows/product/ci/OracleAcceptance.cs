@@ -409,7 +409,7 @@ internal static class OracleAcceptance
         Console.WriteLine("ACTUAL_SERVICE_WORKER_MINIMUM="+state["service_worker_minimum"]);
         Console.WriteLine("ACTUAL_SERVICE_WORKER_THREADS="+state["service_worker_threads"]);
         Console.WriteLine("ACTUAL_SERVICE_EGRESS_PROBE_PROTOCOL="+state["egress_probe_protocol"]);
-        if(state["core_start_timings"] is JsonObject coreTimings)foreach(string key in new[]{"bundle_ms","process_ms","private_probe_ready_ms","adapter_ready_ms","receipt_ms","adapter_create_ms","adapter_audit_ms","empty_audited"})
+        if(state["core_start_timings"] is JsonObject coreTimings)foreach(string key in new[]{"bundle_ms","process_ms","private_probe_ready_ms","adapter_create_begin_ms","adapter_pnp_begin_ms","adapter_ready_ms","receipt_ms","adapter_create_ms","adapter_audit_ms","empty_audited"})
             if(coreTimings[key] is JsonValue timing && timing.TryGetValue<long>(out long elapsed))Console.WriteLine("ACTUAL_SERVICE_CORE_"+key.ToUpperInvariant()+"="+elapsed);
         Console.WriteLine("ACTUAL_SERVICE_RECENT_ACCOUNT_PROOF_RESTORED="+(state["recent_account_proof_restored"]?.GetValue<bool>()==true));
         foreach(string key in new[]{"click_to_ready_ms","connect_switch_ms"})if(state[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
@@ -497,9 +497,20 @@ internal static class OracleAcceptance
             // Connection admission already requires the IPv6 exit probe as well.
             Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");
             Check(connected["tun_route_mask"]?.GetValue<uint>()==15,"ORDINARY_ROUTE_BOTH_IPV4_AND_IPV6_HALVES_USE_OWNED_TUN");
+            Check(connected["observed_at"]?.GetValue<long>()>0 && connected["account"]?["used_bytes"]?.GetValue<long>()>=0,
+                "REAL_AUTHENTICATED_USAGE_AND_SERVER_OBSERVATION_AVAILABLE_TO_UI");
             await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:true);
+            var meterStart=await Send("Status");
             await SampleDownload("WIREGUARD_UDP");
             await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
+            var meterEnd=await Send("Status");
+            uint core=meterStart["core_pid"]?.GetValue<uint>()??0;
+            var first=meterStart["traffic"];var last=meterEnd["traffic"];
+            Check(core>0 && meterEnd["core_pid"]?.GetValue<uint>()==core && meterStart["mode"]?.GetValue<string>()=="connected" &&
+                meterEnd["mode"]?.GetValue<string>()=="connected" && first?["sample_ms"]?.GetValue<long>() is long start && start>=0 &&
+                last?["sample_ms"]?.GetValue<long>()>start && first["rx_bytes"]?.GetValue<long>() is long rx && rx>=0 &&
+                first["tx_bytes"]?.GetValue<long>() is long tx && tx>=0 && last?["rx_bytes"]?.GetValue<long>()>rx && last?["tx_bytes"]?.GetValue<long>()>tx,
+                "REAL_LOCAL_TUN_COUNTERS_ADVANCE_IN_BOTH_DIRECTIONS_DURING_BROWSER_TRAFFIC");
             await LiveGuiUdpToggle();
             // X intentionally clears a non-remembered login. Reauthenticate the
             // same durable key; never allocate a second CI device for GUI timing.

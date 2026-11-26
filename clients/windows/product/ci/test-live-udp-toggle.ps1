@@ -20,12 +20,16 @@ function Find-Control([string]$Id){
 }
 function Await-Mode([string]$Prefix,[bool]$RequireStopped){
  $watch=[Diagnostics.Stopwatch]::StartNew()
+ $status=$null
  while($watch.Elapsed.TotalSeconds -lt 30){
-  $status=Find-Control 'connection-status'
-  if($status -and $status.Current.Name.StartsWith($Prefix)){
-   $connect=Find-Control 'connect'
-   if(!$RequireStopped -or ((Get-Service OracleProxyService).Status -eq 'Stopped' -and $connect -and $connect.Current.IsEnabled)){return}
-  }
+  try {
+   if(!$status){$status=Find-Control 'connection-status'}
+   if($status -and $status.Current.Name.StartsWith($Prefix)){
+    if(!$RequireStopped){return}
+    $connect=Find-Control 'connect'
+    if((Get-Service OracleProxyService).Status -eq 'Stopped' -and $connect -and $connect.Current.IsEnabled){return}
+   }
+  } catch [Windows.Automation.ElementNotAvailableException] {$status=$null}
   Start-Sleep -Milliseconds 20
  }
  throw 'LIVE_GUI_MODE_OR_BACKEND_NOT_CONFIRMED'

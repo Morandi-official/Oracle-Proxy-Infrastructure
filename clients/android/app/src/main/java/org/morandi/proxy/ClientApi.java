@@ -30,9 +30,12 @@ class ClientApi {
     private final ConnectivityManager connectivity;
     private Network reusablePhysicalNetwork;
     private volatile PasswordTiming lastPasswordTiming;
+    private enum Warmup { NONE, RUNNING, READY, UNAVAILABLE }
+    private volatile Warmup loginWarmup = Warmup.NONE;
 
     record PasswordTiming(long streamOpenMs, long uploadMs, long responseHeadersMs,
-                          long responseBodyMs) {}
+                          long responseBodyMs, long networkSelectMs, long configureMs, long outputOpenMs,
+                          String warmupAtStart, String warmupAtOutput) {}
 
     PasswordTiming lastPasswordTiming() {
         return lastPasswordTiming;
@@ -58,11 +61,15 @@ class ClientApi {
         long started = passwordRequest ? SystemClock.elapsedRealtime() : 0;
         long streamOpened = 0;
         long requestWritten = 0;
+        long outputRequested = 0;
+        Warmup warmupAtStart = loginWarmup;
+        Warmup warmupAtOutput = warmupAtStart;
         if (passwordRequest) {
             lastPasswordTiming = null;
         }
         URL url = new URL(ORIGIN + "/api/client/" + action);
         Network controlNetwork = controlNetwork();
+        long networkSelected = passwordRequest ? SystemClock.elapsedRealtime() : 0;
         HttpsURLConnection connection = (HttpsURLConnection) (controlNetwork == null
                 ? url.openConnection(Proxy.NO_PROXY)
                 : controlNetwork.openConnection(url, Proxy.NO_PROXY));
@@ -86,6 +93,10 @@ class ClientApi {
                 connection.setRequestProperty("Content-Type", "application/json");
                 connection.setFixedLengthStreamingMode(request.length);
                 connection.setDoOutput(true);
+                if (passwordRequest) {
+                    outputRequested = SystemClock.elapsedRealtime();
+                    warmupAtOutput = loginWarmup;
+                }
                 try (var output = connection.getOutputStream()) {
                     if (passwordRequest) {
                         streamOpened = SystemClock.elapsedRealtime();
@@ -121,7 +132,9 @@ class ClientApi {
             if (passwordRequest) {
                 lastPasswordTiming = new PasswordTiming(streamOpened - started,
                         requestWritten - streamOpened, headersReceived - requestWritten,
-                        SystemClock.elapsedRealtime() - headersReceived);
+                        SystemClock.elapsedRealtime() - headersReceived, networkSelected - started,
+                        outputRequested - networkSelected, streamOpened - outputRequested,
+                        warmupAtStart.name(), warmupAtOutput.name());
             }
             return response;
         } finally {
@@ -132,6 +145,7 @@ class ClientApi {
     }
 
     void warmLoginConnection() {
+        loginWarmup = Warmup.RUNNING;
         HttpsURLConnection connection = null;
         boolean responseConsumed = false;
         try {
@@ -157,6 +171,7 @@ class ClientApi {
         } catch (Exception ignored) {
             // Login does not wait for this anonymous request and sends credentials only once.
         } finally {
+            loginWarmup = responseConsumed ? Warmup.READY : Warmup.UNAVAILABLE;
             if (connection != null && !responseConsumed) {
                 connection.disconnect();
             }

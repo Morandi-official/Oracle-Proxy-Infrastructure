@@ -102,6 +102,7 @@ if [[ "$mode" == production ]]; then
     # marker also identifies time spent in configuration before the OS call.
     # Only numeric timings are emitted from the emulator log.
     adb logcat -d -v epoch 'WireGuard/GoBackend:D' 'ProxyVpnTiming:D' '*:S' | awk '
+        /Requesting to start VpnService[[:space:]]*$/ { stock_starts++ }
         /Bringing tunnel Proxy UP[[:space:]]*$/ { started = $1; attempt++ }
         /ProxyVpnTiming: ESTABLISH_NS=[0-9]+[[:space:]]*$/ && started {
             os_ns = $NF
@@ -110,7 +111,8 @@ if [[ "$mode" == production ]]; then
             if (pre_ms < 0) pre_ms = 0
             printf "ANDROID_PERF_NATIVE_OS_ESTABLISH_NS=%.0f;BEFORE_OS_MS=%.0f;ATTEMPT=%d\n", os_ns, pre_ms, attempt
             started = 0
-        }'
+        }
+        END { if (attempt) printf "ANDROID_PERF_GO_BACKEND_SERVICE_STARTS=%d;UP_ATTEMPTS=%d\n", stock_starts, attempt }'
     download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
     timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)_MS=[0-9]+;TARGET_MS=1000|'
     timing+='CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK)_MS=[0-9]+;TARGET_MS=1000);UNDER_TARGET=[01]$'
@@ -121,10 +123,12 @@ if [[ "$mode" == production ]]; then
     visual+=';APP_UP_DELIVERY_NS:(-1|[0-9]+);CONSENT_RESULT_NS:(-1|[0-9]+);FOCUS_GAIN_NS:(-1|[0-9]+)'
     visual+=';FIRST_VERIFIED_DRAW_NS:(-1|[0-9]+);FIRST_DRAW_FOCUSED:(-1|[01]);FOCUSED_DRAW_NS:(-1|[0-9]+)$'
     login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
-    login_phases+=',STREAM_OPEN_MS:[0-9]+,UPLOAD_MS:[0-9]+,RESPONSE_HEADERS_MS:[0-9]+,RESPONSE_BODY_MS:[0-9]+$'
+    login_phases+=',STREAM_OPEN_MS:[0-9]+,UPLOAD_MS:[0-9]+,RESPONSE_HEADERS_MS:[0-9]+,RESPONSE_BODY_MS:[0-9]+'
+    login_phases+=',NETWORK_SELECT_MS:[0-9]+,CONFIGURE_MS:[0-9]+,OUTPUT_OPEN_MS:[0-9]+'
+    login_phases+=',WARMUP_AT_START:(NONE|RUNNING|READY|UNAVAILABLE),WARMUP_AT_OUTPUT:(NONE|RUNNING|READY|UNAVAILABLE)$'
     families='^ANDROID_PERF_VERIFIED_FAMILIES=[12]$'
     proof='^ANDROID_PERF_EXIT_PROOF_(FIRST|RECONNECT(_[2-5])?)=IPV4:(h3|https);IPV6:(h3|https|blocked);H3_CANDIDATE=[01]$'
-    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT(_[2-5])?)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;QUEUE_MS:[0-9]+;PREPARATION_MS:[0-9]+;POLICY_WAIT_MS:[0-9]+;CONSENT_POLICY_AGE_MS:(-1|[0-9]+);BACKEND_WAIT_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+'
+    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT(_[2-5])?)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;QUEUE_MS:[0-9]+;PREPARATION_MS:[0-9]+;POLICY_WAIT_MS:[0-9]+;CONSENT_POLICY_AGE_MS:(-1|[0-9]+);BACKEND_WAIT_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;SERVICE_REQUEST_MS:[0-9]+;FOREGROUND_ACK_MS:[0-9]+;BASELINE_READ_MS:[0-9]+;RETRIED_SERVICE_START:[01];NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+'
     phases+=';NETWORK_DISCOVERY_MS:[0-9]+;NETWORK_OWNER_WAIT_MS:[0-9]+;BIND_READY_MS:[0-9]+;EMPTY_BIND_FAILURES:[0-9]+'
     phases+=';FIRST_BIND_ERRNO:(-1|[0-9]+);LAST_BIND_ERRNO:(-1|[0-9]+);BLOCKED_AT_DISCOVERY:(-1|[01]);BLOCKED_AT_BIND:(-1|[01]);EXIT_PROOF_MS:[0-9]+;WG_HANDSHAKE_MS:(-1|[0-9]+)'
     phases+=';IPV4_PROOF_MS:[0-9]+;IPV4_PROOF_ATTEMPTS:[1-3];IPV6_PROOF_MS:[0-9]+;IPV6_PROOF_ATTEMPTS:[0-3];ATTEMPTS:[0-9]+$'

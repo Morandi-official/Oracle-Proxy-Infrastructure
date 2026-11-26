@@ -95,6 +95,10 @@ public final class TunnelEngine {
         Network verifiedUnderlay;
         long backendWaitMs;
         long serviceWaitMs;
+        long serviceRequestMs;
+        long foregroundAckMs;
+        long baselineReadMs;
+        boolean retriedServiceStart;
         long nativeStartMs;
         long networkWaitMs;
         long networkDiscoveryMs;
@@ -302,12 +306,15 @@ public final class TunnelEngine {
                 if (!overlappedStart) {
                     serviceDeadline = ProxyVpnService.requestStart(context);
                 }
+                long requestedServiceAt = SystemClock.elapsedRealtime();
+                timing.serviceRequestMs = requestedServiceAt - serviceStarted;
                 try {
                     ProxyVpnService.awaitStart(serviceDeadline, callback);
                 } catch (IOException error) {
                     if (!overlappedStart || callback.cancelled()) {
                         throw error;
                     }
+                    timing.retriedServiceStart = true;
                     // If Android rejected the early launch, use the normal
                     // foreground-service start after authorization has completed.
                     disconnect();
@@ -319,6 +326,7 @@ public final class TunnelEngine {
                 if (callback.cancelled()) {
                     throw new IOException("VPN_CONNECT_CANCELLED");
                 }
+                timing.foregroundAckMs = SystemClock.elapsedRealtime() - requestedServiceAt;
                 if (attempts == 1 && attemptUnderlay == null && underlayRead != null) {
                     // Only credit a result observed before this TUN existed.
                     attemptUnderlay = underlayRead.getNow(null);
@@ -326,7 +334,9 @@ public final class TunnelEngine {
                 // Android starts publishing the new TUN inside GoBackend.setState.
                 // Observe that exact new network while native initialization finishes.
                 // Neither a successful setState nor a probe alone can commit a connection.
+                long baselineStarted = SystemClock.elapsedRealtime();
                 Set<Network> existing = changes.existingBeforeActivation();
+                timing.baselineReadMs = SystemClock.elapsedRealtime() - baselineStarted;
                 CountDownLatch nativeReady = new CountDownLatch(1);
                 AtomicBoolean verifying = new AtomicBoolean(true);
                 BooleanSupplier active = () -> verifying.get() && !callback.cancelled()

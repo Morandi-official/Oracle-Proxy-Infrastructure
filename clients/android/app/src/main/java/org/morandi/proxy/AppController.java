@@ -10,6 +10,8 @@ import android.os.SystemClock;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import com.wireguard.crypto.KeyPair;
+
 import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -171,14 +173,19 @@ public final class AppController {
             try {
                 slot = PrivateStore.accountSlot(normalized);
                 String key = vault.read(slot);
+                String publicKey;
                 if (key.isEmpty()) {
-                    key = TunnelEngine.generatePrivateKey();
+                    KeyPair identity = new KeyPair();
+                    key = identity.getPrivateKey().toBase64();
+                    publicKey = identity.getPublicKey().toBase64();
                     vault.write(slot, key);
+                } else {
+                    publicKey = TunnelEngine.publicKey(key);
                 }
                 JSONObject request = new JSONObject()
                         .put("username", normalized)
                         .put("password", password)
-                        .put("public_key", TunnelEngine.publicKey(key))
+                        .put("public_key", publicKey)
                         .put("device_name", defaultDeviceName)
                         .put("client_version", VERSION);
                 long identityReadyAt = SystemClock.elapsedRealtime();
@@ -320,6 +327,8 @@ public final class AppController {
         final long consentPolicyAgeMs;
         final long backendWaitMs;
         final long serviceWaitMs;
+        final long serviceRequestMs, foregroundAckMs, baselineReadMs;
+        final boolean retriedServiceStart;
         final long nativeStartMs;
         final long networkWaitMs;
         final long networkDiscoveryMs;
@@ -353,6 +362,10 @@ public final class AppController {
             this.consentPolicyAgeMs = consentPolicyAgeMs;
             this.backendWaitMs = attempt.backendWaitMs;
             this.serviceWaitMs = attempt.serviceWaitMs;
+            this.serviceRequestMs = attempt.serviceRequestMs;
+            this.foregroundAckMs = attempt.foregroundAckMs;
+            this.baselineReadMs = attempt.baselineReadMs;
+            this.retriedServiceStart = attempt.retriedServiceStart;
             this.nativeStartMs = attempt.nativeStartMs;
             this.networkWaitMs = attempt.networkWaitMs;
             this.networkDiscoveryMs = attempt.networkDiscoveryMs;

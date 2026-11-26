@@ -13,7 +13,7 @@ try{
     $body=@'
 $env:ORACLE_BINDING_LAB='DISPOSABLE_WINDOWS_RUNNER'
 $fixture=Join-Path $env:ProgramData OracleProxyCandidateFixture
-& "$fixture/binding-lab.test.exe" -test.run '^TestDisposableOracleBindings$' -test.count=2 -test.timeout=180s -test.v *> "$fixture/binding.log"
+& "$fixture/binding-lab.test.exe" '-test.run=^TestDisposableOracleBindings$' '-test.count=2' '-test.timeout=180s' '-test.v' *> "$fixture/binding.log"
 Set-Content "$fixture/result" $LASTEXITCODE
 '@
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body))

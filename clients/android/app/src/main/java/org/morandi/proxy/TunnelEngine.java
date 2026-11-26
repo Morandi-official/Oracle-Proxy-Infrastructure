@@ -179,15 +179,15 @@ public final class TunnelEngine {
                 || (!hasSystemConsentResult && VpnService.prepare(context) != null)) {
             return;
         }
-        preparedUnderlay = currentUnderlay(connectivity, null);
-        prepareLocalComponents();
         try {
-            // Starting the notification-bearing service does not install a
-            // TUN, load a server profile or send WireGuard traffic.
+            // It cannot install a TUN, so Android can start the notification
+            // service while this worker reads the physical network.
             preparedServiceDeadline = ProxyVpnService.requestPreparation(context);
         } catch (IOException ignored) {
             // Connect can start the service normally after policy is available.
         }
+        preparedUnderlay = currentUnderlay(connectivity, null);
+        prepareLocalComponents();
     }
 
     synchronized void prepareLocalComponents() {
@@ -233,7 +233,10 @@ public final class TunnelEngine {
         long deadline = backendStarted + CONNECT_DEADLINE_MS;
         loadBackend(deadline, callback);
         long backendWaitMs = SystemClock.elapsedRealtime() - backendStarted;
-        Network underlay = currentUnderlay(connectivity, beforeService);
+        // With no port hint to validate, the prepared physical-network
+        // snapshot is enough. The VPN route and exit still get fresh proof.
+        Network underlay = lastVerifiedCandidate == null && beforeService != null
+                ? beforeService : currentUnderlay(connectivity, beforeService);
         Network attemptUnderlay = underlay;
         int firstAttemptedPort = 0;
         int attempts = 0;

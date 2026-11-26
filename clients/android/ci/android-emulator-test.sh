@@ -92,16 +92,30 @@ if [[ "$mode" == production ]]; then
     unset ANDROID_ACCEPTANCE_USERNAME ANDROID_ACCEPTANCE_PASSWORD
     adb install -t "$app"
     adb install -t "$test_apk"
+    adb shell setprop log.tag.ProxyVpnTiming D
     adb shell am instrument -w -e class org.morandi.proxy.ProductionLifecycleTest \
         -e proxyProduction 1 -e proxyUser "$user_b64" -e proxyPass "$pass_b64" \
         -e proxyRun "$GITHUB_RUN_ID" org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
         | tee "$working_dir/instrumentation.txt"
     unset user_b64 pass_b64
+    # The app times the real Builder.establish() call. The preceding WireGuard
+    # marker also identifies time spent in configuration before the OS call.
+    # Only numeric timings are emitted from the emulator log.
+    adb logcat -d -v epoch 'WireGuard/GoBackend:D' 'ProxyVpnTiming:D' '*:S' | awk '
+        /Bringing tunnel Proxy UP[[:space:]]*$/ { started = $1; attempt++ }
+        /ProxyVpnTiming: ESTABLISH_NS=[0-9]+[[:space:]]*$/ && started {
+            os_ns = $NF
+            sub(/^ESTABLISH_NS=/, "", os_ns)
+            pre_ms = ($1 - started) * 1000 - os_ns / 1000000
+            if (pre_ms < 0) pre_ms = 0
+            printf "ANDROID_PERF_NATIVE_OS_ESTABLISH_NS=%.0f;BEFORE_OS_MS=%.0f;ATTEMPT=%d\n", os_ns, pre_ms, attempt
+            started = 0
+        }'
     download='^ANDROID_DOWNLOAD_(DIRECT|WIREGUARD_UDP)_BYTES=[0-9]+;ELAPSED_MS=[0-9]+$'
     timing='^ANDROID_PERF_(LOGIN_(FRESH|SAVED_CONTROLLER|WARM)_MS=[0-9]+;TARGET_MS=1000|'
-    timing+='CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK)_MS=[0-9]+;TARGET_MS=1500);UNDER_TARGET=[01]$'
+    timing+='CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK)_MS=[0-9]+;TARGET_MS=1000);UNDER_TARGET=[01]$'
     reconnect_series='^ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=([0-9]+,){4}[0-9]+'
-    reconnect_series+=';N=5;MEDIAN_MS=[0-9]+;MAX_MS=[0-9]+;UNDER_1500MS=[0-5]$'
+    reconnect_series+=';N=5;MEDIAN_MS=[0-9]+;MAX_MS=[0-9]+;UNDER_1000MS=[0-5]$'
     visual='^ANDROID_PERF_VISUAL_DIAGNOSTICS_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_[1-5])='
     visual+='DOWN_CALL_NS:(-1|[0-9]+);UP_CALL_NS:(-1|[0-9]+);APP_DOWN_DELIVERY_NS:(-1|[0-9]+)'
     visual+=';APP_UP_DELIVERY_NS:(-1|[0-9]+);CONSENT_RESULT_NS:(-1|[0-9]+);FOCUS_GAIN_NS:(-1|[0-9]+)'
@@ -117,19 +131,21 @@ if [[ "$mode" == production ]]; then
     latency+=';N=20;MEDIAN_MS=[0-9]+;P95_MS=[0-9]+;UNDER_500MS=[0-9]+;HOST=www[.]cloudflare[.]com'
     latency+=';PATH=/cdn-cgi/trace;ENDPOINT=[0-9.]+;ADDRESS_FAMILY=IPv4;PROTOCOL=HTTP_1_1$'
     rtt_sample='(-1|[0-9]+[.][0-9]{3})'
-    rtt="^ANDROID_PERF_UDP_STUN_(DIRECT|WIREGUARD_UDP)_RTT_MS=($rtt_sample,){11}$rtt_sample"
+    rtt="^ANDROID_PERF_UDP_STUN_(DIRECT|WIREGUARD_UDP(_UPLOAD|_DOWNLOAD)?)_RTT_MS=($rtt_sample,){11}$rtt_sample"
     rtt+=';N=12;REPLIES=[0-9]+;UNANSWERED=[0-9]+;PROBE_LOSS_PERCENT=[0-9]+[.][0-9]{3}'
     rtt+=";MEDIAN_MS=$rtt_sample;P95_MS=$rtt_sample;MEAN_ADJACENT_RTT_CHANGE_MS=$rtt_sample"
     rtt+=';HOST=(stun[.]cloudflare[.]com|stun[.]l[.]google[.]com);ENDPOINT=[0-9.]+;PORT=(3478|19302)'
     rtt+=';TIMEOUT_MS=1200;VPN_EXIT_VERIFIED=[01]$'
     rtt_unavailable='^ANDROID_PERF_UDP_STUN_(DIRECT|WIREGUARD_UDP)_STATUS=(DNS_UNAVAILABLE|NO_IPV4_ADDRESS)'
     rtt_unavailable+=';HOST=(stun[.]cloudflare[.]com|stun[.]l[.]google[.]com);PORT=(3478|19302)$'
+    load='^ANDROID_PERF_LOAD_(UPLOAD|DOWNLOAD)_RATES_MBPS=([0-9]+[.][0-9]{2},){2,31}[0-9]+[.][0-9]{2}'
+    load+=';N=[0-9]+;BYTES_PER_TRANSFER=2097152;RTT_SAMPLES=12;PROBES_WITH_BODY_PROGRESS=[0-9]+$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
         grep -E -e "$download" -e "$timing" -e "$reconnect_series" -e "$visual" -e "$login_phases" -e "$families" -e "$proof" \
-            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" |
+            -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" -e "$load" |
         tee "$working_dir/performance.txt"
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
-    for metric in DOWNLOAD_DIRECT_BYTES DOWNLOAD_WIREGUARD_UDP_BYTES PERF_VERIFIED_FAMILIES \
+    for metric in DOWNLOAD_DIRECT_BYTES PERF_LOAD_DOWNLOAD_RATES_MBPS PERF_LOAD_UPLOAD_RATES_MBPS PERF_VERIFIED_FAMILIES \
         PERF_LOGIN_FRESH_MS PERF_LOGIN_SAVED_CONTROLLER_MS PERF_LOGIN_WARM_MS \
         PERF_LOGIN_FRESH_PHASES PERF_LOGIN_WARM_PHASES \
         PERF_CONNECT_FIRST_CLICK_MS PERF_CONNECT_AFTER_CONSENT_MS PERF_CONNECT_RECONNECT_CLICK_MS \
@@ -150,11 +166,33 @@ if [[ "$mode" == production ]]; then
         grep -Eq "^ANDROID_PERF_UDP_STUN_${route}_(RTT_MS|STATUS)=.*;HOST=stun[.]l[.]google[.]com;(ENDPOINT=[0-9.]+;)?PORT=19302(;|$)" \
             "$working_dir/performance.txt"
     done
+    # Both idle targets and the Cloudflare target during each load must answer through the VPN.
+    # For 12 samples, nearest-rank p95 is the slowest response. Require every sent probe.
+    for route in WIREGUARD_UDP WIREGUARD_UDP_DOWNLOAD WIREGUARD_UDP_UPLOAD; do
+        expected=1
+        [[ "$route" != WIREGUARD_UDP ]] || expected=2
+        awk -F ';' -v route="$route" -v expected="$expected" '
+          $1 ~ ("^ANDROID_PERF_UDP_STUN_" route "_RTT_MS=") {
+            records++; replies=0; exit_ok=0; p95=-1; host=""
+            for (i=2; i<=NF; i++) {
+              split($i, field, "=")
+              if (field[1]=="HOST") host=field[2]
+              if (field[1]=="REPLIES") replies=field[2]+0
+              if (field[1]=="P95_MS") p95=field[2]+0
+              if (field[1]=="VPN_EXIT_VERIFIED") exit_ok=field[2]+0
+            }
+            if (++hosts[host]==1 && replies==12 && exit_ok==1 && p95>=0 && p95<=500) passed++
+          }
+          END {exit records!=expected || passed!=expected}' "$working_dir/performance.txt" || {
+            echo "Android $route failed the verified 500 ms RTT or probe-delivery target." >&2
+            exit 1
+        }
+    done
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         latency_met=false
-        if grep -Eq '^ANDROID_PERF_CONNECT_AFTER_CONSENT_MS=[1-9][0-9]*;TARGET_MS=1500;UNDER_TARGET=1$' \
+        if grep -Eq '^ANDROID_PERF_CONNECT_AFTER_CONSENT_MS=[1-9][0-9]*;TARGET_MS=1000;UNDER_TARGET=1$' \
                 "$working_dir/performance.txt" &&
-            grep -Eq '^ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=.*;UNDER_1500MS=5$' \
+            grep -Eq '^ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=.*;UNDER_1000MS=5$' \
                 "$working_dir/performance.txt"; then
             latency_met=true
         fi

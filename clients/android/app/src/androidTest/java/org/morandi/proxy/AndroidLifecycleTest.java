@@ -58,6 +58,8 @@ public final class AndroidLifecycleTest {
     public void loginEnrollConsentConnectDisconnectAndLogout() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Context context = instrumentation.getTargetContext();
+        AtomicReference<Network> proved4 = new AtomicReference<>();
+        AtomicReference<Network> proved6 = new AtomicReference<>();
         AtomicInteger verified4 = new AtomicInteger();
         AtomicInteger verified6 = new AtomicInteger();
         AtomicBoolean injectFirstIpv6Failure = new AtomicBoolean(true);
@@ -68,6 +70,7 @@ public final class AndroidLifecycleTest {
                 if (ipv6 && injectFirstIpv6Failure.compareAndSet(true, false)) {
                     throw new IOException("FIXTURE_IPV6_RETRY");
                 }
+                (ipv6 ? proved6 : proved4).set(network);
                 (ipv6 ? verified6 : verified4).incrementAndGet();
                 return observed;
             } catch (IOException error) {
@@ -152,6 +155,9 @@ public final class AndroidLifecycleTest {
             assertEquals(InetAddress.getByName(V6), InetAddress.getByName(connected.verifiedIpv6));
             assertEquals("A valid IPv4 proof is kept during the IPv6 retry", 1, verified4.get());
             assertTrue(verified6.get() > 0);
+            Network firstNetwork = proved4.get();
+            assertNotNull(firstNetwork);
+            assertEquals("Both exit families were proven on this activation's VPN", firstNetwork, proved6.get());
             assertTrue("IPv6 was freshly proven after its retry",
                     firstTiming.ipv6ProofAttempts > 1);
             await("connected presence", controller, () -> api.events.contains("presence:connected"));
@@ -176,6 +182,9 @@ public final class AndroidLifecycleTest {
             }
             assertTrue("Reconnect needs a new IPv4 proof", verified4.get() > previousV4Proofs);
             assertTrue("Reconnect needs a new IPv6 proof", verified6.get() > previousV6Proofs);
+            assertFalse("Reconnect must not reuse the previous VPN network for proof",
+                    firstNetwork.equals(proved4.get()));
+            assertEquals("Reconnect proves both families on its own VPN", proved4.get(), proved6.get());
             tap(instrumentation, activity, R.id.disconnect);
             await("reconnect disconnect", controller, () -> "disconnected".equals(controller.snapshot().mode)
                     && !engine.isUp() && !hasVpnRoute(context));

@@ -63,6 +63,10 @@ public final class TunnelProfileTest {
         assertEquals(1, blockedConfig.getInterface().getAddresses().size());
         assertEquals(1, blockedConfig.getPeers().get(0).getAllowedIps().size());
         assertTrue(blocked.ipv6Exit.isEmpty());
+        assertEquals(1200, blockedConfig.getInterface().getMtu().get().intValue());
+        assertEquals(privateKey, blockedConfig.getInterface().getKeyPair().getPrivateKey());
+        assertEquals("1.1.1.1", blockedConfig.getInterface().getDnsServers().iterator()
+                .next().getHostAddress());
 
         tunnel.put("ipv6_policy", "tunnel");
         tunnel.put("ipv6_egress", "2603:c020:c015:8100::10");
@@ -72,6 +76,11 @@ public final class TunnelProfileTest {
         Config dualConfig = dual.wireGuardConfig(dual.candidates.get(0), privateKey);
         assertEquals(2, dualConfig.getInterface().getAddresses().size());
         assertEquals(2, dualConfig.getPeers().get(0).getAllowedIps().size());
+
+        assertEquals(1280, dualConfig.getInterface().getMtu().get().intValue());
+        assertEquals(PRIMARY + ":443", dualConfig.getPeers().get(0).getEndpoint().get().toString());
+        assertEquals(dual.candidates.get(0).key, dualConfig.getPeers().get(0).getPublicKey());
+        assertEquals(25, dualConfig.getPeers().get(0).getPersistentKeepalive().get().intValue());
 
         tunnel.put("allowed_ips", new JSONArray().put("10.77.0.0/24").put("::/0"));
         assertThrows(IOException.class, () -> read(tunnel, 0));

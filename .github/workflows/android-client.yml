@@ -287,4 +287,4 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           gh release create "wireguard-android-v$version" Proxy-Android.apk SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "Proxy WireGuard Android $version" --latest=false \
-            --notes 'The signed APK passed a v0.1.0 upgrade and WireGuard tests on Android API 29 and 36. In the production acceptance run, the first system VPN confirmation and five reconnects reached verified egress within 1.5 seconds each. Requires Android 10 or later.'
+            --notes 'The signed APK passed a v0.1.0 upgrade and WireGuard tests on Android API 29 and 36. In the production acceptance run, the first system VPN confirmation and five reconnects reached verified egress within 1 second each. Twelve verified UDP round trips per target met 500 ms on two idle Internet endpoints and one endpoint during repeated, completed uploads and downloads. Requires Android 10 or later.'

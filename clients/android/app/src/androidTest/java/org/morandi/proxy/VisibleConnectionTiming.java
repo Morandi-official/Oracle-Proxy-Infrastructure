@@ -18,7 +18,7 @@ import static org.junit.Assert.assertTrue;
 
 /** Times a touchscreen release through the first view draw of the verified status. */
 final class VisibleConnectionTiming implements AutoCloseable {
-    static final long TARGET_NANOS = TimeUnit.MILLISECONDS.toNanos(1500);
+    static final long TARGET_NANOS = TimeUnit.MILLISECONDS.toNanos(1000);
 
     private final Instrumentation instrumentation;
     private final MainActivity screen;
@@ -147,7 +147,7 @@ final class VisibleConnectionTiming implements AutoCloseable {
 
     static void report(String label, long duration) {
         android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_" + label + "_MS="
-                + TimeUnit.NANOSECONDS.toMillis(duration) + ";TARGET_MS=1500;UNDER_TARGET="
+                + TimeUnit.NANOSECONDS.toMillis(duration) + ";TARGET_MS=1000;UNDER_TARGET="
                 + (duration <= TARGET_NANOS ? 1 : 0));
     }
 

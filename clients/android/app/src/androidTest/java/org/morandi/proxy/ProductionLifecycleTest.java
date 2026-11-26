@@ -140,10 +140,6 @@ public final class ProductionLifecycleTest {
             Network vpn = vpnNetwork(context);
             assertNotNull("Production VPN network is installed", vpn);
             assertTrue("DNS resolves over the VPN network", vpn.getAllByName("www.cloudflare.com").length > 0);
-            networkLatency.sampleTunnel(vpn, controller.snapshot().verifiedIpv4);
-            latency.sample(vpn, "WIREGUARD_UDP", controller.snapshot().verifiedIpv4);
-            sampleDownload(vpn, "WIREGUARD_UDP");
-
             controller.disconnect();
             await("Production VPN route removed", () -> "disconnected".equals(controller.snapshot().mode)
                     && !engine.isUp() && vpnNetwork(context) == null);
@@ -160,17 +156,30 @@ public final class ProductionLifecycleTest {
                     VisibleConnectionTiming.report("CONNECT_RECONNECT_CLICK", reconnectNanos[sample]);
                     reportProofProtocol(controller, "RECONNECT");
                 }
-                controller.disconnect();
-                await("Production VPN route removed after reconnect",
-                        () -> "disconnected".equals(controller.snapshot().mode) && !engine.isUp()
-                                && vpnNetwork(context) == null);
+                if (sample + 1 < reconnectNanos.length) {
+                    controller.disconnect();
+                    await("Production VPN route removed after reconnect",
+                            () -> "disconnected".equals(controller.snapshot().mode) && !engine.isUp()
+                                    && vpnNetwork(context) == null);
+                }
             }
             int underTarget = reportReconnectSamples(reconnectNanos);
+            vpn = vpnNetwork(context);
+            assertNotNull("Final verified VPN is installed for transfer and latency checks", vpn);
+            networkLatency.sampleTunnel(vpn, controller.snapshot().verifiedIpv4);
+            latency.sample(vpn, "WIREGUARD_UDP", controller.snapshot().verifiedIpv4);
+            networkLatency.sampleUnderLoad(vpn, controller.snapshot().verifiedIpv4, false);
+            networkLatency.sampleUnderLoad(vpn, controller.snapshot().verifiedIpv4, true);
+            controller.disconnect();
+            await("Final production VPN route removed", () -> "disconnected".equals(controller.snapshot().mode)
+                    && !engine.isUp() && vpnNetwork(context) == null);
             controller.removeDevice(controller.snapshot().deviceId);
             await("Dedicated test device removed and signed out", () -> !controller.snapshot().signedIn);
-            assertTrue("Real consent tap to visible verified VPN must complete within 1500 ms",
+            assertTrue("All idle and loaded VPN RTT samples must reply within 500 ms",
+                    networkLatency.tunnelTargetMet());
+            assertTrue("Real consent tap to visible verified VPN must complete within 1000 ms",
                     afterConsentNanos <= VisibleConnectionTiming.TARGET_NANOS);
-            assertTrue("Every preauthorized tap to visible verified VPN must complete within 1500 ms",
+            assertTrue("Every preauthorized tap to visible verified VPN must complete within 1000 ms",
                     underTarget == reconnectNanos.length);
         } finally {
             active.disconnect();
@@ -225,7 +234,7 @@ public final class ProductionLifecycleTest {
         android.util.Log.i("ProxySpeedAcceptance", "ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=" + samples
                 + ";N=" + sorted.length + ";MEDIAN_MS=" + TimeUnit.NANOSECONDS.toMillis(sorted[sorted.length / 2])
                 + ";MAX_MS=" + TimeUnit.NANOSECONDS.toMillis(sorted[sorted.length - 1])
-                + ";UNDER_1500MS=" + underTarget);
+                + ";UNDER_1000MS=" + underTarget);
         return underTarget;
     }
 

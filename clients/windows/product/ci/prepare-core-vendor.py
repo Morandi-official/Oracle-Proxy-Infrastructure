@@ -204,6 +204,7 @@ func ParkOracleAdapter() (err error) {
 	// the separate full-table readback below always decides.
 	err = verifyOracleParkedEmpty(luid)
 	if err == nil { return nil }
+	oracleLogParkedCounts(luid, "before")
 	if !oracleParkedConfigPresent(err) { return err }
 	dns := oraclePreparedDNSProblem(luid)
 	var clearErr error
@@ -224,20 +225,83 @@ func ParkOracleAdapter() (err error) {
 	_ = luid.FlushRoutes(windows.AF_UNSPEC)
 	err = verifyOracleParkedEmpty(luid)
 	if err == nil { return nil }
+	oracleLogParkedCounts(luid, "flushed")
 	if !oracleParkedConfigPresent(err) { return err }
 
 	// Windows can preserve or regenerate automatic multicast/local rows
 	// even after an exact flush. Disable only this creator's NDIS interface,
 	// retaining the Wintun handle. Unsupported drivers fall back to full close.
 	if err := setOracleParkedAdmin(luid, winipcfg.NetIfAdminStatusUp, winipcfg.NetIfAdminStatusDown); err != nil { return err }
-	for try := 0; try < 6; try++ {
+	// Windows publishes IP Helper table changes asynchronously after SetIfEntry.
+	// Return on the first strict success or ownership/query failure. The running
+	// child remains under the parent's kill-on-close job throughout this wait.
+	started := time.Now()
+	deadline := started.Add(800 * time.Millisecond)
+	for {
 		err = verifyOracleParkedEmpty(luid)
 		if err == nil { return nil }
-		if !oracleParkedConfigPresent(err) { return err }
-		if try != 5 { time.Sleep(20 * time.Millisecond) }
+		if !oracleParkedConfigPresent(err) { oracleLogParkedCounts(luid, "down"); return err }
+		remaining := time.Until(deadline)
+		if remaining <= 0 { break }
+		pause := 20 * time.Millisecond
+		if time.Since(started) >= 100 * time.Millisecond { pause = 100 * time.Millisecond }
+		if remaining < pause { pause = remaining }
+		time.Sleep(pause)
 	}
+	oracleLogParkedCounts(luid, "down")
 	if clearErr != nil && (err.Error() == "PARK_DNS_SERVER_PRESENT" || err.Error() == "PARK_DNS_SUFFIX_PRESENT") { return clearErr }
 	return err
+}
+
+// Report only the counts of an exact creator's native metadata. These failure
+// diagnostics never grant permission to retain or activate an interface.
+func oracleLogParkedCounts(luid winipcfg.LUID, stage string) {
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return }
+	counts := [7]int{-1, -1, -1, -1, -1, -1, -1}
+	if rows, err := winipcfg.GetUnicastIPAddressTable(windows.AF_UNSPEC); err == nil {
+		counts[0] = 0
+		for _, row := range rows { if row.InterfaceLUID == luid { counts[0]++ } }
+	}
+	if rows, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC); err == nil {
+		counts[4] = 0
+		for _, row := range rows { if row.InterfaceLUID == luid { counts[4]++ } }
+	}
+	rows, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagIncludeAllInterfaces)
+	if err == nil {
+		var owned *winipcfg.IPAdapterAddresses
+		for _, row := range rows {
+			if row == nil { owned = nil; break }
+			if row.LUID != luid { continue }
+			if owned != nil { owned = nil; break }
+			owned = row
+		}
+		if owned != nil {
+			counts[1] = oracleParkedListCount(owned.FirstUnicastAddress, func(p *windows.IpAdapterUnicastAddress) *windows.IpAdapterUnicastAddress { return p.Next })
+			counts[2] = oracleParkedListCount(owned.FirstAnycastAddress, func(p *windows.IpAdapterAnycastAddress) *windows.IpAdapterAnycastAddress { return p.Next })
+			counts[3] = oracleParkedListCount(owned.FirstMulticastAddress, func(p *windows.IpAdapterMulticastAddress) *windows.IpAdapterMulticastAddress { return p.Next })
+			counts[5] = oracleParkedListCount(owned.FirstDNSServerAddress, func(p *windows.IpAdapterDnsServerAdapter) *windows.IpAdapterDnsServerAdapter { return p.Next })
+			counts[6] = 0
+			if owned.DNSSuffix() != "" { counts[6]++ }
+			visited := 0
+			for suffix := owned.FirstDNSSuffix; suffix != nil; suffix = suffix.Next {
+				if visited >= 256 { counts[6] = -1; break }
+				if suffix.String() != "" { counts[6]++ }
+				visited++
+			}
+		}
+	}
+	for i := range counts { if counts[i] > 65535 { counts[i] = -1 } }
+	if err := verifyOracleRecoveryIdentity(luid); err != nil { return }
+	fmt.Fprintln(os.Stderr, "PARK_COUNTS", stage, counts[0], counts[1], counts[2], counts[3], counts[4], counts[5], counts[6])
+}
+
+func oracleParkedListCount[T any](p *T, next func(*T) *T) int {
+	count := 0
+	for ; p != nil; p = next(p) {
+		if count >= 256 { return -1 }
+		count++
+	}
+	return count
 }
 
 func oracleParkedConfigPresent(err error) bool {

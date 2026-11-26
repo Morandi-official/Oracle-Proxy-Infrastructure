@@ -18,6 +18,28 @@ internal sealed class CoreProcess : IDisposable
     private TaskCompletionSource? _parkFence;
     private TaskCompletionSource? _stderrDrained;
     private volatile string? _parkFailure;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string,string> _parkCounts=new();
+    internal IEnumerable<string> ParkCounts{
+        get{
+            foreach(string stage in new[]{"before","flushed","down"}){
+                if(_parkCounts.TryGetValue(stage,out var counts))yield return stage+" "+counts;
+            }
+        }
+    }
+    private void RecordParkCounts(string line)
+    {
+        // Aggregate rows only. Never log arbitrary stderr, IPs, DNS names or
+        // other adapter details. A malformed line contributes no evidence.
+        if(line.Length>80)return;
+        var fields=line.Split(' ');
+        if(fields.Length!=9 || fields[0]!="PARK_COUNTS" || fields[1] is not ("before" or "flushed" or "down"))return;
+        var counts=new int[7];
+        for(int i=0;i<counts.Length;i++){
+            if(!int.TryParse(fields[i+2],System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture,out counts[i]) || counts[i] is < -1 or > 65535)return;
+        }
+        _parkCounts[fields[1]]=string.Join(" ",counts.Select(n=>n.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+    }
     private CancellationTokenSource? _proofCancel;
     private readonly object _proofLock=new();
     private long _proofStarted;
@@ -107,6 +129,7 @@ internal sealed class CoreProcess : IDisposable
         _process.ErrorDataReceived+=(_,line)=>{
             if(line.Data is null){drained.TrySetResult();return;}
             if(!ReferenceEquals(_process,owned))return;
+            if(line.Data.StartsWith("PARK_COUNTS ",StringComparison.Ordinal)){RecordParkCounts(line.Data);return;}
             if(line.Data.StartsWith("PARK_AUDIT_FAILED ",StringComparison.Ordinal)){
                 string reason=line.Data["PARK_AUDIT_FAILED ".Length..];
                 if(reason is "PARK_QUERY_FAILED" or "PARK_CREATOR_MISSING" or "PARK_IP_QUERY_FAILED" or "PARK_IP_NOT_EMPTY" or
@@ -164,7 +187,7 @@ internal sealed class CoreProcess : IDisposable
         _parkFailure=null;_startTimings.Clear();_proofStarted=Stopwatch.GetTimestamp();
         _parkFence=new(TaskCreationOptions.RunContinuationsAsynchronously);
         StandbyCapable=true;TunActive=false;
-        Launch("--adapter-holder");
+        _parkCounts.Clear();Launch("--adapter-holder");
         await _process!.StandardInput.WriteLineAsync("HOLD");await _process.StandardInput.FlushAsync();
         await AcceptPark(_process,cancel);
         TunReceipt.Record(_process);
@@ -194,7 +217,7 @@ internal sealed class CoreProcess : IDisposable
     {
         if(Parked)return;
         if(!StandbyCapable || !Running)throw new IOException("CORE_NOT_READY");
-        NativeGuard.SuspendTun();EndPeer();_parkFailure=null;
+        NativeGuard.SuspendTun();EndPeer();_parkFailure=null;_parkCounts.Clear();
         _parkFence=new(TaskCreationOptions.RunContinuationsAsynchronously);
         Process owner=_process!;
         await owner.StandardInput.WriteLineAsync("PARK");await owner.StandardInput.FlushAsync();

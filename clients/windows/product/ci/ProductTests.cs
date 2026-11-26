@@ -1567,6 +1567,7 @@ internal static class ProductTests
                 "REAL_SYSTEM_HOLDER_REMAINS_STRICTLY_EMPTY");
         }catch{
             Evidence.Add("ACTUAL_OFFLINE_HOLDER_STAGE="+core.SafeStage);
+            foreach(string counts in core.ParkCounts)Evidence.Add("ACTUAL_OFFLINE_HOLDER_COUNTS="+counts);
             throw;
         }finally{
             await core.Stop();

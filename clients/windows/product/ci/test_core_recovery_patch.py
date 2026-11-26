@@ -299,6 +299,9 @@ func localRoute4(prefix string) fakeRow {return fakeRow{InterfaceLUID:7,Destinat
     def test_park_dns_cleanup_and_down_require_readback_on_same_creator(self):
         source = vendor.PARKED.split('func ParkOracleAdapter()', 1)[1].split('func VerifyParkedOracleAdapter()', 1)[0]
         source = 'func ParkOracleAdapter()' + source
+        diag = source.index('// Report only the counts')
+        end_diag = source.index('func oracleParkedConfigPresent(', diag)
+        source = source[:diag] + 'func oracleLogParkedCounts(l LUID,stage string){checkLUID(l)}\n' + source[end_diag:]
         source = source.replace('windows.', '').replace('winipcfg.', '')
         declarations = '''package parkflow
 import ("fmt"; "sync"; "time")

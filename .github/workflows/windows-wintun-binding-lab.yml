@@ -1,0 +1,57 @@
+name: Disposable Windows Wintun protocol binding measurement
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-wintun-binding-lab.yml'
+      - 'clients/windows/product/ci/binding-lab/**'
+permissions:
+  contents: read
+jobs:
+  measure:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Build the exact-binding helper with the installed Windows SDK
+        shell: cmd
+        working-directory: clients/windows/product/ci/binding-lab
+        run: |
+          @echo off
+          set "VSROOT="
+          for /f "usebackq delims=" %%D in (`call "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSROOT=%%D"
+          if not defined VSROOT exit /b 1
+          call "%VSROOT%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b 1
+          cl.exe /nologo /EHsc /std:c++17 /W4 /O2 /DUNICODE /D_UNICODE /Fo"%RUNNER_TEMP%\binding-native.obj" /Fe"%RUNNER_TEMP%\binding-native.exe" binding-native.cpp /link Ole32.lib Uuid.lib Iphlpapi.lib Cfgmgr32.lib Advapi32.lib
+          if errorlevel 1 exit /b 1
+      - name: Compile the isolated fixture with the candidate Wintun source
+        shell: pwsh
+        working-directory: clients/windows/product/core
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go mod tidy
+          if ($LASTEXITCODE) { throw 'Core dependency resolution failed' }
+          go mod vendor
+          if ($LASTEXITCODE) { throw 'Vendor retrieval failed' }
+          python ../ci/prepare-core-vendor.py
+          if ($LASTEXITCODE) { throw 'Pinned vendor patch failed' }
+          Copy-Item ../ci/binding-lab/bindinglab_windows_test.go,../ci/binding-lab/packetproof_windows_test.go,../ci/binding-lab/bindinglab.ps1 vendor/github.com/sagernet/sing-tun/
+          $nativeDigest = (Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP/binding-native.exe").Hash
+          go test -mod=vendor -c -tags oracle_binding_lab -trimpath -ldflags "-X github.com/sagernet/sing-tun.bindingLabNativeSHA256=$nativeDigest" -o "$env:RUNNER_TEMP/binding-lab.test.exe" github.com/sagernet/sing-tun
+          if ($LASTEXITCODE) { throw 'Compile failed' }
+      - name: Verify embedded Wintun against the signed upstream distribution
+        shell: pwsh
+        run: ./clients/windows/product/ci/verify-wintun.ps1
+      - name: Measure only the disposable SYSTEM-owned virtual adapter
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./clients/windows/product/ci/binding-lab/run-disposable.ps1

@@ -307,6 +307,29 @@ internal static class OracleAcceptance
         if(tunneled)await OracleNetworkPerformance.MeasureTransfers(targets,allowedExits,index);
         Check(PathMatches(await Send("Status")),"REAL_NETWORK_RTT_"+route+"_STATE_AFTER");
     }
+    // Failure evidence from the existing attested session only. Both account
+    // data and peer counters are the service's most recent server observation.
+    private static async Task ReportNetworkFailure(JsonObject before)
+    {
+        try{
+            var state=await ControlPipe.Send("Status").WaitAsync(TimeSpan.FromSeconds(3));
+            if(state["ok"]?.GetValue<bool>()!=true)return;
+            var account=state["account"];
+            bool sameCore=before["core_pid"]?.GetValue<uint>() is uint core && core!=0 && state["core_pid"]?.GetValue<uint>()==core;
+            bool? Advanced(string field)=>sameCore && before[field]?.GetValue<long>() is long start &&
+                state[field]?.GetValue<long>() is long end && end>=start?end>start:null;
+            long now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long? handshake=state["server_handshake_at"]?.GetValue<long>();
+            Console.WriteLine("WINDOWS_PERF_FAILURE_STATUS="+System.Text.Json.JsonSerializer.Serialize(new{
+                same_core=sameCore,tunnel_verified=state["mode"]?.GetValue<string>()=="connected" && state["guard"]?.GetValue<bool>()==true,
+                observed_account_active=account?["status"]?.GetValue<string>() is string status?(bool?)(status=="active"):null,
+                observed_quota_exhausted=account?["limit_bytes"]?.GetValue<long>() is long limit &&
+                    account?["used_bytes"]?.GetValue<long>() is long used?(bool?)(used>=limit):null,
+                observed_handshake_within_180s=handshake is long at?(bool?)(at>0 && at<=now && now-at<=180):null,
+                observed_rx_advanced=Advanced("peer_rx_bytes"),observed_tx_advanced=Advanced("peer_tx_bytes"),
+            }));
+        }catch(Exception){Console.WriteLine("WINDOWS_PERF_FAILURE_STATUS_UNAVAILABLE=true");}
+    }
     private static async Task BulkDownload()
     {
         using var client=new HttpClient(new SocketsHttpHandler{UseProxy=false,UseCookies=false}){Timeout=TimeSpan.FromSeconds(20)};
@@ -480,7 +503,7 @@ internal static class OracleAcceptance
             if(phases[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
         return 0;
     }
-    private static async Task LiveGuiUdpToggle(string directExit,bool closeConnectedOnly=false)
+    private static async Task<bool> LiveGuiUdpToggle(string directExit,bool closeConnectedOnly=false)
     {
         string script=Path.GetFullPath("clients/windows/product/ci/test-live-udp-toggle.ps1");
         string client=Path.GetFullPath("dist/product/Proxy.exe");
@@ -496,9 +519,14 @@ internal static class OracleAcceptance
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
             string evidence=await output;await error;
             if(evidence.Length>16384)throw new IOException("LIVE_GUI_EVIDENCE_TOO_LARGE");
-            foreach(string line in evidence.Split('\n'))if(line.StartsWith("ACTUAL_",StringComparison.Ordinal))Console.WriteLine(line.Trim());
-            Check(process.ExitCode==0,"REAL_PRODUCT_GUI_UDP_ON_OFF_AND_SHUTDOWN");
+            var lines=evidence.Split('\n',StringSplitOptions.TrimEntries);
+            foreach(string line in lines)if(line.StartsWith("ACTUAL_",StringComparison.Ordinal))Console.WriteLine(line);
+            bool slow=!closeConnectedOnly && process.ExitCode==17 &&
+                lines.Contains("ACTUAL_PRODUCT_GUI_CLOSED_WITHOUT_SERVICE_HOLDER_OR_ADAPTER=PASS") &&
+                lines.Contains("ACTUAL_PROXY_GUI_VERIFIED_CONNECT_TARGET_MISSED=true");
+            Check(process.ExitCode==0 || slow,"REAL_PRODUCT_GUI_UDP_ON_OFF_AND_SHUTDOWN");
             Check(await ExitIp()==directExit,"REAL_GUI_CLOSE_RESTORES_VERIFIED_PHYSICAL_EXIT");
+            return !slow;
         }finally{
             if(!process.HasExited){process.Kill(true);await process.WaitForExitAsync();}
         }
@@ -551,11 +579,7 @@ internal static class OracleAcceptance
             Check(IngressCatalogMatchesPolicy(login,expectedEndpoints),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();
             var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
-            IPAddress? performanceTarget=await OraclePerformance.ResolveTarget();
-            var networkTargets=await OracleNetworkPerformance.ResolveTargets();
-            phase="DIRECT_NETWORK";
-            await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:false);
-            await MeasureNetwork(networkTargets,allowed,tunneled:false);
+            phase="DIRECT_EXIT";
             string directExit=await ExitIp();
             Check(!allowed.Contains(directExit),"REAL_PHYSICAL_EXIT_BEFORE_GUI_TEST");
             phase="CONNECT";
@@ -571,20 +595,6 @@ internal static class OracleAcceptance
             Check(connected["tun_route_mask"]?.GetValue<uint>()==15,"ORDINARY_ROUTE_BOTH_IPV4_AND_IPV6_HALVES_USE_OWNED_TUN");
             Check(connected["observed_at"]?.GetValue<long>()>0 && connected["account"]?["used_bytes"]?.GetValue<long>()>=0,
                 "REAL_AUTHENTICATED_USAGE_AND_SERVER_OBSERVATION_AVAILABLE_TO_UI");
-            phase="TUNNELED_NETWORK";
-            await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:true);
-            var meterStart=await Send("Status");
-            await MeasureNetwork(networkTargets,allowed,tunneled:true,connected["core_pid"]!.GetValue<uint>());
-            phase="BROWSER";
-            await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
-            var meterEnd=await Send("Status");
-            uint core=meterStart["core_pid"]?.GetValue<uint>()??0;
-            var first=meterStart["traffic"];var last=meterEnd["traffic"];
-            Check(core>0 && meterEnd["core_pid"]?.GetValue<uint>()==core && meterStart["mode"]?.GetValue<string>()=="connected" &&
-                meterEnd["mode"]?.GetValue<string>()=="connected" && first?["sample_ms"]?.GetValue<long>() is long start && start>=0 &&
-                last?["sample_ms"]?.GetValue<long>()>start && first["rx_bytes"]?.GetValue<long>() is long rx && rx>=0 &&
-                first["tx_bytes"]?.GetValue<long>() is long tx && tx>=0 && last?["rx_bytes"]?.GetValue<long>()>rx && last?["tx_bytes"]?.GetValue<long>()>tx,
-                "REAL_LOCAL_TUN_COUNTERS_ADVANCE_IN_BOTH_DIRECTIONS_DURING_BROWSER_TRAFFIC");
             phase="GUI_TOGGLE";
             // Start the first visible click with a freshly launched GUI and no
             // previously retained holder. Allow only its ordinary startup work.
@@ -593,7 +603,7 @@ internal static class OracleAcceptance
             Check(NetworkInterface.GetAllNetworkInterfaces().All(n=>n.Name!="OracleProxy" &&
                 (!Guid.TryParse(n.Id,out var id) || id!=Guid.Parse(TunReceipt.AdapterGuid))) && await ExitIp()==directExit,
                 "REAL_GUI_COLD_LAUNCH_WITHOUT_PREVIOUS_ADAPTER");
-            await LiveGuiUdpToggle(directExit);
+            bool guiConnectWithinTarget=await LiveGuiUdpToggle(directExit);
             // X intentionally clears a non-remembered login. Reauthenticate the
             // same durable key; never allocate a second CI device for GUI timing.
             phase="ACCOUNT_AND_DIAGNOSTICS";
@@ -630,10 +640,49 @@ internal static class OracleAcceptance
                 "REAL_COLD_START_RESTORES_REMEMBERED_LOGIN_FROM_PRE_MIGRATION_IP_CACHE");
             Console.WriteLine("WINDOWS_PERF_REMEMBERED_FRESH_REFRESH_AFTER_COLD_START_MS="+loginMs);
 
+            // Exercise the actual first GUI click and exit before opening the
+            // throughput origin. Keep both direct and tunneled baselines together,
+            // with fresh authenticated route/exit checks on this new connection.
+            Check(await ExitIp()==directExit,"REAL_PERF_STARTS_ON_VERIFIED_PHYSICAL_EXIT");
+            IPAddress? performanceTarget=await OraclePerformance.ResolveTarget();
+            var networkTargets=await OracleNetworkPerformance.ResolveTargets();
+            phase="DIRECT_NETWORK";
+            await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:false);
+            await MeasureNetwork(networkTargets,allowed,tunneled:false);
+            phase="PERFORMANCE_RECONNECT";
+            await Send("PreferUdp443");await Send("Connect");
+            connected=await Connected();
+            Check(connected["transport"]?.GetValue<string>()=="wireguard-udp" &&
+                connected["transport_address"]?.GetValue<string>()==primary && connected["transport_port"]?.GetValue<int>()==443 &&
+                connected["transport_private_address"]?.GetValue<string>()==login["network_endpoints"]!["private_ipv4"]![primary]!.GetValue<string>() &&
+                connected["guard"]?.GetValue<bool>()==true && connected["tun_permitted"]?.GetValue<bool>()==true &&
+                connected["tun_route_mask"]?.GetValue<uint>()==15 && allowed.Contains(await ExitIp()) &&
+                connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","REAL_PERFORMANCE_RECONNECT_VERIFIES_REQUESTED_ROUTE_AND_DUAL_STACK_EXIT");
+            phase="TUNNELED_NETWORK";
+            await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:true);
+            var meterStart=await Send("Status");
+            try{await MeasureNetwork(networkTargets,allowed,tunneled:true,connected["core_pid"]!.GetValue<uint>());}
+            catch{await ReportNetworkFailure(meterStart);throw;}
+            phase="BROWSER";
+            await BrowserRouteAcceptance.Run(allowed,"2603:c020:c015:8100::10");
+            var meterEnd=await Send("Status");
+            uint core=meterStart["core_pid"]?.GetValue<uint>()??0;
+            var first=meterStart["traffic"];var last=meterEnd["traffic"];
+            Check(core>0 && meterEnd["core_pid"]?.GetValue<uint>()==core && meterStart["mode"]?.GetValue<string>()=="connected" &&
+                meterEnd["mode"]?.GetValue<string>()=="connected" && first?["sample_ms"]?.GetValue<long>() is long start && start>=0 &&
+                last?["sample_ms"]?.GetValue<long>()>start && first["rx_bytes"]?.GetValue<long>() is long rx && rx>=0 &&
+                first["tx_bytes"]?.GetValue<long>() is long tx && tx>=0 && last?["rx_bytes"]?.GetValue<long>()>rx && last?["tx_bytes"]?.GetValue<long>()>tx,
+                "REAL_LOCAL_TUN_COUNTERS_ADVANCE_IN_BOTH_DIRECTIONS_DURING_BROWSER_TRAFFIC");
+            await Send("Disconnect");await StoppedService();
+            Check(await ExitIp()==directExit,"REAL_PERF_DISCONNECT_RESTORES_PHYSICAL_EXIT");
+            await Send("AttachClient");
             phase="DEVICE_RETIREMENT";
             var deleted=RequireSuccess("DeleteDevice",await ControlPipe.Send("DeleteDevice",login["registration"]!["device_id"]!.GetValue<string>()));
             Check(deleted["login_authenticated"]?.GetValue<bool>()==false && deleted["account"] is null && deleted["core_pid"]?.GetValue<uint>()==0 && deleted["intent"]?.GetValue<bool>()==false,"MIGRATION_DEVICE_SELF_DELETE_CLEARS_LOGIN_AND_RETIRES_ONLY_THIS_CI_SLOT");
-            ownedCiDevice=null;Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
+            ownedCiDevice=null;
+            phase="GUI_TIMING";
+            Check(guiConnectWithinTarget,"REAL_GUI_VERIFIED_CONNECT_EACH_UNDER_1000_MS");
+            Console.WriteLine("REAL_ORACLE_CLIENT_END_TO_END=PASS");return 0;
         }catch(Exception error){
             Console.WriteLine("MIGRATION_FAILURE_PHASE="+phase);
             Console.WriteLine("MIGRATION_ERROR_TYPE="+error.GetType().Name);

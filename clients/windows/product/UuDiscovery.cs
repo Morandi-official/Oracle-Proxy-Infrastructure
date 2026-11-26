@@ -12,39 +12,51 @@ internal static class UuDiscovery
 {
     internal static string[] InstallationRoots()
     {
-        var roots=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach(var view in new[]{RegistryView.Registry64,RegistryView.Registry32}){
-            using var machine=RegistryKey.OpenBaseKey(RegistryHive.LocalMachine,view);
-            using(var setup=machine.OpenSubKey(@"SOFTWARE\Netease\GameViewerSetup"))
-                if(setup is not null)foreach(string key in setup.GetValueNames())
-                    if(setup.GetValue(key) is string value)AddRoot(value,roots);
-            using var uninstall=machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall");
-            if(uninstall is null)continue;
-            foreach(string name in uninstall.GetSubKeyNames()){
-                using var app=uninstall.OpenSubKey(name);string label=app?.GetValue("DisplayName") as string ?? "";
-                if(!Related(label))continue;
-                AddRoot(app?.GetValue("InstallLocation") as string ?? "",roots);
-                AddRoot(app?.GetValue("DisplayIcon") as string ?? "",roots);
-            }
-        }
-        // Discover per-user installations from loaded profiles as well. The
-        // SYSTEM HKCU is not the interactive user's hive. Every path still has
-        // to pass the same publisher, ownership and ACL checks below.
-        using(var profiles=RegistryKey.OpenBaseKey(RegistryHive.Users,RegistryView.Registry64))
+        // Registry views, loaded profiles and currently running processes are
+        // independent sources. Take a fresh snapshot from all four before this
+        // connect's normal object/ACL/publisher checks, in the usual root order.
+        var sources = Enumerable.Range(0,4)
+            .Select(_ => new HashSet<string>(StringComparer.OrdinalIgnoreCase)).ToArray();
+        Parallel.Invoke(
+            () => MachineInstallations(RegistryView.Registry64,sources[0]),
+            () => MachineInstallations(RegistryView.Registry32,sources[1]),
+            () => UserInstallations(sources[2]),
+            () => RunningInstallations(sources[3]));
+        return sources.SelectMany(roots => roots).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+    private static void MachineInstallations(RegistryView view,HashSet<string> roots)
+    {
+        using var machine=RegistryKey.OpenBaseKey(RegistryHive.LocalMachine,view);
+        using(var setup=machine.OpenSubKey(@"SOFTWARE\Netease\GameViewerSetup"))
+            if(setup is not null)foreach(string key in setup.GetValueNames())
+                if(setup.GetValue(key) is string value)AddRoot(value,roots);
+        using var uninstall=machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall");
+        AddUninstallRoots(uninstall,roots);
+    }
+    private static void UserInstallations(HashSet<string> roots)
+    {
+        // The SYSTEM HKCU is not the interactive user's hive.
+        using var profiles=RegistryKey.OpenBaseKey(RegistryHive.Users,RegistryView.Registry64);
         foreach(string sid in profiles.GetSubKeyNames().Where(s=>s.StartsWith("S-1-5-21-",StringComparison.Ordinal) && !s.EndsWith("_Classes",StringComparison.Ordinal))){
             using var uninstall=profiles.OpenSubKey(sid+@"\Software\Microsoft\Windows\CurrentVersion\Uninstall");
-            if(uninstall is null)continue;
-            foreach(string name in uninstall.GetSubKeyNames()){
-                using var app=uninstall.OpenSubKey(name);
-                if(!Related(app?.GetValue("DisplayName") as string ?? ""))continue;
-                AddRoot(app?.GetValue("InstallLocation") as string ?? "",roots);
-                AddRoot(app?.GetValue("DisplayIcon") as string ?? "",roots);
-            }
+            AddUninstallRoots(uninstall,roots);
         }
+    }
+    private static void AddUninstallRoots(RegistryKey? uninstall,HashSet<string> roots)
+    {
+        if(uninstall is null)return;
+        foreach(string name in uninstall.GetSubKeyNames()){
+            using var app=uninstall.OpenSubKey(name);
+            if(!Related(app?.GetValue("DisplayName") as string ?? ""))continue;
+            AddRoot(app?.GetValue("InstallLocation") as string ?? "",roots);
+            AddRoot(app?.GetValue("DisplayIcon") as string ?? "",roots);
+        }
+    }
+    private static void RunningInstallations(HashSet<string> roots)
+    {
         foreach(var process in Process.GetProcesses())using(process){
             try{if(Related(process.ProcessName))AddRoot(process.MainModule?.FileName ?? "",roots);}catch{ /* counted through installation records when available */ }
         }
-        return roots.ToArray();
     }
     internal static UuInventory Discover()
     {

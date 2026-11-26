@@ -21,7 +21,11 @@ internal sealed class BundleLease : IDisposable
             for(int i=0;i<paths.Length;i++){
                 Platform.NoLinks(Path.GetDirectoryName(paths[i])!);
                 if(File.GetAttributes(paths[i]).HasFlag(FileAttributes.ReparsePoint))throw new IOException("BUNDLE_INTEGRITY_FAILED");
-                var file=new FileStream(paths[i],FileMode.Open,FileAccess.Read,FileShare.Read);files.Add(file);
+                // The full image digest is sequential. Amortize native file reads
+                // while retaining this exact deny-write/delete handle as the lease.
+                var file=new FileStream(paths[i],FileMode.Open,FileAccess.Read,FileShare.Read,
+                    bufferSize:128*1024,FileOptions.SequentialScan);
+                files.Add(file);
                 if(!CryptographicOperations.FixedTimeEquals(SHA256.HashData(file),Convert.FromHexString(hashes[i])))throw new IOException("BUNDLE_INTEGRITY_FAILED");
                 identities.Add(ReadIdentity(file.SafeFileHandle));
             }

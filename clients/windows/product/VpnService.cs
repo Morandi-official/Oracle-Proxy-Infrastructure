@@ -6,7 +6,18 @@ internal sealed class VpnService : ServiceBase
     private Task? _worker;
     private readonly ManualResetEventSlim _finished=new(false);
     private VpnRuntime? _runtime;
-    internal VpnService(){ServiceName=Platform.Service;AutoLog=false;CanShutdown=true;}
+    private readonly Task _startupBundle;
+    internal VpnService()
+    {
+        ServiceName=Platform.Service;AutoLog=false;CanShutdown=true;
+        // The exact service entry point has checked SYSTEM/session zero.
+        // The SCM dispatcher can start while these protected files are read.
+        // This task installs no native code, policy, adapter or control pipe.
+        _startupBundle=Task.Run(()=>{
+            Platform.VerifyProtected(Platform.Root);
+            Platform.VerifyBundle(Platform.Root);
+        });
+    }
     protected override void OnStart(string[] args)
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();
@@ -14,7 +25,7 @@ internal sealed class VpnService : ServiceBase
         Platform.VerifyServiceEnvironment();
         _worker=Task.Run(async ()=>{
             try{
-                _runtime=new VpnRuntime(manageClientLifetime:true);await _runtime.Initialize();
+                _runtime=new VpnRuntime(manageClientLifetime:true);await _runtime.Initialize(_startupBundle);
                 // Open the attested pipe after full Initialize, before normal
                 // background maintenance occupies its first serialized pass.
                 var tasks=new[]{ControlPipe.Serve(_runtime,_cancel.Token),_runtime.Run(_cancel.Token)};

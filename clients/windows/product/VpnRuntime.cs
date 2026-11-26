@@ -71,11 +71,11 @@ internal sealed partial class VpnRuntime : IDisposable
     private bool _usingBackup;
     private JsonObject EffectiveState()=>EndpointCatalog.ForIngress(_state!,_usingBackup);
     private string Profile()=>Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(EffectiveState()["tunnel"]!.ToJsonString())));
-    internal async Task Initialize()
+    internal async Task Initialize(Task? startupBundle=null)
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();
         Platform.VerifyProtected(Platform.Root);Platform.VerifyProtected(Platform.StateRoot);
-        Task bundle=Task.Run(()=>Platform.VerifyBundle(Platform.Root));
+        Task bundle=startupBundle ?? Task.Run(()=>Platform.VerifyBundle(Platform.Root));
         bool missing=!File.Exists(Path.Combine(Platform.StateRoot,"state.dpapi"));
         _secret=DurableState.Load();
         string owner=File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim();
@@ -92,6 +92,9 @@ internal sealed partial class VpnRuntime : IDisposable
         // Independent protected-state reads may overlap the first full image
         // digest. Never load the native module or admit a pipe command first.
         await bundle;
+        // When hashing began before SCM OnStart, check that the current protected
+        // paths still resolve to both locked file objects, or rehash replacements.
+        if(startupBundle is not null)Platform.VerifyBundle(Platform.Root);
         if(missing && NativeGuard.Active){
             // A lost state file is not an explicit Off request. Keep the last
             // persistent policy (including existing UU exceptions) and require

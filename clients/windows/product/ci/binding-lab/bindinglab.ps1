@@ -3,11 +3,15 @@ $ns='root/StandardCimv2'
 $guid=[guid]'62e2af98-7089-6f2c-246b-4a5960cfc978'
 $luid=[uint64]$env:ORACLE_TEST_CREATED_LUID
 $stage=$env:ORACLE_TEST_AUDIT_STAGE
-function BindingHash($entries,[bool]$forceIpOff) {
+# Only these target-adapter transport dependents were observed to be disabled by
+# NetCfg when both IP protocols are unbound. Each candidate may only turn a flag off.
+$dependentOffBits=@{'ms_msclient'=1; 'ms_netbios'=2; 'ms_netbt'=4; 'ms_server'=8}
+function BindingHash($entries,[bool]$forceIpOff,[int]$dependentOffMask=0) {
     [string[]]$tokens=@(foreach ($binding in $entries) {
         if (!$binding.ComponentID -or !$binding.InstanceID -or $null -eq $binding.Enabled) {throw 'INVALID_BINDING_ROW'}
         $enabled=[bool]$binding.Enabled
-        if ($forceIpOff -and $binding.ComponentID -in 'ms_tcpip','ms_tcpip6') {$enabled=$false}
+        if ($forceIpOff -and ($binding.ComponentID -in 'ms_tcpip','ms_tcpip6' -or
+            ($dependentOffMask -band ([int]$dependentOffBits[[string]$binding.ComponentID])) -ne 0)) {$enabled=$false}
         ConvertTo-Json -InputObject @([string]$binding.InterfaceDescription,[string]$binding.ComponentID,[string]$binding.InstanceID,$enabled) -Compress
     })
     if (!$tokens.Count) {return ''}
@@ -43,6 +47,7 @@ try {
     # An unrelated adapter hash alone says nothing about rollback on this device.
     # Use its CIM association from the exact LUID+GUID+PnP identity. Missing or
     # ambiguous protocol rows remain unknown rather than implying disabled.
+    $targetUnique=$false; $allowedUnbound=@()
     $targetCount=0; $targetHash=''; $targetOffHash=''; $ip4=-1; $ip6=-1
     if ($owned.Count -eq 1) {
         try {
@@ -53,9 +58,24 @@ try {
             $targetCount=$target.Count
             $targetHash=BindingHash $target $false
             $targetOffHash=BindingHash $target $true
+            $components=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $instances=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $availableMask=0; $targetUnique=($targetCount -ge 2 -and $targetCount -le 128)
+            foreach ($binding in $target) {
+                if (!$components.Add([string]$binding.ComponentID)) {$targetUnique=$false}
+                if (!$instances.Add([string]$binding.InstanceID)) {$targetUnique=$false}
+                if ($binding.Enabled) {$availableMask=$availableMask -bor ([int]$dependentOffBits[[string]$binding.ComponentID])}
+            }
+            if ($stage -eq 'before' -and $targetUnique) {
+                # Compare the full exact rows, including unchanged identities, descriptions,
+                # component sets and enabled states. Never qualify on the short report tokens.
+                $allowedUnbound=@(foreach ($mask in 0..15) {
+                    if (($mask -band $availableMask) -eq $mask) {BindingHash $target $true $mask}
+                })
+            }
             if ($four.Count -eq 1 -and $null -ne $four[0].Enabled) {$ip4=[int][bool]$four[0].Enabled}
             if ($six.Count -eq 1 -and $null -ne $six[0].Enabled) {$ip6=[int][bool]$six[0].Enabled}
-        } catch {$targetCount=0; $targetHash=''; $targetOffHash=''; $ip4=-1; $ip6=-1}
+        } catch {$targetUnique=$false; $allowedUnbound=@(); $targetCount=0; $targetHash=''; $targetOffHash=''; $ip4=-1; $ip6=-1}
     }
     $targetRows=@()
     if ($targetCount -gt 0 -and $targetCount -le 128 -and $targetHash) {
@@ -75,6 +95,7 @@ try {
     [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
     [Console]::WriteLine((ConvertTo-Json -Depth 4 -Compress -InputObject ([ordered]@{
         pnp=$pnp; description=$desc; present=($nodes.Count -eq 1); matching=($owned.Count -eq 1); count=$others.Count; hash=$hash
+        targetUnique=$targetUnique; allowedUnbound=$allowedUnbound
         targetRows=$targetRows; targetCount=$targetCount; targetHash=$targetHash; targetOffHash=$targetOffHash; ip4=$ip4; ip6=$ip6
     })))
 } catch {exit 1}

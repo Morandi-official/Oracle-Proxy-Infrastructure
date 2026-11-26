@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,8 @@ var bindingLabScript string
 var bindingLabNativeSHA256 string
 
 type labSnapshot struct {
+	TargetUnique              bool
+	AllowedUnbound            []string
 	PNP, Description, Hash    string
 	TargetHash, TargetOffHash string
 	TargetCount, IP4, IP6     int
@@ -312,6 +315,9 @@ func TestDisposableOracleBindings(t *testing.T) {
 	if original.TargetCount < 2 || original.IP4 != 1 || original.IP6 != 1 || len(original.TargetHash) != 64 || len(original.TargetOffHash) != 64 || original.TargetHash == original.TargetOffHash {
 		t.Fatal("CIM_TARGET_BASELINE_UNVERIFIED")
 	}
+	if !original.TargetUnique || len(original.AllowedUnbound) == 0 || len(original.AllowedUnbound) > 16 || !slices.Contains(original.AllowedUnbound, original.TargetOffHash) {
+		t.Fatal("CIM_TARGET_IDENTITIES_OR_DEPENDENCY_BASELINE_UNVERIFIED")
+	}
 	t.Logf("BIND_LAB_IDENTITY_before PNP_PRESENT=%t MATCHING_NIC=%t", original.Present, original.Matching)
 	checkWitness := func(stage string) bool {
 		logLabIPInterfaces(t, luid, stage)
@@ -335,11 +341,14 @@ func TestDisposableOracleBindings(t *testing.T) {
 		if !sameBindings {
 			t.Errorf("CIM_%s_OTHER_BINDINGS_CHANGED", stage)
 		}
-		wantHash, wantEnabled := original.TargetHash, 1
+		wantEnabled := 1
+		inventoryMatches := observed.TargetHash == original.TargetHash
 		if stage == "unbound" {
-			wantHash, wantEnabled = original.TargetOffHash, 0
+			wantEnabled = 0
+			inventoryMatches = slices.Contains(original.AllowedUnbound, observed.TargetHash)
+			t.Logf("CIM_unbound_IP_ONLY_HASH_MATCH=%t TARGET_DEPENDENCY_CANDIDATE_MATCH=%t", observed.TargetHash == original.TargetOffHash, inventoryMatches)
 		}
-		targetMatches := observed.TargetCount == original.TargetCount && observed.TargetHash == wantHash && observed.IP4 == wantEnabled && observed.IP6 == wantEnabled
+		targetMatches := observed.TargetUnique && observed.TargetCount == original.TargetCount && inventoryMatches && observed.IP4 == wantEnabled && observed.IP6 == wantEnabled
 		t.Logf("CIM_%s_TARGET_BINDINGS ROWS=%d IPV4_ENABLED=%d IPV6_ENABLED=%d EXPECTED_CHOICES=%t", stage, observed.TargetCount, observed.IP4, observed.IP6, targetMatches)
 		if !targetMatches {
 			t.Errorf("CIM_%s_TARGET_BINDINGS_UNVERIFIED", stage)

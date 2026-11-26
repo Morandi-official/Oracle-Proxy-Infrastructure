@@ -9,12 +9,25 @@ internal static class InitialProbeRaceTests
             Check(InitialProbeRace.Parse(line,allowed,12) is null);
         var h3=InitialProbeRace.Parse("EGRESS_H3_VERIFIED 152.67.154.225 2603:c020:c015:8100::10",allowed,12)!;
         Check(h3 is not null);
-        var cancelled=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var won=await InitialProbeRace.Verify(Task.FromResult<VerifiedExit?>(h3),async token=>{
-            try{await Task.Delay(Timeout.Infinite,token);throw new IOException();}
-            finally{cancelled.TrySetResult();}
+        int needlessFallbacks=0;
+        var won=await InitialProbeRace.Verify(Task.FromResult<VerifiedExit?>(h3),_=>{
+            needlessFallbacks++;
+            return Task.FromException<VerifiedExit>(new IOException());
         },CancellationToken.None);
-        Check(won.Protocol=="h3");await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Check(won.Protocol=="h3" && needlessFallbacks==0);
+
+        var started=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var liveH3=new TaskCompletionSource<VerifiedExit?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var race=InitialProbeRace.Verify(liveH3.Task,async token=>{
+            started.SetResult();
+            try{await Task.Delay(Timeout.Infinite,token);throw new IOException();}
+            finally{cancelled.SetResult();}
+        },CancellationToken.None);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        liveH3.SetResult(h3);
+        Check((await race).Protocol=="h3");
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
         var tcp=new VerifiedExit("152.67.154.225",20,"https");
         Check(await InitialProbeRace.Verify(Task.FromResult<VerifiedExit?>(null),_=>Task.FromResult(tcp),CancellationToken.None)==tcp);
         Check(await InitialProbeRace.Verify(Task.FromResult<VerifiedExit?>(h3),_=>Task.FromException<VerifiedExit>(new IOException()),CancellationToken.None)==h3);

@@ -117,6 +117,7 @@ function Print-ControlTimings([int]$Cycle){
  }
  throw 'LIVE_DIAGNOSTICS_DIALOG_STILL_OPEN' 
 }
+$connectTargetMet=$true
 $script:stage='initial-window' 
 try {
  Await-Mode '已连接' $false
@@ -135,6 +136,7 @@ try {
   $onMs=$watch.ElapsedMilliseconds
   Write-Host "ACTUAL_PROXY_GUI_UDP_COLD_ON_AND_VERIFIED_DISPLAY_MS_${cycle}=$onMs"
   Write-Host "ACTUAL_PROXY_GUI_UDP_COLD_ON_UNDER_1000MS_${cycle}=$($onMs -lt 1000)"
+  if($onMs -ge 1000){$connectTargetMet=$false}
   Print-ControlTimings $cycle
   & $SnapshotReader --live-udp-timing-snapshot
   if($LASTEXITCODE -ne 0){throw 'LIVE_TIMING_SNAPSHOT_FAILED'}
@@ -147,6 +149,7 @@ try {
  $watch.Restart()
  while((Get-Service OracleProxyService).Status -ne 'Stopped' -and $watch.Elapsed.TotalSeconds -lt 15){Start-Sleep -Milliseconds 20}
  if((Get-Service OracleProxyService).Status -ne 'Stopped'){throw 'LIVE_GUI_X_LEFT_BACKEND'}
+ if(!$connectTargetMet){throw 'LIVE_GUI_VERIFIED_CONNECT_OVER_TARGET'}
  Write-Host 'ACTUAL_PRODUCT_GUI_UDP_REPEATED_ON_OFF_DISPLAY_AND_NO_BACKGROUND=PASS'
 } catch {
  Write-Host "ACTUAL_PROXY_GUI_FAILURE_STAGE=$script:stage"

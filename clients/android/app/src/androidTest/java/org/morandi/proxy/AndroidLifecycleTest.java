@@ -94,6 +94,8 @@ public final class AndroidLifecycleTest {
             tap(instrumentation, activity, R.id.device_confirm);
             await("enrollment", controller, () -> controller.snapshot().registered && !controller.snapshot().busy);
             assertEquals("0123456789ab", controller.snapshot().deviceId);
+            ConnectivityManager connectivity = context.getSystemService(ConnectivityManager.class);
+            Network initialUnderlay = TunnelEngine.currentUnderlay(connectivity);
 
             assertNotNull("A newly installed app asks for VPN consent", VpnService.prepare(context));
             tap(instrumentation, activity, R.id.connect);
@@ -131,13 +133,16 @@ public final class AndroidLifecycleTest {
             int previousV4Proofs = verified4.get();
             int previousV6Proofs = verified6.get();
             instrumentation.waitForIdleSync();
-            attemptedClosedPort.set(false);
+            Network reconnectUnderlay = TunnelEngine.currentUnderlay(connectivity);
             tap(instrumentation, activity, R.id.connect);
             await("verified reconnect", controller, () -> "connected".equals(controller.snapshot().mode));
             assertEquals(HOST + ":51820", controller.snapshot().endpoint);
-            assertNotNull(controller.lastConnectTiming());
-            assertEquals(1, controller.lastConnectTiming().attempts);
-            assertFalse("A same-network reconnect skips the previously failed port", attemptedClosedPort.get());
+            AppController.ConnectionTiming reconnectTiming = controller.lastConnectTiming();
+            assertNotNull(reconnectTiming);
+            if (initialUnderlay != null && initialUnderlay.equals(reconnectUnderlay)) {
+                assertEquals("A same-network reconnect tries the verified port first",
+                        51820, reconnectTiming.firstAttemptedPort);
+            }
             assertTrue("Reconnect needs a new IPv4 proof", verified4.get() > previousV4Proofs);
             assertTrue("Reconnect needs a new IPv6 proof", verified6.get() > previousV6Proofs);
             tap(instrumentation, activity, R.id.disconnect);

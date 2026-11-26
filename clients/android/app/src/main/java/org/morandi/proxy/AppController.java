@@ -258,6 +258,7 @@ public final class AppController {
         final String ipv4ProofProtocol;
         final String ipv6ProofProtocol;
         final int attempts;
+        final int firstAttemptedPort;
 
         ConnectionTiming(long totalMs, long policyMs, TunnelEngine.AttemptTiming attempt) {
             this.totalMs = totalMs;
@@ -277,6 +278,7 @@ public final class AppController {
             this.ipv4ProofProtocol = attempt.ipv4ProofProtocol;
             this.ipv6ProofProtocol = attempt.ipv6ProofProtocol;
             this.attempts = attempt.attempts;
+            this.firstAttemptedPort = attempt.firstAttemptedPort;
         }
     }
 

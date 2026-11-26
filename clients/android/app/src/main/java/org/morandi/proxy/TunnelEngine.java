@@ -73,6 +73,7 @@ public final class TunnelEngine {
 
     static final class AttemptTiming {
         final int attempts;
+        int firstAttemptedPort;
         long backendWaitMs;
         long serviceWaitMs;
         long nativeStartMs;
@@ -209,7 +210,8 @@ public final class TunnelEngine {
         long deadline = backendStarted + CONNECT_DEADLINE_MS;
         loadBackend(deadline, callback);
         long backendWaitMs = SystemClock.elapsedRealtime() - backendStarted;
-        Network underlay = currentUnderlay();
+        Network underlay = currentUnderlay(connectivity);
+        int firstAttemptedPort = 0;
         int attempts = 0;
         for (TunnelProfile.Candidate candidate : orderedCandidates(target, preferredPort, underlay)) {
             if (callback.cancelled()) {
@@ -220,10 +222,15 @@ public final class TunnelEngine {
             }
             callback.trying(candidate.endpoint());
             trace("attempt UDP " + candidate.port);
+            if (firstAttemptedPort == 0) {
+                firstAttemptedPort = candidate.port;
+            }
+            Network attemptUnderlay = attempts == 0 ? underlay : currentUnderlay(connectivity);
             // There is no client-side traffic bypass while a full-route TUN is up.
             // Android can restore normal routes between attempts when a TUN is torn down.
             Config config = target.wireGuardConfig(candidate, key);
             AttemptTiming timing = new AttemptTiming(++attempts);
+            timing.firstAttemptedPort = firstAttemptedPort;
             timing.backendWaitMs = backendWaitMs;
             try {
                 long serviceStarted = SystemClock.elapsedRealtime();
@@ -258,7 +265,7 @@ public final class TunnelEngine {
                     profile = target;
                     connected = candidate;
                     lastVerifiedCandidate = candidate;
-                    lastVerifiedUnderlay = underlay;
+                    lastVerifiedUnderlay = attemptUnderlay;
                     lastVerifiedAt = SystemClock.elapsedRealtime();
                     return result;
                 }
@@ -319,11 +326,29 @@ public final class TunnelEngine {
         }
     }
 
-    private Network currentUnderlay() {
+    static Network currentUnderlay(ConnectivityManager connectivity) {
         Network active = connectivity.getActiveNetwork();
         NetworkCapabilities capabilities = active == null ? null : connectivity.getNetworkCapabilities(active);
-        return capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-                ? active : null;
+        if (capabilities != null && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+            return active;
+        }
+        // On disconnect, Android can briefly report its old VPN or no
+        // default. A unique validated physical network can identify the
+        // previous underlay for port ordering; it never sets socket routing.
+        Network physical = null;
+        for (Network network : connectivity.getAllNetworks()) {
+            NetworkCapabilities candidate = connectivity.getNetworkCapabilities(network);
+            if (candidate == null || candidate.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    || !candidate.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    || !candidate.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                continue;
+            }
+            if (physical != null) {
+                return null;
+            }
+            physical = network;
+        }
+        return physical;
     }
 
     private List<TunnelProfile.Candidate> orderedCandidates(TunnelProfile target, int preferredPort,

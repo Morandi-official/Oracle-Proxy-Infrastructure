@@ -61,7 +61,11 @@ public final class ProductionLifecycleTest {
             try (StateTiming fresh = new StateTiming(enrollment, ProductionLifecycleTest::signedIn)) {
                 fresh.start();
                 enrollment.login(username, password, true);
-                fresh.report("LOGIN_FRESH");
+                try {
+                    fresh.report("LOGIN_FRESH");
+                } catch (AssertionError failure) {
+                    throw new AssertionError("First login phase: " + api.authenticationPhase, failure);
+                }
             }
             reportPasswordPhases("FRESH", enrollment, api);
             assertFalse("Release test requires a fresh emulator identity", enrollment.snapshot().registered);
@@ -323,6 +327,7 @@ public final class ProductionLifecycleTest {
         private volatile boolean enrollmentAttempted;
         private volatile boolean removed;
         private volatile boolean dualStack;
+        private volatile String authenticationPhase = "BEFORE_ACCOUNT_REQUEST";
 
         AcceptanceApi(Context context) {
             super(context);
@@ -330,16 +335,29 @@ public final class ProductionLifecycleTest {
 
         @Override
         JSONObject call(String action, String credential, JSONObject body) throws Exception {
+            boolean authenticating = "authenticate".equals(action);
             if ("enroll".equals(action) && !newDevice.isEmpty()) {
                 enrollmentAttempted = true;
             }
-            if ("authenticate".equals(action) && authenticationKey == null) {
+            if (authenticating && authenticationKey == null) {
                 authenticationKey = body.getString("public_key");
                 authenticationDeviceName = body.getString("device_name");
                 authenticationClientVersion = body.getString("client_version");
             }
-            JSONObject response = super.call(action, credential, body);
-            if ("authenticate".equals(action)) {
+            if (authenticating) {
+                authenticationPhase = "ACCOUNT_REQUEST_STARTED";
+            }
+            JSONObject response;
+            try {
+                response = super.call(action, credential, body);
+            } catch (Exception failure) {
+                if (authenticating) {
+                    authenticationPhase = accountFailure(failure);
+                }
+                throw failure;
+            }
+            if (authenticating) {
+                authenticationPhase = "ACCOUNT_RESPONSE_RECEIVED";
                 JSONObject registration = response.getJSONObject("registration");
                 String issuedDevice = registration.optString("device_id");
                 if (newDevice.isEmpty() && "pending".equals(registration.optString("status"))) {
@@ -360,6 +378,25 @@ public final class ProductionLifecycleTest {
                 removed = true;
             }
             return response;
+        }
+
+        private static String accountFailure(Exception failure) {
+            // Emit fixed categories only. Network exception text may contain
+            // addresses or request details.
+            for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+                if (cause instanceof ClientApi.ApiError api) {
+                    return switch (api.code) {
+                        case "INVALID_CREDENTIALS", "RATE_LIMITED", "PENDING_SESSION_LIMIT",
+                                "CONTROL_SERVICE_UNAVAILABLE", "DEVICE_REVOKED" -> api.code;
+                        default -> "ACCOUNT_API_REJECTED";
+                    };
+                }
+                if (cause instanceof java.net.UnknownHostException) return "ACCOUNT_DNS_FAILED";
+                if (cause instanceof javax.net.ssl.SSLException) return "ACCOUNT_TLS_FAILED";
+                if (cause instanceof java.net.SocketTimeoutException) return "ACCOUNT_SOCKET_TIMED_OUT";
+                if (cause instanceof java.net.SocketException) return "ACCOUNT_SOCKET_FAILED";
+            }
+            return "ACCOUNT_REQUEST_FAILED";
         }
 
         void cleanUp(String username, String password) throws Exception {

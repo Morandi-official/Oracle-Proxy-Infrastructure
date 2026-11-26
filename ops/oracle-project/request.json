@@ -1,4 +1,4 @@
 {
-  "operation": "deploy",
-  "request_id": "windows-enrollment-console-apply"
+  "operation": "preflight",
+  "request_id": "wireguard-restart-native-ports-observed"
 }

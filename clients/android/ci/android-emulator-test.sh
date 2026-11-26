@@ -61,9 +61,11 @@ if ! timeout 180 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr 
     exit 1
 fi
 adb shell input keyevent 82
-adb shell settings put global window_animation_scale 0
-adb shell settings put global transition_animation_scale 0
-adb shell settings put global animator_duration_scale 0
+if [[ "$mode" != production ]]; then
+    adb shell settings put global window_animation_scale 0
+    adb shell settings put global transition_animation_scale 0
+    adb shell settings put global animator_duration_scale 0
+fi
 
 if [[ "$mode" == production ]]; then
     if [[ -z "${ANDROID_ACCEPTANCE_USERNAME:-}" || -z "${ANDROID_ACCEPTANCE_PASSWORD:-}" ]]; then

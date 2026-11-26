@@ -176,10 +176,11 @@ internal sealed class AccountApi : IDisposable
         }
     }
 
-    internal async Task<JsonObject> Call(string action,string token,JsonObject? body=null)
+    internal Task<JsonObject> Call(string action,string token,JsonObject? body=null)=>Call(action,token,body,CancellationToken.None);
+    internal async Task<JsonObject> Call(string action,string token,JsonObject? body,CancellationToken cancel)
     {
         if(action is not ("login" or "authenticate" or "enroll" or "presence" or "state" or "logout" or "udp-diagnostics" or "device-delete"))throw new InvalidOperationException();
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);deadline.CancelAfter(TimeSpan.FromSeconds(12));
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);deadline.CancelAfter(TimeSpan.FromSeconds(12));
         using var request=new HttpRequestMessage(body is null?HttpMethod.Get:HttpMethod.Post,"api/client/"+action);
         request.Headers.Add("X-Oracle-Client-Capabilities","dual-stack-v1");
         if(token.Length>0)request.Headers.Authorization=new("Bearer",token);

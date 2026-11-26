@@ -15,7 +15,61 @@ internal sealed class CoreProcess : IDisposable
     internal string? VerifiedIPv4 {get;private set;}
     private HttpClient? _probeClient;
     private TaskCompletionSource<VerifiedExit?>? _initialH3,_h3Lifetime;
+    private TaskCompletionSource? _parkFence;
+    private TaskCompletionSource? _stderrDrained;
+    private volatile string? _parkFailure;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string,string> _parkCounts=new();
+    internal IEnumerable<string> ParkCounts{
+        get{
+            foreach(string stage in new[]{"before","flushed","down"}){
+                if(_parkCounts.TryGetValue(stage,out var counts))yield return stage+" "+counts;
+            }
+        }
+    }
+    private void RecordParkCounts(string line)
+    {
+        // Aggregate rows only. Never log arbitrary stderr, IPs, DNS names or
+        // other adapter details. A malformed line contributes no evidence.
+        if(line.Length>80)return;
+        var fields=line.Split(' ');
+        if(fields.Length!=9 || fields[0]!="PARK_COUNTS" || fields[1] is not ("before" or "flushed" or "down"))return;
+        var counts=new int[7];
+        for(int i=0;i<counts.Length;i++){
+            if(!int.TryParse(fields[i+2],System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture,out counts[i]) || counts[i] is < -1 or > 65535)return;
+        }
+        _parkCounts[fields[1]]=string.Join(" ",counts.Select(n=>n.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+    }
+    internal bool RecordParkFailure(string line)
+    {
+        const string prefix="PARK_AUDIT_FAILED ";
+        if(!line.StartsWith(prefix,StringComparison.Ordinal))return false;
+        string reason=line[prefix.Length..];
+        if(reason is "PARK_QUERY_FAILED" or "PARK_CREATOR_MISSING" or "PARK_IP_QUERY_FAILED" or "PARK_IP_NOT_EMPTY" or
+            "PARK_ROUTE_QUERY_FAILED" or "PARK_ROUTE_NOT_EMPTY" or "PARK_DNS_NOT_EMPTY" or "PARK_INTERFACE_QUERY_FAILED" or
+            "PARK_DNS_SERVER_PRESENT" or "PARK_DNS_SUFFIX_PRESENT" or "PARK_DNS4_CLEAR_FAILED" or "PARK_DNS6_CLEAR_FAILED" or "PARK_DNS_LIST_INVALID" or
+            "PARK_BINDINGS_LOAD_FAILED" or "PARK_BINDINGS_DISABLE_FAILED" or "PARK_BINDINGS_RESTORE_FAILED" or
+            "PARK_ADMIN_IDENTITY_FAILED" or "PARK_ADMIN_CHANGE_FAILED" or "ORPHAN_IDENTITY_FAILED" or "DORMANT_IP_QUERY_FAILED" or
+            "DORMANT_IP_NOT_EMPTY" or "DORMANT_ROUTE_QUERY_FAILED" or "DORMANT_ROUTE_NOT_EMPTY" or "DORMANT_DNS_QUERY_FAILED" or
+            "DORMANT_DNS_NOT_EMPTY" or "DORMANT_ROUTE_PROTOCOL_NOT_LOCAL" or "DORMANT_ROUTE_NEXT_HOP_UNSAFE" or "DORMANT_ROUTE_DESTINATION_UNSAFE")
+            _parkFailure=reason;
+        return true;
+    }
+    private async Task<string> ParkFailureAfterEof(string fallback,CancellationToken cancel)
+    {
+        // The child's stdout and stderr close independently. Wait for its fixed
+        // diagnostic when an activation or park command encounters stdout EOF.
+        if(_stderrDrained is not null)await Task.WhenAny(_stderrDrained.Task,Task.Delay(1000,cancel));
+        return _parkFailure ?? fallback;
+    }
+    private CancellationTokenSource? _proofCancel;
+    private readonly object _proofLock=new();
     private long _proofStarted;
+    private volatile bool _parked;
+    private ulong _parkedLuid;
+    internal bool WasParked=>_parked;
+    internal bool Parked=>_parked && Running;
+    internal bool StrictParked=>Parked && NativeGuard.TunParked(_parkedLuid);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string,long> _startTimings=new();
     internal JsonObject StartTimings=>new(_startTimings.Select(x=>new KeyValuePair<string,JsonNode?>(x.Key,JsonValue.Create(x.Value))));
     private void MarkStart(string key)=>_startTimings[key]=(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds;
@@ -30,32 +84,76 @@ internal sealed class CoreProcess : IDisposable
     internal int? NativePort=>CarrierStage=="CARRIER_NATIVE_8443"?8443:CarrierStage=="CARRIER_NATIVE_443"?443:CarrierStage=="CARRIER_NATIVE_51820"?51820:null;
     internal bool HandshakeReplyReceived=>NativePort is not null || Volatile.Read(ref _wireGuardReply)==1;
     private string _safeStage="NOT_STARTED";
-    internal string SafeStage=>Volatile.Read(ref _safeStage);
+    internal string SafeStage=>_parkFailure ?? Volatile.Read(ref _safeStage);
     internal uint Pid=>Running?(uint)_process!.Id:0;
     internal bool Running=>_process is not null && !_process.HasExited;
     internal async Task Start(JsonObject state,DurableState secret,bool standby=false,UdpDiagnosticTarget? diagnosticTarget=null,Action? probeReady=null,Action<int[]>? configuredPorts=null)
     {
         _stop.Token.ThrowIfCancellationRequested();
-        if(Running)throw new IOException("CORE_ALREADY_RUNNING");
-        if(_process is not null)await Stop();
-        _initialH3=null;ProbeProtocol="";_startTimings.Clear();_proofStarted=Stopwatch.GetTimestamp();
-        _expectedIPv4=EndpointCatalog.Egress(state).ToHashSet();VerifiedIPv4=null;_dualStack=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
-        _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");Platform.VerifyBundle(Platform.Root);MarkStart("bundle_ms");_probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        bool resume=Parked;
+        if(Running && !resume)throw new IOException("CORE_ALREADY_RUNNING");
+        if(resume && (!standby || diagnosticTarget is not null || probeReady is null))throw new IOException("CORE_RESUME_REQUIRES_PRIVATE_PROBE");
+        if(!resume && _process is not null)await Stop();
+        _parkFailure=null;_startTimings.Clear();_proofStarted=Stopwatch.GetTimestamp();
+        Platform.VerifyBundle(Platform.Root);
+        if(resume && (_parkedLuid!=TunReceipt.VerifyRetained(_process!) || !StrictParked))throw new IOException("TUN_PARK_AUDIT_FAILED");
+        MarkStart("bundle_ms");
+        _expectedIPv4=EndpointCatalog.Egress(state).ToHashSet();_dualStack=state["tunnel"]?["ipv6_policy"]?.GetValue<string>()=="tunnel";
+        _probeSecret=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         if(probeReady is not null && !standby)throw new IOException("PROBE_REQUIRES_PRIVATE_STANDBY");
-        if(standby)info.ArgumentList.Add(probeReady is null?"--standby":"--standby-probe");
-        if(probeReady is not null && _dualStack)_initialH3=new(TaskCreationOptions.RunContinuationsAsynchronously);
-        var h3Proof=_initialH3;_h3Lifetime=h3Proof;
-        StandbyCapable=standby;TunActive=!standby;
-        // A suspended native launch + job assignment would narrow the creation
-        // race further. Persistent WFP already blocks direct user traffic.
+        _proofCancel=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        _initialH3=probeReady is not null && _dualStack?new(TaskCreationOptions.RunContinuationsAsynchronously):null;_h3Lifetime=_initialH3;
+        _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"STARTING");Volatile.Write(ref _safeStage,"LAUNCH");
+        StandbyCapable=standby;TunActive=!standby;_parked=false;
+        if(!resume)Launch(standby?probeReady is null?"--standby":"--standby-probe":null);
+        else _startTimings["adapter_reused"]=1;
+        Process owned=_process!;
+        var config=CoreConfig.Build(state,secret,_probeSecret,out var nativePorts,diagnosticTarget);
+        configuredPorts?.Invoke(nativePorts);
+        if(resume)await owned.StandardInput.WriteLineAsync("RESUME");
+        await owned.StandardInput.WriteLineAsync(config.ToJsonString());await owned.StandardInput.FlushAsync();
+        string? ready;
+        async Task<string?> ReadStartup(){
+            string? line=await owned.StandardOutput.ReadLineAsync();
+            if(probeReady is not null && line=="PROBE_READY"){
+                // Start only this generation's private authenticated SOCKS
+                // probes while the core creates its unconfigured adapter.
+                MarkStart("private_probe_ready_ms");probeReady();
+                return await owned.StandardOutput.ReadLineAsync();
+            }
+            return line;
+        }
+        try{ready=await ReadStartup().WaitAsync(TimeSpan.FromSeconds(20),_stop.Token);}
+        catch(TimeoutException error){throw new IOException("CORE_READY_TIMEOUT",error);}
+        if(ready!="READY"){
+            try{await owned.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));}catch{}
+            throw new IOException(_parkFailure ?? (SafeStage.StartsWith("CORE_",StringComparison.Ordinal)?SafeStage:"CORE_START_FAILED"));
+        }
+        // Only the cold standby preparation guarantees fresh CreateAdapter;
+        // never manufacture ownership from a by-name OpenAdapter fallback.
+        MarkStart("adapter_ready_ms");
+        if(standby && !resume)TunReceipt.Record(owned);
+        MarkStart("receipt_ms");
+        Volatile.Write(ref _safeStage,"READY");
+    }
+    private void Launch(string? argument)
+    {
+        var info=new ProcessStartInfo(Platform.Core){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Platform.Root,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        if(argument is not null)info.ArgumentList.Add(argument);
+        // Fixed configuration/HOLD is supplied only after assignment. An
+        // early parent exit closes stdin before the child can create a tunnel.
         _process=Process.Start(info) ?? throw new IOException("CORE_START_FAILED");MarkStart("process_ms");
         _job=CreateJobObject(IntPtr.Zero,null);if(_job==IntPtr.Zero)throw new IOException("JOB_CREATE_FAILED");
         var limits=new JobLimits();limits.Basic.LimitFlags=0x2000; // KILL_ON_JOB_CLOSE
         if(!SetInformationJobObject(_job,9,ref limits,(uint)Marshal.SizeOf<JobLimits>()) || !AssignProcessToJobObject(_job,_process.Handle))throw new IOException("JOB_ASSIGN_FAILED");
-        Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){h3Proof?.TrySetResult(null);try{NativeGuard.SuspendTun();}catch{}}};
+        Process owned=_process;_process.EnableRaisingEvents=true;_process.Exited+=(_,_)=>{if(ReferenceEquals(_process,owned)){_h3Lifetime?.TrySetResult(null);_parkFence?.TrySetCanceled();try{NativeGuard.SuspendTun();}catch{}}};
+        var drained=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);_stderrDrained=drained;
         _process.ErrorDataReceived+=(_,line)=>{
+            if(line.Data is null){drained.TrySetResult();return;}
             if(!ReferenceEquals(_process,owned))return;
+            if(line.Data.StartsWith("PARK_COUNTS ",StringComparison.Ordinal)){RecordParkCounts(line.Data);return;}
+            if(RecordParkFailure(line.Data))return;
+            if(line.Data=="PARK_FENCE"){_parkFence?.TrySetResult();return;}
             if(_nativeEvidence.Record(line.Data))return;
             if(line.Data=="ADAPTER_EMPTY_AUDITED"){_startTimings["empty_audited"]=1;return;}
             if(line.Data=="ADAPTER_CREATE_BEGIN"){MarkStart("adapter_create_begin_ms");return;}
@@ -70,9 +168,9 @@ internal sealed class CoreProcess : IDisposable
                     _startTimings[pair[0]=="ADAPTER_CREATE_MS"?"adapter_create_ms":"adapter_audit_ms"]=ms;return;
                 }
             }
-            if(line.Data=="EGRESS_H3_UNAVAILABLE"){h3Proof?.TrySetResult(null);return;}
+            if(line.Data=="EGRESS_H3_UNAVAILABLE"){_h3Lifetime?.TrySetResult(null);return;}
             if(line.Data?.StartsWith("EGRESS_H3_VERIFIED ",StringComparison.Ordinal)==true){
-                h3Proof?.TrySetResult(InitialProbeRace.Parse(line.Data,_expectedIPv4,(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds));return;
+                _h3Lifetime?.TrySetResult(InitialProbeRace.Parse(line.Data,_expectedIPv4,(long)Stopwatch.GetElapsedTime(_proofStarted).TotalMilliseconds));return;
             }
             if(line.Data is "CARRIER_NATIVE_51820" or "CARRIER_NATIVE_443" or "CARRIER_NATIVE_8443")Volatile.Write(ref _carrierStage,line.Data);
             else if(line.Data=="WIREGUARD_REPLY_RECEIVED")Volatile.Write(ref _wireGuardReply,1);
@@ -82,44 +180,76 @@ internal sealed class CoreProcess : IDisposable
                 if(line.Data!="CORE_CLOSE_FAILED" || !SafeStage.StartsWith("TUN_CLEANUP_",StringComparison.Ordinal))Volatile.Write(ref _safeStage,line.Data);
             }
         };_process.BeginErrorReadLine();
-        var config=CoreConfig.Build(state,secret,_probeSecret,out var nativePorts,diagnosticTarget);
-        configuredPorts?.Invoke(nativePorts);
-        await _process.StandardInput.WriteLineAsync(config.ToJsonString());await _process.StandardInput.FlushAsync();
-        string? ready;
-        async Task<string?> ReadStartup(){
-            string? line=await _process.StandardOutput.ReadLineAsync();
-            if(probeReady is not null && line=="PROBE_READY"){
-                // Start only this generation's private authenticated SOCKS
-                // probes while the core creates its unconfigured adapter.
-                MarkStart("private_probe_ready_ms");probeReady();
-                return await _process.StandardOutput.ReadLineAsync();
-            }
-            return line;
+    }
+    private void EndPeer()
+    {
+        lock(_proofLock){
+            _proofCancel?.Cancel();_proofCancel?.Dispose();_proofCancel=null;
+            _h3Lifetime?.TrySetResult(null);_h3Lifetime=null;_initialH3=null;
+            _probeClient?.Dispose();_probeClient=null;_probeSecret="";
+            VerifiedIPv4=null;ProbeProtocol="";
         }
-        try{ready=await ReadStartup().WaitAsync(TimeSpan.FromSeconds(20),_stop.Token);}
-        catch(TimeoutException error){throw new IOException("CORE_READY_TIMEOUT",error);}
-        if(ready!="READY"){
-            try{await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));}catch{}
-            throw new IOException(SafeStage.StartsWith("CORE_",StringComparison.Ordinal)?SafeStage:"CORE_START_FAILED");
+    }
+    internal async Task PrepareHolder(CancellationToken cancel=default)
+    {
+        if(Parked)return;
+        if(Running)throw new IOException("CORE_ALREADY_RUNNING");
+        if(_process is not null)await Stop();
+        Platform.VerifyBundle(Platform.Root);
+        _parkFailure=null;_startTimings.Clear();_proofStarted=Stopwatch.GetTimestamp();
+        _parkFence=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        StandbyCapable=true;TunActive=false;
+        _parkCounts.Clear();Launch("--adapter-holder");
+        await _process!.StandardInput.WriteLineAsync("HOLD");await _process.StandardInput.FlushAsync();
+        await AcceptPark(_process,cancel);
+        TunReceipt.Record(_process);
+        _parkedLuid=TunReceipt.VerifyRetained(_process);
+        if(!NativeGuard.TunParked(_parkedLuid))throw new IOException("TUN_PARK_AUDIT_FAILED");
+        _parked=true;
+    }
+    private async Task AcceptPark(Process owner,CancellationToken cancel)
+    {
+        var fence=_parkFence ?? throw new IOException("CORE_PARK_FENCE_MISSING");
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        if(await owner.StandardOutput.ReadLineAsync(deadline.Token)!="PARKED"){
+            throw new IOException(await ParkFailureAfterEof("CORE_PARK_FAILED",deadline.Token));
         }
-        // Only the cold standby preparation guarantees fresh CreateAdapter;
-        // never manufacture ownership from a by-name OpenAdapter fallback.
-        MarkStart("adapter_ready_ms");
-        if(standby)TunReceipt.Record(owned);
-        MarkStart("receipt_ms");
-        Volatile.Write(ref _safeStage,"READY");
+        // stderr is an independent ordered stream. Drain its prior generation
+        // before publishing Off or arming another H3/handshake observer.
+        await fence.Task.WaitAsync(deadline.Token);_parkFence=null;
+        _nativeEvidence.Clear();_startTimings.Clear();Volatile.Write(ref _wireGuardReply,0);
+        Volatile.Write(ref _carrierStage,"NOT_STARTED");Volatile.Write(ref _safeStage,"ADAPTER_PARKED");
+        TunActive=false;
+    }
+    internal async Task Park()
+    {
+        if(Parked)return;
+        if(!StandbyCapable || !Running)throw new IOException("CORE_NOT_READY");
+        NativeGuard.SuspendTun();EndPeer();_parkFailure=null;_parkCounts.Clear();
+        _parkFence=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Process owner=_process!;
+        await owner.StandardInput.WriteLineAsync("PARK");await owner.StandardInput.FlushAsync();
+        await AcceptPark(owner,_stop.Token);
+        _parkedLuid=TunReceipt.VerifyRetained(owner);
+        if(!NativeGuard.TunParked(_parkedLuid))throw new IOException("TUN_PARK_AUDIT_FAILED");
+        _parked=true;
     }
     private async Task CoreCommand(string command,string expected)
     {
         if(!Running || !StandbyCapable)throw new IOException("CORE_NOT_READY");
         await _process!.StandardInput.WriteLineAsync(command);await _process.StandardInput.FlushAsync();
-        if(await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5),_stop.Token)!=expected)throw new IOException("CORE_TRANSITION_FAILED");
+        string? response=await _process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5),_stop.Token);
+        if(response is null)throw new IOException(await ParkFailureAfterEof("CORE_TRANSITION_FAILED",_stop.Token));
+        if(response!=expected)throw new IOException("CORE_TRANSITION_FAILED");
     }
     internal async Task Activate(){await CoreCommand("ACTIVATE","TUN_ACTIVE");TunActive=true;}
     internal async Task Deactivate(){NativeGuard.SuspendTun();await CoreCommand("DEACTIVATE","STANDBY_READY");TunActive=false;}
     internal async Task<long> Probe(int timeoutSeconds=12)
     {
-        if(!Running)throw new IOException("CORE_NOT_RUNNING");
+        var lifetime=_proofCancel ?? throw new IOException("CORE_NOT_RUNNING");
+        if(!Running || Parked)throw new IOException("CORE_NOT_RUNNING");
+        var cancellation=lifetime.Token;
         if(_probeClient is null){
             var proxy=new WebProxy("socks5://127.0.0.1:28083"){Credentials=new NetworkCredential("service",_probeSecret)};
             _probeClient=new HttpClient(new SocketsHttpHandler{Proxy=proxy,UseProxy=true,UseCookies=false,AllowAutoRedirect=false}){Timeout=Timeout.InfiniteTimeSpan};
@@ -138,8 +268,11 @@ internal sealed class CoreProcess : IDisposable
             return new VerifiedExit(address,timer.ElapsedMilliseconds,"https");
         }
         try{
-            var proof=await InitialProbeRace.Verify(initial?.Task,Tcp,_stop.Token);
-            VerifiedIPv4=proof.Address;ProbeProtocol=proof.Protocol;return proof.ElapsedMs;
+            var proof=await InitialProbeRace.Verify(initial?.Task,Tcp,cancellation);
+            lock(_proofLock){
+                if(!ReferenceEquals(lifetime,_proofCancel))throw new OperationCanceledException(cancellation);
+                VerifiedIPv4=proof.Address;ProbeProtocol=proof.Protocol;return proof.ElapsedMs;
+            }
         }
         catch(IOException error)when(error.Message=="ORACLE_PROBE_TIMEOUT"){
             if(ReferenceEquals(Interlocked.CompareExchange(ref _probeClient,null,client),client))client.Dispose();
@@ -148,19 +281,17 @@ internal sealed class CoreProcess : IDisposable
     }
     internal async Task Stop()
     {
+        EndPeer();_parked=false;_parkedLuid=0;_parkFence=null;
+        _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"NOT_STARTED");
         if(_process is null)return;
-        _h3Lifetime?.TrySetResult(null);_h3Lifetime=null;_initialH3=null;
         NativeGuard.SuspendTun();
-        // Cancel in-flight and idle probe sockets before asking the core to
-        // close its router, so its shutdown never waits on our HTTP reader.
-        _probeClient?.Dispose();_probeClient=null;
         if(!_process.HasExited){
             _process.StandardInput.Close();
             try{await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));}
             catch{_process.Kill(true);await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));}
         }
-        _process.Dispose();_process=null;
-        _probeClient?.Dispose();_probeClient=null;StandbyCapable=false;TunActive=false;
+        _process.Dispose();_process=null;StandbyCapable=false;TunActive=false;
+        _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"NOT_STARTED");
         if(_job!=IntPtr.Zero){CloseHandle(_job);_job=IntPtr.Zero;}
         _probeSecret="";
     }

@@ -426,10 +426,45 @@ internal static class OracleAcceptance
             Check(!VpnRuntime.TunnelInactive() ? false : await ExitIp()!="152.67.154.225","LIFETIME_CONTROLLER_CRASH_STOPS_BACKGROUND_AND_RESTORES_DIRECT");
         }finally{if(!controller.HasExited){controller.Kill(true);await controller.WaitForExitAsync();}}
     }
+    internal static async Task<int> CheckParkedGui()
+    {
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
+        using var service=new System.ServiceProcess.ServiceController(Platform.Service);
+        if(service.Status!=System.ServiceProcess.ServiceControllerStatus.Running){
+            Console.WriteLine("ACTUAL_PARK_WITNESS_SERVICE_NOT_RUNNING=True");return 1;
+        }
+        var state=RequireSuccess("Status",await ControlPipe.Send("Status"));
+        foreach(string field in new[]{"mode","error","core_stage","adapter_parked","adapter_preparing","park_error","park_stage"}){
+            string? value=state[field]?.ToString();
+            if(value is {Length:>0 and <=80} && value.All(c=>char.IsAsciiLetterOrDigit(c) || c=='_'))
+                Console.WriteLine("ACTUAL_PARK_WITNESS_"+field.ToUpperInvariant()+"="+value);
+        }
+        if(state["adapter_parked"]?.GetValue<bool>()!=true || state["mode"]?.GetValue<string>()!="disconnected" ||
+            state["intent"]?.GetValue<bool>()!=false || state["guard"]?.GetValue<bool>()!=false ||
+            state["tun_permitted"]?.GetValue<bool>()!=false || state["tun_route_mask"]?.GetValue<uint>()!=0 ||
+            state["client_handshake_reply"]?.GetValue<bool>()!=false || state["preparing"]?.GetValue<bool>()!=false ||
+            state["quick_ready"]?.GetValue<bool>()!=false || state["verified_exit_ip"] is not null || state["verified_exit_ipv6"] is not null ||
+            state["transport_port"] is not null || state["core_pid"]?.GetValue<uint>() is not uint holder || holder==0 ||
+            state["network_endpoints"]?["egress_ipv4"] is not JsonArray allowed || allowed.Count==0)return 1;
+        using var process=Process.GetProcessById(checked((int)holder));
+        if(process.SessionId!=0 || !string.Equals(process.MainModule?.FileName,Platform.Core,StringComparison.OrdinalIgnoreCase))return 1;
+        string direct=await ExitIp();
+        if(direct!=Environment.GetEnvironmentVariable("ORACLE_CI_DIRECT_EXIT") || allowed.Any(ip=>ip?.GetValue<string>()==direct))return 1;
+        Console.WriteLine("ACTUAL_PARKED_HOLDER_PID="+holder);
+        Console.WriteLine("ACTUAL_GUI_OFF_DIRECT_EGRESS_AND_NO_PEER=PASS");
+        return 0;
+    }
     internal static async Task<int> PrintLiveTimings()
     {
         if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted")return 3;
         var state=RequireSuccess("Status",await ControlPipe.Send("Status"));
+        if(state["mode"]?.GetValue<string>()!="connected" || state["intent"]?.GetValue<bool>()!=true ||
+            state["guard"]?.GetValue<bool>()!=true || state["tun_permitted"]?.GetValue<bool>()!=true ||
+            state["tun_route_mask"]?.GetValue<uint>()!=15 || state["client_handshake_reply"]?.GetValue<bool>()!=true ||
+            state["verified_exit_ip"]?.GetValue<string>() is not string exit || state["network_endpoints"]?["egress_ipv4"] is not JsonArray allowed ||
+            !allowed.Any(ip=>ip?.GetValue<string>()==exit) || state["verified_exit_ipv6"]?.GetValue<string>()!="2603:c020:c015:8100::10" ||
+            state["core_pid"]?.GetValue<uint>() is not uint pid || pid==0)return 1;
+        Console.WriteLine("ACTUAL_CONNECTED_HOLDER_PID="+pid);
         Console.WriteLine("ACTUAL_SERVICE_WORKER_MINIMUM="+state["service_worker_minimum"]);
         Console.WriteLine("ACTUAL_SERVICE_WORKER_THREADS="+state["service_worker_threads"]);
         Console.WriteLine("ACTUAL_SERVICE_EGRESS_PROBE_PROTOCOL="+state["egress_probe_protocol"]);
@@ -437,11 +472,15 @@ internal static class OracleAcceptance
             if(coreTimings[key] is JsonValue timing && timing.TryGetValue<long>(out long elapsed))Console.WriteLine("ACTUAL_SERVICE_CORE_"+key.ToUpperInvariant()+"="+elapsed);
         Console.WriteLine("ACTUAL_SERVICE_RECENT_ACCOUNT_PROOF_RESTORED="+(state["recent_account_proof_restored"]?.GetValue<bool>()==true));
         foreach(string key in new[]{"click_to_ready_ms","connect_switch_ms"})if(state[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
+        foreach(string key in new[]{"adapter_preparing_at_click","adapter_parked_at_click"}){
+            if(state["switch_timings"]?[key] is JsonValue value && value.TryGetValue<bool>(out bool flag))
+                Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+flag);
+        }
         if(state["switch_timings"] is JsonObject phases)foreach(string key in new[]{"uu_discovery_ms","state_saved_ms","guard_installed_ms","core_process_ms","protection_joined_ms","core_active_and_authorized_ms","initial_probe_ms","complete_ms"})
             if(phases[key] is JsonValue value && value.TryGetValue<long>(out long ms))Console.WriteLine("ACTUAL_SERVICE_"+key.ToUpperInvariant()+"="+ms);
         return 0;
     }
-    private static async Task LiveGuiUdpToggle()
+    private static async Task LiveGuiUdpToggle(string directExit,bool closeConnectedOnly=false)
     {
         string script=Path.GetFullPath("clients/windows/product/ci/test-live-udp-toggle.ps1");
         string client=Path.GetFullPath("dist/product/Proxy.exe");
@@ -449,14 +488,17 @@ internal static class OracleAcceptance
         var start=new ProcessStartInfo("powershell.exe"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
         foreach(string value in new[]{"-NoProfile","-STA","-ExecutionPolicy","Bypass","-File",script,"-Client",client,"-SnapshotReader",Environment.ProcessPath!})start.ArgumentList.Add(value);
         start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_USERNAME");start.Environment.Remove("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
+        if(closeConnectedOnly)start.ArgumentList.Add("-CloseConnectedOnly");
+        start.Environment["ORACLE_CI_DIRECT_EXIT"]=directExit;
         using var process=Process.Start(start)??throw new IOException("LIVE_GUI_FIXTURE_START_FAILED");
         var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();
         try{
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2));
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
             string evidence=await output;await error;
-            if(evidence.Length>8192)throw new IOException("LIVE_GUI_EVIDENCE_TOO_LARGE");
+            if(evidence.Length>16384)throw new IOException("LIVE_GUI_EVIDENCE_TOO_LARGE");
             foreach(string line in evidence.Split('\n'))if(line.StartsWith("ACTUAL_",StringComparison.Ordinal))Console.WriteLine(line.Trim());
             Check(process.ExitCode==0,"REAL_PRODUCT_GUI_UDP_ON_OFF_AND_SHUTDOWN");
+            Check(await ExitIp()==directExit,"REAL_GUI_CLOSE_RESTORES_VERIFIED_PHYSICAL_EXIT");
         }finally{
             if(!process.HasExited){process.Kill(true);await process.WaitForExitAsync();}
         }
@@ -514,6 +556,8 @@ internal static class OracleAcceptance
             phase="DIRECT_NETWORK";
             await OraclePerformance.MeasureHttps(performanceTarget,allowed,tunneled:false);
             await MeasureNetwork(networkTargets,allowed,tunneled:false);
+            string directExit=await ExitIp();
+            Check(!allowed.Contains(directExit),"REAL_PHYSICAL_EXIT_BEFORE_GUI_TEST");
             phase="CONNECT";
             await Send("PreferUdp443");await Send("Connect");var connected=await Connected();
             using var runningUu=Process.GetProcessById(int.Parse(Environment.GetEnvironmentVariable("ORACLE_CI_RUNNING_UU_PID")!));
@@ -542,7 +586,14 @@ internal static class OracleAcceptance
                 first["tx_bytes"]?.GetValue<long>() is long tx && tx>=0 && last?["rx_bytes"]?.GetValue<long>()>rx && last?["tx_bytes"]?.GetValue<long>()>tx,
                 "REAL_LOCAL_TUN_COUNTERS_ADVANCE_IN_BOTH_DIRECTIONS_DURING_BROWSER_TRAFFIC");
             phase="GUI_TOGGLE";
-            await LiveGuiUdpToggle();
+            // Start the first visible click with a freshly launched GUI and no
+            // previously retained holder. Allow only its ordinary startup work.
+            await Send("Disconnect");
+            await StoppedService();
+            Check(NetworkInterface.GetAllNetworkInterfaces().All(n=>n.Name!="OracleProxy" &&
+                (!Guid.TryParse(n.Id,out var id) || id!=Guid.Parse(TunReceipt.AdapterGuid))) && await ExitIp()==directExit,
+                "REAL_GUI_COLD_LAUNCH_WITHOUT_PREVIOUS_ADAPTER");
+            await LiveGuiUdpToggle(directExit);
             // X intentionally clears a non-remembered login. Reauthenticate the
             // same durable key; never allocate a second CI device for GUI timing.
             phase="ACCOUNT_AND_DIAGNOSTICS";
@@ -561,7 +612,8 @@ internal static class OracleAcceptance
             await Send("AttachClient");await VerifyDiagnostics(devices,extended:false);
             var remembered=RequireSuccess("LoginRemembered",await ControlPipe.Send("LoginRemembered",username,Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD")));
             Check(remembered["login_remembered_until"]?.GetValue<long>()>DateTimeOffset.UtcNow.ToUnixTimeSeconds(),"COLD_LOGIN_PROOF_SAVED");
-            await Send("Quit");await StoppedService();
+            await Send("Connect");await Connected();
+            await LiveGuiUdpToggle(directExit,closeConnectedOnly:true);
             Platform.VerifyProtected(Platform.StateRoot);
             string cache=Path.Combine(Platform.StateRoot,"api-addresses.json");
             const string staleCache="""["152.67.154.225","150.230.113.158"]""";

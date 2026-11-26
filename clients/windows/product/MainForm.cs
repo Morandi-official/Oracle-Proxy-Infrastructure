@@ -18,8 +18,7 @@ internal sealed partial class MainForm : Form
     private readonly TextBox _username=new(){PlaceholderText="管理员分配的账号",Width=215,MaxLength=64};
     private readonly TextBox _password=new(){PlaceholderText="管理员分配的密码",Width=215,UseSystemPasswordChar=true,MaxLength=128};
     private readonly SmoothButton _login=new(){Name="login",Text="登录",AutoSize=true};
-    private readonly SmoothButton _connect=new(){Name="connect",Text="连接",Width=155,Height=48,Enabled=false};
-    private readonly SmoothButton _disconnect=new(){Name="disconnect",Text="断开并恢复直连",Width=180,Height=48};
+    private readonly SmoothButton _connectionAction=new(){Name="connect",Text="连接",Width=180,Height=48,Enabled=false};
     private string _lastUiCommand="";
     private long? _lastUiQueueMs,_lastUiAttachMs,_lastUiResponseMs,_lastUiCompleteMs;
     private bool _backendIdle,_sessionAttached,_recoveryProvedDirect;
@@ -191,9 +190,7 @@ internal sealed partial class MainForm : Form
         selection.Controls.Add(new Label{Text="UDP 端口",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_udpPortChoice);
         _udpPortChoice.Items.AddRange([new UdpPortChoice(0,"优选可用端口"),new UdpPortChoice(443,"443"),new UdpPortChoice(8443,"8443"),new UdpPortChoice(51820,"51820")]);_udpPortChoice.SelectedIndex=0;
         _udpPortChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingPort)await Act((_udpPortChoice.SelectedItem as UdpPortChoice)?.Port switch{443=>"PreferUdp443",8443=>"PreferUdp8443",51820=>"PreferUdp51820",_=>"PreferUdpAdaptive"});};
-        var buttons=Actions();_connect.Margin=new Padding(0,0,10,0);_disconnect.Margin=new Padding(0);buttons.Controls.AddRange([_connect,_disconnect]);Row(connection,buttons);
-        _help.SetToolTip(_connect,"使用所选通道连接；必要时自动尝试备用通道。连接通过验证后，普通应用流量经加密隧道发送。");
-        _help.SetToolTip(_disconnect,"安全断开 VPN 并恢复普通应用直连，保留已登记设备。");
+        var buttons=Actions();_connectionAction.Margin=Padding.Empty;buttons.Controls.Add(_connectionAction);Row(connection,buttons);
         _telemetry.AutoSize=false;_telemetry.Height=28;_telemetry.AutoEllipsis=true;_telemetry.ForeColor=Muted;_telemetry.Margin=new Padding(0,8,0,0);Row(connection,_telemetry);
         var connectionCard=Card("connectionSection","当前连接",connection);summary.Controls.Add(connectionCard,0,0);connectionCard.Margin=new Padding(0,0,10,12);
         var account=_accountContent=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,10);Row(account,_accountName);
@@ -282,17 +279,16 @@ internal sealed partial class MainForm : Form
             if(_recovering || MessageBox.Show(this,"将停止隧道、关闭自动连接并恢复直连。已保存密钥保留；损坏的加密状态会保留备份。继续？","恢复直连",MessageBoxButtons.OKCancel)!=DialogResult.OK)return;
             await RecoverDirect();
         };
-        _login.Click+=async(_,_)=>await Act(_rememberLogin.Checked?"LoginRemembered":"Login");_connect.Click+=async(_,_)=>await Act("Connect");_disconnect.Click+=async(_,_)=>await Act("Disconnect");
+        _login.Click+=async(_,_)=>await Act(_rememberLogin.Checked?"LoginRemembered":"Login");_connectionAction.Click+=async(_,_)=>await Act(DisconnectAction?"Disconnect":"Connect");
         _password.KeyDown+=async(_,e)=>{if(e.KeyCode==Keys.Enter && _login.Enabled){e.SuppressKeyPress=true;await Act(_rememberLogin.Checked?"LoginRemembered":"Login");}};
         _timer.Tick+=async(_,_)=>{
-            if(_busy || _closing)return;
-            bool restoring=_diagnosticSnapshot?["login_authenticated"]?.GetValue<bool>()==true && !_hasAccount;
+            if(_busy || _closing || _recovering)return;
             await Act("Status");
-            if(restoring && _hasAccount)await StartReadyClient();
+            if(!_startupPrepared && _canConnect)await StartReadyClient();
         };
         Shown+=async(_,_)=>{if(_realService){if(await ProvisionService())await StartReadyClient();}else{await Act("Status");await StartReadyClient();}};
         IEnumerable<Control> Descendants(Control parent){foreach(Control child in parent.Controls){yield return child;foreach(var nested in Descendants(child))yield return nested;}}
-        foreach(var button in Descendants(_shell).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connect || button==_login);StyleButton(_emergencyRecovery);
+        foreach(var button in Descendants(_shell).Concat(Descendants(_loginGate)).OfType<Button>())StyleButton(button,button==_connectionAction || button==_login);StyleButton(_emergencyRecovery);
         foreach(var input in new[]{_username,_password,_deviceName}){input.BorderStyle=BorderStyle.None;input.AccessibleName=input==_username?"登录账号":input==_password?"密码":"设备名称";}
         _help.SetToolTip(_telemetry,"速率按本机 VPN 网卡字节增量统计；HTTP 延迟包含隧道及检测站点响应时间，与游戏延迟不同。");
         foreach(var value in new[]{_download,_upload})_help.SetToolTip(value,"按本机 VPN 网卡字节变化约每秒更新。1 MB/s = 8 Mbps。");
@@ -317,7 +313,7 @@ internal sealed partial class MainForm : Form
             _dashboardShown=dashboard==true;_initialViewResolved=dashboard.HasValue;
             _shell.Visible=dashboard==true;_loginGate.Visible=dashboard==false;_startupGate.Visible=!dashboard.HasValue;
             (dashboard==true?(Control)_shell:dashboard==false?_loginGate:_startupGate).BringToFront();
-            AcceptButton=dashboard==true?_connect:dashboard==false?_login:null;
+            AcceptButton=dashboard==true?_connectionAction:dashboard==false?_login:null;
         }finally{
             _loginGate.ResumeLayout(true);_shell.ResumeLayout(true);ResumeLayout(true);
             if(redraw){SendMessage(Handle,0x000B,new IntPtr(1),IntPtr.Zero);}
@@ -329,7 +325,8 @@ internal sealed partial class MainForm : Form
     private static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wParam,IntPtr lParam);
     private async Task StartReadyClient()
     {
-        if(!IsDisposed && !_closing && _authenticated && _statusReadSucceeded && !_needsReconcile && !_startupPrepared && _deviceRegistered && !_connectionIntent && !_udpDiagnosing && _lastMode=="disconnected"){
+        if(!IsDisposed && ActionsAvailable && _canConnect && _statusReadSucceeded && !_startupPrepared
+            && !_connectionIntent && !_udpDiagnosing && _lastMode=="disconnected"){
             _startupPrepared=true;await Act("Prepare");
         }
         if(!IsDisposed && !_closing && _serviceReady)_timer.Start();
@@ -342,7 +339,7 @@ internal sealed partial class MainForm : Form
         var state=await ControlPipe.Send("AttachClient",null,null,cancel);
         if(!ServiceBootstrap.Current(state,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
         if(IsDisposed || _closing)return;
-        _sessionAttached=true;_backendIdle=false;_serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;
+        _sessionAttached=true;_backendIdle=false;_recoveryProvedDirect=false;_serviceReady=true;_statusReadSucceeded=true;_needsReconcile=false;
         _bootstrapRetry.Visible=false;_startupReport="初始化已完成。版本："+ClientVersion;Display(state);
     }
     private string StartupFailure(Exception error)
@@ -387,12 +384,24 @@ internal sealed partial class MainForm : Form
     protected override void Dispose(bool disposing){if(disposing){_viewBlend?.Dispose();_lifetime.Cancel();_requestEpoch.Cancel();_timer.Dispose();_help.Dispose();}base.Dispose(disposing);}
     private void CancelRequests(){var previous=_requestEpoch;_requestEpoch=new CancellationTokenSource();previous.Cancel();previous.Dispose();}
     private bool ActionsAvailable => _serviceReady && !_provisioning && !_busy && !_closing && !_needsReconcile && !_uuMaintaining && !_recovering;
+    private bool DisconnectAction => _connectionIntent || _lastMode is "connected" or "connecting" or "protected" or "recovery";
+    private void UpdateConnectionAction()
+    {
+        bool disconnect=DisconnectAction;
+        string name=disconnect?"disconnect":"connect";
+        if(_connectionAction.Name!=name)_connectionAction.Name=name;
+        string text=disconnect?"断开并恢复直连":"连接";
+        if(_connectionAction.Text!=text)_connectionAction.Text=text;
+        string help=disconnect?"安全断开 VPN 并恢复普通应用直连，保留已登记设备。":"连接后验证代理出口，自动选择可用的 UDP 端口。";
+        if(_help.GetToolTip(_connectionAction)!=help)_help.SetToolTip(_connectionAction,help);
+        _connectionAction.Enabled=ActionsAvailable && (disconnect || (_lastMode=="disconnected" && !_udpDiagnosing && _canConnect));
+    }
     private void RefreshActions()
     {
         if(IsDisposed)return;
         _emergencyRecovery.Enabled=!_provisioning && !_recovering;
         bool available=ActionsAvailable;
-        _connect.Enabled=available && !_udpDiagnosing && _authenticated && _canConnect;_disconnect.Enabled=_login.Enabled=_logout.Enabled=available;
+        UpdateConnectionAction();_login.Enabled=_logout.Enabled=available;
         _udpPortChoice.Enabled=available && !_connectionIntent && !_udpDiagnosing;
         UpdateUdpAction();_maintenance.Enabled=available && !_udpDiagnosing;
         _deleteDevice.Enabled=available && _hasAccount && !_udpDiagnosing && _knownDevices.SelectedItem is ListedDevice;
@@ -404,25 +413,24 @@ internal sealed partial class MainForm : Form
         cancel.ThrowIfCancellationRequested();
         async Task<JsonObject> Real(){
             while(true){try{
-                    if(command is not ("Status" or "Connect")){
-                        var attachTimer=System.Diagnostics.Stopwatch.StartNew();
+                    if(command is not ("Status" or "Connect" or "Prepare" or "Disconnect" or "Quit")){
                         var attached=await ControlPipe.Send("AttachClient",null,null,cancel);
-                        if(command is "Connect" or "Disconnect")_lastUiAttachMs=attachTimer.ElapsedMilliseconds;
                         if(!ServiceBootstrap.Current(attached,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
                         _sessionAttached=true;_recoveryProvedDirect=false;
                         _backendIdle=false;if(!_closing)_timer.Start();
                     }
-                    if(command=="Connect"){
-                        // One authenticated service transaction attaches this live
-                        // window, starts the tunnel and returns its verified state.
-                        _lastUiAttachMs=0;
-                        var connected=await Task.Run(()=>ControlPipe.Send("AttachConnect",null,null,cancel),cancel);
-                        // The pipe has attested the service. A failed connection
-                        // can still return a valid snapshot from that service.
-                        if(!ServiceBootstrap.MatchesService(connected,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
-                        _sessionAttached=true;_recoveryProvedDirect=false;_backendIdle=false;
-                        if(!_closing)_timer.Start();
-                        return connected;
+                    if(command is "Connect" or "Prepare" or "Disconnect" or "Quit"){
+                        // The service verifies the live window's identity and version
+                        // in the same transaction as the requested operation.
+                        string attachedCommand=command switch{"Connect"=>"AttachConnect","Disconnect"=>"AttachDisconnect","Prepare"=>"AttachPrepare",_=>"AttachQuit"};
+                        if(command is "Connect" or "Disconnect")_lastUiAttachMs=0;
+                        var state=await Task.Run(()=>ControlPipe.Send(attachedCommand,null,null,cancel),cancel);
+                        if(!ServiceBootstrap.MatchesService(state,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
+                        if(command!="Quit"){
+                            _sessionAttached=true;_recoveryProvedDirect=false;_backendIdle=false;
+                            if(!_closing)_timer.Start();
+                        }
+                        return state;
                     }
                     return await ControlPipe.Send(command,username,password,cancel);
                 }
@@ -444,27 +452,27 @@ internal sealed partial class MainForm : Form
         string result="恢复结果尚未确认，请查看连接诊断。";
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(TimeSpan.FromMinutes(2));
         try{
-            _loginFeedback.Text=_detail.Text="正在等待管理员授权及本机恢复，请稍候…";
-            int code=await _recover(deadline.Token);
-            _recoveryProvedDirect=code==0;
-            result=code==4?"已取消管理员授权，正在重新读取服务状态。":code==0?"恢复程序已完成，正在核对直连状态。":"恢复未完成，正在重新读取服务诊断；保护状态以服务确认为准。";
-        }catch(OperationCanceledException){result="恢复等待已结束，后台恢复可能仍在执行；请先查看诊断，不要重复提交。";}
-        catch(Exception error){result=StartupFailure(error);}
-        finally{
-            _recovering=false;
-            if(!IsDisposed){
-                _emergencyRecovery.Enabled=true;_backendIdle=false;
-                if(_realService){
-                    using var verify=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);verify.CancelAfter(TimeSpan.FromSeconds(12));
-                    try{
-                        var current=await ControlPipe.Send("Status",null,null,verify.Token);
-                        if(!ServiceBootstrap.Current(current,ClientVersion))throw new IOException("SERVICE_VERSION_NOT_VERIFIED");
-                        await AttachReadyService(verify.Token);if(!IsDisposed)_timer.Start();
-                    }
-                    catch(Exception error){if(!IsDisposed){_serviceReady=false;_bootstrapRetry.Visible=true;result+="\r\n"+StartupFailure(error);RevealView(false);}}
-                }else{_timer.Start();await Act("Status");}
-                if(!IsDisposed){_loginFeedback.Text=_detail.Text=result;RefreshActions();}
-            }
+            try{
+                _loginFeedback.Text=_detail.Text="正在等待管理员授权及本机恢复，请稍候…";
+                int code=await _recover(deadline.Token);
+                _recoveryProvedDirect=code==0;
+                result=code==4?"已取消管理员授权，正在重新读取服务状态。":code==0?"恢复程序已完成，正在核对直连状态。":"恢复未完成，正在重新读取服务诊断；保护状态以服务确认为准。";
+            }catch(OperationCanceledException){result="恢复等待已结束，后台恢复可能仍在执行；请先查看诊断，不要重复提交。";}
+            catch(Exception error){result=StartupFailure(error);}
+            if(IsDisposed)return;
+            _backendIdle=false;
+            if(_realService){
+                using var verify=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);verify.CancelAfter(TimeSpan.FromSeconds(12));
+                try{
+                    var current=await ControlPipe.Send("Status",null,null,verify.Token);
+                    if(!ServiceBootstrap.Current(current,ClientVersion))throw new IOException("SERVICE_VERSION_NOT_VERIFIED");
+                    await AttachReadyService(verify.Token);if(!IsDisposed)_timer.Start();
+                }
+                catch(Exception error){if(!IsDisposed){_serviceReady=false;_bootstrapRetry.Visible=true;result+="\r\n"+StartupFailure(error);RevealView(false);}}
+            }else{_timer.Start();await Act("Status");}
+            if(!IsDisposed)_loginFeedback.Text=_detail.Text=result;
+        }finally{
+            _recovering=false;if(!IsDisposed)RefreshActions();
         }
     }
     internal async Task<bool> QuitClient()
@@ -473,10 +481,10 @@ internal sealed partial class MainForm : Form
         // An uninitialized window has never attached or admitted a network
         // command. Closing its UI does not alter/claim the prior network state.
         // Elevated maintenance is independent and must finish its transaction.
-        if(_realService && !_sessionAttached || _recoveryProvedDirect && !_recovering){
+        if(_recovering){_detail.Text="正在恢复直连，请等待本次恢复结果后再关闭。";return false;}
+        if(_realService && !_sessionAttached || _recoveryProvedDirect){
             _closing=true;_allowClose=true;_timer.Stop();Close();return true;
         }
-        if(_recovering){_detail.Text="正在恢复直连，请等待本次恢复结果后再关闭。";return false;}
         _closing=true;_timer.Stop();CancelRequests();RefreshActions();
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);deadline.CancelAfter(_quitTimeout);
         bool acquired=false,sentQuit=false;
@@ -491,9 +499,21 @@ internal sealed partial class MainForm : Form
                 _needsReconcile=false;
             }
             sentQuit=true;var state=await SendRequest("Quit",null,null,deadline.Token);
+            // A second authenticated window can own the existing connection.
+            // This acknowledgment is issued only after this window detached.
+            if(state["ok"]?.GetValue<bool>()==true && state["window_detached"]?.GetValue<bool>()==true
+                && state["shutdown_after_response"]?.GetValue<bool>()!=true){
+                _allowClose=true;Close();return true;
+            }
             Display(state);
-            if(state["ok"]?.GetValue<bool>()!=true || state["intent"]?.GetValue<bool>()!=false || state["core_pid"]?.GetValue<uint>()!=0 || state["mode"]?.GetValue<string>()!="disconnected")throw new IOException("SAFE_EXIT_NOT_VERIFIED");
-            if(_realService && state["shutdown_after_response"]?.GetValue<bool>()==true)await ControlPipe.WaitStopped(deadline.Token);
+            if(state["ok"]?.GetValue<bool>()!=true || state["intent"]?.GetValue<bool>()!=false || state["core_pid"]?.GetValue<uint>()!=0
+                || state["mode"]?.GetValue<string>()!="disconnected" || (_realService
+                    ?state["adapter_parked"]?.GetValue<bool>()!=false:state["adapter_parked"]?.GetValue<bool>()==true)
+                || state["guard"]?.GetValue<bool>()==true || state["tun_permitted"]?.GetValue<bool>()==true)throw new IOException("SAFE_EXIT_NOT_VERIFIED");
+            if(_realService){
+                if(state["shutdown_after_response"]?.GetValue<bool>()!=true)throw new IOException("SERVICE_SHUTDOWN_NOT_ACKNOWLEDGED");
+                await ControlPipe.WaitStopped(deadline.Token);
+            }
             _allowClose=true;Close();return true;
         }catch{
             if(sentQuit)_needsReconcile=true;
@@ -506,8 +526,8 @@ internal sealed partial class MainForm : Form
     }
     internal async Task Act(string command)
     {
-        if(_closing || IsDisposed || _recovering)return;
         bool passive=command=="Status";
+        if(_closing || IsDisposed || _recovering && !passive)return;
         if(passive && _backendIdle)return;
         if(passive)_statusReadSucceeded=false;
         if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
@@ -569,6 +589,7 @@ internal sealed partial class MainForm : Form
             }
         }
         finally{if(toggle)_lastUiCompleteMs=operationTimer.ElapsedMilliseconds;if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
+        if(command is "Login" or "LoginRemembered" or "ConfirmDevice" or "DeleteDevice")await StartReadyClient();
     }
     private async Task MaintainUu(bool restore)
     {
@@ -635,7 +656,7 @@ internal sealed partial class MainForm : Form
     {
         if(state is null)return "尚未读取系统服务。";
         var report=new System.Text.StringBuilder("连接诊断（不含账号密码、令牌或密钥）\r\n");
-            foreach(string key in new[]{"product_version","egress_probe_protocol","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","uu_discovery_verified","uu_candidates","uu_rejected","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
+            foreach(string key in new[]{"product_version","egress_probe_protocol","mode","error","intent","guard","transport","connection_stage","core_stage","carrier_stage","transport_address","transport_private_address","transport_port","ipv6_policy","verified_exit_ipv6","native_udp_8443_available","native_udp_adaptive","native_udp_port_preference","native_udp_selected_port","client_handshake_reply","core_pid","adapter_parked","tun_permitted","tun_route_mask","server_handshake_at","peer_rx_bytes","peer_tx_bytes","uu_verified_programs","uu_discovery_verified","uu_candidates","uu_rejected","quick_ready","preparing","verified_at","connect_switch_ms","click_to_ready_ms"})report.Append($"{key}: {state[key]}\r\n");
 
             if(state["native_udp_attempt"] is JsonObject native)foreach(string key in new[]{"transport_address","port_order","endpoint_port","preferred_port","selected_port","socket_binding","server_handshake_at_observed","started_at","started_without_tun","probe_result","probe_failures","core_age_ms","verified_after_start_ms","inner_mtu"})report.Append($"native_udp.{key}: {native[key]}\r\n");
             if(state["native_udp_attempt"]?["ports"] is JsonObject ports)foreach(string port in new[]{"51820","443","8443"})if(ports[port] is JsonObject counters)foreach(string key in new[]{"tx_initiations","rx_responses","rx_cookies","rx_invalid","rx_obsolete","read_errors","write_errors","last_read_error","last_write_error","rcvbuf_before","sndbuf_before","rcvbuf_after","sndbuf_after","socket_buffer_error"})report.Append($"native_udp.{port}.{key}: {counters[key]}\r\n");
@@ -697,6 +718,9 @@ internal sealed partial class MainForm : Form
                 foreach(var item in uuIssues)_uuReport+=$"\r\n{UuReason(item!["code"]!.GetValue<string>())}\r\n{item["code"]} {item["detail"]}\r\n{item["path"]}\r\n";
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
             string mode=state["mode"]?.GetValue<string>() ?? "unknown";bool guard=state["guard"]?.GetValue<bool>()==true;
+            // A parked empty adapter is compatible with direct access. A live
+            // connection intent, guard or tunnel permission still calls for recovery.
+            if(mode=="disconnected" && (_connectionIntent || guard || state["tun_permitted"]?.GetValue<bool>()==true))mode="recovery";
             _lastMode=mode;
             DisplayUdpDiagnostics(state);
             _timer.Interval=_udpDiagnosing?1000:mode is "protected" or "connecting"?100:(state["preparing"]?.GetValue<bool>()==true && state["quick_ready"]?.GetValue<bool>()!=true)?250:mode=="connected"?1000:3000;
@@ -710,7 +734,7 @@ internal sealed partial class MainForm : Form
                 var writable=(state["uu_diagnostics"] as JsonArray)?.FirstOrDefault(item=>item?["code"]?.GetValue<string>() is "UU_DIRECTORY_WRITABLE" or "UU_EXECUTABLE_WRITABLE");
                 detail=writable is not null?"UU 安装目录允许普通用户修改。请展开系统维护，选择“修复 UU 权限”；完整路径见 UU 检查详情。":"UU 信任核验未通过，请查看 UU 检查详情。目录权限问题可使用“修复 UU 权限”。";
             }
-            if(mode=="disconnected" && state["quick_ready"]?.GetValue<bool>()==true)detail="当前直连，通道已就绪。点击“连接”启用 VPN 与防泄漏保护。";
+            if(mode=="disconnected" && (state["adapter_parked"]?.GetValue<bool>()==true || state["quick_ready"]?.GetValue<bool>()==true))detail="当前为直连。点击“连接”后将验证代理出口。";
             else if(mode=="disconnected" && state["preparing"]?.GetValue<bool>()==true)detail="正在准备连接，当前仍为直连。首次连接或网络变化可能需要等待。";
             var account=state["login_authenticated"]?.GetValue<bool>()==true?state["account"]?.AsObject():null;
             bool hasAccount=account is not null;
@@ -804,7 +828,7 @@ internal sealed partial class MainForm : Form
         string id=registration?["device_id"]?.GetValue<string>() ?? "";
         string identity=(account?["username"]?.GetValue<string>() ?? "")+"|"+id;
         string name=registration?["device_name"]?.GetValue<string>() ?? Environment.MachineName;
-        if(identity!=_deviceIdentity){_deviceIdentity=identity;_deviceName.Text=name;_deviceConfirmation.Checked=false;}
+        if(identity!=_deviceIdentity){_startupPrepared=false;_deviceIdentity=identity;_deviceName.Text=name;_deviceConfirmation.Checked=false;}
         long at=state["observed_at"]?.GetValue<long>() ?? 0;bool fresh=at>0 && Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds()-at)<=20;
         bool active=account?["status"]?.GetValue<string>()=="active" && fresh;
         bool requiresSlot=registration?["requires_slot"]?.GetValue<bool>()!=false;
@@ -817,7 +841,7 @@ internal sealed partial class MainForm : Form
         if(_admissionShown!=showAdmission){_admissionShown=showAdmission;_admissionDevicesPanel.Visible=showAdmission;}
         string deviceInfo=$"本机已登记  ·  {name}  ·  {id}\n设备名额  {count} / {limit}";
         if(_deviceIdentityLabel.Text!=deviceInfo)_deviceIdentityLabel.Text=deviceInfo;
-        _canConnect=_authenticated && _deviceRegistered && active;_connect.Enabled=!_busy && !_closing && !_needsReconcile && !_uuMaintaining && _canConnect;
+        _canConnect=_authenticated && _deviceRegistered && active;UpdateConnectionAction();
         _canRegister=showRegistration && active;
         _deviceConfirmation.Enabled=_canRegister && !_connectionIntent;
         string note=_connectionIntent?"请先断开，再登记本机。":!active?"账号不可用或状态待刷新，暂不能登记。":$"本机尚未登记  ·  {id}";

@@ -24,34 +24,11 @@ The sole VPN transport is native WireGuard UDP. The client retains the UDP
 port picker and automatic failover to another authorized IP. The local control
 service verifies the WireGuard exit before reporting the connection ready.
 
-The GUI requests route-free encrypted preparation while visible. The standby
-core exposes only a random authenticated loopback SOCKS probe, with no TUN or
-system routing changes. A recent verified Oracle exit, fresh active policy and
-unchanged profile allow the same SYSTEM core to create the TUN after persistent
-WFP protection is installed. The service grants a live TUN lease only after the
-owned core/interface are verified. Explicit Off removes the TUN before clearing
-protection. Background network probes do not hold the command gate. Readiness,
-verification time and measured switch duration are reported explicitly; cold
-connections are never represented as verified or promised to take one second.
+While the registered client window is open and disconnected, the service may keep its own empty Wintun adapter ready for the next click. Before reporting a direct connection, it checks that the WireGuard session has stopped and that the adapter has zero assigned addresses, routes and DNS servers. If it cannot verify the empty adapter, it removes it. The next Connect checks the current account policy and verifies the new encrypted connection and its public exits.
 
-The hosted Oracle acceptance measures the actual IPC click duration, verifies
-ordinary app HTTP exit and fresh UDP DNS, and rejects a prepared switch taking
-1000 ms or more. Route-free standby must leave ordinary app egress direct. The
-Acceptance covers UDP loss, permitted ingress and port fallback, DNS and
-dual-stack egress, and recovery without opening an unprotected tunnel route.
+Closing the last registered window releases the holder and adapter and stops the control service. Confirmed loss of that window triggers the same cleanup. A cleanup failure retains protection and exposes the recovery action.
 
-
-Since rc36, normal window close and “断开并恢复直连” use cold cleanup:
-stop the core, verify the owned TUN is removed, persist disconnected intent,
-then clear only owned protection and stop the control service after its reply.
-Disconnect retains the main window, without a polling or prewarm background.
-The next deliberate action starts only the fixed service through query/start
-rights for its registered owner, without another UAC prompt. An unremembered
-login resumes only while the same registered GUI PID/creation-time identity lives.
-Confirmed death of the last GUI performs the same cleanup; an uncertain process
-query or network failure is not death. Failed cleanup retains protection and
-recovery guidance. UAC recovery is an emergency tool. See
-[rc36 routing and lifetime](ci/rc36-routing-lifetime.md) for validation boundaries.
+The hosted acceptance measures clicks through the actual GUI, checks direct Internet access while disconnected and tests both transfer directions through the verified tunnel. It records UDP round-trip times under each load.
 
 rc11 adds bounded native per-port initiation/response/cookie/invalid/obsolete
 counters and numeric socket errors. Failed native evidence survives fallback;

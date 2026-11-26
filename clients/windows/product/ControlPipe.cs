@@ -37,6 +37,7 @@ internal static class ControlPipe
     {
         var owner=new SecurityIdentifier(File.ReadAllText(Path.Combine(Platform.Root,"owner.sid")).Trim());
         bool firstConnection=true;
+        var verifiedWindows=new List<ClientIdentity>();
         while(!cancel.IsCancellationRequested){
             var acl=new PipeSecurity();acl.SetAccessRuleProtection(true,false);
             acl.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid,null),PipeAccessRights.FullControl,AccessControlType.Deny));
@@ -66,9 +67,16 @@ internal static class ControlPipe
                     // Cancellation withdraws queued admission, not a mutation
                     // already executing. Never detach a timed-out command.
                     ClientIdentity? client=null;
-                    if(value["command"]?.GetValue<string>() is "AttachClient" or "AttachConnect"){
+                    string? operation=value["command"]?.GetValue<string>();
+                    if(operation is "AttachClient" or "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit"){
                         if(!GetNamedPipeClientProcessId(pipe.SafePipeHandle,out uint clientPid))throw new IOException("CLIENT_IDENTITY_UNAVAILABLE");
                         client=ClientIdentity.Capture(clientPid,clientSid);
+                        verifiedWindows.RemoveAll(x=>x.Alive()!=true);
+                        client.ProductWindow=verifiedWindows.Any(x=>x.SameProcess(client));
+                        if(!client.ProductWindow){
+                            pipe.RunAsClient(()=>client.ProductWindow=client.MatchesGuiImage());
+                            if(client.ProductWindow && verifiedWindows.Count<8)verifiedWindows.Add(client);
+                        }
                     }
                     response=await runtime.Command(value,admission.Token,client);
                 }finally{
@@ -100,7 +108,7 @@ internal static class ControlPipe
         // credentials. A pipe DACL alone authenticates only its client.
         if(!BoundToService(pipe))throw new IOException("SERVICE_IDENTITY_NOT_VERIFIED");
         long pipeReady=timer.ElapsedMilliseconds;
-        var frame=new JsonObject{["version"]=1,["command"]=command};if(command=="AttachConnect")frame["expected_version"]=DeviceRegistration.Version;if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}else if(command=="DeleteDevice"){frame["device_id"]=username;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
+        var frame=new JsonObject{["version"]=1,["command"]=command};if(command is "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit")frame["expected_version"]=DeviceRegistration.Version;if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}else if(command=="DeleteDevice"){frame["device_id"]=username;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
         await WriteFrame(pipe,frame.ToJsonString(),8192,timeout.Token).ConfigureAwait(false);
         var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token).ConfigureAwait(false))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");

@@ -27,6 +27,15 @@ internal static class TunReceipt
         VerifyFileIfPresent(ReceiptPath);
     }
 
+    internal static ulong VerifyRetained(Process creator)
+    {
+        VerifyEnvironment();
+        Owner receipt=Read();
+        if(!OwnedCore(creator,out long started) || creator.HasExited || receipt.Pid!=checked((uint)creator.Id) ||
+            started!=receipt.Started || CurrentLuid()!=receipt.Luid)throw new IOException("TUN_OWNER_IDENTITY_MISMATCH");
+        return receipt.Luid;
+    }
+
     internal static Task RecoverOrphan(CancellationToken cancel=default)=>RecoverOwned(false,cancel);
     internal static Task RecoverDormantOrphan(CancellationToken cancel=default)=>RecoverOwned(true,cancel);
     private static async Task RecoverOwned(bool dormant,CancellationToken cancel)
@@ -101,6 +110,38 @@ internal static class TunReceipt
     }
     private static string? DiagnosticCode(ReadOnlySpan<byte> line)
     {
+        if(line.SequenceEqual("PARK_BINDINGS_LOAD_FAILED"u8))return "TUN_OWNER_PARK_BINDINGS_LOAD_FAILED";
+        if(line.SequenceEqual("PARK_BINDINGS_RESTORE_FAILED"u8))return "TUN_OWNER_PARK_BINDINGS_RESTORE_FAILED";
+        if(line.SequenceEqual("PARK_RESTORE_ACCESS_DENIED"u8))return "TUN_OWNER_PARK_RESTORE_ACCESS_DENIED";
+        if(line.SequenceEqual("PARK_RESTORE_LOCK_BUSY"u8))return "TUN_OWNER_PARK_RESTORE_LOCK_BUSY";
+        if(line.SequenceEqual("PARK_RESTORE_REBOOT_REQUIRED"u8))return "TUN_OWNER_PARK_RESTORE_REBOOT_REQUIRED";
+        if(line.SequenceEqual("PARK_RESTORE_OWNER"u8))return "TUN_OWNER_PARK_RESTORE_OWNER";
+        if(line.SequenceEqual("PARK_RESTORE_IDENTITY"u8))return "TUN_OWNER_PARK_RESTORE_IDENTITY";
+        if(line.SequenceEqual("PARK_RESTORE_PNP"u8))return "TUN_OWNER_PARK_RESTORE_PNP";
+        if(line.SequenceEqual("DORMANT_DEVICE_PRESENT_STARTED"u8))return "TUN_OWNER_DORMANT_DEVICE_PRESENT_STARTED";
+        if(line.SequenceEqual("DORMANT_DEVICE_PRESENT_STOPPED"u8))return "TUN_OWNER_DORMANT_DEVICE_PRESENT_STOPPED";
+        if(line.SequenceEqual("DORMANT_DEVICE_PRESENT_PROBLEM"u8))return "TUN_OWNER_DORMANT_DEVICE_PRESENT_PROBLEM";
+        if(line.SequenceEqual("DORMANT_DEVICE_SETUP_PRESENT"u8))return "TUN_OWNER_DORMANT_DEVICE_SETUP_PRESENT";
+        if(line.SequenceEqual("DORMANT_DEVICE_JOURNAL_MISSING"u8))return "TUN_OWNER_DORMANT_DEVICE_JOURNAL_MISSING";
+        if(line.SequenceEqual("DORMANT_DEVICE_JOURNAL_INVALID"u8))return "TUN_OWNER_DORMANT_DEVICE_JOURNAL_INVALID";
+        if(line.SequenceEqual("DORMANT_DEVICE_OWNER"u8))return "TUN_OWNER_DORMANT_DEVICE_OWNER";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_MISMATCH"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_MISMATCH";
+        if(line.SequenceEqual("DORMANT_DEVICE_QUERY_FAILED"u8))return "TUN_OWNER_DORMANT_DEVICE_QUERY_FAILED";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_COMPONENTS"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_COMPONENTS";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_PATH_TOKENS"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_PATH_TOKENS";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_FLAGS"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_FLAGS";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_UNRECORDED_DISABLED"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_UNRECORDED_DISABLED";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_ROLLBACK_FAILED"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_ROLLBACK_FAILED";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_READBACK"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_READBACK";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_APPLY"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_APPLY";
+        if(line.SequenceEqual("DORMANT_DEVICE_FRESH_IDENTITY"u8))return "TUN_OWNER_DORMANT_DEVICE_FRESH_IDENTITY";
+        if(line.SequenceEqual("PARK_RESTORE_DRIFT"u8))return "TUN_OWNER_PARK_RESTORE_DRIFT";
+        if(line.SequenceEqual("PARK_RESTORE_READBACK"u8))return "TUN_OWNER_PARK_RESTORE_READBACK";
+        if(line.SequenceEqual("PARK_RESTORE_JOURNAL_INVALID"u8))return "TUN_OWNER_PARK_RESTORE_JOURNAL_INVALID";
+        if(line.SequenceEqual("PARK_RESTORE_INVALID_STATE"u8))return "TUN_OWNER_PARK_RESTORE_INVALID_STATE";
+        if(line.SequenceEqual("CORE_INPUT_FAILED"u8))return "TUN_OWNER_CORE_INPUT_FAILED";
+        if(line.SequenceEqual("CORE_IDENTITY_FAILED"u8))return "TUN_OWNER_CORE_IDENTITY_FAILED";
+        if(line.SequenceEqual("CORE_ADAPTER_RECOVERY_FAILED"u8))return "TUN_OWNER_CORE_ADAPTER_RECOVERY_FAILED";
         if(line.SequenceEqual("ORPHAN_IDENTITY_FAILED"u8))return "TUN_OWNER_ORPHAN_IDENTITY_FAILED";
         if(line.SequenceEqual("ORPHAN_IP_CLEANUP_FAILED"u8))return "TUN_OWNER_ORPHAN_IP_CLEANUP_FAILED";
         if(line.SequenceEqual("ORPHAN_ROUTE_CLEANUP_FAILED"u8))return "TUN_OWNER_ORPHAN_ROUTE_CLEANUP_FAILED";

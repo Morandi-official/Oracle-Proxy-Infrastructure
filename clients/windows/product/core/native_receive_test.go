@@ -88,3 +88,42 @@ func BenchmarkNativeReceive(b *testing.B) {
 		}
 	}
 }
+
+type drainingSocket struct {
+	net.Conn
+	readStarted chan struct{}
+	closing     chan struct{}
+	release     chan struct{}
+}
+
+func (s *drainingSocket) Read([]byte) (int, error) {
+	close(s.readStarted)
+	<-s.release
+	return 0, net.ErrClosed
+}
+
+func (s *drainingSocket) Close() error {
+	close(s.closing)
+	return nil
+}
+
+func TestNativeCloseJoinsReaderBeforePark(t *testing.T) {
+	socket := &drainingSocket{readStarted: make(chan struct{}), closing: make(chan struct{}), release: make(chan struct{})}
+	conn := newNativeConn([]net.Conn{socket}, []uint16{8443})
+	<-socket.readStarted
+	closed := make(chan struct{})
+	go func() { conn.Close(); close(closed) }()
+	<-socket.closing
+	select {
+	case <-closed:
+		close(socket.release)
+		t.Fatal("returned while a former socket reader could still publish events")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(socket.release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("reader finished but Close did not")
+	}
+}

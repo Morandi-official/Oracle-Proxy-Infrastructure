@@ -1,0 +1,44 @@
+name: Publish the signed WireGuard Android 0.2.0 preview
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/android-020-prerelease.yml'
+      - 'ops/android-release/android-020-prerelease.sh'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-020-prerelease.yml'
+      - 'ops/android-release/android-020-prerelease.sh'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: bash ops/android-release/android-020-prerelease.sh verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    concurrency: publish-wireguard-android-v0.2.0
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: bash ops/android-release/android-020-prerelease.sh publish
+        env:
+          GH_TOKEN: ${{ github.token }}

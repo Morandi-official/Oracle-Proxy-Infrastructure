@@ -119,9 +119,9 @@ public final class ProductionLifecycleTest {
                     && !state.verifiedIpv4.isEmpty() && (!api.dualStack || !state.verifiedIpv6.isEmpty());
             long afterConsentNanos;
             try (VisibleConnectionTiming firstClick =
-                         new VisibleConnectionTiming(instrumentation, screen, controller, verified);
+                         new VisibleConnectionTiming("FIRST_CLICK", instrumentation, screen, controller, verified);
                  VisibleConnectionTiming afterConsent =
-                         new VisibleConnectionTiming(instrumentation, screen, controller, verified)) {
+                         new VisibleConnectionTiming("AFTER_CONSENT", instrumentation, screen, controller, verified)) {
                 firstClick.tapConnectButton();
                 UiDevice ui = UiDevice.getInstance(instrumentation);
                 UiObject2 allow = ui.wait(Until.findObject(By.res("android", "button1")), 8_000);
@@ -151,7 +151,8 @@ public final class ProductionLifecycleTest {
             for (int sample = 0; sample < reconnectNanos.length; sample++) {
                 assertTrue("Android VPN consent still valid", VpnService.prepare(context) == null);
                 try (VisibleConnectionTiming reconnect =
-                             new VisibleConnectionTiming(instrumentation, screen, controller, verified)) {
+                             new VisibleConnectionTiming("RECONNECT_" + (sample + 1), instrumentation,
+                                     screen, controller, verified)) {
                     reconnect.tapConnectButton();
                     reconnectNanos[sample] = reconnect.await("Preauthorized connection " + (sample + 1));
                 }
@@ -198,6 +199,7 @@ public final class ProductionLifecycleTest {
                 + "=TOTAL_MS:" + timing.totalMs + ";POLICY_MS:" + timing.policyMs
                 + ";QUEUE_MS:" + timing.queueMs + ";PREPARATION_MS:" + timing.preparationMs
                 + ";POLICY_WAIT_MS:" + timing.policyWaitMs
+                + ";CONSENT_POLICY_AGE_MS:" + timing.consentPolicyAgeMs
                 + ";BACKEND_WAIT_MS:" + timing.backendWaitMs
                 + ";SERVICE_WAIT_MS:" + timing.serviceWaitMs + ";NATIVE_START_MS:" + timing.nativeStartMs
                 + ";NETWORK_WAIT_MS:" + timing.networkWaitMs

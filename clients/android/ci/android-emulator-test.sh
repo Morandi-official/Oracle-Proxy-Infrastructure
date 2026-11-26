@@ -61,11 +61,27 @@ if ! timeout 180 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr 
     exit 1
 fi
 adb shell input keyevent 82
-adb shell settings put global window_animation_scale 0
-adb shell settings put global transition_animation_scale 0
-adb shell settings put global animator_duration_scale 0
+if [[ "$mode" != production ]]; then
+    adb shell settings put global window_animation_scale 0
+    adb shell settings put global transition_animation_scale 0
+    adb shell settings put global animator_duration_scale 0
+fi
 
 if [[ "$mode" == production ]]; then
+    animation_scale() {
+        local scale
+        scale=$(adb shell settings get global "$1" | tr -d '\r')
+        if [[ "$scale" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            printf '%s' "$scale"
+        elif [[ "$scale" == null ]]; then
+            printf 'DEFAULT'
+        else
+            printf 'UNKNOWN'
+        fi
+    }
+    printf 'ANDROID_PERF_VISUAL_ENV=API:%s;WINDOW_SCALE:%s;TRANSITION_SCALE:%s;ANIMATOR_SCALE:%s\n' \
+        "$api" "$(animation_scale window_animation_scale)" \
+        "$(animation_scale transition_animation_scale)" "$(animation_scale animator_duration_scale)"
     if [[ -z "${ANDROID_ACCEPTANCE_USERNAME:-}" || -z "${ANDROID_ACCEPTANCE_PASSWORD:-}" ]]; then
         echo 'The dedicated client acceptance credentials are required.' >&2
         exit 1
@@ -86,11 +102,15 @@ if [[ "$mode" == production ]]; then
     timing+='CONNECT_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_CLICK)_MS=[0-9]+;TARGET_MS=1500);UNDER_TARGET=[01]$'
     reconnect_series='^ANDROID_PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS=([0-9]+,){4}[0-9]+'
     reconnect_series+=';N=5;MEDIAN_MS=[0-9]+;MAX_MS=[0-9]+;UNDER_1500MS=[0-5]$'
+    visual='^ANDROID_PERF_VISUAL_DIAGNOSTICS_(FIRST_CLICK|AFTER_CONSENT|RECONNECT_[1-5])='
+    visual+='DOWN_CALL_NS:(-1|[0-9]+);UP_CALL_NS:(-1|[0-9]+);APP_DOWN_DELIVERY_NS:(-1|[0-9]+)'
+    visual+=';APP_UP_DELIVERY_NS:(-1|[0-9]+);CONSENT_RESULT_NS:(-1|[0-9]+);FOCUS_GAIN_NS:(-1|[0-9]+)'
+    visual+=';FIRST_VERIFIED_DRAW_NS:(-1|[0-9]+);FIRST_DRAW_FOCUSED:(-1|[01]);FOCUSED_DRAW_NS:(-1|[0-9]+)$'
     login_phases='^ANDROID_PERF_LOGIN_(FRESH|WARM)_PHASES=QUEUE_MS:[0-9]+,IDENTITY_MS:[0-9]+,AUTH_MS:[0-9]+,SESSION_MS:[0-9]+'
     login_phases+=',STREAM_OPEN_MS:[0-9]+,UPLOAD_MS:[0-9]+,RESPONSE_HEADERS_MS:[0-9]+,RESPONSE_BODY_MS:[0-9]+$'
     families='^ANDROID_PERF_VERIFIED_FAMILIES=[12]$'
     proof='^ANDROID_PERF_EXIT_PROOF_(FIRST|RECONNECT)=IPV4:(h3|https);IPV6:(h3|https|blocked);H3_CANDIDATE=[01]$'
-    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;QUEUE_MS:[0-9]+;PREPARATION_MS:[0-9]+;POLICY_WAIT_MS:[0-9]+;BACKEND_WAIT_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+'
+    phases='^ANDROID_PERF_CONNECT_PHASES_(FIRST|RECONNECT)=TOTAL_MS:[0-9]+;POLICY_MS:[0-9]+;QUEUE_MS:[0-9]+;PREPARATION_MS:[0-9]+;POLICY_WAIT_MS:[0-9]+;CONSENT_POLICY_AGE_MS:(-1|[0-9]+);BACKEND_WAIT_MS:[0-9]+;SERVICE_WAIT_MS:[0-9]+;NATIVE_START_MS:[0-9]+;NETWORK_WAIT_MS:[0-9]+'
     phases+=';NETWORK_DISCOVERY_MS:[0-9]+;NETWORK_BIND_MS:[0-9]+;EXIT_PROOF_MS:[0-9]+;WG_HANDSHAKE_MS:(-1|[0-9]+)'
     phases+=';IPV4_PROOF_MS:[0-9]+;IPV4_PROOF_ATTEMPTS:[1-3];IPV6_PROOF_MS:[0-9]+;IPV6_PROOF_ATTEMPTS:[0-3];ATTEMPTS:[0-9]+$'
     latency='^ANDROID_PERF_HTTPS_(DIRECT|WIREGUARD_UDP)_(FRESH|REUSED)_SAMPLES_MS=([0-9]+,){19}[0-9]+'
@@ -105,7 +125,7 @@ if [[ "$mode" == production ]]; then
     rtt_unavailable='^ANDROID_PERF_UDP_STUN_(DIRECT|WIREGUARD_UDP)_STATUS=(DNS_UNAVAILABLE|NO_IPV4_ADDRESS)'
     rtt_unavailable+=';HOST=(stun[.]cloudflare[.]com|stun[.]l[.]google[.]com);PORT=(3478|19302)$'
     adb logcat -d -v raw -s ProxySpeedAcceptance:I '*:S' |
-        grep -E -e "$download" -e "$timing" -e "$reconnect_series" -e "$login_phases" -e "$families" -e "$proof" \
+        grep -E -e "$download" -e "$timing" -e "$reconnect_series" -e "$visual" -e "$login_phases" -e "$families" -e "$proof" \
             -e "$phases" -e "$latency" -e "$rtt" -e "$rtt_unavailable" |
         tee "$working_dir/performance.txt"
     grep -Eq '^OK \(1 test\)' "$working_dir/instrumentation.txt"
@@ -114,11 +134,15 @@ if [[ "$mode" == production ]]; then
         PERF_LOGIN_FRESH_PHASES PERF_LOGIN_WARM_PHASES \
         PERF_CONNECT_FIRST_CLICK_MS PERF_CONNECT_AFTER_CONSENT_MS PERF_CONNECT_RECONNECT_CLICK_MS \
         PERF_CONNECT_PREAUTHORIZED_SAMPLES_MS \
+        PERF_VISUAL_DIAGNOSTICS_FIRST_CLICK PERF_VISUAL_DIAGNOSTICS_AFTER_CONSENT \
         PERF_EXIT_PROOF_FIRST PERF_EXIT_PROOF_RECONNECT \
         PERF_CONNECT_PHASES_FIRST PERF_CONNECT_PHASES_RECONNECT \
         PERF_HTTPS_DIRECT_FRESH_SAMPLES_MS PERF_HTTPS_DIRECT_REUSED_SAMPLES_MS \
         PERF_HTTPS_WIREGUARD_UDP_FRESH_SAMPLES_MS PERF_HTTPS_WIREGUARD_UDP_REUSED_SAMPLES_MS; do
         grep -q "^ANDROID_$metric=" "$working_dir/performance.txt"
+    done
+    for sample in {1..5}; do
+        grep -q "^ANDROID_PERF_VISUAL_DIAGNOSTICS_RECONNECT_$sample=" "$working_dir/performance.txt"
     done
     for route in DIRECT WIREGUARD_UDP; do
         grep -Eq "^ANDROID_PERF_UDP_STUN_${route}_(RTT_MS|STATUS)=.*;HOST=stun[.]cloudflare[.]com;(ENDPOINT=[0-9.]+;)?PORT=3478(;|$)" \

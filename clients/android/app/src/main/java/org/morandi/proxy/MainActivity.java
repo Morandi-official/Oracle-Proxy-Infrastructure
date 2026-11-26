@@ -16,6 +16,7 @@ import android.graphics.drawable.RippleDrawable;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.view.Gravity;
@@ -46,6 +47,8 @@ public final class MainActivity extends Activity {
     private AppController controller;
     private AppController.State state;
     private boolean consentPending;
+    private long consentRequest;
+    private long consentResultNanos;
     private boolean showingLogin;
     private boolean showingRegistration;
     private boolean showingSessionPending;
@@ -93,6 +96,7 @@ public final class MainActivity extends Activity {
         if (saved != null) {
             page = Math.max(CONNECTION, Math.min(DIAGNOSTICS, saved.getInt("page")));
             consentPending = saved.getBoolean("vpnConsentPending");
+            consentRequest = saved.getLong("vpnConsentRequest");
         }
         render(controller.snapshot(), true);
     }
@@ -116,21 +120,23 @@ public final class MainActivity extends Activity {
     protected void onSaveInstanceState(Bundle out) {
         out.putInt("page", page);
         out.putBoolean("vpnConsentPending", consentPending);
+        out.putLong("vpnConsentRequest", consentRequest);
         super.onSaveInstanceState(out);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == VPN_PERMISSION) consentResultNanos = SystemClock.elapsedRealtimeNanos();
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != VPN_PERMISSION) return;
+        if (requestCode != VPN_PERMISSION || !consentPending) return;
         consentPending = false;
-        AppController.State current = controller.snapshot();
-        if (resultCode == RESULT_OK && current.signedIn && current.registered) {
-            controller.connect();
-        } else if (resultCode != RESULT_OK) {
-            controller.reportConsentDenied();
-        }
+        controller.finishVpnConsent(consentRequest, resultCode == RESULT_OK);
+        consentRequest = 0;
         render(controller.snapshot(), false);
+    }
+
+    long vpnConsentResultNanos() {
+        return consentResultNanos;
     }
 
     private void render(AppController.State value, boolean first) {
@@ -458,9 +464,10 @@ public final class MainActivity extends Activity {
             consentPending = true;
             try {
                 startActivityForResult(request, VPN_PERMISSION);
-                controller.prepareVpnConsent();
+                consentRequest = controller.prepareVpnConsent();
             } catch (android.content.ActivityNotFoundException error) {
                 consentPending = false;
+                consentRequest = 0;
                 Toast.makeText(this, "本机无法打开系统 VPN 授权。", Toast.LENGTH_LONG).show();
             }
             render(controller.snapshot(), false);

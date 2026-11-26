@@ -37,6 +37,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.assertEquals;
@@ -98,29 +99,45 @@ public final class AndroidLifecycleTest {
             assertEquals("0123456789ab", controller.snapshot().deviceId);
 
             assertNotNull("A newly installed app asks for VPN consent", VpnService.prepare(context));
-            tap(instrumentation, activity, R.id.connect);
-            UiObject2 allow = ui.wait(Until.findObject(By.res("android", "button1")), 7_000);
-            assertNotNull("The Android VPN consent dialog was shown", allow);
-            UiObject2 deny = ui.wait(Until.findObject(By.res("android", "button2")), 7_000);
-            assertNotNull("The Android VPN consent dialog has a cancel button", deny);
-            deny.click();
-            await("consent cancellation", controller, () -> controller.snapshot().message.contains("系统未授权 VPN"));
-            assertFalse(engine.isUp());
-
-            tap(instrumentation, activity, R.id.connect);
-            allow = ui.wait(Until.findObject(By.res("android", "button1")), 7_000);
-            assertNotNull("The user can reopen VPN consent", allow);
-            PolicyGate initialPolicy = new PolicyGate();
-            api.policyGate = initialPolicy;
+            PolicyGate deniedPolicy = new PolicyGate();
+            api.policyGate.set(deniedPolicy);
             try {
+                tap(instrumentation, activity, R.id.connect);
+                assertNotNull("The Android VPN consent dialog was shown",
+                        ui.wait(Until.findObject(By.res("android", "button1")), 7_000));
+                assertTrue("The explicit tap can read policy while awaiting consent",
+                        deniedPolicy.requested.await(7, TimeUnit.SECONDS));
+                assertFalse("Consent is required before installing a VPN route", hasVpnRoute(context));
+                UiObject2 deny = ui.wait(Until.findObject(By.res("android", "button2")), 7_000);
+                assertNotNull("The Android VPN consent dialog has a cancel button", deny);
+                deny.click();
+                await("consent cancellation", controller,
+                        () -> controller.snapshot().message.contains("系统未授权 VPN"));
+                assertFalse(engine.isUp());
+            } finally {
+                api.policyGate.compareAndSet(deniedPolicy, null);
+                deniedPolicy.respond.countDown();
+            }
+
+            PolicyGate pendingPrefetch = new PolicyGate();
+            PolicyGate approvedPolicy = new PolicyGate();
+            api.policyGate.set(pendingPrefetch);
+            try {
+                tap(instrumentation, activity, R.id.connect);
+                UiObject2 allow = ui.wait(Until.findObject(By.res("android", "button1")), 7_000);
+                assertNotNull("The user can reopen VPN consent", allow);
+                assertTrue("The next tap requests its own policy",
+                        pendingPrefetch.requested.await(7, TimeUnit.SECONDS));
+                api.policyGate.set(approvedPolicy);
                 allow.click();
-                assertTrue("The approved attempt requests fresh account policy",
-                        initialPolicy.requested.await(7, TimeUnit.SECONDS));
+                assertTrue("An incomplete prefetch never delays the approved attempt's own policy request",
+                        approvedPolicy.requested.await(7, TimeUnit.SECONDS));
                 assertFalse("A pending account response cannot activate the tunnel", engine.isUp());
                 assertFalse("A pending account response cannot install a VPN route", hasVpnRoute(context));
             } finally {
-                api.policyGate = null;
-                initialPolicy.respond.countDown();
+                api.policyGate.set(null);
+                pendingPrefetch.respond.countDown();
+                approvedPolicy.respond.countDown();
             }
             await("verified connection", controller, () -> "connected".equals(controller.snapshot().mode));
             AppController.State connected = controller.snapshot();
@@ -267,8 +284,8 @@ public final class AndroidLifecycleTest {
 
     private static final class FixtureApi extends ClientApi {
         private final List<String> events = Collections.synchronizedList(new ArrayList<>());
+        private final AtomicReference<PolicyGate> policyGate = new AtomicReference<>();
         private volatile boolean policyDisabled;
-        private volatile PolicyGate policyGate;
         private boolean registered;
         private String clientPublicKey;
         private final String serverPublicKey;
@@ -304,12 +321,10 @@ public final class AndroidLifecycleTest {
                     events.add("logout");
                     return new JSONObject().put("ok", true);
                 case "state":
-                    PolicyGate gate = policyGate;
+                    PolicyGate gate = policyGate.getAndSet(null);
                     if (gate != null) {
                         gate.requested.countDown();
-                        if (!gate.respond.await(10, TimeUnit.SECONDS)) {
-                            throw new IOException("Timed out waiting for the fixture to release policy");
-                        }
+                        gate.respond.await();
                     }
                     return state();
                 default:

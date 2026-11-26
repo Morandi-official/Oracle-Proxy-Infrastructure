@@ -36,6 +36,7 @@ final class CloudflareExitProbe {
     private static final String ORIGIN6 = "[2606:4700:4700::1111]";
     private static final int MAX_TRACE_BYTES = 8_192;
     private static final long HTTPS_HEDGE_MS = 100;
+    private static final long FIRST_HTTPS_HEDGE_MS = 50;
     private static volatile String lastHttp3Exit4 = "";
     private static volatile String lastHttp3Exit6 = "";
 
@@ -70,10 +71,12 @@ final class CloudflareExitProbe {
         if (!BuildConfig.H3_EXIT_PROOF_ENABLED || !platformSupported()) {
             return https.run(deadline);
         }
-        // Race both transports immediately until this process has accepted
-        // an actual H3 proof for the expected exit on this address family.
+        // Give QUIC a short head start so the first dual-stack probe does
+        // not launch four handshakes at once. An early QUIC failure starts
+        // HTTPS immediately. A previously verified QUIC path gets longer.
         String verifiedHttp3 = ipv6 ? lastHttp3Exit6 : lastHttp3Exit4;
-        long hedgeDelay = expected.equals(verifiedHttp3) ? HTTPS_HEDGE_MS : 0;
+        long hedgeDelay = expected.equals(verifiedHttp3)
+                ? HTTPS_HEDGE_MS : FIRST_HTTPS_HEDGE_MS;
         return PlatformHttp3.hedge(context, vpn, url, expected, ipv6, deadline, hedgeDelay, https);
     }
 

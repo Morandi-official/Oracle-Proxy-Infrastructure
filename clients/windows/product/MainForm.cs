@@ -69,7 +69,7 @@ internal sealed partial class MainForm : Form
     private readonly SemaphoreSlim _requests=new(1,1);
     private readonly CancellationTokenSource _lifetime=new();
     private CancellationTokenSource _requestEpoch=new();
-    private readonly TimeSpan _requestTimeout,_quitTimeout,_statusTimeout;
+    private readonly TimeSpan _requestTimeout,_loginTimeout,_quitTimeout,_statusTimeout;
     private readonly Func<string,string?,string?,Task<JsonObject>> _send;
     private readonly bool _realService;
     private bool _needsReconcile,_startupPrepared,_uuMaintaining,_statusReadSucceeded,_recovering;
@@ -158,6 +158,7 @@ internal sealed partial class MainForm : Form
         _recover=recover ?? Installer.ElevateRecoveryAsync;
         _send=send ?? ControlPipe.Send;_realService=send is null;_serviceReady=!_realService;DoubleBuffered=true;
         _requestTimeout=requestTimeout??TimeSpan.FromSeconds(45);_quitTimeout=quitTimeout??TimeSpan.FromSeconds(45);
+        _loginTimeout=requestTimeout??TimeSpan.FromSeconds(55);
         if(_requestTimeout<=TimeSpan.Zero || _requestTimeout>TimeSpan.FromMinutes(1) || _quitTimeout<=TimeSpan.Zero || _quitTimeout>TimeSpan.FromMinutes(1))throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         _statusTimeout=TimeSpan.FromMilliseconds(Math.Min(_requestTimeout.TotalMilliseconds,6000));
         Text="Proxy";AutoScaleMode=AutoScaleMode.Dpi;ClientSize=new Size(1220,820);MinimumSize=new Size(760,540);BackColor=Canvas;ForeColor=Ink;Font=ClientAppearance.CreateFont(10);StartPosition=FormStartPosition.CenterScreen;
@@ -526,19 +527,19 @@ internal sealed partial class MainForm : Form
     }
     internal async Task Act(string command)
     {
-        bool passive=command=="Status";
+        bool passive=command=="Status",login=command is "Login" or "LoginRemembered";
         if(_closing || IsDisposed || _recovering && !passive)return;
         if(passive && _backendIdle)return;
         if(passive)_statusReadSucceeded=false;
         if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:_requestTimeout);
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:login?_loginTimeout:_requestTimeout);
         bool acquired=false,sentMutation=false,awaitingResponse=true;
         bool toggle=command is "Connect" or "Disconnect";var operationTimer=System.Diagnostics.Stopwatch.StartNew();
         using var focusScroll=toggle?_viewport.HoldFocusScroll():null;
         if(toggle){_lastUiCommand=command;_lastUiQueueMs=_lastUiAttachMs=_lastUiResponseMs=_lastUiCompleteMs=null;}
         if(!passive){
             _busy=true;
-            if(command is "Login" or "LoginRemembered")_loginFeedback.Text="正在验证账号并登记设备…";
+            if(login)_loginFeedback.Text="正在验证账号并登记设备…";
             void ShowPendingFeedback()
             {
                 if(toggle){
@@ -560,14 +561,14 @@ internal sealed partial class MainForm : Form
             if(toggle)_lastUiQueueMs=operationTimer.ElapsedMilliseconds;
             // Ordinary Connect preserves the service's adaptive port plan.
             // A diagnostic pin is set only by its explicit diagnostic button.
-            if(command is "Login" or "LoginRemembered" && _connectionIntent){
+            if(login && _connectionIntent){
                 sentMutation=true;var off=await SendRequest("Disconnect",null,null,deadline.Token);Display(off);
                 if(off["ok"]?.GetValue<bool>()!=true || off["intent"]?.GetValue<bool>()!=false)throw new IOException("SAFE_OFF_NOT_VERIFIED");
             }
-            sentMutation=!passive;var state=await SendRequest(command,command is "Login" or "LoginRemembered"?_username.Text:command=="ConfirmDevice"?_deviceName.Text:command=="DeleteDevice"?_deleteDeviceId:null,command is "Login" or "LoginRemembered"?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
+            sentMutation=!passive;var state=await SendRequest(command,login?_username.Text:command=="ConfirmDevice"?_deviceName.Text:command=="DeleteDevice"?_deleteDeviceId:null,login?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
             awaitingResponse=false;
             if(toggle)_lastUiResponseMs=operationTimer.ElapsedMilliseconds;
-            if(command is "Login" or "LoginRemembered")_password.Clear();
+            if(login)_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
             Display(state);
             if(state["shutdown_after_response"]?.GetValue<bool>()==true && state["ok"]?.GetValue<bool>()==true){
@@ -577,7 +578,7 @@ internal sealed partial class MainForm : Form
                 if(_realService){try{await ControlPipe.WaitStopped(deadline.Token);}catch{_backendIdle=false;if(!_closing)_timer.Start();throw;}}
             }
             if(command=="Logout" && state["ok"]?.GetValue<bool>()==true){_username.Clear();_password.Clear();_startupPrepared=false;}
-            if(command is "Login" or "LoginRemembered" && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
+            if(login && !_deviceRegistered && state["account"] is JsonObject)_deviceName.Focus();
         }catch(OperationCanceledException){
             if(sentMutation)_needsReconcile=true;
             if(!IsDisposed && !_closing){
@@ -595,7 +596,7 @@ internal sealed partial class MainForm : Form
             }
         }
         finally{awaitingResponse=false;if(toggle)_lastUiCompleteMs=operationTimer.ElapsedMilliseconds;if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
-        if(command is "Login" or "LoginRemembered" or "ConfirmDevice" or "DeleteDevice")await StartReadyClient();
+        if(login || command is "ConfirmDevice" or "DeleteDevice")await StartReadyClient();
     }
     private async Task MaintainUu(bool restore)
     {

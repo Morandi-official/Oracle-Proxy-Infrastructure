@@ -60,6 +60,12 @@ internal static class ProductTests
             return 1;
         }
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return UiOnMessageLoop();
+        if(args.SequenceEqual(new[]{"--public-account-http3-probe"})){
+            if(!System.Net.Quic.QuicConnection.IsSupported)throw new PlatformNotSupportedException("Windows QUIC is required for this control");
+            using var http=AccountApi.CreateHttp3Client();
+            AccountApi.VerifyAccountRoute(http,CancellationToken.None).GetAwaiter().GetResult();
+            Console.WriteLine("PINNED_HTTP3_AUTHENTICATE_ROUTE_TLS_AND_ANONYMOUS_POST=PASS");return 0;
+        }
         if(args.SequenceEqual(new[]{"--service-worker-self-test"}))return ServiceWorkerBudget().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--native-denial"})){
@@ -499,20 +505,21 @@ internal static class ProductTests
 
     private static void AccountRouteRegression()
     {
-        static HttpResponseMessage SignedOut()=>new(HttpStatusCode.Unauthorized){
-            Content=new StringContent("""{"error":"LOGIN_REQUIRED"}""")};
+        static HttpResponseMessage AnonymousPost()=>new(HttpStatusCode.BadRequest){
+            Content=new StringContent("""{"error":"INVALID_REQUEST"}""")};
         static HttpClient Client(Func<HttpRequestMessage,CancellationToken,Task<HttpResponseMessage>> send)=>
             new(new AccountRouteHandler((request,cancel)=>{
-                UiAssert(request.Method==HttpMethod.Get && request.RequestUri==new Uri(AccountApi.Base,"api/client/state") &&
-                    request.Headers.Authorization is null && request.Content is null,"ACCOUNT_ROUTE_PROBE_IS_ANONYMOUS_AND_ORIGIN_BOUND");
+                UiAssert(request.Method==HttpMethod.Post && request.RequestUri==new Uri(AccountApi.Base,"api/client/authenticate") &&
+                    request.Headers.Authorization is null && request.Content?.ReadAsStringAsync(cancel).GetAwaiter().GetResult()=="{}",
+                    "ACCOUNT_ROUTE_PROBE_IS_ANONYMOUS_AND_USES_THE_PASSWORD_ENDPOINT");
                 return send(request,cancel);
             })){BaseAddress=AccountApi.Base};
-        static HttpClient Select(HttpClient direct,HttpClient physical)=>AccountApi.SelectVerifiedRoute(
-            direct,physical,AccountApi.VerifyAccountRoute,CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+        static HttpClient Select(params HttpClient[] clients)=>AccountApi.SelectVerifiedRoute(
+            clients,AccountApi.VerifyAccountRoute,CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
 
         int physicalCalls=0;
-        using var physical=Client((_,_)=>{physicalCalls++;return Task.FromResult(SignedOut());});
-        using var direct=Client((_,_)=>Task.FromResult(SignedOut()));
+        using var physical=Client((_,_)=>{physicalCalls++;return Task.FromResult(AnonymousPost());});
+        using var direct=Client((_,_)=>Task.FromResult(AnonymousPost()));
         UiAssert(ReferenceEquals(Select(direct,physical),direct) && physicalCalls==0,
             "VERIFIED_ORDINARY_ACCOUNT_ROUTE_KEEPS_ITS_HEAD_START");
 
@@ -525,18 +532,28 @@ internal static class ProductTests
         using var stalled=Client(async (_,cancel)=>{
             try{await Task.Delay(Timeout.Infinite,cancel).ConfigureAwait(false);}
             finally{cancelled.TrySetResult();}
-            return SignedOut();
+            return AnonymousPost();
         });
         UiAssert(ReferenceEquals(Select(stalled,physical),physical),"ACCOUNT_HTTPS_FALLBACK_SURVIVES_ORDINARY_HTTP_STALL");
         cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
 
         using var redirected=Client((_,_)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.Redirect)));
         UiAssert(ReferenceEquals(Select(redirected,physical),physical),"ACCOUNT_ROUTE_PROBE_REJECTS_A_REDIRECT");
-        using var wrongBody=Client((_,_)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized){
+        using var wrongBody=Client((_,_)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest){
             Content=new StringContent("""{"error":"SOMETHING_ELSE"}""")}));
+        using var failedTcp=Client((_,_)=>Task.FromException<HttpResponseMessage>(
+            new HttpRequestException(HttpRequestError.ConnectionError,"TEST_CONNECT_FAILURE",
+                new SocketException((int)SocketError.NetworkUnreachable))));
+        using var lastAlternate=Client((_,_)=>Task.FromResult(AnonymousPost()));
+        UiAssert(ReferenceEquals(Select(failedTcp,failedTls,wrongBody,lastAlternate),lastAlternate),
+            "ACCOUNT_VERIFIES_ALTERNATE_AFTER_BOTH_OLD_TCP_ROUTES_FAIL");
         bool refused=false;
-        try{Select(redirected,wrongBody);}
-        catch(IOException error)when(error.Message=="ACCOUNT_API_UNREACHABLE"){refused=true;}
+        try{Select(failedTcp,wrongBody);}
+        catch(AccountTransportException error){
+            var report=ConnectionFailure.Capture("ACCOUNT_AUTHENTICATE",error,"");
+            refused=report["account_phase"]?.GetValue<string>()=="ROUTE_PROBE" &&
+                report["socket_error"]?.GetValue<string>()=="NetworkUnreachable";
+        }
         UiAssert(refused,"ACCOUNT_ROUTE_REQUIRES_THE_ACTUAL_API_RESPONSE");
         Console.WriteLine("ACCOUNT_API_VERIFIED_TLS_AND_HTTP_ROUTE_FALLBACK=PASS");
     }

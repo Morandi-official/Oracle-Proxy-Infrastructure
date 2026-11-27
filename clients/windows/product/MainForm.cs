@@ -651,7 +651,7 @@ internal sealed partial class MainForm : Form
         if (_diagnosticSnapshot is JsonObject state) {
             report.Append("\r\n登录状态：" + state["error"]);
             if (state["failure"] is JsonObject failure)
-                foreach (string key in new[] { "stage", "category", "socket_error", "http_error", "http_status", "at" })
+                foreach (string key in new[] { "stage", "category", "account_phase", "socket_error", "http_error", "http_status", "at" })
                     report.Append($"\r\n{key}: {failure[key]}");
         }
         return report.ToString();
@@ -669,7 +669,7 @@ internal sealed partial class MainForm : Form
             if(state["core_start_timings"] is JsonObject coreTimings)foreach(string key in new[]{"bundle_ms","process_ms","private_probe_ready_ms","adapter_ready_ms","receipt_ms","adapter_create_ms","adapter_audit_ms","empty_audited"})report.Append($"core.{key}: {coreTimings[key]}\r\n");
             if(state["control_timings"] is JsonObject controlTimings)foreach(string key in new[]{"service_ready_ms","attested_pipe_ms","response_ms"})report.Append($"control.{key}: {controlTimings[key]}\r\n");
             if(state["disconnect_timings"] is JsonObject offTimings)foreach(string key in new[]{"core_stopped_ms","tunnel_audited_ms","state_saved_ms","complete_ms"})report.Append($"disconnect.{key}: {offTimings[key]}\r\n");
-            if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})report.Append($"failure.{key}: {failure[key]}\r\n");
+            if(state["failure"] is JsonObject failure)foreach(string key in new[]{"stage","category","account_phase","hresult","native_error","socket_error","http_error","http_status","core_stage","at"})report.Append($"failure.{key}: {failure[key]}\r\n");
         return report.ToString().Replace("ORACLE_EGRESS_","EGRESS_",StringComparison.Ordinal).Replace("ORACLE_","EGRESS_",StringComparison.Ordinal).Replace("oracle_egress_","egress_",StringComparison.Ordinal).Replace("oracle_","egress_",StringComparison.Ordinal);
     }
     internal string UuReport=>_uuReport;

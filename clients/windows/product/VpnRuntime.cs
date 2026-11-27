@@ -402,8 +402,10 @@ internal sealed partial class VpnRuntime : IDisposable
                     finally{CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);}
                 }
                 if(_secret.PrivateKey.Length==0)NewIdentity();
-                _stage="DEVICE_ADMISSION";
-                var login=await LoginAdmission.Run(_api.Call,()=>_secret.PublicKey,NewIdentity,username,password,Environment.MachineName);
+                var login=await LoginAdmission.Run((action,token,body)=>{
+                    _stage=action=="authenticate"?"ACCOUNT_AUTHENTICATE":"DEVICE_ADMISSION";
+                    return _api.Call(action,token,body);
+                },()=>_secret.PublicKey,NewIdentity,username,password,Environment.MachineName);
                 ClearRecentAccount();_secret.Token=login["token"]!.GetValue<string>();login.Remove("token");LoginPolicy.Start(_secret,login["token_expires_at"]!.GetValue<long>(),command=="LoginRemembered",username,DateTimeOffset.UtcNow.ToUnixTimeSeconds());_interactiveAuthenticated=true;_secret.GuiAuthenticated=true;_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error=login["admission_error"]?.GetValue<string>()??"";_failure=null;_mode="disconnected";_prepareUntil=default;_prepareMayStartCore=false;_prepareRetryAfter=default;break;
             case "ConfirmDevice":{
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_ENROLLMENT");

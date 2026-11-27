@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/admin/password',views.admin_password),
     path('api/admin/endpoint-apply', views.endpoint_apply),
     path('api/status', views.status),
+    path('api/port-monitor', views.port_monitor_status),
     path('api/host-status', views.host_status),
     path('api/audit', views.audit),
     path('api/control', views.management),

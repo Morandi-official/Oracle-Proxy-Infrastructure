@@ -26,7 +26,30 @@ function replaceRows(id,rows){
  body.replaceChildren(...rows);rowSignatures.set(body,signature);
  if(focused)for(const item of body.querySelectorAll('button[data-focus-key]'))if(item.dataset.focusKey===focused){item.focus({preventScroll:true});break;}
 }
+function renderPortStatus(status){
+ const rows=(status?.rows || []).map(record=>{
+  const row=document.createElement('tr');cell(row,record.port);
+  for(const platform of ['windows','android']){
+   const result=record[platform];const age=result?Math.floor(Date.now()/1000-result.verified_at):null;
+   const valid=age!==null && age>=-5 && age<=2700;
+   const label=valid?({success:'正常',failure:'未通过',error:'探测异常'}[result.result]):status.available?'待巡检':'读取异常';
+   const col=cell(row,label);
+   if(valid){col.className=result.result==='failure'?'failed-port':'verified-port';col.title=time(result.verified_at);}
+  }
+  return row;
+ });
+ if(!rows.length){const row=document.createElement('tr');cell(row,'暂无端口信息').colSpan=3;rows.push(row);}
+ replaceRows('port-status-rows',rows);
+}
+let portStatusBusy=false;
+async function refreshPortStatus(){
+ if(portStatusBusy)return;portStatusBusy=true;
+ try{renderPortStatus(await api('/api/port-monitor'));}
+ catch{renderPortStatus({available:false,rows:[443,8443,51820].map(port=>({port}))});}
+ finally{portStatusBusy=false;}
+}
 function render(data){
+
  const endpoints=data.ingress_endpoints || {};for(const name of ['ingress_access','ingress_preferred'])for(const option of el('user-form').elements[name].options){if(option.value==='primary')option.textContent='主 IP'+(endpoints.primary?' · '+endpoints.primary:'');if(option.value==='backup')option.textContent='备用 IP'+(endpoints.backup?' · '+endpoints.backup:'');}
  current=data;renderConnections(data);const b=data.budget;const age=data.observed_at ? Date.now()/1000-data.observed_at : null;
  el('remaining').textContent=size(b.remaining_bytes);el('outbound').textContent=size(b.measured_outbound_bytes);
@@ -165,7 +188,7 @@ document.addEventListener('click',event=>{const icon=event.target.closest('.help
 document.addEventListener('keydown',event=>{if(event.key==='Escape')dismissHelp();});
 document.addEventListener('pointerover',event=>{const help=event.target.closest('.help');if(help){help.classList.remove('dismissed');positionHelp(help);}});
 document.addEventListener('focusin',event=>{const help=event.target.closest('.help');if(help){help.classList.remove('dismissed');positionHelp(help);}});
-el('refresh').addEventListener('click',refresh);refresh();setInterval(()=>{if(!document.hidden)refresh();},5000);
+el('refresh').addEventListener('click',()=>{refresh();refreshPortStatus();});refresh();refreshPortStatus();setInterval(()=>{if(!document.hidden){refresh();refreshPortStatus();}},5000);
 
 
 // Keep the sidebar aligned with the section being inspected, including keyboard/hash navigation.

@@ -36,6 +36,7 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--live-udp-parked-snapshot"}))return OracleAcceptance.CheckParkedGui().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--live-udp-timing-snapshot"}))return OracleAcceptance.PrintLiveTimings().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--oracle-client"}))return OracleAcceptance.Run().GetAwaiter().GetResult();
+        if(args.SequenceEqual(new[]{"--port-monitor"}))return OracleAcceptance.MonitorPorts().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--udp-loss-self-test"}))return OracleAcceptance.VerifyUdpFaultSession();
         if(args.SequenceEqual(new[]{"--tun-presence-diagnostic"})){
             var value=new JsonArray(NetworkInterface.GetAllNetworkInterfaces().Where(n=>n.Name=="OracleProxy").Select(n=>(JsonNode?)new JsonObject{

@@ -1,0 +1,110 @@
+name: Native WireGuard port monitor
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/native-port-monitor.yml', 'ops/port-monitor/**']
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: native-wireguard-port-monitor
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 15
+    environment: windows-client-acceptance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: clients/windows/product/global.json
+      - name: Build the non-shipped monitor harness
+        run: dotnet publish clients/windows/product/ci/OracleProxy.Product.Tests.csproj -c Release -o monitor-fixture
+      - name: Probe each UDP port through the Windows client
+        env:
+          ORACLE_CLIENT_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ORACLE_CLIENT_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){throw 'Preexisting product service refused'}
+          if(Test-Path "$env:ProgramFiles/OracleProxy"){throw 'Preexisting product directory refused'}
+          $file='Proxy-0.2.2-win-x64-1d595973ffc2.zip'
+          $url="https://github.com/Morandi-official/Oracle-Proxy-Infrastructure/releases/download/wireguard-windows-v0.2.2/$file"
+          Invoke-WebRequest $url -OutFile $file
+          if((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'ca9a35265ed78398d964bf37416a0312505767e0225977c2f6a9952f33682465'){throw 'Release digest mismatch'}
+          Expand-Archive $file monitor-product
+          $app=(Get-ChildItem monitor-product -Recurse -Filter Proxy.exe).FullName
+          $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          try {
+            if((Start-Process $app -ArgumentList @('--install',$owner) -Wait -PassThru).ExitCode -ne 0){throw 'Monitor installation failed'}
+            & ./monitor-fixture/OracleProxy.Product.Tests.exe --port-monitor | Tee-Object -FilePath monitor-result.txt
+            if($LASTEXITCODE -ne 0){throw 'Monitor setup or cleanup was incomplete'}
+          } finally {
+            if(Get-Service OracleProxyService -ErrorAction SilentlyContinue){
+              if((Start-Process $app -ArgumentList '--recover' -Wait -PassThru).ExitCode -eq 0){
+                Start-Process $app -ArgumentList '--uninstall' -Wait
+              }
+            }
+          }
+      - name: Publish Windows port evidence
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python ops/port-monitor/publish.py windows monitor-result.txt
+
+  android:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: windows-client-acceptance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.3'
+          cache: false
+      - name: Build the Android client and non-shipped probe
+        working-directory: clients/android
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.0.12077973'
+          gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Probe each UDP port through the Android client
+        env:
+          ANDROID_ACCEPTANCE_USERNAME: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_USERNAME }}
+          ANDROID_ACCEPTANCE_PASSWORD: ${{ secrets.ORACLE_CLIENT_ACCEPTANCE_PASSWORD }}
+        run: |
+          set -o pipefail
+          bash clients/android/ci/android-emulator-test.sh 36 \
+            clients/android/app/build/outputs/apk/debug/app-debug.apk \
+            clients/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            port-monitor | tee monitor-result.txt
+      - name: Publish Android port evidence
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ops/port-monitor/publish.py android monitor-result.txt

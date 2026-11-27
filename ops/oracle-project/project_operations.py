@@ -817,6 +817,14 @@ def main(arguments):
         spec.loader.exec_module(console)
         if console.dispatch(host, operation, request, revision):
             return
+        if request.get('request_id')=='native-port-monitor-console-apply':
+            # The existing web-only helper is loaded from the same sealed source.
+            sys.modules['enrollment_console'] = console
+            spec = importlib.util.spec_from_file_location('port_console', Path(__file__).with_name('port_console.py'))
+            monitor = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(monitor)
+            if monitor.dispatch(host, operation, request, revision):
+                return
     if operation == 'preflight':
         request=json.loads(Path(__file__).with_name('request.json').read_text())
         if request.get('request_id')=='retire-rc38-observed-ci-two-20261109':

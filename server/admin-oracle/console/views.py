@@ -218,6 +218,14 @@ def audit(request):
     return JsonResponse({'entries': entries,'activity':grouped,'activity_window_hours':24})
 
 
+@require_GET
+def port_monitor_status(request):
+    rejected=deny(request)
+    if rejected is not None:return rejected
+    from .port_monitor import snapshot
+    return client_api.response(snapshot())
+
+
 @require_http_methods(['GET','POST'])
 def management(request):
     rejected = deny(request)

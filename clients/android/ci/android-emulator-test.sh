@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 3 || $# -gt 4 || ( $# -eq 4 && "$4" != production ) ]]; then
-    echo 'Usage: android-emulator-test.sh API app.apk instrumentation.apk [production]' >&2
+if [[ $# -lt 3 || $# -gt 4 || ( $# -eq 4 && "$4" != production && "$4" != port-monitor ) ]]; then
+    echo 'Usage: android-emulator-test.sh API app.apk instrumentation.apk [production|port-monitor]' >&2
     exit 2
 fi
 api="$1"
@@ -67,7 +67,7 @@ if [[ "$mode" != production ]]; then
     adb shell settings put global animator_duration_scale 0
 fi
 
-if [[ "$mode" == production ]]; then
+if [[ "$mode" == production || "$mode" == port-monitor ]]; then
     animation_scale() {
         local scale
         scale=$(adb shell settings get global "$1" | tr -d '\r')
@@ -99,6 +99,15 @@ if [[ "$mode" == production ]]; then
             -e proxyRun "$GITHUB_RUN_ID" org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner \
             | tee "$2"
     }
+    if [[ "$mode" == port-monitor ]]; then
+        adb shell appops set org.morandi.proxy ACTIVATE_VPN allow
+        adb shell am instrument -w -e class org.morandi.proxy.ProductionLifecycleTest#monitorProductionPorts \
+            -e proxyPortMonitor 1 -e proxyUser "$user_b64" -e proxyPass "$pass_b64" \
+            org.morandi.proxy.test/androidx.test.runner.AndroidJUnitRunner | tee "$working_dir/port-monitor.txt"
+        grep -Eq '^OK \(1 test\)' "$working_dir/port-monitor.txt"
+        adb logcat -d -v raw -s ProxyPortMonitor:I '*:S' | grep -Ex 'PORT_MONITOR (443|8443|51820) (success|failure|error)'
+        exit 0
+    fi
     run_production_test signedAppAgainstProduction "$working_dir/instrumentation.txt"
     # Run the same signed APK with fresh app data and a new process. No saved key,
     # authenticated connection pool or in-process JIT state can carry over from headless password login.

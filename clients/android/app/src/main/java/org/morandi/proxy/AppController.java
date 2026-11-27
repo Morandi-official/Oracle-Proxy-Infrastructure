@@ -691,7 +691,7 @@ public final class AppController {
         } catch (Exception failure) {
             if (!handleSessionFailure(failure)) {
                 // Keep the saved session and retry promptly against the account origin.
-                message = token.isEmpty() ? textFor(failure) : "暂时无法核验账号，正在重试已保存的登录。";
+                message = token.isEmpty() ? textFor(failure) : restoreFailureText(failure);
             }
         } finally {
             publish();
@@ -818,7 +818,7 @@ public final class AppController {
                 if ("connected".equals(mode) && SystemClock.elapsedRealtime() - policyAt >= POLICY_TIMEOUT) {
                     loseConnection("暂时无法核验账号状态，VPN 已断开。", false);
                 } else if (accountState == null) {
-                    message = "暂时无法核验账号，正在重试已保存的登录。";
+                    message = restoreFailureText(failure);
                 }
             }
         }
@@ -981,7 +981,28 @@ public final class AppController {
         return failure instanceof ClientApi.ApiError remote && code.equals(remote.code);
     }
 
+    private static String accountTransportText(Exception failure) {
+        if (!(failure instanceof ClientApi.ApiError error)) {
+            return "";
+        }
+        return switch (error.code) {
+            case "ACCOUNT_API_UNREACHABLE" -> "无法连接账号服务。请检查网络后重试。（ACCOUNT_API_UNREACHABLE）";
+            case "ACCOUNT_API_TLS_FAILED" -> "无法验证账号服务的安全连接。请检查系统日期和时间后重试。（ACCOUNT_API_TLS_FAILED）";
+            case "API_UNAVAILABLE" -> "账号服务暂时没有返回可用响应。请稍后重试。（API_UNAVAILABLE）";
+            default -> "";
+        };
+    }
+
+    private static String restoreFailureText(Exception failure) {
+        String transport = accountTransportText(failure);
+        return (transport.isEmpty() ? "暂时无法核验账号。" : transport) + "正在重试已保存的登录。";
+    }
+
     private static String textFor(Exception failure) {
+        String transport = accountTransportText(failure);
+        if (!transport.isEmpty()) {
+            return transport;
+        }
         String error = failure instanceof ClientApi.ApiError apiError ? apiError.code : failure.getMessage();
         if (error == null) {
             return "操作未完成，请稍后重试。";
@@ -998,7 +1019,7 @@ public final class AppController {
             case "ACCOUNT_DISABLED" -> "账号当前不可用。";
             case "ACCOUNT_QUOTA", "ACCOUNT_QUOTA_EXCEEDED" -> "本周期用量已达到限额。";
             case "ACCOUNT_SERVER_BUDGET" -> "服务端出站保护已启用。";
-            case "ACCOUNT_UNAVAILABLE", "CONTROL_SERVICE_UNAVAILABLE", "API_UNAVAILABLE" -> "暂时无法核验账号，请稍后重试。";
+            case "ACCOUNT_UNAVAILABLE", "CONTROL_SERVICE_UNAVAILABLE" -> "暂时无法核验账号，请稍后重试。";
             case "PRIVATE_STORE_INVALID", "PRIVATE_STORE_UNAVAILABLE" -> "系统暂时无法读取本机设备身份，请解锁设备后重试。";
             case "VPN_PERMISSION_REQUIRED", "VPN_CONSENT_REQUIRED" -> "请先允许 Android 的 VPN 请求。";
             case "TUNNEL_NOT_RUNNING", "VPN_EXIT_NOT_VERIFIED" -> "未能验证出口。可稍后重试或选择其他可用 UDP 端口。";

@@ -33,6 +33,6 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation:none!important;transition:none!important}}
 @media(forced-colors:active){.panel,.metrics article,.table-wrap,button,input,select,textarea,.help-icon{border-color:CanvasText}.usage-bar{fill:Highlight}.status-badge,.tag{border-color:CanvasText}}
 
-.metrics-overview .port-status{padding:.875rem 1rem}.port-status h3{font-size:.875rem;margin:0 0 .375rem}.port-status table{width:100%;min-width:0;font-size:.75rem;table-layout:auto}.port-status :is(th,td){padding:.25rem .375rem;text-align:left;white-space:nowrap}.port-status .verified-port{font-weight:600}.port-status small{margin-top:.375rem}
+.metrics-overview .port-status{padding:.875rem 1rem}.port-status h3{font-size:.875rem;margin:0 0 .375rem}.port-status table{width:100%;min-width:0;font-size:.75rem;table-layout:fixed}.port-status :is(th,td){padding:.25rem .25rem;text-align:left;white-space:normal;overflow-wrap:anywhere}.port-status .verified-port{font-weight:600}.port-status small{margin-top:.375rem}
 @media(min-width:960px){.metrics-overview{grid-template-columns:minmax(0,1fr) minmax(0,.8fr) minmax(15rem,1fr);gap:.75rem}.metrics-overview article:not(.port-status){padding:1rem 1.125rem}}
 .port-status .failed-port{color:#a22621;font-weight:600}

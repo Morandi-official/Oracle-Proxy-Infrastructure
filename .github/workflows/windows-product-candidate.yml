@@ -184,6 +184,11 @@ jobs:
         shell: pwsh
         timeout-minutes: 6
         run: ./clients/windows/product/ci/acceptance.ps1
+      - name: UU permission and exact process route acceptance without an account
+        if: env.ORACLE_ACCEPTANCE_SCOPE == 'endpoint-migration' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        timeout-minutes: 5
+        run: ./clients/windows/product/ci/acceptance.ps1 -UuOnly
       - name: Focused real SYSTEM prepared-orphan startup and UAC recovery
         if: env.ORACLE_ACCEPTANCE_SCOPE == 'endpoint-migration' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
@@ -242,7 +247,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: Proxy-WireGuard-0.2.0-win-x64-unsigned-acceptance-candidate
+          name: Proxy-WireGuard-0.2.1-win-x64-unsigned-acceptance-candidate
           path: |
             dist/candidate/*.zip
             dist/candidate/*-setup.exe
@@ -254,7 +259,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success() && steps.oracle-acceptance.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          name: Proxy-WireGuard-0.2.0-corresponding-source
+          name: Proxy-WireGuard-0.2.1-corresponding-source
           path: |
             dist/candidate/*-source.zip
             dist/candidate/SHA256SUMS.txt

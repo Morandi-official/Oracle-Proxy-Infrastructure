@@ -46,6 +46,8 @@ internal static class Program
                 string reason=error.Message switch{
                     "UU_PATH_FILES_IN_USE"=>"UU 的文件或目录正被占用，本次未写入 UU 权限。请在本地退出 UU 后重试。程序不会自动停止 UU。",
                     "UU_PATH_ACCESS_DENIED"=>"当前权限不足，本次未写入 UU 权限。请确认已完成管理员授权。",
+                    "UU_REPAIR_DISCONNECT_REQUIRED"=>"请在 VPN 安全断开、网络诊断结束后重试。现有连接保持原状。",
+                    "UU_REPAIR_NOT_VERIFIED"=>"未能验证修复后的 UU 程序权限和签名，请查看下面的诊断。",
                     "UU_PATH_VOLUME_AUTHORITY_REFUSED"=>"盘根权限不满足安全保护条件；本工具不会修改盘根。",
                     "UU_REPAIR_OWNER_REFUSED"=>"存在不受信任的目录或文件拥有者；本工具不会更改拥有者。",
                     "UU_REPAIR_DACL_REQUIRED"=>"程序对象缺少可核验的访问权限表；本工具未接管权限。",

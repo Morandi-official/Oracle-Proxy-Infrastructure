@@ -107,8 +107,12 @@ internal static partial class UuAclRepair
                 bool signed=false;int count=0;
                 foreach(string main in Directory.EnumerateFiles(root,"GameViewer.exe",options)){
                     if(++count>32)break;
+                    if(UuDiscovery.MutableDataExecutable(main))continue;
                     var issue=UuDiscovery.Inspect(main);
-                    if(issue?.Code=="UU_DIRECTORY_WRITABLE" && string.Equals(issue.Path,root,StringComparison.OrdinalIgnoreCase) && UuDiscovery.SignatureIssue(main) is null){signed=true;break;}
+                    bool rootGrant=issue?.Code=="UU_DIRECTORY_WRITABLE" && string.Equals(issue.Path,root,StringComparison.OrdinalIgnoreCase);
+                    bool inheritedGrant=issue?.Code=="UU_EXECUTABLE_WRITABLE" &&
+                        !UuDiscovery.UnsafeWriter(new FileInfo(main).GetAccessControl(),includeInherited:false);
+                    if((rootGrant || inheritedGrant) && UuDiscovery.SignatureIssue(main) is null){signed=true;break;}
                 }
                 if(signed)roots.Add(root);
             }catch{ /* unsupported installations remain blocked and untouched */ }
@@ -182,6 +186,10 @@ internal static partial class UuAclRepair
             foreach(var entry in entries)if(Sddl(byPath[entry.Path].Read())!=entry.Before)throw new IOException("UU_REPAIR_ACL_CHANGED");
             foreach(var entry in journal.Entries.Where(e=>changes.ContainsKey(e.Path))){mutated=true;byPath[entry.Path].Write(entry.After);}
             foreach(string root in roots)if(UuDiscovery.UnsafeWriter(byPath[root].Read()))throw new IOException("UU_REPAIR_NOT_VERIFIED");
+            foreach(string root in roots){
+                var options=new EnumerationOptions{RecurseSubdirectories=true,MaxRecursionDepth=4,IgnoreInaccessible=false,AttributesToSkip=FileAttributes.ReparsePoint};
+                if(!Directory.EnumerateFiles(root,"GameViewer.exe",options).Any(UuDiscovery.Trusted))throw new IOException("UU_REPAIR_NOT_VERIFIED");
+            }
             Save(journal with{Phase="applied",Entries=entries.Select(e=>e with{After=Sddl(byPath[e.Path].Read())}).ToArray()});
         }catch{
             if(mutated)RestoreEntries(journal,byPath);Save(journal with{Phase="restored"});throw;
@@ -228,8 +236,8 @@ internal static partial class UuAclRepair
             "将备份下列 UU 目录及现有子项的权限，仅将 Users/Authenticated Users 的额外“修改”授权收紧为“读取和执行”，保留系统、管理员和读取权限。不会停止 UU 或改写程序文件。普通用户写入安装目录或自动更新可能受到影响；可使用“恢复 UU 权限”回滚。请仅在可本地操作的测试机进行。")+"\r\n\r\n"+string.Join("\r\n",advanced?AdvancedAncestors(roots[0]).Concat(roots):roots);
         if(MessageBox.Show(message,"UU 权限维护（UAC）",MessageBoxButtons.OKCancel,MessageBoxIcon.Warning)!=DialogResult.OK)return false;
         using(AcquireMaintenance()){
-            var state=Task.Run(()=>ControlPipe.Send(restore?"Disconnect":"Status")).GetAwaiter().GetResult();
-            if(state["ok"]?.GetValue<bool>()!=true || state["mode"]?.GetValue<string>()!="disconnected" || state["guard"]?.GetValue<bool>()==true || state["intent"]?.GetValue<bool>()==true)throw new IOException("UU_REPAIR_DISCONNECT_REQUIRED");
+            var state=Task.Run(()=>ControlPipe.Send("CheckUuMaintenance")).GetAwaiter().GetResult();
+            if(!ServiceBootstrap.Current(state,DeviceRegistration.Version))throw new IOException("UU_REPAIR_DISCONNECT_REQUIRED");
             if(restore)Restore();else if(reapply is not null)ReapplyAdvancedRoot(reapply.Root);else if(advanced)ApplyAdvanced(roots);else Apply(roots);
         }
         MessageBox.Show(restore?"原访问权限和继承开关已恢复，VPN 保持断开。":"权限修复已核验，VPN 保持断开。关闭此提示后返回客户端查看识别结果。","UU 权限维护");

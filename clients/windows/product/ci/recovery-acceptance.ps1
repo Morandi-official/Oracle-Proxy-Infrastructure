@@ -81,6 +81,13 @@ if($remove.ExitCode -ne 0){throw 'Focused recovery fixture uninstall failed'}
 if($ParkOnly){
  if(!$observed -or !$body.Contains('REAL_SYSTEM_CRASHED_PARKED_HOLDER_REMOVED_BY_ORDINARY_RECOVERY=PASS')){throw 'Parked crash recovery was not observed'}
  Assert-OtherAdapterBindingState $otherBindings
+ # This test created the fixture service, watchdog and empty state root.
+ # Retire them after the verified uninstall so the next isolated test starts clean.
+ & sc.exe delete OracleProxyCandidateFixture | Out-Null
+ if($LASTEXITCODE -ne 0){throw 'Parked fixture service removal failed'}
+ Stop-ScheduledTask -TaskName OracleProxyCandidateWatchdog -ErrorAction SilentlyContinue
+ Unregister-ScheduledTask -TaskName OracleProxyCandidateWatchdog -Confirm:$false
+ Remove-Item -LiteralPath $root -Recurse -Force
  Write-Host 'REAL_OFFLINE_EMPTY_ADAPTER_HOLDER=PASS'
 }
 else{Write-Host 'FOCUSED_REAL_SYSTEM_DORMANT_STARTUP_AND_UAC_RECOVERY=PASS'}

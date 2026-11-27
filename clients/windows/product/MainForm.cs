@@ -600,14 +600,13 @@ internal sealed partial class MainForm : Form
     private async Task MaintainUu(bool restore)
     {
         if(_uuMaintaining || _closing || _busy || _needsReconcile)return;
-        if(_connectionIntent){_detail.Text="请先断开 VPN，再进行 UU 权限维护。";return;}
+        if(DisconnectAction){_detail.Text="请先断开 VPN，再进行 UU 权限维护。";return;}
         _uuMaintaining=true;RefreshActions();
         try{
             int result=await Installer.ElevateUuPermissionsAsync(restore,_lifetime.Token);
             if(IsDisposed)return;
             if(result==0){
-                _uuMaintaining=false;await Act("RefreshUu");await Act("Status");
-                if(!IsDisposed && !_needsReconcile && _uuReport.Contains("UU_DIRECTORY_WRITABLE",StringComparison.Ordinal))_detail.Text="部分 UU 目录仍可写，请查看“UU 检查详情”中的具体路径。";
+                _uuMaintaining=false;await Act("RefreshUu");
             }else _detail.Text=result==4?"已取消 UU 权限维护，未自动重试。":"UU 权限维护未完成，请查看维护窗口中的提示。";
         }catch(IOException error)when(error.Message=="UU_MAINTENANCE_RESULT_PENDING"){
             if(!IsDisposed)_detail.Text="UU 权限维护可能仍在进行，尚未确认结果。请等待维护窗口结束后重新识别；未自动重试。";
@@ -627,7 +626,7 @@ internal sealed partial class MainForm : Form
         StyleButton(copy,true);dialog.Padding=new Padding(12);dialog.BackColor=Canvas;dialog.Controls.Add(new SmoothInputFrame(text){Dock=DockStyle.Fill});dialog.Controls.Add(copy);
         if(refresh is not null){
             var rescan=new SmoothButton{Text="重新识别 UU",Dock=DockStyle.Bottom,Height=40,
-                Enabled=!_connectionIntent && !_busy && !_needsReconcile && !_udpDiagnosing && _serviceReady};
+                Enabled=!DisconnectAction && !_busy && !_needsReconcile && !_udpDiagnosing && _serviceReady && !_uuMaintaining};
             StyleButton(rescan);
             rescan.Click+=(_,_)=>{dialog.DialogResult=DialogResult.Retry;};
             dialog.Controls.Add(rescan);
@@ -897,6 +896,7 @@ internal sealed partial class MainForm : Form
         "ORACLE_PROBE_TIMEOUT"=>"出口验证超时，保护保持启用。请复制“连接诊断”。",
         "ORACLE_PROBE_HTTP_FAILED"=>"出口请求失败，保护保持启用。请复制“连接诊断”。",
         "UU_MAINTENANCE_BUSY"=>"UU 权限维护进行中，请完成后再连接。",
+        "UU_REPAIR_DISCONNECT_REQUIRED"=>"请在 VPN 安全断开、网络诊断结束后重试 UU 维护。",
         "TUN_ROUTE_NOT_ACTIVE"=>"Windows 尚未将普通应用流量送入 VPN，连接未生效。请查看连接诊断；防泄漏保护保持开启。",
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",

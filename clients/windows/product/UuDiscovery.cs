@@ -61,13 +61,16 @@ internal static class UuDiscovery
     internal static UuInventory Discover()
     {
         var roots=InstallationRoots();
-        var valid=new HashSet<string>(StringComparer.OrdinalIgnoreCase);int count=0,rejected=0;var issues=new List<UuIssue>();
+        var valid=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var scanned=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int count=0,rejected=0;var issues=new List<UuIssue>();
         void Issue(UuIssue issue){if(issues.Count<6 && !issues.Any(i=>i.Path==issue.Path && i.Code==issue.Code))issues.Add(issue with{Path=issue.Path.Length>256?issue.Path[..256]:issue.Path});}
         foreach(string root in roots){
             try{
                 Platform.NoLinks(root);
                 var options=new EnumerationOptions{RecurseSubdirectories=true,MaxRecursionDepth=4,IgnoreInaccessible=false,AttributesToSkip=FileAttributes.ReparsePoint};
                 foreach(string path in Directory.EnumerateFiles(root,"*.exe",options)){
+                    if(MutableDataExecutable(path) || !scanned.Add(path))continue;
                     if(++count>256)throw new IOException("UU_INVENTORY_LIMIT");
                     var issue=Inspect(path);if(issue is null)valid.Add(Path.GetFullPath(path));else{rejected++;Issue(issue);}
                 }
@@ -83,7 +86,16 @@ internal static class UuDiscovery
             if(p.Contains(","))p=p.Split(',')[0].Trim('"');
             if(!Path.IsPathFullyQualified(p)||p.StartsWith(@"\\"))return;
             if(File.Exists(p))p=Path.GetDirectoryName(p)!;
-            if(Directory.Exists(p)&&Related(p)&&Path.GetPathRoot(p)!=p)roots.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)));
+            if(!Directory.Exists(p) || Path.GetPathRoot(p)==p)return;
+            string root=Path.TrimEndingDirectorySeparator(Path.GetFullPath(p));
+            if(Related(root)){roots.Add(root);return;}
+            // InstallLocation/DisplayIcon can point to a custom folder with an
+            // unrelated name. Require the signed main executable at that root
+            // before treating its subtree as a UU installation.
+            string main=Path.Combine(root,"GameViewer.exe");
+            Platform.NoLinks(root);
+            if(File.Exists(main) && !File.GetAttributes(main).HasFlag(FileAttributes.ReparsePoint) &&
+                CachedSignatureIssue(main) is null)roots.Add(root);
         }catch{}
     }
     internal static bool Trusted(string path)=>Inspect(path) is null;
@@ -171,7 +183,7 @@ internal static class UuDiscovery
     }
     internal static bool TrustedOwner(FileSystemSecurity security)=>
         security.GetOwner(typeof(SecurityIdentifier))?.Value is "S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
-    internal static bool UnsafeWriter(FileSystemSecurity security)=>security.GetAccessRules(true,true,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(rule=>
+    internal static bool UnsafeWriter(FileSystemSecurity security,bool includeInherited=true)=>security.GetAccessRules(true,includeInherited,typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Any(rule=>
         !rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly) && rule.AccessControlType==AccessControlType.Allow &&
         rule.IdentityReference.Value is not ("S-1-5-18" or "S-1-5-32-544" or "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464") &&
         (rule.FileSystemRights&(FileSystemRights.WriteData|FileSystemRights.CreateDirectories|FileSystemRights.Delete|FileSystemRights.DeleteSubdirectoriesAndFiles|FileSystemRights.ChangePermissions|FileSystemRights.TakeOwnership))!=0);

@@ -227,8 +227,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir previous-android
-          gh release download wireguard-android-v0.2.0 --pattern Proxy-Android.apk --dir previous-android
-          printf '%s  %s\n' 8a05c39b893a282e19b3207dda1f7e8fce249a01eb1ce25af12944a06dc9d972 \
+          gh release download wireguard-android-v0.2.1 --pattern Proxy-Android.apk --dir previous-android
+          printf '%s  %s\n' 5cf11e735f098e6d3e3599a91173f6edf650094aeefb62053a31d23f0ffb1c12 \
             previous-android/Proxy-Android.apk | sha256sum -c -
       - name: Validate the exact APK after an in-place upgrade
         env:
@@ -312,7 +312,7 @@ jobs:
               ;;
             *) echo 'Missing verified Android connection timing.' >&2; exit 1 ;;
           esac
-          notes="The signed APK passed an in-place upgrade from v0.2.0 and WireGuard tests on Android API 29 and 36. Production verification covered login, enrollment, WireGuard, DNS, disconnect and isolated test-device cleanup. All 48 verified UDP round trips met 500 ms on idle and loaded paths. $timing Requires Android 10 or later."
+          notes="This release improves Android sign-in on unreliable networks. The signed APK passed an in-place upgrade from v0.2.1 and WireGuard tests on Android API 29 and 36. Production verification covered login, enrollment, WireGuard, DNS, disconnect and isolated test-device cleanup. All 48 verified UDP round trips met 500 ms on idle and loaded paths. $timing Requires Android 10 or later."
           printf '%s\n\n[Cloud acceptance run](https://github.com/%s/actions/runs/%s)\n' "$notes" "$GH_REPO" "$GITHUB_RUN_ID" > release-notes.md
           gh release create "wireguard-android-v$version" Proxy-Android.apk SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "$title" --latest=false --notes-file release-notes.md "${flags[@]}"

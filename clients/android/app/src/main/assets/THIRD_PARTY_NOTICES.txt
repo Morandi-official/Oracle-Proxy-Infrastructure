@@ -8,6 +8,11 @@ AndroidX Annotation and AndroidX Collection
 Copyright The Android Open Source Project.
 https://source.android.com/
 
+OkHttp 4.12.0 and Okio
+Copyright Block, Inc. and contributors.
+https://square.github.io/okhttp/
+https://square.github.io/okio/
+
 Kotlin Standard Library
 Copyright 2010-2024 JetBrains s.r.o. and respective authors and developers.
 https://github.com/JetBrains/kotlin

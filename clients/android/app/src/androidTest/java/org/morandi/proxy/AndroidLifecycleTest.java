@@ -76,6 +76,62 @@ public final class AndroidLifecycleTest {
     }
 
     @Test
+    public void failedSignInShowsSafeNetworkFeedbackAndAllowsRetry() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Context context = instrumentation.getTargetContext();
+        String username = "fixture-login-feedback";
+        AtomicReference<Exception> failure = new AtomicReference<>();
+        AtomicInteger submissions = new AtomicInteger();
+        ClientApi api = new ClientApi() {
+            @Override JSONObject call(String action, String token, JSONObject body) throws Exception {
+                assertEquals("authenticate", action);
+                assertTrue(token.isEmpty());
+                submissions.incrementAndGet();
+                throw failure.get();
+            }
+        };
+        AppController controller = new AppController(context, api, new TunnelEngine(context));
+        AppController.installForTest(controller);
+        MainActivity activity = (MainActivity) instrumentation.startActivitySync(
+                new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            UiDevice ui = UiDevice.getInstance(instrumentation);
+            Exception[] failures = {
+                    new ClientApi.ApiError("ACCOUNT_API_UNREACHABLE"),
+                    new ClientApi.ApiError("ACCOUNT_API_TLS_FAILED"),
+                    new ClientApi.ApiError("API_UNAVAILABLE"),
+                    new ClientApi.ApiError("INVALID_CREDENTIALS"),
+                    new IOException("fixture-raw-network-details")
+            };
+            String[] messages = {
+                    "无法连接账号服务。请检查网络后重试。（ACCOUNT_API_UNREACHABLE）",
+                    "无法验证账号服务的安全连接。请检查系统日期和时间后重试。（ACCOUNT_API_TLS_FAILED）",
+                    "账号服务暂时没有返回可用响应。请稍后重试。（API_UNAVAILABLE）",
+                    "账号或密码有误。",
+                    "连接未完成，请检查网络后重试。"
+            };
+            enter(instrumentation, activity, R.id.username, username);
+            for (int i = 0; i < failures.length; i++) {
+                String expected = messages[i];
+                failure.set(failures[i]);
+                enter(instrumentation, activity, R.id.password, "fixture-only");
+                tap(instrumentation, activity, R.id.login);
+                await("Safe sign-in feedback", controller, () -> expected.equals(controller.snapshot().message)
+                        && !controller.snapshot().busy);
+                assertNotNull("The login page displays the sanitized feedback",
+                        ui.wait(Until.findObject(By.text(expected)), 5_000));
+                assertFalse(controller.snapshot().signedIn);
+                assertEquals("Each explicit attempt submits exactly once", i + 1, submissions.get());
+                assertFalse(ui.hasObject(By.textContains("fixture-raw-network-details")));
+            }
+        } finally {
+            instrumentation.runOnMainSync(activity::finish);
+            AppController.installForTest(null);
+            new PrivateStore(context).remove(PrivateStore.accountSlot(username));
+        }
+    }
+
+    @Test
     public void stoppingPreparationWaitsForTheSubmittedServiceStart() throws Exception {
         Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
         CountDownLatch startEntered = new CountDownLatch(1);

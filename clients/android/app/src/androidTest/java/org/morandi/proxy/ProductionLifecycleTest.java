@@ -20,6 +20,7 @@ import androidx.test.uiautomator.UiObject2;
 import androidx.test.uiautomator.Until;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -250,6 +251,48 @@ public final class ProductionLifecycleTest {
         }
     }
 
+    @Test
+    public void monitorProductionPorts() throws Exception {
+        Bundle args = InstrumentationRegistry.getArguments();
+        Assume.assumeTrue("Dedicated monitoring runner only", "1".equals(args.getString("proxyPortMonitor")));
+        String username = decode(args, "proxyUser"), password = decode(args, "proxyPass");
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertTrue("The disposable emulator has VPN consent", VpnService.prepare(context) == null);
+        AcceptanceApi api = new AcceptanceApi(context);
+        TunnelEngine engine = new TunnelEngine(context);
+        AppController controller = new AppController(context, api, engine);
+        AppController.installForTest(controller);
+        try {
+            controller.login(username, password, false);
+            await("Port monitor login", () -> signedIn(controller.snapshot()));
+            assertFalse("A fresh monitoring identity is required", controller.snapshot().registered);
+            controller.confirmDevice("Android port monitor");
+            await("Port monitor device registration", () -> controller.snapshot().registered && !controller.snapshot().busy);
+            for (int port : new int[]{443, 8443, 51820}) {
+                api.monitorPort = port;
+                controller.connect();
+                long deadline = SystemClock.elapsedRealtime() + 65_000;
+                do { SystemClock.sleep(100); }
+                while ((controller.snapshot().busy || api.appliedMonitorPort != port) && SystemClock.elapsedRealtime() < deadline);
+                AppController.State state = controller.snapshot();
+                boolean success = "connected".equals(state.mode) && state.endpoint.endsWith(":" + port)
+                        && !state.verifiedIpv4.isEmpty() && (!api.dualStack || !state.verifiedIpv6.isEmpty());
+                String result = success ? "success" : api.appliedMonitorPort == port ? "failure" : "error";
+                controller.disconnect();
+                await("Monitor cleans its own VPN", () -> !engine.isUp() && !controller.snapshot().busy);
+                android.util.Log.i("ProxyPortMonitor", "PORT_MONITOR " + port + " " + result);
+            }
+        } finally {
+            try {
+                controller.disconnect();
+                await("Monitor disconnect before removing its own device", () -> !engine.isUp() && !controller.snapshot().busy);
+            } finally {
+                try { api.cleanUp(username, password); }
+                finally { AppController.installForTest(null); }
+            }
+        }
+    }
+
     private static boolean signedIn(AppController.State state) {
         return state.signedIn && !state.busy;
     }
@@ -438,6 +481,7 @@ public final class ProductionLifecycleTest {
         private volatile boolean enrollmentAttempted;
         private volatile boolean removed;
         private volatile boolean dualStack;
+        private volatile int monitorPort, appliedMonitorPort;
         private volatile String authenticationPhase = "BEFORE_ACCOUNT_REQUEST";
 
         AcceptanceApi(Context context) {
@@ -483,6 +527,15 @@ public final class ProductionLifecycleTest {
             JSONObject tunnel = response.optJSONObject("tunnel");
             if (tunnel != null) {
                 dualStack = "tunnel".equals(tunnel.optString("ipv6_policy"));
+                int port = monitorPort;
+                if (port != 0 && "state".equals(action)) {
+                    JSONArray ports = tunnel.getJSONArray("native_udp_ports");
+                    boolean advertised = false;
+                    for (int i = 0; i < ports.length(); i++) advertised |= ports.getInt(i) == port;
+                    if (!advertised) throw new IOException("MONITOR_PORT_NOT_ADVERTISED");
+                    tunnel.put("native_udp_ports", new JSONArray().put(port));
+                    appliedMonitorPort = port;
+                }
             }
             if ("device-delete".equals(action) && newDevice.equals(response.optString("removed"))
                     && response.optBoolean("current")) {

@@ -1,4 +1,4 @@
 {
-  "operation": "preflight",
-  "request_id": "wireguard-restart-native-ports-observed"
+  "operation": "deploy",
+  "request_id": "native-port-monitor-console-apply"
 }

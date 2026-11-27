@@ -758,6 +758,45 @@ internal static class OracleAcceptance
             }
         }
     }
+    internal static async Task<int> MonitorPorts()
+    {
+        if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || Environment.GetEnvironmentVariable("RUNNER_ENVIRONMENT")!="github-hosted" ||
+            Environment.GetEnvironmentVariable("GITHUB_REF")!="refs/heads/main")return 3;
+        string? user=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_USERNAME");
+        string? password=Environment.GetEnvironmentVariable("ORACLE_CLIENT_ACCEPTANCE_PASSWORD");
+        if(string.IsNullOrEmpty(user) || string.IsNullOrEmpty(password))return 2;
+        string? ownDevice=null;
+        try{
+            var login=RequireSuccess("MonitorLogin",await ControlPipe.Send("Login",user,password));
+            if(login["device_registered"]?.GetValue<bool>()!=true)return 2;
+            ownDevice=login["registration"]!["device_id"]!.GetValue<string>();
+            var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
+            if(allowed.Contains(await ExitIp()))return 2;
+            foreach(int port in new[]{443,8443,51820}){
+                string result="error";
+                try{
+                    await Send("PreferUdp"+port);
+                    await Send("Connect");
+                    var state=await Connected();
+                    result=state["transport_port"]?.GetValue<int>()==port && allowed.Contains(await ExitIp())?"success":"failure";
+                }catch(IOException error)when(error.Message=="ORACLE_RECONNECT_TIMED_OUT"){result="failure";}
+                catch(Exception error)when(error is IOException or HttpRequestException or TimeoutException or OperationCanceledException){}
+                finally{await Send("Disconnect");}
+                Console.WriteLine($"PORT_MONITOR {port} {result}");
+            }
+            return 0;
+        }catch{return 1;}
+        finally{
+            if(ownDevice is not null){
+                try{
+                    await Send("Disconnect");
+                    var active=RequireSuccess("MonitorCleanup",await ControlPipe.Send("Login",user,password));
+                    if(active["registration"]?["device_id"]?.GetValue<string>()==ownDevice)
+                        RequireSuccess("MonitorRemove",await ControlPipe.Send("DeleteDevice",ownDevice));
+                }catch{Console.WriteLine("PORT_MONITOR_CLEANUP_UNCONFIRMED");}
+            }
+        }
+    }
     internal static async Task<int> Run()
     {
         if(Environment.GetEnvironmentVariable("ORACLE_ACCEPTANCE_SCOPE")=="endpoint-migration")return await RunEndpointMigration();

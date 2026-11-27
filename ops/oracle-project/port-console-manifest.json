@@ -1,0 +1,18 @@
+{
+  "before": {
+    "config/urls.py": "495b6b3fb6c1f0bd30845667b7066f576e4cbc0791393029b596db0539229ea7",
+    "console/views.py": "4c084a50dce279a0716d5c984fe1b0100bf7b76063f7761201dea37d04ab5f03",
+    "console/port_monitor.py": null,
+    "static/console/app.js": "599b906934f5042c44d59e6f2a8d98109945825efdaca83a0a431d406f5b865c",
+    "static/console/style.css": "19f9fa9b303189bc29cddb84d941d091ed2c06bcb9bf71a01bb13d1d57606839",
+    "templates/dashboard.html": "f522013ad669b0cae883c0274bc2c5779859b76e8116c5c801e2c8433f136e8d"
+  },
+  "after": {
+    "config/urls.py": "e9b95bb9f844bb078be857c06e6264c59b52c2d6487394b1788db96992963c8b",
+    "console/views.py": "0d87c4056ba7e14e5256058d7b016939ef59b01f51dadbeafa47a9ab64927d30",
+    "console/port_monitor.py": "69376ee077b85b870839396e75f1a15a94f158c651936df4c9a4c24728640a26",
+    "static/console/app.js": "f50fa12a68383b88c9e789ba57014cde78870f17275893d2e9ff5d3c735dacc6",
+    "static/console/style.css": "82e9b4ce5436b1c4bd61d8a360f4c57601b23d8b05bf47dc46d90c817e7013d9",
+    "templates/dashboard.html": "1c23268edbeb47950cc54348daf00a8b4d20797507c1ad04087c49710aa0ac55"
+  }
+}

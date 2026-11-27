@@ -4,7 +4,11 @@ using System.Text.Json.Nodes;
 namespace OracleProxy.Product;
 internal static class CoreConfig
 {
-    private static string ProcessPattern(string path)=>"(?i)^"+string.Concat(path.Select(c=>"\\.+*?()|[]{}^$".Contains(c)?"\\"+c:c.ToString()))+"$";
+    private static string EscapeProcessCharacter(char value)=>"\\.+*?()|[]{}^$".Contains(value)?"\\"+value:value.ToString();
+    private static string UuProcessPattern(string path)=>"(?i)^"+string.Concat(path.Select(EscapeProcessCharacter))+"$";
+    // RE2's Unicode folding can match another file on NTFS, for example K and K.
+    private static string DirectApplicationPattern(string path)=>"^"+string.Concat(path.Select(c=>
+        char.IsAsciiLetter(c)?$"[{char.ToLowerInvariant(c)}{char.ToUpperInvariant(c)}]":EscapeProcessCharacter(c)))+"$";
     internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,UdpDiagnosticTarget? diagnosticTarget=null)
         =>Build(state,secret,socksPassword,out _,diagnosticTarget);
     internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,out int[] nativePorts,UdpDiagnosticTarget? diagnosticTarget=null,
@@ -21,9 +25,10 @@ internal static class CoreConfig
             if(parts.Length!=2 || !IPAddress.TryParse(parts[0],out var ip) || (ip.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork?parts[1]!="32":parts[1]!="128"))throw new IOException("INVALID_TUNNEL_ADDRESS");}
         string serverKey=(diagnosticTarget is not null && tunnel["server_public_keys"] is JsonObject keys ? keys[diagnosticTarget.Address] : tunnel["server_public_key"])?.GetValue<string>() ?? throw new IOException("UNAUTHORIZED_INGRESS_IDENTITY");if(Convert.FromBase64String(serverKey).Length!=32)throw new IOException("INVALID_SERVER_KEY");
         var rules=new JsonArray();
-        string[] directPaths=secret.UuPaths.Concat(directApplicationPaths??[]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        bool routeDirectProcesses=directPaths.Length>0;
-        if(routeDirectProcesses)rules.Add(new JsonObject{["inbound"]="device",["process_path_regex"]=new JsonArray(directPaths.Select(p=>(JsonNode?)JsonValue.Create(ProcessPattern(p))).ToArray()),["action"]="route",["outbound"]="uu-direct"});
+        var processPatterns=secret.UuPaths.Select(UuProcessPattern).Concat((directApplicationPaths??[]).Select(DirectApplicationPattern));
+        var directRules=new JsonArray(processPatterns.Select(pattern=>(JsonNode?)JsonValue.Create(pattern)).ToArray());
+        bool routeDirectProcesses=directRules.Count>0;
+        if(routeDirectProcesses)rules.Add(new JsonObject{["inbound"]="device",["process_path_regex"]=directRules,["action"]="route",["outbound"]="uu-direct"});
         rules.Add(new JsonObject{["port"]=53,["action"]="hijack-dns"});
         // Explicit secure policy until Oracle IPv6 is provisioned and proven.
         if(tunnel["ipv6_policy"]?.GetValue<string>()!="tunnel")rules.Add(new JsonObject{["ip_version"]=6,["action"]="reject"});

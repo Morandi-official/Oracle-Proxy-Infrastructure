@@ -1810,6 +1810,10 @@ internal static class ProductTests
             uuRule["inbound"]!.GetValue<string>()=="device" &&
             uuRule["process_path_regex"]!.AsArray().Count==uuPaths.Length+1,
             "UU_ROUTE_MATCHES_CONFIGURED_PROCESS_PATHS_ONLY_ON_TUN_INBOUND");
+        string manualPattern=uuRule["process_path_regex"]!.AsArray()[^1]!.GetValue<string>();
+        Require(System.Text.RegularExpressions.Regex.IsMatch(routeProbe.ToUpperInvariant(),manualPattern) &&
+            !System.Text.RegularExpressions.Regex.IsMatch(routeProbe.Replace("apps","appſ",StringComparison.Ordinal),manualPattern),
+            "DIRECT_APP_ROUTE_MATCHES_WINDOWS_ASCII_CASE_WITHOUT_UNICODE_ALIAS");
         var diagnosticState=(JsonObject)state.DeepClone();diagnosticState["tunnel"]!["endpoint"]="152.67.156.100:51820";
         var diagnosticSecret=new DurableState{PrivateKey=clientKey.Private,NativeUdpPortPreference=8443};
         bool diagnosticRefused=false;try{CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");}catch(IOException error)when(error.Message=="NATIVE_UDP_PORT_NOT_AVAILABLE"){diagnosticRefused=true;}

@@ -36,15 +36,15 @@ internal sealed class DirectApplicationLease : IDisposable
             for(var directory=new DirectoryInfo(Path.GetDirectoryName(path)!);directory.Parent is not null;directory=directory.Parent)
                 parents.Push(directory.FullName);
             foreach(string directory in parents){
-                var handle=OpenExact(directory,0x81,3,0x02200000);
+                var handle=OpenExact(directory,0x81,3,0x02200000,out _);
                 _directories.Add(handle);
             }
-            var image=OpenExact(path,0x80000000,1,0x08200000);
+            var image=OpenExact(path,0x80000000,1,0x08200000,out var canonicalPath);
             try{_file=new FileStream(image,FileAccess.Read,128*1024);}catch{image.Dispose();throw;}
             if(_file.Length is <1024 or >300_000_000 || _file.ReadByte()!=0x4d || _file.ReadByte()!=0x5a)
                 throw new IOException("DIRECT_APP_LOCAL_EXE_REQUIRED");
             _file.Position=0;
-            Application=new(path,Convert.ToHexString(SHA256.HashData(_file)));
+            Application=new(canonicalPath,Convert.ToHexString(SHA256.HashData(_file)));
         }catch{Dispose();throw;}
     }
 
@@ -58,18 +58,20 @@ internal sealed class DirectApplicationLease : IDisposable
         return null;
     }
 
-    private static SafeFileHandle OpenExact(string path,uint access,uint share,uint flags)
+    private static SafeFileHandle OpenExact(string path,uint access,uint share,uint flags,out string canonicalPath)
     {
-        var handle=CreateFile(path,access,share,IntPtr.Zero,3,flags,IntPtr.Zero);
+        var handle=CreateFile(@"\\?\"+path,access,share,IntPtr.Zero,3,flags,IntPtr.Zero);
         if(handle.IsInvalid){handle.Dispose();throw new IOException("DIRECT_APP_FILE_UNAVAILABLE");}
         try{
             var actual=new StringBuilder(1050);
             uint length=FinalPath(handle,actual,(uint)actual.Capacity,0);
+            string finalPath=actual.ToString();
             if(length==0 || length>=actual.Capacity ||
-                !actual.ToString().Equals(@"\\?\"+path,StringComparison.OrdinalIgnoreCase) ||
+                !finalPath.Equals(@"\\?\"+path,StringComparison.OrdinalIgnoreCase) ||
                 !FileInformation(handle,9,out var attributes,8) || (attributes&0x400)!=0 ||
                 ((attributes&0x10)!=0 && (!FileInformation(handle,23,out var caseSensitive,4) || (caseSensitive&1)!=0)))
                 throw new IOException("DIRECT_APP_LOCAL_EXE_REQUIRED");
+            canonicalPath=finalPath[4..];
             return handle;
         }catch{handle.Dispose();throw;}
     }

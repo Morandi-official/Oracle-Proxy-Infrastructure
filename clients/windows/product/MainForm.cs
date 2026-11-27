@@ -185,7 +185,7 @@ internal sealed partial class MainForm : Form
         var metrics=new TableLayoutPanel{Name="connectionMetrics",AutoSize=false,Height=156,Dock=DockStyle.Fill,ColumnCount=3,RowCount=2,Margin=new Padding(0,0,0,8)};
         for(int i=0;i<3;i++)metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/3));for(int i=0;i<2;i++)metrics.RowStyles.Add(new RowStyle(SizeType.Percent,50));
         _exitIp.Font=new Font(Font.FontFamily,10,FontStyle.Bold);_protocol.Font=new Font(Font.FontFamily,9.5f,FontStyle.Bold);
-        var values=new[]{Metric("当前协议",_protocol),Metric("出口 IP",_exitIp),Metric("HTTP 延迟",_latency),Metric("实时下载",_download),Metric("实时上传",_upload),Metric("UU 直连保护",_uu)};
+        var values=new[]{Metric("当前协议",_protocol),Metric("出口 IP",_exitIp),Metric("HTTP 延迟",_latency),Metric("实时下载",_download),Metric("实时上传",_upload),Metric("UU 自动识别",_uu)};
         for(int i=0;i<values.Length;i++)metrics.Controls.Add(values[i],i%3,i/3);Row(connection,metrics);
         var selection=Actions();selection.Controls.Add(new Label{Text="连接方式",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(new Label{Text="WireGuard / UDP",AutoSize=true,Margin=new Padding(0,8,0,0)});Row(connection,selection);
         selection.Controls.Add(new Label{Text="UDP 端口",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_udpPortChoice);
@@ -798,10 +798,9 @@ internal sealed partial class MainForm : Form
             string protocolHelp=protocolText+"\n"+entryText;
             if(_help.GetToolTip(_protocol)!=protocolHelp)_help.SetToolTip(_protocol,protocolHelp);
             _latency.Text=mode=="connected" && latency is not null?$"{latency} ms":"—";
-            _uu.Text=state["error"]?.GetValue<string>()=="UU_TRUST_NOT_VERIFIED"
-                ?"信任核验未通过"
-                :uuNeedsTunnel?"已识别 · 走 VPN":uuVerified>0?$"{uuVerified} 个程序已验证":state["uu_candidates"] is null?"待识别":"未发现 UU";
-            string uuHelp=uuNeedsTunnel?"UU 暂无直连权限。连接后使用 VPN，可在断开时修复权限。":"仅通过信任核验的 UU 程序可以直连。";
+            _uu.Text=uuNeedsTunnel || state["error"]?.GetValue<string>()=="UU_TRUST_NOT_VERIFIED"?"信任核验未通过":
+                uuVerified>0?$"{uuVerified} 个程序已验证":state["uu_candidates"] is null?"待识别":"未发现 UU";
+            string uuHelp="这里显示 UU 自动识别结果。手动选择的程序及状态请查看“应用直连”。";
             if(_help.GetToolTip(_uu)!=uuHelp)_help.SetToolTip(_uu,uuHelp);
             UpdateRates(state,mode=="connected" && guard);
             _telemetry.Text=mode=="connected"?(state["verified_exit_ipv6"] is not null?"双栈出口已验证 · ":"")+"防泄漏保护已启用":"连接通过验证后显示协议、出口与实时速率。";
@@ -817,6 +816,7 @@ internal sealed partial class MainForm : Form
             if(restoring)_timer.Interval=awaitingFirstRefresh?100:1000;
             UpdateUdpAction();
             RevealView(awaitingFirstRefresh?null:_authenticated);
+            _updateDirectApplicationDialog?.Invoke();
 
     }
     internal string DownloadRate=>_download.Text;

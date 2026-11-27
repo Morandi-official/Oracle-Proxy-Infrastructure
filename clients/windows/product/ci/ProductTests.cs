@@ -83,6 +83,11 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--owner-status"})){
             try{var state=ControlPipe.Send("Status").GetAwaiter().GetResult();return state["mode"]?.GetValue<string>()=="disconnected"?0:1;}catch{return 1;}
         }
+        if(args.SequenceEqual(new[]{"--uu-maintenance-off-check"})){
+            var state=ControlPipe.Send("CheckUuMaintenance").GetAwaiter().GetResult();
+            return state["ok"]?.GetValue<bool>()==true && state["intent"]?.GetValue<bool>()==false &&
+                state["mode"]?.GetValue<string>()=="disconnected" && state["shutdown_after_response"] is null?0:1;
+        }
         if(!Platform.IsSystem || !File.Exists(Path.Combine(Root,"authorized")))return 3;
         if(args.SequenceEqual(new[]{"--uu-route-probe"}))return Tcp().GetAwaiter().GetResult()?0:1;
         if(args.SequenceEqual(new[]{"--verify-recovered"})){
@@ -96,6 +101,7 @@ internal static class ProductTests
         }
         if(args.SequenceEqual(new[]{"--rescue"})){Rescue();return 0;}
         if(args.SequenceEqual(new[]{"--service"})){ServiceBase.Run(new Fixture());return 0;}
+        if(args.SequenceEqual(new[]{"--uu-network-service"})){ServiceBase.Run(new Fixture(()=>Run(uuOnly:true)));return 0;}
         if(args.SequenceEqual(new[]{"--recovery-service"})){ServiceBase.Run(new Fixture(RunRecoveryOnly));return 0;}
         if(args.SequenceEqual(new[]{"--park-service"})){ServiceBase.Run(new Fixture(RunParkedOffline));return 0;}
         return 2;
@@ -433,6 +439,10 @@ internal static class ProductTests
             Directory.CreateDirectory(customRoot);Platform.Protect(customRoot,true);
             try{
                 File.Copy(executable,customMain);
+                var customFile=new FileInfo(customMain);
+                var customAcl=customFile.GetAccessControl();
+                customAcl.SetOwner(new System.Security.Principal.SecurityIdentifier("S-1-5-32-544"));
+                customFile.SetAccessControl(customAcl);
                 using var key=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath,true)!;
                 key.SetValue("InstallLocation",customRoot);
                 if(!UuDiscovery.Discover().Paths.Contains(customMain,StringComparer.OrdinalIgnoreCase))
@@ -1401,7 +1411,7 @@ internal static class ProductTests
     private sealed class Fixture:ServiceBase
     {
         private readonly Func<Task> _run;
-        internal Fixture(Func<Task>? run=null){_run=run??ProductTests.Run;ServiceName=Name;AutoLog=false;}
+        internal Fixture(Func<Task>? run=null){_run=run??(()=>ProductTests.Run());ServiceName=Name;AutoLog=false;}
         protected override void OnStart(string[] args)=>Task.Run(async()=>{
             bool success=false;string result;
             try{await _run();success=true;result=string.Join('\n',Evidence)+"\nRESULT=PASS\n";}
@@ -1696,7 +1706,7 @@ internal static class ProductTests
             "REAL_UAC_RECOVERY_TRANSACTION_REMOVES_DORMANT_ORPHAN_AND_RESTARTS_AUTHENTICATED_CONTROL_SERVICE");
         Require(await Tcp() && await Dns(),"RECOVERY_GATE_FINISHES_WITH_DIRECT_TCP_AND_DNS");
     }
-    private static async Task Run()
+    private static async Task Run(bool uuOnly=false)
     {
         Require(!NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name=="OracleProxy"),"DISPOSABLE_NO_PREEXISTING_PRODUCT_TUN");
         Require(!NativeGuard.TunPresent,"REAL_NATIVE_INTERFACE_TABLE_HAS_NO_PREEXISTING_PRODUCT_TUN");
@@ -1745,14 +1755,24 @@ internal static class ProductTests
         // production configuration separately pins the physical carrier IP.
         config["outbounds"]![1]!.AsObject().Remove("address");
 
-        await OffDormantRecovery(config,uuPaths);
-        Require(NativeGuard.Active,"REAL_EXISTING_GUARDED_FIXTURE_POLICY_RESTORED_AFTER_OFF_DORMANT_CASES");
+        if(!uuOnly){
+            await OffDormantRecovery(config,uuPaths);
+            Require(NativeGuard.Active,"REAL_EXISTING_GUARDED_FIXTURE_POLICY_RESTORED_AFTER_OFF_DORMANT_CASES");
+        }
 
         File.Copy(Environment.ProcessPath!,routeProbe);
         Process? exit=null,client=null;
         try{
             exit=await Launch(server);
             Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
+            if(uuOnly){
+                client=await Launch(config);
+                NativeGuard.AuthorizeTun((uint)client.Id);
+                Require(await Tcp(),"REAL_UU_FIXTURE_ORDINARY_PROCESS_HAS_WIREGUARD_BEFORE_PEER_LOSS");
+                await Stop(exit);exit=null;
+                await VerifyUuRouteAfterPeerLoss(routeProbe);
+                return;
+            }
             NativeGuard.Clear();
             client=await Launch(config,standby:true);
             Require(NativeGuard.TunPresent,"REAL_NATIVE_INTERFACE_TABLE_DETECTS_CREATED_STANDBY_ADAPTER");
@@ -1828,12 +1848,8 @@ internal static class ProductTests
             Require(tunneled,"REAL_TUN_USERSPACE_WIREGUARD_TCP_TO_ISOLATED_PEER");
             Require(await Dns(),"REAL_TUN_USERSPACE_WIREGUARD_UDP_DNS_TO_ISOLATED_PEER");
             await Stop(exit);exit=null;
-            Require(!await Tcp(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_TCP_FALLBACK");
+            await VerifyUuRouteAfterPeerLoss(routeProbe);
             Require(!await Dns(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_DNS_FALLBACK");
-            using(var probe=Process.Start(new ProcessStartInfo(routeProbe){UseShellExecute=false,ArgumentList={"--uu-route-probe"}})!){
-                await probe.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-                Require(probe.ExitCode==0 && NativeGuard.TunPermitted,"REAL_EXACT_PROCESS_RULE_USES_DIRECT_OUTBOUND_DURING_PEER_LOSS");
-            }
             client.Kill(true);await client.WaitForExitAsync();client.Dispose();client=null;
             Require(NativeGuard.Active,"REAL_CORE_CRASH_PERSISTENT_GUARD_SURVIVES");
             Evidence.Add("REAL_CORE_EXIT_LIFECYCLE_FLAGS="+NativeGuard.CoreLifecycle);
@@ -1847,7 +1863,7 @@ internal static class ProductTests
             await RejectOrphanReceipt(foreign,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_FOREIGN_GUID_WITH_GUARD_AND_DEVICE_PRESERVED");
             var unknown=(JsonObject)recorded.DeepClone();unknown["unexpected_command"]="not-an-interface-operation";
             await RejectOrphanReceipt(unknown,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_UNKNOWN_RECEIPT_FIELDS_WITH_GUARD_AND_DEVICE_PRESERVED");
-        }finally{await Stop(client);await Stop(exit);File.Delete(routeProbe);}
+        }finally{await Stop(client);await Stop(exit);if(uuOnly)NativeGuard.Clear();File.Delete(routeProbe);}
         NativeGuard.Clear();
         Require(await Tcp(),"REAL_EXPLICIT_OFF_PHYSICAL_TCP_RESTORED");Require(await Dns(),"REAL_EXPLICIT_OFF_PHYSICAL_UDP_DNS_RESTORED");
         Require(!UuDiscovery.Trusted(Environment.ProcessPath!),"UU_UNSIGNED_TEST_EXECUTABLE_REJECTED");
@@ -1862,5 +1878,15 @@ internal static class ProductTests
         foreach(var nic in metadata)
             Evidence.Add("SYSTEM_TUN_METADATA_NAME_OracleProxy_STATUS_"+nic.OperationalStatus+"_TYPE_"+nic.NetworkInterfaceType);
         Evidence.Add("REAL_GAMEVIEWER_CONTINUITY=NOT_TESTED");Evidence.Add("ACTUAL_OS_REBOOT=NOT_TESTED");Evidence.Add("PHYSICAL_IPV6=NOT_TESTED");
+    }
+
+    private static async Task VerifyUuRouteAfterPeerLoss(string routeProbe)
+    {
+        Require(!await Tcp(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_TCP_FALLBACK");
+        using var probe=Process.Start(new ProcessStartInfo(routeProbe){UseShellExecute=false,ArgumentList={"--uu-route-probe"}})!;
+        try{
+            await probe.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Require(probe.ExitCode==0 && NativeGuard.TunPermitted,"REAL_EXACT_PROCESS_RULE_USES_DIRECT_OUTBOUND_DURING_PEER_LOSS");
+        }finally{if(!probe.HasExited)probe.Kill();}
     }
 }

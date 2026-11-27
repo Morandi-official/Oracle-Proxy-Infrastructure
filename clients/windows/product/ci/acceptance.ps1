@@ -1,3 +1,4 @@
+param([switch]$UuOnly)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'official-download.ps1')
 . (Join-Path $PSScriptRoot 'uu-network-fixture.ps1')
@@ -24,6 +25,11 @@ $install=Start-Process $exe -ArgumentList @('--install',$owner) -Wait -PassThru
 if($install.ExitCode -ne 0){if(Test-Path "$env:ProgramFiles/OracleProxy/diagnostics.json"){Get-Content "$env:ProgramFiles/OracleProxy/diagnostics.json"};Get-Service OracleProxyService -ErrorAction SilentlyContinue | Select-Object Status,Name;throw 'Actual product setup failed'}
 & $test --owner-status
 if($LASTEXITCODE -ne 0){throw 'SCM-authenticated owner pipe failed'}
+if($UuOnly){
+  & $test --uu-maintenance-off-check
+  if($LASTEXITCODE -ne 0){throw 'Read-only UU maintenance check failed while safely disconnected'}
+  Stop-Service OracleProxyService
+}else{
 & $test --native-denial
 if($LASTEXITCODE -ne 0){throw 'Native policy mutation admitted non-SYSTEM caller'}
 & $test --ui-self-test
@@ -48,6 +54,7 @@ try{
   if($denial.ExitCode -ne 0){throw 'Actual non-owner pipe denial not established'}
   Write-Host 'REAL_NONADMIN_NONOWNER_WINDOWS_IDENTITY_PIPE_ACCESS_DENIED=PASS'
 }finally{Remove-LocalUser $other -ErrorAction SilentlyContinue}
+}
 $uuFixture=Join-Path $env:ProgramFiles 'OracleProxy/GameViewer-Trust-Fixture'
 New-Item -ItemType Directory $uuFixture | Out-Null
 $officialInstaller=Join-Path $uuFixture 'GameViewer.exe'
@@ -62,7 +69,8 @@ New-CIUuNetworkFixture
 $action=New-ScheduledTaskAction -Execute $test -Argument '--watchdog'
 Register-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog' -Action $action -User SYSTEM -RunLevel Highest -Force | Out-Null
 Start-ScheduledTask -TaskName 'OracleProxyCandidateWatchdog'
-$image='"'+$test+'" --service'
+$serviceArg=if($UuOnly){'--uu-network-service'}else{'--service'}
+$image='"'+$test+'" '+$serviceArg
 $sc=[Diagnostics.ProcessStartInfo]::new('sc.exe');$sc.UseShellExecute=$false
 foreach($arg in @('create','OracleProxyCandidateFixture','binPath=',$image,'obj=','LocalSystem','start=','demand')){$sc.ArgumentList.Add($arg)}
 $created=[Diagnostics.Process]::Start($sc);$created.WaitForExit()
@@ -77,6 +85,7 @@ $body=Get-Content -Raw $result
 Write-Host $body
 if($body -notmatch 'RESULT=PASS'){throw 'Actual WFP/WireGuard fixture failed'}
 Remove-CIUuNetworkFixture
+if($UuOnly){return}
 # The runner account is an Administrator, but is not LocalSystem; CurrentUser
 # DPAPI ciphertext created inside the real SCM process must remain unreadable.
 Add-Type -AssemblyName System.Security

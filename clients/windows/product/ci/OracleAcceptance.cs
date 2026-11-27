@@ -767,6 +767,7 @@ internal static class OracleAcceptance
         if(string.IsNullOrEmpty(user) || string.IsNullOrEmpty(password))return 2;
         string? ownDevice=null;
         try{
+            await Send("AttachClient");
             var login=RequireSuccess("MonitorLogin",await ControlPipe.Send("Login",user,password));
             if(login["device_registered"]?.GetValue<bool>()!=true)return 2;
             ownDevice=login["registration"]!["device_id"]!.GetValue<string>();
@@ -781,7 +782,7 @@ internal static class OracleAcceptance
                     result=state["transport_port"]?.GetValue<int>()==port && allowed.Contains(await ExitIp())?"success":"failure";
                 }catch(IOException error)when(error.Message=="ORACLE_RECONNECT_TIMED_OUT"){result="failure";}
                 catch(Exception error)when(error is IOException or HttpRequestException or TimeoutException or OperationCanceledException){}
-                finally{await Send("Disconnect");}
+                finally{await Send("Disconnect");await StoppedService();}
                 Console.WriteLine($"PORT_MONITOR {port} {result}");
             }
             return 0;
@@ -790,6 +791,8 @@ internal static class OracleAcceptance
             if(ownDevice is not null){
                 try{
                     await Send("Disconnect");
+                    await StoppedService();
+                    await Send("AttachClient");
                     var active=RequireSuccess("MonitorCleanup",await ControlPipe.Send("Login",user,password));
                     if(active["registration"]?["device_id"]?.GetValue<string>()==ownDevice)
                         RequireSuccess("MonitorRemove",await ControlPipe.Send("DeleteDevice",ownDevice));

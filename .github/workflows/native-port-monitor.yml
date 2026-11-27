@@ -1,6 +1,9 @@
 name: Native WireGuard port monitor
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/native-port-monitor.yml', 'ops/port-monitor/**']
   schedule:
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:

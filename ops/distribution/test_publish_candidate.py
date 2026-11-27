@@ -56,8 +56,8 @@ class PublicationBoundaries(unittest.TestCase):
                 validate_dotnet_runtime(candidate)
 
     def test_manifest_requires_two_distinct_exact_artifacts_and_wireguard_source(self):
-        self.assertEqual(TAG, 'wireguard-windows-v0.2.1')
-        manifest={'version':'0.2.1','run_id':42,'uu_path_run_id':43,'source_revision':'a'*40,
+        self.assertEqual(TAG, 'wireguard-windows-v0.2.2')
+        manifest={'version':'0.2.2','run_id':42,'uu_path_run_id':43,'source_revision':'a'*40,
                   'artifacts':[{'id':1,'sha256':'b'*64},{'id':2,'sha256':'c'*64}]}
         validate_manifest(manifest)
         variants=[dict(manifest,artifacts=[]),dict(manifest,artifacts=manifest['artifacts'][:1]),

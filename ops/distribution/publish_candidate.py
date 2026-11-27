@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 REPO = 'Morandi-official/Oracle-Proxy-Infrastructure'
-VERSION = '0.2.1'
+VERSION = '0.2.2'
 TAG = 'wireguard-windows-v' + VERSION
 MANIFEST = Path(__file__).with_name('windows-wireguard-' + VERSION + '.json')
 

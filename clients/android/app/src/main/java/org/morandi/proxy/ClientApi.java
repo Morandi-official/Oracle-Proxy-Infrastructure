@@ -17,6 +17,7 @@ import java.net.Proxy;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -259,7 +260,7 @@ class ClientApi {
             // Keep the URL, SNI and Android certificate verification on HOST.
             builder.dns(host -> {
                 if (!HOST.equals(host)) throw new UnknownHostException();
-                return List.of(InetAddress.getByAddress(BOOTSTRAP_IPV4));
+                return Collections.singletonList(InetAddress.getByAddress(BOOTSTRAP_IPV4));
             });
         } else if (network != null) {
             builder.dns(host -> Arrays.asList(network.getAllByName(host)));

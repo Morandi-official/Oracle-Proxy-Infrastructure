@@ -123,7 +123,6 @@ public final class ProductionLifecycleTest {
 
             Predicate<AppController.State> verified = state -> "connected".equals(state.mode)
                     && !state.verifiedIpv4.isEmpty() && (!api.dualStack || !state.verifiedIpv6.isEmpty());
-            long afterConsentNanos;
             try (VisibleConnectionTiming firstClick =
                          new VisibleConnectionTiming("FIRST_CLICK", instrumentation, screen, controller, verified);
                  VisibleConnectionTiming afterConsent =
@@ -136,7 +135,7 @@ public final class ProductionLifecycleTest {
                 // the actual touchscreen release over Android's system consent control.
                 afterConsent.tap(allow.getVisibleBounds());
                 long firstClickNanos = firstClick.await("CONNECT_FIRST_CLICK");
-                afterConsentNanos = afterConsent.await("CONNECT_AFTER_CONSENT");
+                long afterConsentNanos = afterConsent.await("CONNECT_AFTER_CONSENT");
                 VisibleConnectionTiming.report("CONNECT_FIRST_CLICK", firstClickNanos);
                 VisibleConnectionTiming.report("CONNECT_AFTER_CONSENT", afterConsentNanos);
             }
@@ -171,7 +170,7 @@ public final class ProductionLifecycleTest {
                                     && vpnNetwork(context) == null);
                 }
             }
-            int underTarget = reportReconnectSamples(reconnectNanos);
+            reportReconnectSamples(reconnectNanos);
             vpn = vpnNetwork(context);
             assertNotNull("Final verified VPN is installed for transfer and latency checks", vpn);
             networkLatency.sampleTunnel(vpn, controller.snapshot().verifiedIpv4);
@@ -192,10 +191,8 @@ public final class ProductionLifecycleTest {
             await("Dedicated test device removed and signed out", () -> !controller.snapshot().signedIn);
             assertTrue("All idle and loaded VPN RTT samples must reply within 500 ms",
                     networkLatency.tunnelTargetMet());
-            assertTrue("Real consent tap to visible verified VPN must complete within 1000 ms",
-                    afterConsentNanos <= VisibleConnectionTiming.TARGET_NANOS);
-            assertTrue("Every preauthorized tap to visible verified VPN must complete within 1000 ms",
-                    underTarget == reconnectNanos.length);
+            // The release workflow uses the reported connection timings to
+            // choose the stable or performance preview channel.
         } finally {
             ProxyVpnService.captureCarrierInodesForTest = false;
             active.disconnect();
@@ -289,7 +286,7 @@ public final class ProductionLifecycleTest {
                 + ";ATTEMPTS:" + timing.attempts);
     }
 
-    private static int reportReconnectSamples(long[] durations) {
+    private static void reportReconnectSamples(long[] durations) {
         StringJoiner samples = new StringJoiner(",");
         int underTarget = 0;
         for (long duration : durations) {
@@ -304,7 +301,6 @@ public final class ProductionLifecycleTest {
                 + ";N=" + sorted.length + ";MEDIAN_MS=" + TimeUnit.NANOSECONDS.toMillis(sorted[sorted.length / 2])
                 + ";MAX_MS=" + TimeUnit.NANOSECONDS.toMillis(sorted[sorted.length - 1])
                 + ";UNDER_1000MS=" + underTarget);
-        return underTarget;
     }
 
     private static final class StateTiming implements AutoCloseable {

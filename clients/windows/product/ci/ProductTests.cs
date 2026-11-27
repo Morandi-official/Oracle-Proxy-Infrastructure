@@ -1740,7 +1740,7 @@ internal static class ProductTests
             "UU_ROUTE_MATCHES_CONFIGURED_PROCESS_PATHS_ONLY_ON_TUN_INBOUND");
         var diagnosticState=(JsonObject)state.DeepClone();diagnosticState["tunnel"]!["endpoint"]="152.67.156.100:51820";
         var diagnosticSecret=new DurableState{PrivateKey=clientKey.Private,NativeUdpPortPreference=8443};
-        bool diagnosticRefused=false;try{CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");}catch(IOException error)when(error.Message=="NATIVE_UDP8443_NOT_AVAILABLE"){diagnosticRefused=true;}
+        bool diagnosticRefused=false;try{CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");}catch(IOException error)when(error.Message=="NATIVE_UDP_PORT_NOT_AVAILABLE"){diagnosticRefused=true;}
         Require(diagnosticRefused,"UNADVERTISED_NATIVE_8443_REFUSED");
         diagnosticState["tunnel"]!["native_udp_ports"]=new JsonArray(51820,443,8443);
         var diagnosticConfig=CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only",out var nativePorts);
@@ -1766,7 +1766,10 @@ internal static class ProductTests
             exit=await Launch(server);
             Require(IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(p=>p.Port==59999),"REAL_ISOLATED_WIREGUARD_UDP_LISTENER");
             if(uuOnly){
-                client=await Launch(config);
+                client=await Launch(config,standby:true);
+                TunReceipt.ConsumePrepared(client);
+                await client.StandardInput.WriteLineAsync("ACTIVATE");await client.StandardInput.FlushAsync();
+                Require(await client.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))=="TUN_ACTIVE","REAL_UU_FIXTURE_ACTIVE_TUN");
                 NativeGuard.AuthorizeTun((uint)client.Id);
                 Require(await Tcp(),"REAL_UU_FIXTURE_ORDINARY_PROCESS_HAS_WIREGUARD_BEFORE_PEER_LOSS");
                 await Stop(exit);exit=null;

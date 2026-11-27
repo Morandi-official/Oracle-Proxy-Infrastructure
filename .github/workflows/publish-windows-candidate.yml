@@ -21,7 +21,7 @@ jobs:
       - run: python3 -m unittest discover -s ops/distribution -p 'test_*.py' -v
       - id: manifest
         run: |
-          if [[ -f ops/distribution/windows-wireguard-0.2.0.json ]]; then
+          if [[ -f ops/distribution/windows-wireguard-0.2.1.json ]]; then
             echo 'present=true' >> "$GITHUB_OUTPUT"
           else
             echo 'present=false' >> "$GITHUB_OUTPUT"

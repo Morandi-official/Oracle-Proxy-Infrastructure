@@ -1,0 +1,16 @@
+{
+  "version": "0.2.1",
+  "run_id": 45945073510,
+  "uu_path_run_id": 45945073481,
+  "source_revision": "3588a96d5d0ba76e15dad453a5323bce875b535f",
+  "artifacts": [
+    {
+      "id": 15174378288,
+      "sha256": "1ca2cbb8133fec1be84db8fa696c13b280ad6834ff5a4d740f8b73f4ba47c7d4"
+    },
+    {
+      "id": 15174423350,
+      "sha256": "cd0523341de85d081264225c0c42d5665bead6350430453bda7777428e72d7f1"
+    }
+  ]
+}

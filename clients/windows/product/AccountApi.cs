@@ -7,8 +7,8 @@ namespace OracleProxy.Product;
 internal sealed class AccountApi : IDisposable
 {
     internal static readonly Uri Base = new("https://vpn-admin.morandi.dpdns.org/");
-    private readonly HttpClient _directHttp;
-    private readonly HttpClient _protectedHttp;
+    private readonly HttpClient[] _disconnectedClients;
+    private readonly HttpClient _physicalHttp;
     private readonly CancellationTokenSource _stop=new();
     private readonly object _routeGate=new();
     private Task<HttpClient>? _disconnectedRoute;
@@ -31,26 +31,36 @@ internal sealed class AccountApi : IDisposable
     internal AccountApi()
     {
         try{if(File.Exists(AddressCache) && !File.GetAttributes(AddressCache).HasFlag(FileAttributes.ReparsePoint) && new FileInfo(AddressCache).Length<=2048){if(JsonNode.Parse(File.ReadAllText(AddressCache)) is JsonArray cached && cached.Count is >0 and <=2 && cached.All(x=>x is JsonValue)){var addresses=cached.Select(x=>EndpointCatalog.Public(x!.GetValue<string>())).Distinct().ToArray();lock(AddressGate){KnownAddresses=addresses;}}}}catch(Exception e) when(e is IOException or System.Text.Json.JsonException or InvalidOperationException){}
-        // Separate pools keep a connection opened on the system route from
-        // being reused after protection starts. Both validate the same TLS host.
-        _directHttp = CreateClient(protectedPath: false);
-        _protectedHttp = CreateClient(protectedPath: true);
+        // Only the interface-bound pool is usable when protection is present.
+        // A pinned address locates a socket; TLS still authenticates Base.Host.
+        _physicalHttp=CreateClient((_,cancel)=>ConnectKnownRoute(bound:true,cancel));
+        var system=CreateClient(ConnectSystemRoute,requireDisconnected:true);
+        var pinned=CreateClient((_,cancel)=>ConnectKnownRoute(bound:false,cancel),requireDisconnected:true);
+        _disconnectedClients=[system,_physicalHttp,pinned];
     }
 
-    private static HttpClient CreateClient(bool protectedPath)
+#if ORACLE_PRODUCT_TESTS
+    internal static async Task VerifyPublicPinnedRoute(CancellationToken cancel)
+    {
+        using var client=CreateClient((_,token)=>ConnectKnownRoute(bound:false,token));
+        await VerifyAccountRoute(client,cancel).ConfigureAwait(false);
+    }
+#endif
+
+    private static HttpClient CreateClient(Func<DnsEndPoint,CancellationToken,Task<Stream>> connect,bool requireDisconnected=false)
     {
         var handler = new SocketsHttpHandler {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false,
-            ConnectTimeout = TimeSpan.FromSeconds(8),
-            ConnectCallback = async (context, token) => {
-                if (context.DnsEndPoint.Host != Base.Host || context.DnsEndPoint.Port != 443)
-                    throw new IOException("UNTRUSTED_API_ENDPOINT");
-                if (protectedPath) return await ConnectPhysicalRoute(token);
-                if (!NativeGuard.ConfirmedAbsent) throw new IOException("ACCOUNT_SYSTEM_ROUTE_PROTECTED");
-                return await TrySystemRoute(context.DnsEndPoint, token) ?? throw new IOException("API_SYSTEM_ROUTE_UNAVAILABLE");
-            },
+            ConnectTimeout = TimeSpan.FromSeconds(24),
+            PooledConnectionIdleTimeout=TimeSpan.FromSeconds(20),
         };
-        return new HttpClient(handler) { BaseAddress = Base, Timeout = TimeSpan.FromSeconds(12) };
+        handler.ConnectCallback = async (context, token) => {
+            if (context.DnsEndPoint.Host != Base.Host || context.DnsEndPoint.Port != 443)
+                throw new IOException("UNTRUSTED_API_ENDPOINT");
+            if(requireDisconnected && !NativeGuard.ConfirmedAbsent)throw new IOException("ACCOUNT_SYSTEM_ROUTE_PROTECTED");
+            return await connect(context.DnsEndPoint,token).ConfigureAwait(false);
+        };
+        return new HttpClient(handler){BaseAddress=Base,Timeout=Timeout.InfiniteTimeSpan};
     }
 
     internal void WarmDisconnectedRoute()
@@ -65,135 +75,152 @@ internal sealed class AccountApi : IDisposable
         lock(_routeGate){
             if(_disconnectedRoute is null || _disconnectedRoute.IsFaulted || _disconnectedRoute.IsCanceled ||
                 Environment.TickCount64>=_routeExpires){
-                _routeExpires=Environment.TickCount64+30_000;
+                _routeExpires=Environment.TickCount64+45_000;
                 _disconnectedRoute=Task.Run(FindDisconnectedRoute);
             }
             return _disconnectedRoute;
         }
     }
 
-    private Task<HttpClient> FindDisconnectedRoute()=>SelectVerifiedRoute(
-        _directHttp,_protectedHttp,VerifyAccountRoute,_stop.Token);
+    private Task<HttpClient> FindDisconnectedRoute()=>SelectVerifiedRoute(_disconnectedClients,(client,cancel)=>
+        NativeGuard.ConfirmedAbsent?VerifyAccountRoute(client,cancel):Task.FromException(new IOException("ACCOUNT_SYSTEM_ROUTE_PROTECTED")),_stop.Token);
+
+    private static HttpRequestMessage Request(HttpMethod method,string action)
+    {
+        var request=new HttpRequestMessage(method,"api/client/"+action);
+        request.Headers.Add("X-Oracle-Client-Capabilities","dual-stack-v1");
+        if(action=="authenticate")request.Headers.Add("X-Oracle-Confirm-Device","true");
+        return request;
+    }
 
     internal static async Task VerifyAccountRoute(HttpClient client,CancellationToken cancel)
     {
-        // A TCP connection can succeed while TLS or the account HTTP endpoint
-        // still stalls. Probes carry no credentials and only accept the expected
-        // response over the same authenticated origin and pool as the API call.
-        using var response=await client.GetAsync("api/client/state",HttpCompletionOption.ResponseHeadersRead,cancel).ConfigureAwait(false);
-        if(response.StatusCode!=HttpStatusCode.Unauthorized)throw new HttpRequestException(
+        // Exercise the exact POST path without a username, device key or token.
+        // The server rejects missing fields before throttling or mutating state.
+        using var request=Request(HttpMethod.Post,"authenticate");
+        request.Content=new StringContent("{}",Encoding.UTF8,"application/json");
+        using var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel).ConfigureAwait(false);
+        if(response.StatusCode!=HttpStatusCode.BadRequest)throw new HttpRequestException(
             "ACCOUNT_ROUTE_PROBE_REJECTED",null,response.StatusCode);
         await response.Content.LoadIntoBufferAsync(1024,cancel).ConfigureAwait(false);
         var value=JsonNode.Parse(await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false));
         if(value is not JsonObject state || state["error"] is not JsonValue error ||
-            !error.TryGetValue<string>(out var code) || code!="LOGIN_REQUIRED")throw new IOException("ACCOUNT_ROUTE_PROBE_REJECTED");
+            !error.TryGetValue<string>(out var code) || code!="INVALID_REQUEST")throw new IOException("ACCOUNT_ROUTE_PROBE_REJECTED");
     }
 
-    internal static async Task<HttpClient> SelectVerifiedRoute(HttpClient direct,HttpClient physical,
+    internal static async Task<HttpClient> SelectVerifiedRoute(IReadOnlyList<HttpClient> clients,
         Func<HttpClient,CancellationToken,Task> verify,CancellationToken cancel)
     {
         using var race=CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        race.CancelAfter(TimeSpan.FromSeconds(9));
-        async Task<Exception?> Probe(HttpClient route)
+        race.CancelAfter(TimeSpan.FromSeconds(26));
+        async Task<(HttpClient Route,Exception? Failure)> Probe(HttpClient route)
         {
-            try{await verify(route,race.Token).ConfigureAwait(false);return null;}
-            catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException or ObjectDisposedException){
-                return error;
+            try{
+                await verify(route,race.Token).ConfigureAwait(false);
+                return (route,null);
+            }
+            catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException or ObjectDisposedException or NotSupportedException){
+                return (route,error);
             }
         }
         try{
-            var preferred=Probe(direct);
+            var preferred=Probe(clients[0]);
             if(await Task.WhenAny(preferred,Task.Delay(200,race.Token)).ConfigureAwait(false)==preferred &&
-                await preferred.ConfigureAwait(false) is null){
-                race.Token.ThrowIfCancellationRequested();return direct;
+                (await preferred.ConfigureAwait(false)).Failure is null){
+                race.Token.ThrowIfCancellationRequested();return clients[0];
             }
-            var fallback=Probe(physical);
-            var first=await Task.WhenAny(preferred,fallback).WaitAsync(race.Token).ConfigureAwait(false);
-            var firstError=await first.ConfigureAwait(false);
-            if(firstError is null){
-                race.Token.ThrowIfCancellationRequested();return first==preferred?direct:physical;
+            var pending=new List<Task<(HttpClient Route,Exception? Failure)>>{preferred};
+            pending.AddRange(clients.Skip(1).Select(Probe));
+            Exception? failure=null;
+            while(pending.Count>0){
+                var finished=await Task.WhenAny(pending).WaitAsync(race.Token).ConfigureAwait(false);
+                pending.Remove(finished);
+                var result=await finished.ConfigureAwait(false);
+                if(result.Failure is null){race.Token.ThrowIfCancellationRequested();return result.Route;}
+                if(failure is null or OperationCanceledException || result.Route==clients[0])failure=result.Failure;
             }
-            var last=first==preferred?fallback:preferred;
-            var lastError=await last.WaitAsync(race.Token).ConfigureAwait(false);
-            if(lastError is null){
-                race.Token.ThrowIfCancellationRequested();return last==preferred?direct:physical;
-            }
-            throw new IOException("ACCOUNT_API_UNREACHABLE",lastError is OperationCanceledException?firstError:lastError);
+            throw new AccountTransportException("ROUTE_PROBE",failure);
+        }catch(OperationCanceledException error)when(!cancel.IsCancellationRequested){
+            throw new AccountTransportException("ROUTE_PROBE",error);
         }finally{
             race.Cancel();
         }
     }
 
-    private static Task<Stream?> TrySystemRoute(DnsEndPoint endpoint, CancellationToken cancel) =>
-        TrySocket(new Socket(SocketType.Stream, ProtocolType.Tcp), endpoint, null, 4_000, cancel);
-
-    private static async Task<Stream> ConnectPhysicalRoute(CancellationToken cancel)
+    private static async Task<Stream> ConnectSystemRoute(DnsEndPoint endpoint,CancellationToken cancel)
     {
-        uint physical = NativeGuard.PhysicalIPv4Index;
-        if (physical == 0) throw new IOException("PHYSICAL_ROUTE_UNAVAILABLE");
+        var socket=new Socket(SocketType.Stream,ProtocolType.Tcp);
+        try{
+            socket.NoDelay=true;
+            await socket.ConnectAsync(endpoint,cancel).ConfigureAwait(false);
+            return new NetworkStream(socket,ownsSocket:true);
+        }catch{socket.Dispose();throw;}
+    }
+
+    private static async Task<Stream> ConnectKnownRoute(bool bound,CancellationToken cancel)
+    {
+        uint? physical=bound?NativeGuard.PhysicalIPv4Index:null;
+        if(physical==0)throw new IOException("PHYSICAL_ROUTE_UNAVAILABLE");
         var tried = new HashSet<string>();
+        Exception? failure=null;
         async Task<Stream?> TryAddress(string address)
         {
             if (!tried.Add(address)) return null;
             var endpoint = new IPEndPoint(IPAddress.Parse(EndpointCatalog.Public(address)), 443);
-            return await TrySocket(
-                new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp),
-                endpoint, physical, 1_500, cancel);
+            var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp);
+            try{
+                using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                timeout.CancelAfter(bound?1_500:18_000);socket.NoDelay=true;
+                if(physical is uint index)
+                    socket.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)index));
+                await socket.ConnectAsync(endpoint,timeout.Token).ConfigureAwait(false);
+                return new NetworkStream(socket,ownsSocket:true);
+            }catch(Exception error)when(error is SocketException or OperationCanceledException or IOException){
+                socket.Dispose();cancel.ThrowIfCancellationRequested();failure=error;return null;
+            }
         }
 
         string[] known;
         lock (AddressGate) { known = KnownAddresses; }
         foreach (string address in ConnectionCandidates(known)) {
-            var stream = await TryAddress(address);
+            var stream = await TryAddress(address).ConfigureAwait(false);
             if (stream is not null) return stream;
         }
-        foreach (string address in await PhysicalDns.Resolve(physical, cancel)) {
-            var stream = await TryAddress(address);
-            if (stream is not null) return stream;
+        if(physical is uint selected){
+            foreach(string address in await PhysicalDns.Resolve(selected,cancel).ConfigureAwait(false)){
+                var stream=await TryAddress(address).ConfigureAwait(false);
+                if(stream is not null)return stream;
+            }
         }
-        throw new IOException("API_ENDPOINTS_UNAVAILABLE");
-    }
-
-    private static async Task<Stream?> TrySocket(
-        Socket socket, EndPoint endpoint, uint? physical, int timeoutMs, CancellationToken cancel)
-    {
-        try {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-            timeout.CancelAfter(timeoutMs);
-            socket.NoDelay = true;
-            if (physical is uint index)
-                socket.SetSocketOption(SocketOptionLevel.IP, (SocketOptionName)31, IPAddress.HostToNetworkOrder((int)index));
-            await socket.ConnectAsync(endpoint, timeout.Token);
-            return new NetworkStream(socket, ownsSocket: true);
-        } catch (Exception error) when (error is SocketException or OperationCanceledException or IOException) {
-            socket.Dispose();
-            cancel.ThrowIfCancellationRequested();
-            return null;
-        }
+        throw new IOException("API_ENDPOINTS_UNAVAILABLE",failure);
     }
 
     internal Task<JsonObject> Call(string action,string token,JsonObject? body=null)=>Call(action,token,body,CancellationToken.None);
     internal async Task<JsonObject> Call(string action,string token,JsonObject? body,CancellationToken cancel)
     {
         if(action is not ("login" or "authenticate" or "enroll" or "presence" or "state" or "logout" or "udp-diagnostics" or "device-delete"))throw new InvalidOperationException();
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);deadline.CancelAfter(TimeSpan.FromSeconds(12));
-        using var request=new HttpRequestMessage(body is null?HttpMethod.Get:HttpMethod.Post,"api/client/"+action);
-        request.Headers.Add("X-Oracle-Client-Capabilities","dual-stack-v1");
-        if(action=="authenticate")request.Headers.Add("X-Oracle-Confirm-Device","true");
-        if(token.Length>0)request.Headers.Authorization=new("Bearer",token);
-        if(body is not null)request.Content=new StringContent(body.ToJsonString(),Encoding.UTF8,"application/json");
-        using var result=await Send(request,deadline.Token);
-        await using var stream=await result.Content.ReadAsStreamAsync(deadline.Token);using var memory=new MemoryStream();var buffer=new byte[4096];
-        int n;while((n=await stream.ReadAsync(buffer,deadline.Token))!=0){if(memory.Length+n>65536)throw new IOException("API_RESPONSE_TOO_LARGE");memory.Write(buffer,0,n);}
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);
+        // Password login is interactive and can await a slow first HTTPS
+        // connection. Presence and connected policy reads keep their limit.
+        deadline.CancelAfter(TimeSpan.FromSeconds(action=="authenticate"?42:12));
+        using var result=await Send(action,token,body,deadline.Token);
+        using var memory=new MemoryStream();var buffer=new byte[4096];
+        try{
+            await using var stream=await result.Content.ReadAsStreamAsync(deadline.Token);
+            int n;while((n=await stream.ReadAsync(buffer,deadline.Token))!=0){if(memory.Length+n>65536)throw new IOException("API_RESPONSE_TOO_LARGE");memory.Write(buffer,0,n);}
+        }catch(Exception error)when(error is HttpRequestException or HttpIOException || error is OperationCanceledException && !_stop.IsCancellationRequested){
+            throw new AccountTransportException("RESPONSE",error);
+        }
         var value=JsonNode.Parse(memory.ToArray())?.AsObject() ?? throw new IOException("INVALID_API_RESPONSE");
         if(!result.IsSuccessStatusCode)throw new ApiException(value["error"]?.GetValue<string>() ?? "API_UNAVAILABLE");
         EndpointCatalog.Normalize(value);Remember(value);return value;
     }
-    private async Task<HttpResponseMessage> Send(HttpRequestMessage request,CancellationToken cancel)
+    private async Task<HttpResponseMessage> Send(string action,string token,JsonObject? body,CancellationToken cancel)
     {
         Task<HttpClient>? route=null;
+        string phase="ROUTE_PROBE";
         try{
-            var client=_protectedHttp;
+            var client=_physicalHttp;
             if(NativeGuard.ConfirmedAbsent){
                 route=GetDisconnectedRoute();
                 try{
@@ -204,14 +231,22 @@ internal sealed class AccountApi : IDisposable
                     // No authenticated request has been sent.
                 }
             }
+            phase="REQUEST";
+            using var request=Request(body is null?HttpMethod.Get:HttpMethod.Post,action);
+            if(token.Length>0)request.Headers.Authorization=new("Bearer",token);
+            if(body is not null)request.Content=new StringContent(body.ToJsonString(),Encoding.UTF8,"application/json");
             return await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel);
         }
         catch(Exception error)when(error is HttpRequestException || error is OperationCanceledException && !_stop.IsCancellationRequested){
             lock(_routeGate){if(ReferenceEquals(_disconnectedRoute,route))_disconnectedRoute=null;}
-            throw new IOException("ACCOUNT_API_UNREACHABLE",error);
+            throw new AccountTransportException(phase,error);
         }
     }
     internal void Cancel()=>_stop.Cancel();
-    public void Dispose(){_stop.Cancel();_directHttp.Dispose();_protectedHttp.Dispose();_stop.Dispose();}
+    public void Dispose(){_stop.Cancel();foreach(var client in _disconnectedClients)client.Dispose();_stop.Dispose();}
+}
+internal sealed class AccountTransportException(string phase,Exception? error):IOException("ACCOUNT_API_UNREACHABLE",error)
+{
+    internal string Phase{get;}=phase;
 }
 internal sealed class ApiException(string code):Exception(code);

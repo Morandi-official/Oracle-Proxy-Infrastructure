@@ -40,6 +40,13 @@ internal static class UuPathProtectionTests
             string? initialIssue=UuDiscovery.Inspect(_exe)?.Code;
             Console.WriteLine("INITIAL_UU_UNSAFE_CODE="+(initialIssue is "UU_EXECUTABLE_WRITABLE" or "UU_DIRECTORY_WRITABLE"?initialIssue:"UNEXPECTED"));
             Check(initialIssue is "UU_EXECUTABLE_WRITABLE" or "UU_DIRECTORY_WRITABLE" && !UuDiscovery.Trusted(_exe),"INHERITED_PARENT_MODIFY_NOT_REPRODUCED");
+            var applicationAcl=Read(_exe);var parentAcl=Read(_programs);
+            using(var manual=new DirectApplicationLease(_exe)){
+                Check(manual.Application.Path==_exe && manual.Application.Sha256==Digest,"MANUAL_SELECTION_DID_NOT_USE_EXACT_LOCAL_UU_IMAGE");
+                Check(!UuDiscovery.Trusted(_exe),"MANUAL_SELECTION_CHANGED_AUTOMATIC_UU_TRUST");
+            }
+            Check(Read(_exe)==applicationAcl && Read(_programs)==parentAcl,"MANUAL_SELECTION_CHANGED_UU_OR_SHARED_PARENT_PERMISSIONS");
+            Pass("REAL_WRITABLE_CUSTOM_DRIVE_UU_CAN_BE_SELECTED_WITHOUT_ACL_CHANGES");
             Check(UuAclRepair.EligibleRoots().Length==0,"LEGACY_REPAIR_UNEXPECTEDLY_ACCEPTED_UNSAFE_ANCESTORS");
             Check(UuAclRepair.EligibleAdvancedRoots().SequenceEqual(new[]{_uu},StringComparer.OrdinalIgnoreCase),"ADVANCED_ROOT_NOT_ELIGIBLE");
             Check(UuAclRepair.AdvancedAncestors(_uu).SequenceEqual(new[]{_programs,_vendor},StringComparer.OrdinalIgnoreCase),"ADVANCED_ANCESTORS_NOT_EXACT");

@@ -60,7 +60,7 @@ internal sealed partial class VpnRuntime : IDisposable
     private long _clickStarted;
     private long? _readyMs;
     private void MarkConnected(){if(!NativeGuard.RoutesReady)throw new IOException("TUN_ROUTE_NOT_ACTIVE");_mode="connected";if(_clickStarted!=0 && _readyMs is null)_readyMs=System.Diagnostics.Stopwatch.GetElapsedTime(_clickStarted).Ticks/TimeSpan.TicksPerMillisecond;}
-    private bool WarmReady=>!_secret.ConnectIntent && !_core.Parked && _core.Running && !_core.TunActive && _verifiedGeneration==_generation && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
+    private bool WarmReady=>!_secret.ConnectIntent && _secret.DirectApplications.Length==0 && !_core.Parked && _core.Running && !_core.TunActive && _verifiedGeneration==_generation && ActivePolicy() && _runningProfile==Profile() && DateTimeOffset.UtcNow-_verified<TimeSpan.FromSeconds(15);
     private bool Preparing=>!_core.Parked && !_secret.ConnectIntent && SessionAuthorized && DeviceRegistration.Confirmed(_state) && _secret.Token.Length>0 &&
         DateTimeOffset.UtcNow<_prepareUntil && (_core.Running || _prepareMayStartCore && DateTimeOffset.UtcNow>=_prepareRetryAfter);
     // Retaining an existing dormant core is not permission to replace it after
@@ -322,11 +322,14 @@ internal sealed partial class VpnRuntime : IDisposable
         if(!value.TryGetPropertyValue("version",out var version)||version?.GetValue<int>()!=1)throw new IOException("INVALID_PROTOCOL");
         string command=value["command"]?.GetValue<string>() ?? "";
         bool attachedAction=command is "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit";
-        var fields=attachedAction?new[]{"version","command","expected_version"}:command is "Login" or "LoginRemembered"?new[]{"version","command","username","password"}:command=="ConfirmDevice"?new[]{"version","command","device_name","confirm"}:command=="DeleteDevice"?new[]{"version","command","device_id"}:new[]{"version","command"};
+        bool directAppAction=command is "AddDirectApplication" or "RemoveDirectApplication";
+        var fields=directAppAction?new[]{"version","command","expected_version","path"}:attachedAction?new[]{"version","command","expected_version"}:command is "Login" or "LoginRemembered"?new[]{"version","command","username","password"}:command=="ConfirmDevice"?new[]{"version","command","device_name","confirm"}:command=="DeleteDevice"?new[]{"version","command","device_id"}:new[]{"version","command"};
         if(value.Count!=fields.Length || fields.Any(field=>!value.ContainsKey(field)))throw new IOException("INVALID_FIELDS");
-        if(command is not ("Status" or "Login" or "LoginRemembered" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "CheckUuMaintenance" or "RefreshUu" or "Prepare" or "PreferUdp" or "PreferUdpAdaptive" or "PreferUdp8443" or "PreferUdp443" or "PreferUdp51820" or "DeleteDevice" or "StartUdpDiagnostics" or "CancelUdpDiagnostics" or "AttachClient" or "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit"))throw new IOException("UNKNOWN_COMMAND");
-        if(attachedAction && value["expected_version"]?.GetValue<string>()!=DeviceRegistration.Version)throw new IOException("SERVICE_VERSION_NOT_VERIFIED");
-        if(attachedAction && client is null)throw new IOException("CLIENT_IDENTITY_REQUIRED");
+        if(!directAppAction && command is not ("Status" or "Login" or "LoginRemembered" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "CheckUuMaintenance" or "RefreshUu" or "Prepare" or "PreferUdp" or "PreferUdpAdaptive" or "PreferUdp8443" or "PreferUdp443" or "PreferUdp51820" or "DeleteDevice" or "StartUdpDiagnostics" or "CancelUdpDiagnostics" or "AttachClient" or "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit"))throw new IOException("UNKNOWN_COMMAND");
+        if((attachedAction || directAppAction) && value["expected_version"]?.GetValue<string>()!=DeviceRegistration.Version)throw new IOException("SERVICE_VERSION_NOT_VERIFIED");
+        if((attachedAction || directAppAction) && client is null)throw new IOException("CLIENT_IDENTITY_REQUIRED");
+        string selectedPath="";
+        if(directAppAction && (value["path"] is not JsonValue path || !path.TryGetValue(out selectedPath!) || selectedPath is null))throw new IOException("INVALID_FIELDS");
         await _gate.WaitAsync(admission);
         bool admitted=false;
         try{
@@ -334,13 +337,24 @@ internal sealed partial class VpnRuntime : IDisposable
             // point is passed, finish its intent changes under this same gate.
             admission.ThrowIfCancellationRequested();
             admitted=true;
-            if(command is "CheckUuMaintenance" or "RefreshUu"){
+            if(directAppAction || command is "CheckUuMaintenance" or "RefreshUu"){
                 bool ready=!Diagnosing && !_shutdown.Task.IsCompleted && _mode=="disconnected" &&
                     !_secret.ConnectIntent && !_secret.RecoveryRequired && NativeGuard.ConfirmedAbsent && !NativeGuard.TunPermitted;
                 if(!ready){
-                    var refused=Snapshot(false);refused["error"]="UU_REPAIR_DISCONNECT_REQUIRED";return refused;
+                    var refused=Snapshot(false);refused["error"]=directAppAction?"DIRECT_APPS_DISCONNECT_REQUIRED":"UU_REPAIR_DISCONNECT_REQUIRED";return refused;
                 }
                 if(command=="CheckUuMaintenance")return Snapshot();
+            }
+            if(directAppAction){
+                try{
+                    if(client?.ProductWindow!=true || client.Alive()!=true)throw new IOException("CLIENT_WINDOW_NOT_VERIFIED");
+                    if(!SessionAuthorized)throw new IOException("LOGIN_REQUIRED");
+                    Attach(client);
+                    UpdateDirectApplication(selectedPath,command=="AddDirectApplication");
+                    return Snapshot();
+                }catch(Exception error)when(error is IOException or UnauthorizedAccessException or ArgumentException){
+                    var refused=Snapshot(false);refused["error"]=Code(error);return refused;
+                }
             }
             if(client is not null && (command=="AttachClient" || attachedAction))Attach(client);
             if(Diagnosing && command is not ("Status" or "CancelUdpDiagnostics" or "AttachDisconnect" or "AttachQuit" or "Disconnect" or "Quit" or "Logout"))throw new IOException("DIAGNOSTIC_BUSY");
@@ -402,8 +416,10 @@ internal sealed partial class VpnRuntime : IDisposable
                     finally{CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(pub);}
                 }
                 if(_secret.PrivateKey.Length==0)NewIdentity();
-                _stage="DEVICE_ADMISSION";
-                var login=await LoginAdmission.Run(_api.Call,()=>_secret.PublicKey,NewIdentity,username,password,Environment.MachineName);
+                var login=await LoginAdmission.Run((action,token,body)=>{
+                    _stage=action=="authenticate"?"ACCOUNT_AUTHENTICATE":"DEVICE_ADMISSION";
+                    return _api.Call(action,token,body);
+                },()=>_secret.PublicKey,NewIdentity,username,password,Environment.MachineName);
                 ClearRecentAccount();_secret.Token=login["token"]!.GetValue<string>();login.Remove("token");LoginPolicy.Start(_secret,login["token_expires_at"]!.GetValue<long>(),command=="LoginRemembered",username,DateTimeOffset.UtcNow.ToUnixTimeSeconds());_interactiveAuthenticated=true;_secret.GuiAuthenticated=true;_secret.Save();_state=login;_received=DateTimeOffset.UtcNow;_error=login["admission_error"]?.GetValue<string>()??"";_failure=null;_mode="disconnected";_prepareUntil=default;_prepareMayStartCore=false;_prepareRetryAfter=default;break;
             case "ConfirmDevice":{
                 if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_ENROLLMENT");
@@ -445,7 +461,7 @@ internal sealed partial class VpnRuntime : IDisposable
                 _windowControlled=command=="AttachConnect" && client?.ProductWindow==true;
                 _clickStarted=commandStarted;_readyMs=null;
                 bool warm=WarmReady;
-                bool reusable=_core.Running && !_core.Parked && !_core.TunActive && ActivePolicy() && _runningProfile==Profile();
+                bool reusable=_secret.DirectApplications.Length==0 && _core.Running && !_core.Parked && !_core.TunActive && ActivePolicy() && _runningProfile==Profile();
                 if(!_secret.ConnectIntent && !reusable && !_core.Parked){await StopCore();_probeFailures=0;}
                 using var uuMaintenance=UuAclRepair.AcquireMaintenance();
                 if(_carriers.Observe(CarrierMemory.Scope(_state))){_usingBackup=false;if(!_core.Parked)await StopCore();_probeFailures=0;warm=false;reusable=false;}
@@ -519,6 +535,20 @@ internal sealed partial class VpnRuntime : IDisposable
         }catch(OperationCanceledException)when(!admitted && admission.IsCancellationRequested){throw;}
         catch(Exception e){if(e is ApiException && e.Message is "LOGIN_REQUIRED" or "DEVICE_REVOKED"){ForgetLogin();await StopCore();}Failed(e);if(!_secret.ConnectIntent)_prepareRetryAfter=DateTimeOffset.UtcNow.AddSeconds(30);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
         finally{_gate.Release();if(command is not ("Status" or "CheckUuMaintenance"))_wake.Pulse();}
+    }
+
+    private void UpdateDirectApplication(string path,bool add)
+    {
+        var previous=_secret.DirectApplications;
+        if(add)path=DirectApplicationLease.Normalize(path);
+        var remaining=previous.Where(app=>!StringComparer.OrdinalIgnoreCase.Equals(app.Path,path)).ToArray();
+        if(add){
+            if(remaining.Length>=DirectApplicationLease.Limit)throw new IOException("DIRECT_APPS_LIMIT_REACHED");
+            using var lease=new DirectApplicationLease(path);
+            remaining=[..remaining,lease.Application];
+        }else if(remaining.Length==previous.Length)return;
+        _secret.DirectApplications=remaining;
+        try{_secret.Save();}catch{_secret.DirectApplications=previous;throw;}
     }
     private JsonObject? _disconnectTimings;
     private async Task Disconnect(bool keepPrepared=false)
@@ -632,6 +662,8 @@ internal sealed partial class VpnRuntime : IDisposable
         ["server_handshake_at"]=_state?["device"]?["handshake_at"]?.DeepClone(),["peer_rx_bytes"]=_state?["device"]?["usage"]?["rx"]?.DeepClone(),["peer_tx_bytes"]=_state?["device"]?["usage"]?["tx"]?.DeepClone(),
         ["native_udp_attempt"]=_nativeUdpAttempt?.DeepClone(),["native_udp_selected_port"]=_core.NativePort,["client_handshake_reply"]=_core.HandshakeReplyReceived,["quick_ready"]=WarmReady,["preparing"]=Preparing,["verified_at"]=_verified==default?null:_verified.ToUnixTimeSeconds(),["connect_switch_ms"]=_connectMs,["click_to_ready_ms"]=_readyMs,["switch_timings"]=_switchTimings?.DeepClone(),["disconnect_timings"]=_disconnectTimings?.DeepClone(),
         ["product_version"]=typeof(VpnRuntime).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false).OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
+        ["direct_applications"]=new JsonArray((SessionAuthorized?_secret.DirectApplications:[]).Select(app=>(JsonNode?)new JsonObject{
+            ["path"]=app.Path,["status"]=tunPermitted && _core.TunActive?(_core.UsesDirectApplication(app.Path)?"active":"unavailable"):"saved"}).ToArray()),
         ["uu_candidates"]=_uuInventory?.Candidates,["uu_rejected"]=_uuInventory?.Rejected,
         ["uu_discovery_verified"]=_uuInventory?.Paths.Length,
         ["uu_diagnostics"]=new JsonArray((_uuInventory?.Issues ?? []).Select(issue=>(JsonNode?)new JsonObject{["path"]=issue.Path,["code"]=issue.Code,["detail"]=issue.Detail}).ToArray())};

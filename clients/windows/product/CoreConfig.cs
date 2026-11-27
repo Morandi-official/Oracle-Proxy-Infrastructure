@@ -4,10 +4,15 @@ using System.Text.Json.Nodes;
 namespace OracleProxy.Product;
 internal static class CoreConfig
 {
-    private static string ProcessPattern(string path)=>"(?i)^"+string.Concat(path.Select(c=>"\\.+*?()|[]{}^$".Contains(c)?"\\"+c:c.ToString()))+"$";
+    private static string EscapeProcessCharacter(char value)=>"\\.+*?()|[]{}^$".Contains(value)?"\\"+value:value.ToString();
+    private static string UuProcessPattern(string path)=>"(?i)^"+string.Concat(path.Select(EscapeProcessCharacter))+"$";
+    // RE2's Unicode folding can match another file on NTFS, for example K and K.
+    private static string DirectApplicationPattern(string path)=>"^"+string.Concat(path.Select(c=>
+        char.IsAsciiLetter(c)?$"[{char.ToLowerInvariant(c)}{char.ToUpperInvariant(c)}]":EscapeProcessCharacter(c)))+"$";
     internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,UdpDiagnosticTarget? diagnosticTarget=null)
         =>Build(state,secret,socksPassword,out _,diagnosticTarget);
-    internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,out int[] nativePorts,UdpDiagnosticTarget? diagnosticTarget=null)
+    internal static JsonObject Build(JsonObject state,DurableState secret,string socksPassword,out int[] nativePorts,UdpDiagnosticTarget? diagnosticTarget=null,
+        string[]? directApplicationPaths=null)
     {
         string ingress=TransportPolicy.IngressAddress(state);
         var tunnel=state["tunnel"]!.AsObject();string endpoint=tunnel["endpoint"]!.GetValue<string>();
@@ -20,8 +25,10 @@ internal static class CoreConfig
             if(parts.Length!=2 || !IPAddress.TryParse(parts[0],out var ip) || (ip.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork?parts[1]!="32":parts[1]!="128"))throw new IOException("INVALID_TUNNEL_ADDRESS");}
         string serverKey=(diagnosticTarget is not null && tunnel["server_public_keys"] is JsonObject keys ? keys[diagnosticTarget.Address] : tunnel["server_public_key"])?.GetValue<string>() ?? throw new IOException("UNAUTHORIZED_INGRESS_IDENTITY");if(Convert.FromBase64String(serverKey).Length!=32)throw new IOException("INVALID_SERVER_KEY");
         var rules=new JsonArray();
-        bool routeUuProcesses=secret.UuPaths.Length>0;
-        if(routeUuProcesses)rules.Add(new JsonObject{["inbound"]="device",["process_path_regex"]=new JsonArray(secret.UuPaths.Select(p=>(JsonNode?)JsonValue.Create(ProcessPattern(p))).ToArray()),["action"]="route",["outbound"]="uu-direct"});
+        var processPatterns=secret.UuPaths.Select(UuProcessPattern).Concat((directApplicationPaths??[]).Select(DirectApplicationPattern));
+        var directRules=new JsonArray(processPatterns.Select(pattern=>(JsonNode?)JsonValue.Create(pattern)).ToArray());
+        bool routeDirectProcesses=directRules.Count>0;
+        if(routeDirectProcesses)rules.Add(new JsonObject{["inbound"]="device",["process_path_regex"]=directRules,["action"]="route",["outbound"]="uu-direct"});
         rules.Add(new JsonObject{["port"]=53,["action"]="hijack-dns"});
         // Explicit secure policy until Oracle IPv6 is provisioned and proven.
         if(tunnel["ipv6_policy"]?.GetValue<string>()!="tunnel")rules.Add(new JsonObject{["ip_version"]=6,["action"]="reject"});
@@ -31,7 +38,7 @@ internal static class CoreConfig
             ["inbounds"]=new JsonArray(new JsonObject{["type"]="tun",["tag"]="device",["interface_name"]="OracleProxy",["address"]=new JsonArray("172.29.255.1/30","fd42:6f70:78::1/126"),["mtu"]=1280,["auto_route"]=true,["route_address"]=new JsonArray("0.0.0.0/1","128.0.0.0/1","::/1","8000::/1"),["strict_route"]=true,["stack"]="mixed"},new JsonObject{["type"]="socks",["tag"]="service-probe",["listen"]="127.0.0.1",["listen_port"]=28083,["users"]=new JsonArray(new JsonObject{["username"]="service",["password"]=socksPassword})}),
             ["endpoints"]=new JsonArray(new JsonObject{["type"]="wireguard",["tag"]="oracle-wireguard",["system"]=false,["mtu"]=tunnel["ipv6_policy"]?.GetValue<string>()=="tunnel"?1280:1200,["address"]=addresses.DeepClone(),["private_key"]=secret.PrivateKey,["peers"]=new JsonArray(new JsonObject{["address"]="152.67.156.100",["port"]=port,["public_key"]=serverKey,["allowed_ips"]=new JsonArray("0.0.0.0/0","::/0"),["persistent_keepalive_interval"]=25})}),
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="uu-direct"}),
-            ["route"]=new JsonObject{["auto_detect_interface"]=true,["find_process"]=routeUuProcesses,["rules"]=rules,["final"]="oracle-wireguard"}
+            ["route"]=new JsonObject{["auto_detect_interface"]=true,["find_process"]=routeDirectProcesses,["rules"]=rules,["final"]="oracle-wireguard"}
         };
         // WireGuard uses connected UDP sockets on the physical interface.
         config["endpoints"]![0]!["detour"]="oracle-native-udp";

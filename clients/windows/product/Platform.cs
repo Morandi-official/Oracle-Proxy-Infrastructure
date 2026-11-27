@@ -157,6 +157,7 @@ internal sealed class DurableState
     public bool ConnectIntent {get;set;}
     public bool RecoveryRequired {get;set;}
     public string[] UuPaths {get;set;}=[];
+    public DirectApplication[] DirectApplications {get;set;}=[];
     internal static DurableState Load()
     {
         if(!Platform.IsSystem)throw new UnauthorizedAccessException();

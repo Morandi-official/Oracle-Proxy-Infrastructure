@@ -191,7 +191,9 @@ internal sealed partial class MainForm : Form
         selection.Controls.Add(new Label{Text="UDP 端口",AutoSize=true,Margin=new Padding(0,8,16,0)});selection.Controls.Add(_udpPortChoice);
         _udpPortChoice.Items.AddRange([new UdpPortChoice(0,"优选可用端口"),new UdpPortChoice(443,"443"),new UdpPortChoice(8443,"8443"),new UdpPortChoice(51820,"51820")]);_udpPortChoice.SelectedIndex=0;
         _udpPortChoice.SelectionChangeCommitted+=async(_,_)=>{if(!_renderingPort)await Act((_udpPortChoice.SelectedItem as UdpPortChoice)?.Port switch{443=>"PreferUdp443",8443=>"PreferUdp8443",51820=>"PreferUdp51820",_=>"PreferUdpAdaptive"});};
-        var buttons=Actions();_connectionAction.Margin=Padding.Empty;buttons.Controls.Add(_connectionAction);Row(connection,buttons);
+        var buttons=Actions();_connectionAction.Margin=Padding.Empty;buttons.Controls.Add(_connectionAction);
+        var directApplications=new SmoothButton{Name="direct-applications",Text="应用直连",Width=138,Height=48,Margin=new Padding(10,0,0,0)};
+        directApplications.Click+=(_,_)=>ShowDirectApplications();buttons.Controls.Add(directApplications);Row(connection,buttons);
         _telemetry.AutoSize=false;_telemetry.Height=28;_telemetry.AutoEllipsis=true;_telemetry.ForeColor=Muted;_telemetry.Margin=new Padding(0,8,0,0);Row(connection,_telemetry);
         var connectionCard=Card("connectionSection","当前连接",connection);summary.Controls.Add(connectionCard,0,0);connectionCard.Margin=new Padding(0,0,10,12);
         var account=_accountContent=Stack("accountContent");_accountName.AutoSize=false;_accountName.Height=30;_accountName.AutoEllipsis=true;_accountName.Font=new Font(Font.FontFamily,11,FontStyle.Bold);_accountName.Margin=new Padding(0,0,0,10);Row(account,_accountName);
@@ -408,13 +410,14 @@ internal sealed partial class MainForm : Form
         _deleteDevice.Enabled=available && _hasAccount && !_udpDiagnosing && _knownDevices.SelectedItem is ListedDevice;
         _admissionDelete.Enabled=available && _hasAccount && !_deviceRegistered && _admissionDevices.SelectedItem is ListedDevice;
         UpdateRegistrationActions();
+        _updateDirectApplicationDialog?.Invoke();
     }
     private async Task<JsonObject> SendRequest(string command,string? username,string? password,CancellationToken cancel)
     {
         cancel.ThrowIfCancellationRequested();
         async Task<JsonObject> Real(){
             while(true){try{
-                    if(command is not ("Status" or "Connect" or "Prepare" or "Disconnect" or "Quit")){
+                    if(command is not ("Status" or "Connect" or "Prepare" or "Disconnect" or "Quit" or "AddDirectApplication" or "RemoveDirectApplication")){
                         var attached=await ControlPipe.Send("AttachClient",null,null,cancel);
                         if(!ServiceBootstrap.Current(attached,ClientVersion))throw new IOException("SERVICE_ATTACHMENT_NOT_VERIFIED");
                         _sessionAttached=true;_recoveryProvedDirect=false;
@@ -525,13 +528,14 @@ internal sealed partial class MainForm : Form
             if(!_allowClose && !IsDisposed){_closing=false;RefreshActions();_timer.Start();}
         }
     }
-    internal async Task Act(string command)
+    internal async Task<JsonObject?> Act(string command,string? applicationPath=null)
     {
         bool passive=command=="Status",login=command is "Login" or "LoginRemembered";
-        if(_closing || IsDisposed || _recovering && !passive)return;
-        if(passive && _backendIdle)return;
+        if(_closing || IsDisposed || _recovering && !passive)return null;
+        if(passive && _backendIdle)return null;
         if(passive)_statusReadSucceeded=false;
-        if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return;
+        if(!passive && (!_serviceReady || _provisioning || _busy || _needsReconcile || _uuMaintaining))return null;
+        JsonObject? response=null;
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token,_requestEpoch.Token);deadline.CancelAfter(passive?_statusTimeout:login?_loginTimeout:_requestTimeout);
         bool acquired=false,sentMutation=false,awaitingResponse=true;
         bool toggle=command is "Connect" or "Disconnect";var operationTimer=System.Diagnostics.Stopwatch.StartNew();
@@ -556,7 +560,7 @@ internal sealed partial class MainForm : Form
             else ShowPendingFeedback();
         }
         try{
-            if(passive){if(!_requests.Wait(0))return;acquired=true;}
+            if(passive){if(!_requests.Wait(0))return null;acquired=true;}
             else{await _requests.WaitAsync(deadline.Token);acquired=true;}
             if(toggle)_lastUiQueueMs=operationTimer.ElapsedMilliseconds;
             // Ordinary Connect preserves the service's adaptive port plan.
@@ -565,12 +569,14 @@ internal sealed partial class MainForm : Form
                 sentMutation=true;var off=await SendRequest("Disconnect",null,null,deadline.Token);Display(off);
                 if(off["ok"]?.GetValue<bool>()!=true || off["intent"]?.GetValue<bool>()!=false)throw new IOException("SAFE_OFF_NOT_VERIFIED");
             }
-            sentMutation=!passive;var state=await SendRequest(command,login?_username.Text:command=="ConfirmDevice"?_deviceName.Text:command=="DeleteDevice"?_deleteDeviceId:null,login?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
+            string? argument=command switch{"Login" or "LoginRemembered"=>_username.Text,"ConfirmDevice"=>_deviceName.Text,"DeleteDevice"=>_deleteDeviceId,_=>applicationPath};
+            sentMutation=!passive;var state=await SendRequest(command,argument,login?_password.Text:command=="ConfirmDevice" && _deviceConfirmation.Checked?"confirmed":null,deadline.Token);
             awaitingResponse=false;
             if(toggle)_lastUiResponseMs=operationTimer.ElapsedMilliseconds;
             if(login)_password.Clear();
             if(passive && state["ok"]?.GetValue<bool>()==true){_needsReconcile=false;_statusReadSucceeded=true;}
             Display(state);
+            response=state;
             if(state["shutdown_after_response"]?.GetValue<bool>()==true && state["ok"]?.GetValue<bool>()==true){
                 _backendIdle=true;_timer.Stop();
                 // Keep the window responsive but do not admit a reconnect into
@@ -597,6 +603,7 @@ internal sealed partial class MainForm : Form
         }
         finally{awaitingResponse=false;if(toggle)_lastUiCompleteMs=operationTimer.ElapsedMilliseconds;if(acquired)_requests.Release();if(!passive)_busy=false;if(!IsDisposed && !_closing)RefreshActions();}
         if(login || command is "ConfirmDevice" or "DeleteDevice")await StartReadyClient();
+        return response;
     }
     private async Task MaintainUu(bool restore)
     {
@@ -719,7 +726,7 @@ internal sealed partial class MainForm : Form
             bool uuDetected=state["uu_candidates"]?.GetValue<int>()>0;
             bool uuNeedsTunnel=uuDetected && uuVerified==0;
             if(uuNeedsTunnel)
-                _uuReport+="\r\n未验证的 UU 程序在连接后走 VPN。可在断开时修复权限，恢复 UU 直连。";
+                _uuReport+="\r\n未自动验证的 UU 程序默认走 VPN。断开后可修复权限，或在“应用直连”添加 UU 的 EXE。";
             if(state["uu_diagnostics"] is JsonArray uuIssues && uuIssues.Count>0){
                 foreach(var item in uuIssues)_uuReport+=$"\r\n{UuReason(item!["code"]!.GetValue<string>())}\r\n{item["code"]} {item["detail"]}\r\n{item["path"]}\r\n";
             }else _uuReport+="\r\n暂无拒绝详情；请在断开状态点击“重新识别 UU”。";
@@ -898,6 +905,10 @@ internal sealed partial class MainForm : Form
         "ORACLE_PROBE_HTTP_FAILED"=>"出口请求失败，保护保持启用。请复制“连接诊断”。",
         "UU_MAINTENANCE_BUSY"=>"UU 权限维护进行中，请完成后再连接。",
         "UU_REPAIR_DISCONNECT_REQUIRED"=>"请在 VPN 安全断开、网络诊断结束后重试 UU 维护。",
+        "DIRECT_APPS_DISCONNECT_REQUIRED"=>"请在本机 VPN 断开、网络诊断结束后编辑应用直连名单。",
+        "DIRECT_APP_LOCAL_EXE_REQUIRED"=>"请选择本机固定磁盘上的 EXE 文件。链接和区分大小写的目录无法使用。",
+        "DIRECT_APP_FILE_UNAVAILABLE"=>"无法读取或锁定所选 EXE。请确认文件仍在原处，且更新程序已结束。",
+        "DIRECT_APPS_LIMIT_REACHED"=>$"已达到 {DirectApplicationLease.Limit} 个应用的上限，请先移除一项。",
         "TUN_ROUTE_NOT_ACTIVE"=>"Windows 尚未将普通应用流量送入 VPN，连接未生效。请查看连接诊断；防泄漏保护保持开启。",
         "ACCOUNT_NOT_ACTIVE"=>"账号已停用、到期、超额，或服务器状态暂不可验证。", "RECOVERY_REQUIRED"=>"清理尚未通过验证，防泄漏保护保留。请使用本机恢复操作。",
         "STATE_MISSING_RECOVERY_REQUIRED"=>"加密状态文件缺失，已保留原防泄漏策略。请在本机使用恢复操作。",

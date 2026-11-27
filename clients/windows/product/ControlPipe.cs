@@ -68,7 +68,7 @@ internal static class ControlPipe
                     // already executing. Never detach a timed-out command.
                     ClientIdentity? client=null;
                     string? operation=value["command"]?.GetValue<string>();
-                    if(operation is "AttachClient" or "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit"){
+                    if(operation is "AttachClient" or "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit" or "AddDirectApplication" or "RemoveDirectApplication"){
                         if(!GetNamedPipeClientProcessId(pipe.SafePipeHandle,out uint clientPid))throw new IOException("CLIENT_IDENTITY_UNAVAILABLE");
                         client=ClientIdentity.Capture(clientPid,clientSid);
                         verifiedWindows.RemoveAll(x=>x.Alive()!=true);
@@ -108,7 +108,12 @@ internal static class ControlPipe
         // credentials. A pipe DACL alone authenticates only its client.
         if(!BoundToService(pipe))throw new IOException("SERVICE_IDENTITY_NOT_VERIFIED");
         long pipeReady=timer.ElapsedMilliseconds;
-        var frame=new JsonObject{["version"]=1,["command"]=command};if(command is "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit")frame["expected_version"]=DeviceRegistration.Version;if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}else if(command=="DeleteDevice"){frame["device_id"]=username;}else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
+        var frame=new JsonObject{["version"]=1,["command"]=command};
+        if(command is "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit" or "AddDirectApplication" or "RemoveDirectApplication")frame["expected_version"]=DeviceRegistration.Version;
+        if(command is "Login" or "LoginRemembered"){frame["username"]=username;frame["password"]=password;}
+        else if(command=="DeleteDevice")frame["device_id"]=username;
+        else if(command=="ConfirmDevice"){frame["device_name"]=username;frame["confirm"]=password=="confirmed";}
+        else if(command is "AddDirectApplication" or "RemoveDirectApplication")frame["path"]=username;
         await WriteFrame(pipe,frame.ToJsonString(),8192,timeout.Token).ConfigureAwait(false);
         var result=JsonNode.Parse(await ReadFrame(pipe,65536,timeout.Token).ConfigureAwait(false))!.AsObject();
         if(result["schema"]?.GetValue<int>()!=1)throw new IOException("INVALID_SERVICE_RESPONSE");

@@ -7,6 +7,13 @@ namespace OracleProxy.Product;
 internal sealed class CoreProcess : IDisposable
 {
     private volatile Process? _process;
+    private readonly List<DirectApplicationLease> _directApplicationLeases=[];
+    internal bool UsesDirectApplication(string path)=>_directApplicationLeases.Any(lease=>StringComparer.OrdinalIgnoreCase.Equals(lease.Application.Path,path));
+    private void ReleaseDirectApplications()
+    {
+        foreach(var lease in _directApplicationLeases)lease.Dispose();
+        _directApplicationLeases.Clear();
+    }
     private readonly CancellationTokenSource _stop=new();
     private IntPtr _job;
     private string _probeSecret="";
@@ -110,7 +117,13 @@ internal sealed class CoreProcess : IDisposable
         if(!resume)Launch(standby?probeReady is null?"--standby":"--standby-probe":null);
         else _startTimings["adapter_reused"]=1;
         Process owned=_process!;
-        var config=CoreConfig.Build(state,secret,_probeSecret,out var nativePorts,diagnosticTarget);
+        if(secret.ConnectIntent && diagnosticTarget is null){
+            foreach(var application in secret.DirectApplications){
+                if(DirectApplicationLease.TryAcquire(application) is { } lease)_directApplicationLeases.Add(lease);
+            }
+        }
+        var config=CoreConfig.Build(state,secret,_probeSecret,out var nativePorts,diagnosticTarget,
+            _directApplicationLeases.Select(lease=>lease.Application.Path).ToArray());
         configuredPorts?.Invoke(nativePorts);
         if(resume)await owned.StandardInput.WriteLineAsync("RESUME");
         await owned.StandardInput.WriteLineAsync(config.ToJsonString());await owned.StandardInput.FlushAsync();
@@ -207,6 +220,7 @@ internal sealed class CoreProcess : IDisposable
         TunReceipt.Record(_process);
         _parkedLuid=TunReceipt.VerifyRetained(_process);
         if(!NativeGuard.TunParked(_parkedLuid))throw new IOException("TUN_PARK_AUDIT_FAILED");
+        ReleaseDirectApplications();
         _parked=true;
     }
     private async Task AcceptPark(Process owner,CancellationToken cancel)
@@ -297,7 +311,7 @@ internal sealed class CoreProcess : IDisposable
     {
         EndPeer();_parked=false;_parkedLuid=0;_parkFence=null;
         _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"NOT_STARTED");
-        if(_process is null)return;
+        if(_process is null){ReleaseDirectApplications();return;}
         NativeGuard.SuspendTun();
         if(!_process.HasExited){
             _process.StandardInput.Close();
@@ -308,10 +322,11 @@ internal sealed class CoreProcess : IDisposable
         _process.Dispose();_process=null;StandbyCapable=false;TunActive=false;
         _nativeEvidence.Clear();Volatile.Write(ref _wireGuardReply,0);Volatile.Write(ref _carrierStage,"NOT_STARTED");
         if(_job!=IntPtr.Zero){CloseHandle(_job);_job=IntPtr.Zero;}
+        ReleaseDirectApplications();
         _probeSecret="";
     }
     internal void Cancel()=>_stop.Cancel();
-    public void Dispose(){_stop.Cancel();try{Stop().GetAwaiter().GetResult();}catch{}if(_job!=IntPtr.Zero){CloseHandle(_job);_job=IntPtr.Zero;}_stop.Dispose();}
+    public void Dispose(){_stop.Cancel();try{Stop().GetAwaiter().GetResult();}catch{}if(_job!=IntPtr.Zero){CloseHandle(_job);_job=IntPtr.Zero;}ReleaseDirectApplications();_stop.Dispose();}
     [StructLayout(LayoutKind.Sequential)]private struct BasicLimits{public long ProcessTime,JobTime;public uint LimitFlags;public UIntPtr Min,Max;public uint Active;public UIntPtr Affinity;public uint Priority,Scheduling;}
     [StructLayout(LayoutKind.Sequential)]private struct IoCounters{public ulong ReadOperations,WriteOperations,OtherOperations,ReadBytes,WriteBytes,OtherBytes;}
     [StructLayout(LayoutKind.Sequential)]private struct JobLimits{public BasicLimits Basic;public IoCounters Io;public UIntPtr ProcessMemory,JobMemory,PeakProcessMemory,PeakJobMemory;}

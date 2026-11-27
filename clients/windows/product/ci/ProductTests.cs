@@ -670,7 +670,7 @@ internal static class ProductTests
         Console.WriteLine("CONNECTION_FAILURE_STAGE_AND_ENUMS_EXPORTED_WITHOUT_MESSAGES_OR_CREDENTIALS=PASS");
         if(!form.UuReport.Contains("UU_DIRECTORY_WRITABLE") || !form.UuReport.Contains(@"E:\Apps\GameViewer") ||
            form.UuReport.Contains("synthetic-user") || form.UuReport.Contains("SYNTHETIC_PASSWORD_DO_NOT_COPY") || form.UuReport.Contains("SYNTHETIC_TOKEN_DO_NOT_COPY"))return 1;
-        if(!form.UuReport.Contains("未验证的 UU 程序在连接后走 VPN",StringComparison.Ordinal))return 1;
+        if(!form.UuReport.Contains("未自动验证的 UU 程序默认走 VPN",StringComparison.Ordinal) || !form.UuReport.Contains("应用直连",StringComparison.Ordinal))return 1;
         Console.WriteLine("UU_DIAGNOSTIC_ACTIONABLE_WITHOUT_ACCOUNT_OR_CREDENTIALS=PASS");
         snapshot["udp_diagnostics_available"]=true;
         snapshot["udp_diagnostic"]=new JsonObject{["phase"]="complete",["running"]=false,["server_capture_closed"]=true,["token"]="SYNTHETIC_UDP_SECRET",["trials"]=new JsonArray(UdpDiagnosticTarget.All.Select(t=>(JsonNode?)new JsonObject{["address"]=t.Address,["port"]=t.Port,["phase"]="passed",["verdict"]="PASSED",["client"]=new JsonObject{["egress_verified"]=true,["private_key"]="SYNTHETIC_UDP_SECRET",["counters"]=new JsonObject{["tx_initiations"]=1,["rx_responses"]=1}}}).ToArray())};
@@ -711,6 +711,7 @@ internal static class ProductTests
         UiHigTextAndContrastRegression(snapshot);
         UiLoginAndLayoutRegression(snapshot);
         UiLayoutRegression(snapshot);
+        UiDirectApplicationSettings(snapshot);
         UiSmoothAndScrollRegression(snapshot);
         var toolsViewport=(ScrollableControl)Descendants(form).Single(c=>c.Name=="viewport");
         toolsViewport.ScrollControlIntoView(Descendants(form).Single(c=>c.Name=="toolsSection"));Application.DoEvents();
@@ -1175,6 +1176,45 @@ internal static class ProductTests
     private static void UiShow(MainForm form)
     {
         form.Show();Application.DoEvents();StopUiPolling(form);form.PerformLayout();Application.DoEvents();
+    }
+    private static void UiDirectApplicationSettings(JsonObject original)
+    {
+        const string selectedPath=@"E:\Program Files (x86)\Netease\GameViewer\GameViewer.exe";
+        var state=UiReady(original);
+        state["direct_applications"]=new JsonArray(new JsonObject{["path"]=selectedPath,["status"]="saved"});
+        string? removed=null;
+        using var form=new MainForm((command,argument,_)=>{
+            if(command=="RemoveDirectApplication"){removed=argument;state["direct_applications"]=new JsonArray();}
+            return Task.FromResult((JsonObject)state.DeepClone());
+        });
+        UiShow(form);form.Display(state);Application.DoEvents();
+        var open=UiButton(form,"direct-applications");
+        UiAssert(open.Visible && open.Enabled,"DIRECT_APPLICATIONS_AVAILABLE_FROM_CONNECTION_PAGE");
+        Exception? failure=null;
+        form.BeginInvoke((Action)(()=>{
+            using var stop=new System.Windows.Forms.Timer{Interval=3000};
+            var dialog=Application.OpenForms.Cast<Form>().Single(f=>f.Name=="direct-application-settings");
+            stop.Tick+=(_,_)=>dialog.Close();stop.Start();
+            try{
+                var paths=(ListBox)UiDescendants(dialog).Single(c=>c.Name=="direct-app-paths");
+                UiAssert(paths.Items.Count==1 && (paths.Items[0]?.ToString()?.Contains(selectedPath)??false),"DIRECT_APPLICATIONS_SHOW_FULL_EXECUTABLE_PATH");
+                var add=UiButton(dialog,"add-direct-app");var remove=UiButton(dialog,"remove-direct-app");
+                state["intent"]=true;state["mode"]="connected";state["guard"]=true;state["tun_permitted"]=true;
+                state["direct_applications"]![0]!["status"]="active";form.Display(state);Application.DoEvents();
+                paths.SelectedIndex=0;
+                UiAssert(!add.Enabled && !remove.Enabled && paths.Items[0]!.ToString()!.Contains("直连已启用"),"LIVE_DIRECT_APPLICATION_LIST_IS_READ_ONLY");
+                state["intent"]=false;state["mode"]="disconnected";state["guard"]=false;state["tun_permitted"]=false;
+                form.Display(state);Application.DoEvents();
+                UiAssert(add.Enabled && remove.Enabled,"DISCONNECTED_DIRECT_APPLICATION_LIST_IS_EDITABLE");
+                remove.PerformClick();
+                UiPumpUntil(()=>removed==selectedPath && paths.Items.Count==0,"DIRECT_APPLICATION_REMOVAL_SENDS_EXACT_PATH_AND_REFRESHES_LIST");
+            }catch(Exception error){failure=error;}
+            finally{dialog.Close();}
+        }));
+        open.PerformClick();
+        if(failure is not null)throw failure;
+        UiAssert(removed==selectedPath,"DIRECT_APPLICATION_DIALOG_DID_NOT_REMOVE_APPLICATION");
+        Console.WriteLine("DIRECT_APPLICATION_UI_FULL_PATH_AND_DISCONNECTED_EDITING=PASS");
     }
     private static void UiRecoveryReachable(MainForm form,string evidence)
     {
@@ -1744,10 +1784,26 @@ internal static class ProductTests
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="exit"}),["route"]=new JsonObject{["auto_detect_interface"]=true,["final"]="exit"}
         };
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:59999",["server_public_key"]=serverKey.Public,["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
-        // This copied fixture image is never added to WFP. Its TCP probe can
-        // survive isolated peer loss only via the configured TUN process rule.
-        string routeProbe=Path.Combine(Root,"Uu-route-probe.exe");
-        var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private,UuPaths=[..uuPaths,routeProbe]},"synthetic-probe-only");
+        // This selected image outside UU discovery uses only the TUN process
+        // rule and receives no persistent WFP exemption.
+        string applicationDirectory=Path.Combine(Root,"Manual apps (x86)");
+        Directory.CreateDirectory(applicationDirectory);
+        string routeProbe=Path.Combine(applicationDirectory,"Uu-route-probe.exe");
+        File.Copy(Environment.ProcessPath!,routeProbe);
+        DirectApplication selected;
+        using(var registration=new DirectApplicationLease(routeProbe))selected=registration.Application;
+        saved.DirectApplications=[selected];saved.Save();
+        Require(DurableState.Load().DirectApplications.SequenceEqual(new[]{selected}),"DIRECT_APP_SELECTION_ROUND_TRIPS_DPAPI_STATE");
+        File.AppendAllText(routeProbe,"changed executable fixture");
+        using(var changed=DirectApplicationLease.TryAcquire(selected))Require(changed is null,"DIRECT_APP_CHANGED_IMAGE_HAS_NO_BYPASS");
+        File.Copy(Environment.ProcessPath!,routeProbe,true);
+        using var selectedImage=DirectApplicationLease.TryAcquire(selected);
+        Require(selectedImage is not null,"DIRECT_APP_MATCHING_LOCAL_EXE_CAN_BE_PINNED");
+        bool writeBlocked=false,renameBlocked=false;
+        try{using var writer=File.OpenWrite(routeProbe);}catch(IOException){writeBlocked=true;}
+        try{Directory.Move(applicationDirectory,applicationDirectory+"-moved");}catch(IOException){renameBlocked=true;}
+        Require(writeBlocked && renameBlocked,"DIRECT_APP_IMAGE_WRITE_AND_PARENT_RENAME_BLOCKED_WHILE_SELECTED");
+        var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private,UuPaths=uuPaths},"synthetic-probe-only",out _,directApplicationPaths:[selectedImage!.Application.Path]);
         var uuRule=config["route"]!["rules"]![0]!;
         Require(config["route"]!["find_process"]!.GetValue<bool>() &&
             uuRule["outbound"]!.GetValue<string>()=="uu-direct" &&
@@ -1776,7 +1832,6 @@ internal static class ProductTests
             Require(NativeGuard.Active,"REAL_EXISTING_GUARDED_FIXTURE_POLICY_RESTORED_AFTER_OFF_DORMANT_CASES");
         }
 
-        File.Copy(Environment.ProcessPath!,routeProbe);
         Process? exit=null,client=null;
         try{
             exit=await Launch(server);
@@ -1882,7 +1937,10 @@ internal static class ProductTests
             await RejectOrphanReceipt(foreign,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_FOREIGN_GUID_WITH_GUARD_AND_DEVICE_PRESERVED");
             var unknown=(JsonObject)recorded.DeepClone();unknown["unexpected_command"]="not-an-interface-operation";
             await RejectOrphanReceipt(unknown,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_UNKNOWN_RECEIPT_FIELDS_WITH_GUARD_AND_DEVICE_PRESERVED");
-        }finally{await Stop(client);await Stop(exit);if(uuOnly)NativeGuard.Clear();File.Delete(routeProbe);}
+        }finally{
+            await Stop(client);await Stop(exit);if(uuOnly)NativeGuard.Clear();
+            selectedImage.Dispose();File.Delete(routeProbe);Directory.Delete(applicationDirectory);
+        }
         NativeGuard.Clear();
         Require(await Tcp(),"REAL_EXPLICIT_OFF_PHYSICAL_TCP_RESTORED");Require(await Dns(),"REAL_EXPLICIT_OFF_PHYSICAL_UDP_DNS_RESTORED");
         Require(!UuDiscovery.Trusted(Environment.ProcessPath!),"UU_UNSIGNED_TEST_EXECUTABLE_REJECTED");

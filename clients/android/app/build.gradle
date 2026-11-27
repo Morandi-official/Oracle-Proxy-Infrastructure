@@ -19,8 +19,8 @@ android {
         applicationId = 'org.morandi.proxy'
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = '0.2.0'
+        versionCode = 8
+        versionName = '0.2.1'
         testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
         buildConfigField 'boolean', 'H3_EXIT_PROOF_ENABLED', http3ExitProbe.toString()
     }

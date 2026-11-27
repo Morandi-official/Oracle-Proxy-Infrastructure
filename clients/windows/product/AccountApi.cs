@@ -80,11 +80,11 @@ internal sealed class AccountApi : IDisposable
         // A TCP connection can succeed while TLS or the account HTTP endpoint
         // still stalls. Probes carry no credentials and only accept the expected
         // response over the same authenticated origin and pool as the API call.
-        using var response=await client.GetAsync("api/client/state",HttpCompletionOption.ResponseHeadersRead,cancel);
+        using var response=await client.GetAsync("api/client/state",HttpCompletionOption.ResponseHeadersRead,cancel).ConfigureAwait(false);
         if(response.StatusCode!=HttpStatusCode.Unauthorized)throw new HttpRequestException(
             "ACCOUNT_ROUTE_PROBE_REJECTED",null,response.StatusCode);
-        await response.Content.LoadIntoBufferAsync(1024,cancel);
-        var value=JsonNode.Parse(await response.Content.ReadAsStringAsync(cancel));
+        await response.Content.LoadIntoBufferAsync(1024,cancel).ConfigureAwait(false);
+        var value=JsonNode.Parse(await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false));
         if(value is not JsonObject state || state["error"] is not JsonValue error ||
             !error.TryGetValue<string>(out var code) || code!="LOGIN_REQUIRED")throw new IOException("ACCOUNT_ROUTE_PROBE_REJECTED");
     }
@@ -96,24 +96,25 @@ internal sealed class AccountApi : IDisposable
         race.CancelAfter(TimeSpan.FromSeconds(9));
         async Task<Exception?> Probe(HttpClient route)
         {
-            try{await verify(route,race.Token);return null;}
+            try{await verify(route,race.Token).ConfigureAwait(false);return null;}
             catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException or ObjectDisposedException){
                 return error;
             }
         }
         try{
             var preferred=Probe(direct);
-            if(await Task.WhenAny(preferred,Task.Delay(200,race.Token))==preferred && await preferred is null){
+            if(await Task.WhenAny(preferred,Task.Delay(200,race.Token)).ConfigureAwait(false)==preferred &&
+                await preferred.ConfigureAwait(false) is null){
                 race.Token.ThrowIfCancellationRequested();return direct;
             }
             var fallback=Probe(physical);
-            var first=await Task.WhenAny(preferred,fallback).WaitAsync(race.Token);
-            var firstError=await first;
+            var first=await Task.WhenAny(preferred,fallback).WaitAsync(race.Token).ConfigureAwait(false);
+            var firstError=await first.ConfigureAwait(false);
             if(firstError is null){
                 race.Token.ThrowIfCancellationRequested();return first==preferred?direct:physical;
             }
             var last=first==preferred?fallback:preferred;
-            var lastError=await last.WaitAsync(race.Token);
+            var lastError=await last.WaitAsync(race.Token).ConfigureAwait(false);
             if(lastError is null){
                 race.Token.ThrowIfCancellationRequested();return last==preferred?direct:physical;
             }

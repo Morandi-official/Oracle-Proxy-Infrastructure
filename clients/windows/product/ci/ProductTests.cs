@@ -513,7 +513,7 @@ internal static class ProductTests
 
         var cancelled=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var stalled=Client(async (_,cancel)=>{
-            try{await Task.Delay(Timeout.Infinite,cancel);}
+            try{await Task.Delay(Timeout.Infinite,cancel).ConfigureAwait(false);}
             finally{cancelled.TrySetResult();}
             return SignedOut();
         });

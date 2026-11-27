@@ -85,7 +85,12 @@ $body=Get-Content -Raw $result
 Write-Host $body
 if($body -notmatch 'RESULT=PASS'){throw 'Actual WFP/WireGuard fixture failed'}
 Remove-CIUuNetworkFixture
-if($UuOnly){return}
+if($UuOnly){
+  (Get-Service OracleProxyCandidateFixture).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(15))
+  $remove=Start-Process $exe -ArgumentList '--uninstall' -Wait -PassThru
+  if($remove.ExitCode -ne 0){throw 'UU acceptance fixture uninstall failed'}
+  return
+}
 # The runner account is an Administrator, but is not LocalSystem; CurrentUser
 # DPAPI ciphertext created inside the real SCM process must remain unreadable.
 Add-Type -AssemblyName System.Security

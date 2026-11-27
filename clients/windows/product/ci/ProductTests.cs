@@ -63,7 +63,8 @@ internal static class ProductTests
         if(args.SequenceEqual(new[]{"--public-account-http3-probe"})){
             if(!System.Net.Quic.QuicConnection.IsSupported)throw new PlatformNotSupportedException("Windows QUIC is required for this control");
             using var http=AccountApi.CreateHttp3Client();
-            AccountApi.VerifyAccountRoute(http,CancellationToken.None).GetAwaiter().GetResult();
+            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            AccountApi.VerifyAccountRoute(http,deadline.Token).GetAwaiter().GetResult();
             Console.WriteLine("PINNED_HTTP3_AUTHENTICATE_ROUTE_TLS_AND_ANONYMOUS_POST=PASS");return 0;
         }
         if(args.SequenceEqual(new[]{"--service-worker-self-test"}))return ServiceWorkerBudget().GetAwaiter().GetResult();

@@ -48,7 +48,7 @@ internal sealed class AccountApi : IDisposable
     {
         var handler = new SocketsHttpHandler {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false,
-            ConnectTimeout = TimeSpan.FromSeconds(8),
+            ConnectTimeout = TimeSpan.FromSeconds(24),
             PooledConnectionIdleTimeout=TimeSpan.FromSeconds(20),
         };
         if(connect is not null)
@@ -60,7 +60,7 @@ internal sealed class AccountApi : IDisposable
             };
         return new HttpClient(handler) {
             BaseAddress=http3?new UriBuilder(Base){Host=BootstrapAddress}.Uri:Base,
-            Timeout=TimeSpan.FromSeconds(18),
+            Timeout=Timeout.InfiniteTimeSpan,
             DefaultRequestVersion=http3?HttpVersion.Version30:HttpVersion.Version11,
             DefaultVersionPolicy=HttpVersionPolicy.RequestVersionExact
         };
@@ -78,7 +78,7 @@ internal sealed class AccountApi : IDisposable
         lock(_routeGate){
             if(_disconnectedRoute is null || _disconnectedRoute.IsFaulted || _disconnectedRoute.IsCanceled ||
                 Environment.TickCount64>=_routeExpires){
-                _routeExpires=Environment.TickCount64+30_000;
+                _routeExpires=Environment.TickCount64+45_000;
                 _disconnectedRoute=Task.Run(FindDisconnectedRoute);
             }
             return _disconnectedRoute;
@@ -118,7 +118,7 @@ internal sealed class AccountApi : IDisposable
         Func<HttpClient,CancellationToken,Task> verify,CancellationToken cancel)
     {
         using var race=CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        race.CancelAfter(TimeSpan.FromSeconds(12));
+        race.CancelAfter(TimeSpan.FromSeconds(26));
         async Task<(HttpClient Route,Exception? Failure)> Probe(HttpClient route)
         {
             try{
@@ -159,9 +159,8 @@ internal sealed class AccountApi : IDisposable
     {
         var socket=new Socket(SocketType.Stream,ProtocolType.Tcp);
         try{
-            using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancel);
-            timeout.CancelAfter(4_000);socket.NoDelay=true;
-            await socket.ConnectAsync(endpoint,timeout.Token).ConfigureAwait(false);
+            socket.NoDelay=true;
+            await socket.ConnectAsync(endpoint,cancel).ConfigureAwait(false);
             return new NetworkStream(socket,ownsSocket:true);
         }catch{socket.Dispose();throw;}
     }
@@ -179,7 +178,7 @@ internal sealed class AccountApi : IDisposable
             var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp);
             try{
                 using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancel);
-                timeout.CancelAfter(1_500);socket.NoDelay=true;
+                timeout.CancelAfter(bound?1_500:18_000);socket.NoDelay=true;
                 if(physical is uint index)
                     socket.SetSocketOption(SocketOptionLevel.IP,(SocketOptionName)31,IPAddress.HostToNetworkOrder((int)index));
                 await socket.ConnectAsync(endpoint,timeout.Token).ConfigureAwait(false);
@@ -208,7 +207,10 @@ internal sealed class AccountApi : IDisposable
     internal async Task<JsonObject> Call(string action,string token,JsonObject? body,CancellationToken cancel)
     {
         if(action is not ("login" or "authenticate" or "enroll" or "presence" or "state" or "logout" or "udp-diagnostics" or "device-delete"))throw new InvalidOperationException();
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);deadline.CancelAfter(TimeSpan.FromSeconds(18));
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(_stop.Token,cancel);
+        // Password login is interactive and can await a slow first HTTPS
+        // connection. Presence and connected policy reads keep their limit.
+        deadline.CancelAfter(TimeSpan.FromSeconds(action=="authenticate"?42:12));
         using var result=await Send(action,token,body,deadline.Token);
         using var memory=new MemoryStream();var buffer=new byte[4096];
         try{

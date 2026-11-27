@@ -101,7 +101,7 @@ jobs:
               if any(x['protocol']!='h3' for x in results):raise SystemExit(1)
           '@ | python -
   windows-account-post:
-    runs-on: windows-2022
+    runs-on: windows-2025
     timeout-minutes: 6
     defaults:
       run:

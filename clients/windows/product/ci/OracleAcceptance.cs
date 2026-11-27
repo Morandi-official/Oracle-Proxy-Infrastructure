@@ -599,6 +599,18 @@ internal static class OracleAcceptance
             Check(IngressCatalogMatchesPolicy(login,expectedEndpoints),"MIGRATION_AUTHENTICATED_ACCOUNT_SCOPED_ENDPOINT_CATALOG");
             int devices=login["account"]!["device_count"]!.GetValue<int>();
             var allowed=login["network_endpoints"]!["egress_ipv4"]!.AsArray().Select(x=>x!.GetValue<string>()).ToHashSet();
+            using(UuAclRepair.AcquireMaintenance()){
+                var maintenance=await Send("CheckUuMaintenance");
+                Check(maintenance["mode"]?.GetValue<string>()=="disconnected" &&
+                    maintenance["login_authenticated"]?.GetValue<bool>()==true &&
+                    maintenance["registration"]?["device_id"]?.GetValue<string>()==ownedCiDevice &&
+                    maintenance["shutdown_after_response"] is null,
+                    "UU_MAINTENANCE_CHECK_PRESERVES_UNREMEMBERED_LOGIN_AND_SERVICE");
+            }
+            var rescanned=await Send("RefreshUu");
+            Check(rescanned["login_authenticated"]?.GetValue<bool>()==true &&
+                rescanned["registration"]?["device_id"]?.GetValue<string>()==ownedCiDevice,
+                "UU_REFRESH_PRESERVES_ACCOUNT_AND_REGISTERED_DEVICE");
             phase="DIRECT_EXIT";
             string directExit=await ExitIp();
             Check(!allowed.Contains(directExit),"REAL_PHYSICAL_EXIT_BEFORE_GUI_TEST");
@@ -609,6 +621,14 @@ internal static class OracleAcceptance
                 connected["uu_rejected"]?.GetValue<int>()>0 && connected["uu_verified_programs"]?.GetValue<int>()==0 &&
                 connected["guard"]?.GetValue<bool>()==true && connected["tun_permitted"]?.GetValue<bool>()==true,
                 "REAL_FIRST_CONNECT_WITH_RUNNING_UNVERIFIED_UU_AND_NO_DIRECT_EXCEPTION");
+            foreach(string command in new[]{"CheckUuMaintenance","RefreshUu"}){
+                var refused=await ControlPipe.Send(command);
+                Check(refused["ok"]?.GetValue<bool>()==false && refused["error"]?.GetValue<string>()=="UU_REPAIR_DISCONNECT_REQUIRED" &&
+                    refused["mode"]?.GetValue<string>()=="connected" &&
+                    refused["core_pid"]?.GetValue<uint>()==connected["core_pid"]?.GetValue<uint>() &&
+                    refused["tun_permitted"]?.GetValue<bool>()==true && refused["shutdown_after_response"] is null,
+                    "UU_"+command.ToUpperInvariant()+"_REFUSED_WITH_EXISTING_TUNNEL_INTACT");
+            }
             Check(connected["transport_address"]?.GetValue<string>()==primary && connected["transport_port"]?.GetValue<int>()==443 && connected["transport_private_address"]?.GetValue<string>()==login["network_endpoints"]!["private_ipv4"]![primary]!.GetValue<string>() && allowed.Contains(await ExitIp()),"MIGRATION_NORMAL_CONNECT_ACTUAL_PRIMARY_PRIVATE_AND_PORT_WITH_VERIFIED_EXIT");
             // Connection admission already requires the IPv6 exit probe as well.
             Check(connected["verified_exit_ipv6"]?.GetValue<string>()=="2603:c020:c015:8100::10","MIGRATION_IPV6_EXIT");

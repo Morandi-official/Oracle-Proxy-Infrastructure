@@ -84,6 +84,7 @@ internal static class ProductTests
             try{var state=ControlPipe.Send("Status").GetAwaiter().GetResult();return state["mode"]?.GetValue<string>()=="disconnected"?0:1;}catch{return 1;}
         }
         if(!Platform.IsSystem || !File.Exists(Path.Combine(Root,"authorized")))return 3;
+        if(args.SequenceEqual(new[]{"--uu-route-probe"}))return Tcp().GetAwaiter().GetResult()?0:1;
         if(args.SequenceEqual(new[]{"--verify-recovered"})){
             var value=DurableState.Load();string digest=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.PublicKey)));
             bool valid=!value.ConnectIntent && !value.RecoveryRequired && value.Token=="" && value.PrivateKey.Length==44 && digest==File.ReadAllText(Path.Combine(Root,"public-sha256")) && !NativeGuard.Active && !NativeGuard.TunPresent;
@@ -408,6 +409,35 @@ internal static class ProductTests
             File.Delete(Path.Combine(root,"hardlink.txt"));
             if(!denied||Descriptor(outside,false)!=outsideBefore||Descriptor(root,true)!=before)throw new IOException("UU_ACL_HARDLINK_NOT_DENIED");
             Console.WriteLine("REAL_UU_REPAIR_REJECTS_UNEXPECTED_GRANTS_REPARSE_AND_HARDLINKS=PASS");
+
+            // An ordinary installer-created executable inherits Modify from the
+            // installation root. Exercise this with the same signed image.
+            var file=new FileInfo(executable);
+            var inherited=file.GetAccessControl();
+            inherited.SetAccessRuleProtection(false,false);file.SetAccessControl(inherited);
+            directory.SetAccessControl(original);
+            string writableMain=Descriptor(executable,false);
+            if(UuDiscovery.Inspect(executable)?.Code!="UU_EXECUTABLE_WRITABLE" ||
+                !UuAclRepair.EligibleRoots().Contains(root,StringComparer.OrdinalIgnoreCase))throw new IOException("UU_INHERITED_EXECUTABLE_REPAIR_NOT_OFFERED");
+            UuAclRepair.Apply([root]);
+            if(!UuDiscovery.Trusted(executable))throw new IOException("UU_INHERITED_EXECUTABLE_REPAIR_UNVERIFIED");
+            UuAclRepair.Restore();
+            if(UuDiscovery.Inspect(executable)?.Code!="UU_EXECUTABLE_WRITABLE" ||
+                Descriptor(executable,false)!=writableMain || Descriptor(root,true)!=before)
+                throw new IOException("UU_INHERITED_EXECUTABLE_RESTORE_NOT_EXACT");
+            Console.WriteLine("REAL_UU_EXECUTABLE_WITH_INHERITED_MODIFY_REPAIR_AND_RESTORE=PASS");
+
+            string customRoot=Path.Combine(Platform.Root,"Application-Fixture");
+            string customMain=Path.Combine(customRoot,"GameViewer.exe");
+            if(Directory.Exists(customRoot))throw new IOException("PREEXISTING_FIXTURE_REFUSED");
+            Directory.CreateDirectory(customRoot);Platform.Protect(customRoot,true);
+            try{
+                File.Copy(executable,customMain);
+                using var key=Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath,true)!;
+                key.SetValue("InstallLocation",customRoot);
+                if(!UuDiscovery.Discover().Paths.Contains(customMain,StringComparer.OrdinalIgnoreCase))
+                    throw new IOException("UU_REGISTERED_CUSTOM_FOLDER_WITH_SIGNED_MAIN_NOT_DISCOVERED");
+            }finally{Directory.Delete(customRoot,true);}
         }finally{
             if(System.IO.Directory.Exists(link))System.IO.Directory.Delete(link);
             foreach(string name in new[]{child,saved,outside,Path.Combine(root,"hardlink.txt"),backup})if(File.Exists(name))File.Delete(name);
@@ -451,66 +481,54 @@ internal static class ProductTests
         }));
         try{Application.Run(host);return result;}finally{if(previousDesktop is not null)ChangeDisplaySettings(previousDesktop,0);}
     }
+    private sealed class AccountRouteHandler(
+        Func<HttpRequestMessage,CancellationToken,Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancel)=>send(request,cancel);
+    }
+
     private static void AccountRouteRegression()
     {
-        var endpoint = new DnsEndPoint(AccountApi.Base.Host, 443);
-        var calls = new List<string>();
-        using var ordinary = new MemoryStream();
-        using var physical = new MemoryStream();
-        Task<Stream?> SystemRoute(DnsEndPoint requested, CancellationToken cancel)
-        {
-            UiAssert(requested.Equals(endpoint), "ACCOUNT_SYSTEM_ROUTE_RECEIVES_ONLY_THE_FIXED_HOST");
-            calls.Add("system");
-            return Task.FromResult<Stream?>(ordinary);
-        }
-        Task<Stream> PhysicalRoute(CancellationToken cancel)
-        {
-            calls.Add("physical");
-            return Task.FromResult<Stream>(physical);
-        }
-        var clear = AccountApi.ConnectAccount(endpoint, false, SystemRoute, PhysicalRoute, CancellationToken.None).GetAwaiter().GetResult();
-        UiAssert(ReferenceEquals(clear, ordinary) && calls.SequenceEqual(new[] { "system" }),
-            "DISCONNECTED_ACCOUNT_API_PREFERS_ORDINARY_DUAL_STACK_ROUTE");
-        calls.Clear();
-        var guarded = AccountApi.ConnectAccount(endpoint, true, SystemRoute, PhysicalRoute, CancellationToken.None).GetAwaiter().GetResult();
-        UiAssert(ReferenceEquals(guarded, physical) && calls.SequenceEqual(new[] { "physical" }),
-            "GUARDED_ACCOUNT_API_NEVER_ATTEMPTS_ORDINARY_ROUTE");
-        calls.Clear();
-        var fallback = AccountApi.ConnectAccount(endpoint, false, (_, _) => {
-            calls.Add("system");
-            return Task.FromResult<Stream?>(null);
-        }, PhysicalRoute, CancellationToken.None).GetAwaiter().GetResult();
-        UiAssert(ReferenceEquals(fallback, physical) && calls.SequenceEqual(new[] { "system", "physical" }),
-            "DISCONNECTED_ACCOUNT_API_RETAINS_PHYSICAL_FALLBACK_BEFORE_TLS");
-        using var lateSystemStream = new MemoryStream();
-        using var fastPhysicalStream = new MemoryStream();
-        var slowSystem = new TaskCompletionSource<Stream?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        CancellationToken systemCancellation = default;
-        var hedged = AccountApi.ConnectAccount(endpoint, false, (_, token) => {
-            systemCancellation = token;
-            return slowSystem.Task;
-        }, _ => Task.FromResult<Stream>(fastPhysicalStream), CancellationToken.None).AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
-        UiAssert(ReferenceEquals(hedged, fastPhysicalStream) && systemCancellation.IsCancellationRequested && fastPhysicalStream.CanRead,
-            "ACCOUNT_PHYSICAL_ROUTE_WINS_WHILE_SYSTEM_ROUTE_IS_STALLED");
-        slowSystem.SetResult(lateSystemStream);
-        UiAssert(SpinWait.SpinUntil(() => !lateSystemStream.CanRead, TimeSpan.FromSeconds(3)),
-            "ACCOUNT_LATE_SYSTEM_RESULT_IS_DISPOSED");
+        static HttpResponseMessage SignedOut()=>new(HttpStatusCode.Unauthorized){
+            Content=new StringContent("""{"error":"LOGIN_REQUIRED"}""")};
+        static HttpClient Client(Func<HttpRequestMessage,CancellationToken,Task<HttpResponseMessage>> send)=>
+            new(new AccountRouteHandler((request,cancel)=>{
+                UiAssert(request.Method==HttpMethod.Get && request.RequestUri==new Uri(AccountApi.Base,"api/client/state") &&
+                    request.Headers.Authorization is null && request.Content is null,"ACCOUNT_ROUTE_PROBE_IS_ANONYMOUS_AND_ORIGIN_BOUND");
+                return send(request,cancel);
+            })){BaseAddress=AccountApi.Base};
+        static HttpClient Select(HttpClient direct,HttpClient physical)=>AccountApi.SelectVerifiedRoute(
+            direct,physical,AccountApi.VerifyAccountRoute,CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
 
-        using var survivingSystemStream = new MemoryStream();
-        var systemWatchingFallback = new TaskCompletionSource<Stream?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var fallbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var failedPhysical = new TaskCompletionSource<Stream>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var surviving = AccountApi.ConnectAccount(endpoint, false, (_, _) => systemWatchingFallback.Task, _ => {
-            fallbackStarted.SetResult();
-            return failedPhysical.Task;
-        }, CancellationToken.None).AsTask();
-        fallbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
-        failedPhysical.SetException(new IOException("SYNTHETIC_PHYSICAL_ROUTE_UNAVAILABLE"));
-        systemWatchingFallback.SetResult(survivingSystemStream);
-        UiAssert(ReferenceEquals(surviving.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult(), survivingSystemStream) && survivingSystemStream.CanRead,
-            "ACCOUNT_PHYSICAL_ROUTE_FAILURE_CANNOT_SUPPRESS_A_VALID_SYSTEM_ROUTE");
-        Console.WriteLine("ACCOUNT_API_ROUTE_MODE_AND_TLS_ORIGIN_BOUNDARY=PASS");
+        int physicalCalls=0;
+        using var physical=Client((_,_)=>{physicalCalls++;return Task.FromResult(SignedOut());});
+        using var direct=Client((_,_)=>Task.FromResult(SignedOut()));
+        UiAssert(ReferenceEquals(Select(direct,physical),direct) && physicalCalls==0,
+            "VERIFIED_ORDINARY_ACCOUNT_ROUTE_KEEPS_ITS_HEAD_START");
+
+        using var failedTls=Client((_,_)=>Task.FromException<HttpResponseMessage>(
+            new HttpRequestException(HttpRequestError.SecureConnectionError,"TEST_TLS_FAILURE")));
+        UiAssert(ReferenceEquals(Select(failedTls,physical),physical),
+            "ACCOUNT_PHYSICAL_ROUTE_SURVIVES_TLS_FAILURE_ON_ORDINARY_ROUTE");
+
+        var cancelled=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stalled=Client(async (_,cancel)=>{
+            try{await Task.Delay(Timeout.Infinite,cancel);}
+            finally{cancelled.TrySetResult();}
+            return SignedOut();
+        });
+        UiAssert(ReferenceEquals(Select(stalled,physical),physical),"ACCOUNT_HTTPS_FALLBACK_SURVIVES_ORDINARY_HTTP_STALL");
+        cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+
+        using var redirected=Client((_,_)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.Redirect)));
+        UiAssert(ReferenceEquals(Select(redirected,physical),physical),"ACCOUNT_ROUTE_PROBE_REJECTS_A_REDIRECT");
+        using var wrongBody=Client((_,_)=>Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized){
+            Content=new StringContent("""{"error":"SOMETHING_ELSE"}""")}));
+        bool refused=false;
+        try{Select(redirected,wrongBody);}
+        catch(IOException error)when(error.Message=="ACCOUNT_API_UNREACHABLE"){refused=true;}
+        UiAssert(refused,"ACCOUNT_ROUTE_REQUIRES_THE_ACTUAL_API_RESPONSE");
+        Console.WriteLine("ACCOUNT_API_VERIFIED_TLS_AND_HTTP_ROUTE_FALLBACK=PASS");
     }
 
     private static void UdpDiagnosticRegression()
@@ -1700,8 +1718,16 @@ internal static class ProductTests
             ["outbounds"]=new JsonArray(new JsonObject{["type"]="direct",["tag"]="exit"}),["route"]=new JsonObject{["auto_detect_interface"]=true,["final"]="exit"}
         };
         var state=new JsonObject{["tunnel"]=new JsonObject{["endpoint"]="152.67.156.100:59999",["server_public_key"]=serverKey.Public,["addresses"]=new JsonArray("10.200.0.2/32"),["ipv6_policy"]="block"}};
-        var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private,UuPaths=uuPaths},"synthetic-probe-only");
-        Require(config["route"]!["find_process"]!.GetValue<bool>() && config["route"]!["rules"]![0]!["outbound"]!.GetValue<string>()=="uu-direct","TRUSTED_UU_ROUTES_KEEP_PROCESS_LOOKUP");
+        // This copied fixture image is never added to WFP. Its TCP probe can
+        // survive isolated peer loss only via the configured TUN process rule.
+        string routeProbe=Path.Combine(Root,"Uu-route-probe.exe");
+        var config=CoreConfig.Build(state,new DurableState{PrivateKey=clientKey.Private,UuPaths=[..uuPaths,routeProbe]},"synthetic-probe-only");
+        var uuRule=config["route"]!["rules"]![0]!;
+        Require(config["route"]!["find_process"]!.GetValue<bool>() &&
+            uuRule["outbound"]!.GetValue<string>()=="uu-direct" &&
+            uuRule["inbound"]!.GetValue<string>()=="device" &&
+            uuRule["process_path_regex"]!.AsArray().Count==uuPaths.Length+1,
+            "UU_ROUTE_MATCHES_CONFIGURED_PROCESS_PATHS_ONLY_ON_TUN_INBOUND");
         var diagnosticState=(JsonObject)state.DeepClone();diagnosticState["tunnel"]!["endpoint"]="152.67.156.100:51820";
         var diagnosticSecret=new DurableState{PrivateKey=clientKey.Private,NativeUdpPortPreference=8443};
         bool diagnosticRefused=false;try{CoreConfig.Build(diagnosticState,diagnosticSecret,"synthetic-probe-only");}catch(IOException error)when(error.Message=="NATIVE_UDP8443_NOT_AVAILABLE"){diagnosticRefused=true;}
@@ -1722,6 +1748,7 @@ internal static class ProductTests
         await OffDormantRecovery(config,uuPaths);
         Require(NativeGuard.Active,"REAL_EXISTING_GUARDED_FIXTURE_POLICY_RESTORED_AFTER_OFF_DORMANT_CASES");
 
+        File.Copy(Environment.ProcessPath!,routeProbe);
         Process? exit=null,client=null;
         try{
             exit=await Launch(server);
@@ -1803,6 +1830,10 @@ internal static class ProductTests
             await Stop(exit);exit=null;
             Require(!await Tcp(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_TCP_FALLBACK");
             Require(!await Dns(),"REAL_ENCRYPTED_PEER_LOSS_NO_DIRECT_DNS_FALLBACK");
+            using(var probe=Process.Start(new ProcessStartInfo(routeProbe){UseShellExecute=false,ArgumentList={"--uu-route-probe"}})!){
+                await probe.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Require(probe.ExitCode==0 && NativeGuard.TunPermitted,"REAL_EXACT_PROCESS_RULE_USES_DIRECT_OUTBOUND_DURING_PEER_LOSS");
+            }
             client.Kill(true);await client.WaitForExitAsync();client.Dispose();client=null;
             Require(NativeGuard.Active,"REAL_CORE_CRASH_PERSISTENT_GUARD_SURVIVES");
             Evidence.Add("REAL_CORE_EXIT_LIFECYCLE_FLAGS="+NativeGuard.CoreLifecycle);
@@ -1816,7 +1847,7 @@ internal static class ProductTests
             await RejectOrphanReceipt(foreign,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_FOREIGN_GUID_WITH_GUARD_AND_DEVICE_PRESERVED");
             var unknown=(JsonObject)recorded.DeepClone();unknown["unexpected_command"]="not-an-interface-operation";
             await RejectOrphanReceipt(unknown,orphanLuid,"REAL_ORPHAN_RECOVERY_REJECTS_UNKNOWN_RECEIPT_FIELDS_WITH_GUARD_AND_DEVICE_PRESERVED");
-        }finally{await Stop(client);await Stop(exit);}
+        }finally{await Stop(client);await Stop(exit);File.Delete(routeProbe);}
         NativeGuard.Clear();
         Require(await Tcp(),"REAL_EXPLICIT_OFF_PHYSICAL_TCP_RESTORED");Require(await Dns(),"REAL_EXPLICIT_OFF_PHYSICAL_UDP_DNS_RESTORED");
         Require(!UuDiscovery.Trusted(Environment.ProcessPath!),"UU_UNSIGNED_TEST_EXECUTABLE_REJECTED");

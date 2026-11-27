@@ -21,7 +21,7 @@ internal static class CoreConfig
         string serverKey=(diagnosticTarget is not null && tunnel["server_public_keys"] is JsonObject keys ? keys[diagnosticTarget.Address] : tunnel["server_public_key"])?.GetValue<string>() ?? throw new IOException("UNAUTHORIZED_INGRESS_IDENTITY");if(Convert.FromBase64String(serverKey).Length!=32)throw new IOException("INVALID_SERVER_KEY");
         var rules=new JsonArray();
         bool routeUuProcesses=secret.UuPaths.Length>0;
-        if(routeUuProcesses)rules.Add(new JsonObject{["process_path_regex"]=new JsonArray(secret.UuPaths.Select(p=>(JsonNode?)JsonValue.Create(ProcessPattern(p))).ToArray()),["action"]="route",["outbound"]="uu-direct"});
+        if(routeUuProcesses)rules.Add(new JsonObject{["inbound"]="device",["process_path_regex"]=new JsonArray(secret.UuPaths.Select(p=>(JsonNode?)JsonValue.Create(ProcessPattern(p))).ToArray()),["action"]="route",["outbound"]="uu-direct"});
         rules.Add(new JsonObject{["port"]=53,["action"]="hijack-dns"});
         // Explicit secure policy until Oracle IPv6 is provisioned and proven.
         if(tunnel["ipv6_policy"]?.GetValue<string>()!="tunnel")rules.Add(new JsonObject{["ip_version"]=6,["action"]="reject"});

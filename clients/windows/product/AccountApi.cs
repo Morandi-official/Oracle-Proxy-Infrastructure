@@ -10,7 +10,9 @@ internal sealed class AccountApi : IDisposable
     private readonly HttpClient _directHttp;
     private readonly HttpClient _protectedHttp;
     private readonly CancellationTokenSource _stop=new();
-    private int _disconnectedRouteWarmed;
+    private readonly object _routeGate=new();
+    private Task<HttpClient>? _disconnectedRoute;
+    private long _routeExpires;
     private static readonly object AddressGate=new();
     internal const string BootstrapAddress="152.67.156.100";
     private static string[] KnownAddresses=[];
@@ -40,92 +42,85 @@ internal sealed class AccountApi : IDisposable
         var handler = new SocketsHttpHandler {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false,
             ConnectTimeout = TimeSpan.FromSeconds(8),
-            ConnectCallback = (context, token) => ConnectAccount(
-                context.DnsEndPoint, protectedPath || !NativeGuard.ConfirmedAbsent,
-                TrySystemRoute, ConnectPhysicalRoute, token),
+            ConnectCallback = async (context, token) => {
+                if (context.DnsEndPoint.Host != Base.Host || context.DnsEndPoint.Port != 443)
+                    throw new IOException("UNTRUSTED_API_ENDPOINT");
+                if (protectedPath) return await ConnectPhysicalRoute(token);
+                if (!NativeGuard.ConfirmedAbsent) throw new IOException("ACCOUNT_SYSTEM_ROUTE_PROTECTED");
+                return await TrySystemRoute(context.DnsEndPoint, token) ?? throw new IOException("API_SYSTEM_ROUTE_UNAVAILABLE");
+            },
         };
         return new HttpClient(handler) { BaseAddress = Base, Timeout = TimeSpan.FromSeconds(12) };
     }
 
     internal void WarmDisconnectedRoute()
     {
-        if (Interlocked.Exchange(ref _disconnectedRouteWarmed, 1) == 0)
-            _ = WarmDisconnectedRouteAsync();
+        var route=GetDisconnectedRoute();
+        _=route.ContinueWith(t=>{_ = t.Exception;},CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted|TaskContinuationOptions.ExecuteSynchronously,TaskScheduler.Default);
     }
 
-    private async Task WarmDisconnectedRouteAsync()
+    private Task<HttpClient> GetDisconnectedRoute()
     {
-        // Reuse a validated TLS connection for manual login. The anonymous
-        // state request carries no account, token, cookies, or device identity.
-        try {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
-            deadline.CancelAfter(TimeSpan.FromSeconds(3));
-            using var response = await _directHttp.GetAsync("api/client/state",
-                HttpCompletionOption.ResponseHeadersRead, deadline.Token);
-            await response.Content.LoadIntoBufferAsync(1024, deadline.Token);
-        } catch (Exception error) when (error is HttpRequestException or IOException or OperationCanceledException or ObjectDisposedException) {
-            // A missed warmup must not block or replace the real login.
+        lock(_routeGate){
+            if(_disconnectedRoute is null || _disconnectedRoute.IsFaulted || _disconnectedRoute.IsCanceled ||
+                Environment.TickCount64>=_routeExpires){
+                _routeExpires=Environment.TickCount64+30_000;
+                _disconnectedRoute=Task.Run(FindDisconnectedRoute);
+            }
+            return _disconnectedRoute;
         }
     }
 
-    internal static async ValueTask<Stream> ConnectAccount(
-        DnsEndPoint endpoint,
-        bool protectedPath,
-        Func<DnsEndPoint, CancellationToken, Task<Stream?>> trySystemRoute,
-        Func<CancellationToken, Task<Stream>> connectPhysicalRoute,
-        CancellationToken cancel)
-    {
-        if (endpoint.Host != Base.Host || endpoint.Port != 443)
-            throw new IOException("UNTRUSTED_API_ENDPOINT");
-        cancel.ThrowIfCancellationRequested();
-        if (protectedPath) return await connectPhysicalRoute(cancel).ConfigureAwait(false);
+    private Task<HttpClient> FindDisconnectedRoute()=>SelectVerifiedRoute(
+        _directHttp,_protectedHttp,VerifyAccountRoute,_stop.Token);
 
-        // The preferred system route keeps its short head start. If DNS or TCP
-        // is slow, try the known physical route without waiting for its full
-        // timeout. The HTTP handler authenticates the fixed TLS name and sends
-        // credentials only over the single winning socket.
-        using var race = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-        Task<Stream?>? system = null;
-        Task<Stream>? physical = null;
-        try {
-            system = trySystemRoute(endpoint, race.Token);
-            if (await Task.WhenAny(system, Task.Delay(200, race.Token)).ConfigureAwait(false) != system) {
-                cancel.ThrowIfCancellationRequested();
-                physical = connectPhysicalRoute(race.Token);
-                await Task.WhenAny((Task)system, physical).WaitAsync(cancel).ConfigureAwait(false);
+    internal static async Task VerifyAccountRoute(HttpClient client,CancellationToken cancel)
+    {
+        // A TCP connection can succeed while TLS or the account HTTP endpoint
+        // still stalls. Probes carry no credentials and only accept the expected
+        // response over the same authenticated origin and pool as the API call.
+        using var response=await client.GetAsync("api/client/state",HttpCompletionOption.ResponseHeadersRead,cancel);
+        if(response.StatusCode!=HttpStatusCode.Unauthorized)throw new HttpRequestException(
+            "ACCOUNT_ROUTE_PROBE_REJECTED",null,response.StatusCode);
+        await response.Content.LoadIntoBufferAsync(1024,cancel);
+        var value=JsonNode.Parse(await response.Content.ReadAsStringAsync(cancel));
+        if(value is not JsonObject state || state["error"] is not JsonValue error ||
+            !error.TryGetValue<string>(out var code) || code!="LOGIN_REQUIRED")throw new IOException("ACCOUNT_ROUTE_PROBE_REJECTED");
+    }
+
+    internal static async Task<HttpClient> SelectVerifiedRoute(HttpClient direct,HttpClient physical,
+        Func<HttpClient,CancellationToken,Task> verify,CancellationToken cancel)
+    {
+        using var race=CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        race.CancelAfter(TimeSpan.FromSeconds(9));
+        async Task<Exception?> Probe(HttpClient route)
+        {
+            try{await verify(route,race.Token);return null;}
+            catch(Exception error)when(error is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException or ObjectDisposedException){
+                return error;
             }
-            cancel.ThrowIfCancellationRequested();
-            if (system.IsCompletedSuccessfully && system.Result is Stream preferred) {
-                system = null;
-                return preferred;
+        }
+        try{
+            var preferred=Probe(direct);
+            if(await Task.WhenAny(preferred,Task.Delay(200,race.Token))==preferred && await preferred is null){
+                race.Token.ThrowIfCancellationRequested();return direct;
             }
-            if (physical is null) {
-                // Preserve the ordinary path's unexpected errors when it
-                // finishes before a fallback has even started.
-                await system.ConfigureAwait(false);
-                physical = connectPhysicalRoute(race.Token);
-            } else if (physical.IsCompleted && !physical.IsCompletedSuccessfully && !system.IsCompleted) {
-                if (await system.WaitAsync(cancel).ConfigureAwait(false) is Stream remaining) {
-                    cancel.ThrowIfCancellationRequested();
-                    system = null;
-                    return remaining;
-                }
+            var fallback=Probe(physical);
+            var first=await Task.WhenAny(preferred,fallback).WaitAsync(race.Token);
+            var firstError=await first;
+            if(firstError is null){
+                race.Token.ThrowIfCancellationRequested();return first==preferred?direct:physical;
             }
-            var fallback = await physical.WaitAsync(cancel).ConfigureAwait(false);
-            cancel.ThrowIfCancellationRequested();
-            physical = null;
-            return fallback;
-        } finally {
+            var last=first==preferred?fallback:preferred;
+            var lastError=await last.WaitAsync(race.Token);
+            if(lastError is null){
+                race.Token.ThrowIfCancellationRequested();return last==preferred?direct:physical;
+            }
+            throw new IOException("ACCOUNT_API_UNREACHABLE",lastError is OperationCanceledException?firstError:lastError);
+        }finally{
             race.Cancel();
-            if (system is not null) _ = DisposeLateConnection(system);
-            if (physical is not null) _ = DisposeLateConnection(physical);
         }
-    }
-
-    private static async Task DisposeLateConnection<T>(Task<T> attempt) where T : Stream?
-    {
-        try { (await attempt.ConfigureAwait(false))?.Dispose(); }
-        catch (Exception) { /* The abandoned route no longer owns the request. */ }
     }
 
     private static Task<Stream?> TrySystemRoute(DnsEndPoint endpoint, CancellationToken cancel) =>
@@ -195,12 +190,25 @@ internal sealed class AccountApi : IDisposable
     }
     private async Task<HttpResponseMessage> Send(HttpRequestMessage request,CancellationToken cancel)
     {
+        Task<HttpClient>? route=null;
         try{
-            var client = NativeGuard.ConfirmedAbsent ? _directHttp : _protectedHttp;
+            var client=_protectedHttp;
+            if(NativeGuard.ConfirmedAbsent){
+                route=GetDisconnectedRoute();
+                try{
+                    var verified=await route.WaitAsync(cancel);
+                    if(NativeGuard.ConfirmedAbsent)client=verified;
+                }catch(IOException)when(!NativeGuard.ConfirmedAbsent){
+                    // Protection may have changed while the anonymous probe ran.
+                    // No authenticated request has been sent.
+                }
+            }
             return await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel);
         }
-        catch(HttpRequestException error){throw new IOException("ACCOUNT_API_UNREACHABLE",error);}
-        catch(OperationCanceledException error)when(!_stop.IsCancellationRequested){throw new IOException("ACCOUNT_API_UNREACHABLE",error);}
+        catch(Exception error)when(error is HttpRequestException || error is OperationCanceledException && !_stop.IsCancellationRequested){
+            lock(_routeGate){if(ReferenceEquals(_disconnectedRoute,route))_disconnectedRoute=null;}
+            throw new IOException("ACCOUNT_API_UNREACHABLE",error);
+        }
     }
     internal void Cancel()=>_stop.Cancel();
     public void Dispose(){_stop.Cancel();_directHttp.Dispose();_protectedHttp.Dispose();_stop.Dispose();}

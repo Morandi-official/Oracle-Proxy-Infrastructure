@@ -324,7 +324,7 @@ internal sealed partial class VpnRuntime : IDisposable
         bool attachedAction=command is "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit";
         var fields=attachedAction?new[]{"version","command","expected_version"}:command is "Login" or "LoginRemembered"?new[]{"version","command","username","password"}:command=="ConfirmDevice"?new[]{"version","command","device_name","confirm"}:command=="DeleteDevice"?new[]{"version","command","device_id"}:new[]{"version","command"};
         if(value.Count!=fields.Length || fields.Any(field=>!value.ContainsKey(field)))throw new IOException("INVALID_FIELDS");
-        if(command is not ("Status" or "Login" or "LoginRemembered" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "RefreshUu" or "Prepare" or "PreferUdp" or "PreferUdpAdaptive" or "PreferUdp8443" or "PreferUdp443" or "PreferUdp51820" or "DeleteDevice" or "StartUdpDiagnostics" or "CancelUdpDiagnostics" or "AttachClient" or "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit"))throw new IOException("UNKNOWN_COMMAND");
+        if(command is not ("Status" or "Login" or "LoginRemembered" or "ConfirmDevice" or "Connect" or "Disconnect" or "Quit" or "Logout" or "CheckUuMaintenance" or "RefreshUu" or "Prepare" or "PreferUdp" or "PreferUdpAdaptive" or "PreferUdp8443" or "PreferUdp443" or "PreferUdp51820" or "DeleteDevice" or "StartUdpDiagnostics" or "CancelUdpDiagnostics" or "AttachClient" or "AttachConnect" or "AttachPrepare" or "AttachDisconnect" or "AttachQuit"))throw new IOException("UNKNOWN_COMMAND");
         if(attachedAction && value["expected_version"]?.GetValue<string>()!=DeviceRegistration.Version)throw new IOException("SERVICE_VERSION_NOT_VERIFIED");
         if(attachedAction && client is null)throw new IOException("CLIENT_IDENTITY_REQUIRED");
         await _gate.WaitAsync(admission);
@@ -334,6 +334,14 @@ internal sealed partial class VpnRuntime : IDisposable
             // point is passed, finish its intent changes under this same gate.
             admission.ThrowIfCancellationRequested();
             admitted=true;
+            if(command is "CheckUuMaintenance" or "RefreshUu"){
+                bool ready=!Diagnosing && !_shutdown.Task.IsCompleted && _mode=="disconnected" &&
+                    !_secret.ConnectIntent && !_secret.RecoveryRequired && NativeGuard.ConfirmedAbsent && !NativeGuard.TunPermitted;
+                if(!ready){
+                    var refused=Snapshot(false);refused["error"]="UU_REPAIR_DISCONNECT_REQUIRED";return refused;
+                }
+                if(command=="CheckUuMaintenance")return Snapshot();
+            }
             if(client is not null && (command=="AttachClient" || attachedAction))Attach(client);
             if(Diagnosing && command is not ("Status" or "CancelUdpDiagnostics" or "AttachDisconnect" or "AttachQuit" or "Disconnect" or "Quit" or "Logout"))throw new IOException("DIAGNOSTIC_BUSY");
             switch(command){
@@ -489,11 +497,20 @@ internal sealed partial class VpnRuntime : IDisposable
                 if(_secret.Token.Length>0){try{await _api.Call("logout",_secret.Token,new JsonObject());}catch{ /* expire remotely; locally erase bearer regardless */ }}
                 ForgetLogin();break;
             case "RefreshUu":
-                if(_secret.ConnectIntent)throw new IOException("DISCONNECT_BEFORE_UU_REFRESH");
-                _prepareRetryAfter=default;
-                _stage="UU_DISCOVERY";var found=UuDiscovery.Discover();_uuInventory=found;
-                await StopCore();
-                _secret.UuPaths=found.Paths;_secret.Save();break;
+                using(UuAclRepair.AcquireMaintenance()){
+                    _stage="UU_DISCOVERY";
+                    var found=UuDiscovery.Discover();
+                    if(!_secret.UuPaths.SequenceEqual(found.Paths,StringComparer.OrdinalIgnoreCase)){
+                        // An empty adapter has no loaded routing configuration.
+                        if(_core.Running && !_core.Parked && _holderPreparation is null)await StopCore();
+                        _secret.UuPaths=found.Paths;_secret.Save();
+                    }
+                    _uuInventory=found;_prepareRetryAfter=default;
+                    if(_error is "UU_TRUST_NOT_VERIFIED" or "UU_SIGNATURE_OR_DIRECTORY_CHANGED" or "UU_TRUST_CHANGED_REFRESH_REQUIRED" or "UU_MAINTENANCE_BUSY"){
+                        _error="";_failure=null;
+                    }
+                }
+                break;
             }
             var response=Snapshot();
             if(_manageClientLifetime && (command is "Disconnect" or "AttachDisconnect" or "AttachQuit" or "Quit") && !_secret.ConnectIntent && !_core.Running && !_secret.RecoveryRequired)
@@ -501,7 +518,7 @@ internal sealed partial class VpnRuntime : IDisposable
             return response;
         }catch(OperationCanceledException)when(!admitted && admission.IsCancellationRequested){throw;}
         catch(Exception e){if(e is ApiException && e.Message is "LOGIN_REQUIRED" or "DEVICE_REVOKED"){ForgetLogin();await StopCore();}Failed(e);if(!_secret.ConnectIntent)_prepareRetryAfter=DateTimeOffset.UtcNow.AddSeconds(30);if(_secret.ConnectIntent){if(!NativeGuard.Active)await _core.Stop();_latency=null;_mode="protected";}return Snapshot(false);}
-        finally{_gate.Release();if(command!="Status")_wake.Pulse();}
+        finally{_gate.Release();if(command is not ("Status" or "CheckUuMaintenance"))_wake.Pulse();}
     }
     private JsonObject? _disconnectTimings;
     private async Task Disconnect(bool keepPrepared=false)

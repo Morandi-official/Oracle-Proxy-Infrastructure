@@ -12,6 +12,7 @@ internal sealed partial class VpnRuntime
         if(!SessionAuthorized || !DeviceRegistration.Confirmed(_state))throw new IOException("LOGIN_REQUIRED");
         if(_secret.ConnectIntent || _secret.RecoveryRequired || NativeGuard.Active || _mode!="disconnected")
             throw new IOException("DISCONNECT_BEFORE_UDP_DIAGNOSTIC");
+        using var uuMaintenance=UuAclRepair.AcquireMaintenance();
         _prepareUntil=default;_prepareMayStartCore=false;_prepareRetryAfter=default;
         await StopCore();await EnsureTunnelRemoved();
         _udpDiagnostics?.Dispose();

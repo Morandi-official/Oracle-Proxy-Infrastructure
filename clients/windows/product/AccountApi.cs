@@ -36,34 +36,31 @@ internal sealed class AccountApi : IDisposable
         _physicalHttp=CreateClient((_,cancel)=>ConnectKnownRoute(bound:true,cancel));
         var system=CreateClient(ConnectSystemRoute,requireDisconnected:true);
         var pinned=CreateClient((_,cancel)=>ConnectKnownRoute(bound:false,cancel),requireDisconnected:true);
-        _disconnectedClients=System.Net.Quic.QuicConnection.IsSupported
-            ?[system,_physicalHttp,pinned,CreateHttp3Client()]
-            :[system,_physicalHttp,pinned];
+        _disconnectedClients=[system,_physicalHttp,pinned];
     }
 
-    internal static HttpClient CreateHttp3Client()=>CreateClient(http3:true);
+#if ORACLE_PRODUCT_TESTS
+    internal static async Task VerifyPublicPinnedRoute(CancellationToken cancel)
+    {
+        using var client=CreateClient((_,token)=>ConnectKnownRoute(bound:false,token));
+        await VerifyAccountRoute(client,cancel).ConfigureAwait(false);
+    }
+#endif
 
-    private static HttpClient CreateClient(Func<DnsEndPoint,CancellationToken,Task<Stream>>? connect=null,bool http3=false,
-        bool requireDisconnected=false)
+    private static HttpClient CreateClient(Func<DnsEndPoint,CancellationToken,Task<Stream>> connect,bool requireDisconnected=false)
     {
         var handler = new SocketsHttpHandler {
             AllowAutoRedirect = false, UseCookies = false, UseProxy = false,
             ConnectTimeout = TimeSpan.FromSeconds(24),
             PooledConnectionIdleTimeout=TimeSpan.FromSeconds(20),
         };
-        if(connect is not null)
-            handler.ConnectCallback = async (context, token) => {
-                if (context.DnsEndPoint.Host != Base.Host || context.DnsEndPoint.Port != 443)
-                    throw new IOException("UNTRUSTED_API_ENDPOINT");
-                if(requireDisconnected && !NativeGuard.ConfirmedAbsent)throw new IOException("ACCOUNT_SYSTEM_ROUTE_PROTECTED");
-                return await connect(context.DnsEndPoint,token).ConfigureAwait(false);
-            };
-        return new HttpClient(handler) {
-            BaseAddress=http3?new UriBuilder(Base){Host=BootstrapAddress}.Uri:Base,
-            Timeout=Timeout.InfiniteTimeSpan,
-            DefaultRequestVersion=http3?HttpVersion.Version30:HttpVersion.Version11,
-            DefaultVersionPolicy=HttpVersionPolicy.RequestVersionExact
+        handler.ConnectCallback = async (context, token) => {
+            if (context.DnsEndPoint.Host != Base.Host || context.DnsEndPoint.Port != 443)
+                throw new IOException("UNTRUSTED_API_ENDPOINT");
+            if(requireDisconnected && !NativeGuard.ConfirmedAbsent)throw new IOException("ACCOUNT_SYSTEM_ROUTE_PROTECTED");
+            return await connect(context.DnsEndPoint,token).ConfigureAwait(false);
         };
+        return new HttpClient(handler){BaseAddress=Base,Timeout=Timeout.InfiniteTimeSpan};
     }
 
     internal void WarmDisconnectedRoute()
@@ -88,12 +85,9 @@ internal sealed class AccountApi : IDisposable
     private Task<HttpClient> FindDisconnectedRoute()=>SelectVerifiedRoute(_disconnectedClients,(client,cancel)=>
         NativeGuard.ConfirmedAbsent?VerifyAccountRoute(client,cancel):Task.FromException(new IOException("ACCOUNT_SYSTEM_ROUTE_PROTECTED")),_stop.Token);
 
-    private static HttpRequestMessage Request(HttpClient client,HttpMethod method,string action)
+    private static HttpRequestMessage Request(HttpMethod method,string action)
     {
-        var request=new HttpRequestMessage(method,"api/client/"+action){
-            Version=client.DefaultRequestVersion,VersionPolicy=client.DefaultVersionPolicy
-        };
-        if(request.Version==HttpVersion.Version30)request.Headers.Host=Base.Host;
+        var request=new HttpRequestMessage(method,"api/client/"+action);
         request.Headers.Add("X-Oracle-Client-Capabilities","dual-stack-v1");
         if(action=="authenticate")request.Headers.Add("X-Oracle-Confirm-Device","true");
         return request;
@@ -103,7 +97,7 @@ internal sealed class AccountApi : IDisposable
     {
         // Exercise the exact POST path without a username, device key or token.
         // The server rejects missing fields before throttling or mutating state.
-        using var request=Request(client,HttpMethod.Post,"authenticate");
+        using var request=Request(HttpMethod.Post,"authenticate");
         request.Content=new StringContent("{}",Encoding.UTF8,"application/json");
         using var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel).ConfigureAwait(false);
         if(response.StatusCode!=HttpStatusCode.BadRequest)throw new HttpRequestException(
@@ -122,8 +116,6 @@ internal sealed class AccountApi : IDisposable
         async Task<(HttpClient Route,Exception? Failure)> Probe(HttpClient route)
         {
             try{
-                if(route.DefaultRequestVersion==HttpVersion.Version30)
-                    await Task.Delay(550,race.Token).ConfigureAwait(false);
                 await verify(route,race.Token).ConfigureAwait(false);
                 return (route,null);
             }
@@ -240,7 +232,7 @@ internal sealed class AccountApi : IDisposable
                 }
             }
             phase="REQUEST";
-            using var request=Request(client,body is null?HttpMethod.Get:HttpMethod.Post,action);
+            using var request=Request(body is null?HttpMethod.Get:HttpMethod.Post,action);
             if(token.Length>0)request.Headers.Authorization=new("Bearer",token);
             if(body is not null)request.Content=new StringContent(body.ToJsonString(),Encoding.UTF8,"application/json");
             return await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,cancel);

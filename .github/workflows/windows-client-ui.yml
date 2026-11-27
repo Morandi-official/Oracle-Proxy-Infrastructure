@@ -28,6 +28,10 @@ jobs:
         run: |
           & ./dist/ui-fixture/OracleProxy.Product.Tests.exe --ui-self-test
           if ($LASTEXITCODE -ne 0) { throw 'Real Windows UI regression failed' }
+      - name: Verify the fixed-address public account HTTPS POST without credentials
+        run: |
+          & ./dist/ui-fixture/OracleProxy.Product.Tests.exe --public-account-pinned-probe
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned account HTTPS path failed' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

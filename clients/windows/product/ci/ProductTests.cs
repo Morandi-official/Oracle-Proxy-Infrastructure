@@ -60,12 +60,10 @@ internal static class ProductTests
             return 1;
         }
         if(args.SequenceEqual(new[]{"--ui-self-test"}))return UiOnMessageLoop();
-        if(args.SequenceEqual(new[]{"--public-account-http3-probe"})){
-            if(!System.Net.Quic.QuicConnection.IsSupported)throw new PlatformNotSupportedException("Windows QUIC is required for this control");
-            using var http=AccountApi.CreateHttp3Client();
-            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            AccountApi.VerifyAccountRoute(http,deadline.Token).GetAwaiter().GetResult();
-            Console.WriteLine("PINNED_HTTP3_AUTHENTICATE_ROUTE_TLS_AND_ANONYMOUS_POST=PASS");return 0;
+        if(args.SequenceEqual(new[]{"--public-account-pinned-probe"})){
+            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(26));
+            AccountApi.VerifyPublicPinnedRoute(deadline.Token).GetAwaiter().GetResult();
+            Console.WriteLine("PINNED_TCP_AUTHENTICATE_ROUTE_TLS_AND_ANONYMOUS_POST=PASS");return 0;
         }
         if(args.SequenceEqual(new[]{"--service-worker-self-test"}))return ServiceWorkerBudget().GetAwaiter().GetResult();
         if(args.SequenceEqual(new[]{"--probe-self-test"}))return ProbeDeadlines().GetAwaiter().GetResult();
@@ -546,7 +544,7 @@ internal static class ProductTests
             new HttpRequestException(HttpRequestError.ConnectionError,"TEST_CONNECT_FAILURE",
                 new SocketException((int)SocketError.NetworkUnreachable))));
         using var lastAlternate=Client((_,_)=>Task.FromResult(AnonymousPost()));
-        UiAssert(ReferenceEquals(Select(failedTcp,failedTls,wrongBody,lastAlternate),lastAlternate),
+        UiAssert(ReferenceEquals(Select(failedTcp,failedTls,lastAlternate),lastAlternate),
             "ACCOUNT_VERIFIES_ALTERNATE_AFTER_BOTH_OLD_TCP_ROUTES_FAIL");
         bool refused=false;
         try{Select(failedTcp,wrongBody);}

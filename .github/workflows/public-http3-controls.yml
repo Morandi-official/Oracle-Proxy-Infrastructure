@@ -2,10 +2,10 @@ name: Account-free public HTTP3 reference controls
 on:
   workflow_dispatch:
   pull_request:
-    paths: ['.github/workflows/public-http3-controls.yml', 'clients/windows/product/AccountApi.cs']
+    paths: ['.github/workflows/public-http3-controls.yml']
   push:
     branches: [main]
-    paths: ['.github/workflows/public-http3-controls.yml', 'clients/windows/product/AccountApi.cs']
+    paths: ['.github/workflows/public-http3-controls.yml']
 permissions:
   contents: read
 jobs:
@@ -100,23 +100,3 @@ jobs:
               context.close();browser.close()
               if any(x['protocol']!='h3' for x in results):raise SystemExit(1)
           '@ | python -
-  windows-account-post:
-    runs-on: windows-2025
-    timeout-minutes: 6
-    defaults:
-      run:
-        shell: pwsh
-        working-directory: clients/windows/product
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: clients/windows/product/global.json
-      - name: Build and verify the pinned account origin without credentials
-        run: |
-          dotnet publish ci/OracleProxy.Product.Tests.csproj -c Release -o dist/account-route
-          if ($LASTEXITCODE -ne 0) { throw 'Account fixture build failed' }
-          & ./dist/account-route/OracleProxy.Product.Tests.exe --public-account-http3-probe
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned HTTP/3 account control failed' }

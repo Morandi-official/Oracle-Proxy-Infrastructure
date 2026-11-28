@@ -74,7 +74,7 @@ def active_state(row, actor):
     if (row.phase!='active' or not peer or peer.get('revoked') or not user or
         user['status']!='active' or state.get('error') or not at or not 0<=now-at<=20 or
         state['budget']['guard_blocked']):raise ValueError('PROFILE_UNAVAILABLE')
-    return state,peer
+    return state,peer,user
 
 
 def material(row):
@@ -216,10 +216,13 @@ def download(request,profile_id,token):
     row=FlClashProfile.objects.select_related('account').filter(pk=profile_id,phase='active').first()
     if not row or not secrets.compare_digest(row.token_hash,hashlib.sha256(token.encode()).hexdigest()):return HttpResponse(status=404)
     try:
-        state,peer=active_state(row,'system:client-api')
+        state,peer,user=active_state(row,'system:client-api')
         data=configuration(row,state,peer,material(row)['private_key'])
         result=HttpResponse(json.dumps(data,ensure_ascii=False,indent=2)+'\n',content_type='application/yaml; charset=utf-8')
         result['Content-Disposition']='attachment; filename="Proxy-UDP.yaml"'
+        usage=user['usage']
+        result['Subscription-Userinfo']=(f"upload={usage['rx']}; download={usage['tx']}; "
+                                         f"total={user['quota'] or 0}; expire={user['expires'] or 0}")
         result['profile-update-interval']='1';result['Cache-Control']='no-store, private';result['Referrer-Policy']='no-referrer'
         return result
     except (ValueError,KeyError,StopIteration,TypeError,OSError,TimeoutError,DatabaseError):return HttpResponse(status=503)

@@ -53,6 +53,17 @@ class FlClashTests(TestCase):
   self.assertFalse(any(p['public_key']==row.public_key for p in self.engine.snapshot()['peers']))
   self.assertEqual(self.client.get('/api/flclash',secure=True).json()['profiles'],[])
   self.assertFalse(self.driver.allowed)
+ def test_subscription_url_carries_current_account_usage_and_actual_expiry(self):
+  self.create();row=FlClashProfile.objects.get();url=self.link(row.pk)
+  self.assertEqual(self.download(url)['Subscription-Userinfo'],'upload=0; download=0; total=1000000; expire=0')
+  expiry=int(time.time())+86400
+  self.engine.db.execute('UPDATE users SET expires=? WHERE id=?',(expiry,self.user['id']))
+  used=self.engine.used
+  with patch.object(self.engine,'used',side_effect=lambda scope,key,*args: {'rx':23,'tx':87} if scope=='user' and key==self.user['id'] else used(scope,key,*args)):
+   response=Client().get(url,secure=True)
+  self.assertEqual(response.status_code,200)
+  self.assertEqual(response['Subscription-Userinfo'],f'upload=23; download=87; total=1000000; expire={expiry}')
+  self.assertEqual(FlClashProfile.objects.count(),1)
  def test_two_native_devices_leave_only_one_configuration_without_pending_refusal(self):
   for key in (base64.b64encode(bytes([14])*32).decode(),base64.b64encode(bytes([15])*32).decode()):
    self.engine.dispatch({'operation':'peer.enroll','actor':'local:1','data':{'public_key':key,'user_id':self.user['id'],'name':'native','machine_name':'native','client_version':'0.3.0','confirm':True}})

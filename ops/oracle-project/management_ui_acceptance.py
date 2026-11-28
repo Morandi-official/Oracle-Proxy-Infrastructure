@@ -112,7 +112,7 @@ def main():
        data={'available':True,'rows':[
          {'port':443,'windows':{'result':'success','verified_at':now},'android':{'result':'failure','verified_at':now}},
          {'port':8443,'windows':None,'android':{'result':'error','verified_at':now}},
-         {'port':51820,'windows':None,'android':None}]}
+         {'port':51820,'windows':None,'android':{'result':'success','verified_at':now-4000,'stale':True}}]}
       elif path=='/api/status':data={'actor':'Synthetic CI administrator','snapshot':{'wg_service':'ACTIVE','wg_interface':'PRESENT','udp_listener':'LISTENING','observed_at':int(time.time())}}
       elif path=='/api/udp-diagnostics':data={'diagnostics':[{'id':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','username':'<b>diagnostic-user</b>','device_id':'aabbccddeeff','started_at':int(time.time()),'phase':'complete','report':{'schema':1,'physical_nic_observation':'not_collected','trials':[{'address':'152.67.156.100','port':443,'client':{'egress_verified':True}}]}}]}
       elif path=='/api/audit':data={'entries':[{'occurred_at':int(time.time())-i,'actor':'fixture','action':'test','resource':'fixture'} for i in range(20)],'activity':[{'username':'ci-user01','count':7}]}
@@ -126,6 +126,7 @@ def main():
      expect(rows.nth(0).locator('td').nth(2)).to_have_text('未通过')
      expect(rows.nth(1).locator('td').nth(2)).to_have_text('探测异常')
      expect(rows.nth(2).locator('td').nth(1)).to_have_text('待巡检')
+     expect(rows.nth(2).locator('td').nth(2)).to_have_text('正常（过期）')
      expect(page.locator('#remaining')).to_have_text('未知')
      endpoints=page.locator('#endpoint-form')
      expect(endpoints.locator('[name=primary]')).to_have_value('192.0.2.20')

@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from unittest import TestCase
+from unittest.mock import patch
 
-from .port_monitor import format_status
+from .port_monitor import format_status, latest_reports, RUNS
 
 
 class PortMonitorTests(TestCase):
@@ -24,7 +25,18 @@ class PortMonitorTests(TestCase):
         result = {row['port']: row for row in rows}
         self.assertEqual(result[443]['windows']['result'], 'success')
         self.assertEqual(result[443]['android']['result'], 'failure')
-        self.assertIsNone(result[8443]['windows'])
+        self.assertEqual(result[8443]['windows']['result'], 'success')
+        self.assertTrue(result[8443]['windows']['stale'])
+        self.assertFalse(result[443]['windows']['stale'])
         self.assertEqual(result[8443]['android']['result'], 'error')
         self.assertIsNone(result[51820]['windows'])
         self.assertIsNone(result[51820]['android'])
+
+    def test_after_deploy_reads_revision_of_last_completed_run(self):
+        revision = 'a' * 40
+        with patch('console.port_monitor.github_json', side_effect=[
+            {'workflow_runs': [{'head_sha': revision}]}, {'check_runs': [{'name': 'probe'}]},
+        ]) as api:
+            self.assertEqual(latest_reports(), [{'name': 'probe'}])
+        self.assertEqual([call.args[0] for call in api.call_args_list],
+                         [RUNS, f'/commits/{revision}/check-runs?per_page=100'])

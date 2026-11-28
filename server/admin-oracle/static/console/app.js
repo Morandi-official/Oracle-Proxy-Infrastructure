@@ -30,16 +30,22 @@ function renderPortStatus(status){
  const rows=(status?.rows || []).map(record=>{
   const row=document.createElement('tr');cell(row,record.port);
   for(const platform of ['windows','android']){
-   const result=record[platform];const age=result?Math.floor(Date.now()/1000-result.verified_at):null;
-   const valid=age!==null && age>=-5 && age<=2700;
-   const label=valid?({success:'正常',failure:'未通过',error:'探测异常'}[result.result]):status.available?'待巡检':'读取异常';
+   const result=record[platform];
+   const label=result?({success:'正常',failure:'未通过',error:'探测异常'}[result.result]):status.available?'待巡检':'读取异常';
    const col=cell(row,label);
-   if(valid){col.className=result.result==='failure'?'failed-port':'verified-port';col.title=time(result.verified_at);}
+   if(result){
+    const stale=result.stale || !status.available;
+    col.className=stale?'muted':result.result==='failure'?'failed-port':'verified-port';
+    if(stale)col.textContent += result.stale?'（过期）':'（上次）';
+    col.title=time(result.verified_at);
+   }
   }
   return row;
  });
  if(!rows.length){const row=document.createElement('tr');cell(row,'暂无端口信息').colSpan=3;rows.push(row);}
  replaceRows('port-status-rows',rows);
+ const latest=Math.max(0,...(status.rows || []).flatMap(row=>['windows','android'].map(p=>row[p]?.verified_at || 0)));
+ el('port-status-note').textContent=(latest?'最近 '+time(latest)+' · ':'')+(status.available?'云端巡检可能延迟':'结果源暂不可用');
 }
 let portStatusBusy=false;
 async function refreshPortStatus(){
@@ -206,8 +212,8 @@ function updateFlClashCapacity(){const select=el('flclash-user'),option=select.s
 function renderFlClashUsers(data){const select=el('flclash-user'),value=select.value;select.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='选择用户';select.append(empty);for(const u of data.users.filter(u=>u.username)){const option=document.createElement('option');option.value=u.id;const remaining=Math.max(0,u.device_limit-u.device_count);option.disabled=u.status!=='active' || remaining===0 || Boolean(data.error || data.budget.guard_blocked);option.dataset.remaining=remaining;option.textContent=u.username+' · '+u.device_count+'/'+u.device_limit+' · '+(u.status!=='active'?'账号不可用':remaining?'余 '+remaining+' 个名额':'已达上限');select.append(option);}select.value=value;updateFlClashCapacity();}
 el('flclash-user').addEventListener('change',updateFlClashCapacity);
 async function profileLink(profile){return (await api('/api/flclash/'+profile.id,{action:'link'})).url;}
-async function refreshFlClash(){try{const data=await api('/api/flclash');const rows=data.profiles.map(p=>{const row=document.createElement('tr');const u=current?.users.find(u=>u.id===p.user_id);cell(row,(u?.username || '已删除账号')+' / '+p.name);cell(row,({active:'可导入 · UDP',pending:'创建结果待核查',blocked:'暂停导入 · 核对用户状态',revoked:'已撤销'})[p.status] || p.status);cell(row,time(p.created_at)+(p.last_used_at?' · 最近使用 '+time(p.last_used_at):' · 尚无握手记录'));const actions=cell(row,'');actions.className='row-actions';if(p.status==='active'){button(actions,'复制链接',async()=>{try{await navigator.clipboard.writeText(await profileLink(p));feedback('导入链接已复制，请私下交给对应用户。');}catch(e){feedback('未能复制链接，请使用下载配置。',true);}});button(actions,'下载配置',async()=>{try{const url=await profileLink(p);const response=await fetch(url,{credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer'});if(!response.ok)throw new Error('配置暂不可下载，请检查用户状态或刷新后重试。');const blob=await response.blob();const objectUrl=URL.createObjectURL(blob);const a=document.createElement('a');a.href=objectUrl;a.download='Proxy-UDP.yaml';a.referrerPolicy='no-referrer';document.body.append(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(objectUrl);},10000);}catch(e){feedback(e.message,true);}});}if(p.status!=='revoked')button(actions,'撤销',async()=>{if(!confirm('撤销 '+p.name+'？已下载配置也将停止接入，配置记录及密钥材料将删除；历史用量保留。'))return;try{await api('/api/flclash/'+p.id,{action:'revoke'});await refresh();feedback('配置已撤销并删除。');}catch(e){feedback(e.message,true);}});return row;});if(!rows.length){const row=document.createElement('tr');const c=cell(row,'暂无配置，为每台设备单独创建。');c.colSpan=4;rows.push(row);}replaceRows('flclash-rows',rows);el('flclash-status').textContent='WireGuard UDP 443 · 无备用通道';}catch(e){el('flclash-status').textContent=e.message;}}
-el('flclash-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;if(!f.reportValidity())return;const submit=f.querySelector('[type=submit]');submit.disabled=true;try{await api('/api/flclash/create',{user_id:f.elements.user_id.value});await refresh();feedback('配置已创建；复制链接或下载后导入 FlClash。');}catch(e){await refreshFlClash();feedback(e.message,true);}finally{updateFlClashCapacity();}});
+async function refreshFlClash(){try{const data=await api('/api/flclash');const rows=data.profiles.map(p=>{const row=document.createElement('tr');const u=current?.users.find(u=>u.id===p.user_id);cell(row,(u?.username || '已删除账号')+' / '+p.name);cell(row,({active:'可导入 · UDP',pending:'创建结果待核查',blocked:'暂停导入 · 核对用户状态',revoked:'已撤销'})[p.status] || p.status);cell(row,time(p.created_at)+(p.last_used_at?' · 最近使用 '+time(p.last_used_at):' · 尚无握手记录'));const actions=cell(row,'');actions.className='row-actions';if(p.status==='active'){button(actions,'复制订阅链接',async()=>{try{await navigator.clipboard.writeText(await profileLink(p));feedback('订阅链接已复制。在 FlClash 中通过 URL 导入可查看用量与有效期。请私下交给对应用户。');}catch(e){feedback('未能复制链接，请使用下载配置。',true);}});button(actions,'下载配置',async()=>{try{const url=await profileLink(p);const response=await fetch(url,{credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer'});if(!response.ok)throw new Error('配置暂不可下载，请检查用户状态或刷新后重试。');const blob=await response.blob();const objectUrl=URL.createObjectURL(blob);const a=document.createElement('a');a.href=objectUrl;a.download='Proxy-UDP.yaml';a.referrerPolicy='no-referrer';document.body.append(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(objectUrl);},10000);}catch(e){feedback(e.message,true);}});}if(p.status!=='revoked')button(actions,'撤销',async()=>{if(!confirm('撤销 '+p.name+'？已下载配置也将停止接入，配置记录及密钥材料将删除；历史用量保留。'))return;try{await api('/api/flclash/'+p.id,{action:'revoke'});await refresh();feedback('配置已撤销并删除。');}catch(e){feedback(e.message,true);}});return row;});if(!rows.length){const row=document.createElement('tr');const c=cell(row,'暂无配置，为每台设备单独创建。');c.colSpan=4;rows.push(row);}replaceRows('flclash-rows',rows);el('flclash-status').textContent='WireGuard UDP 443 · 无备用通道';}catch(e){el('flclash-status').textContent=e.message;}}
+el('flclash-form').addEventListener('submit',async event=>{event.preventDefault();const f=event.currentTarget;if(!f.reportValidity())return;const submit=f.querySelector('[type=submit]');submit.disabled=true;try{await api('/api/flclash/create',{user_id:f.elements.user_id.value});await refresh();feedback('配置已创建。请复制订阅链接，在 FlClash 中通过 URL 导入。');}catch(e){await refreshFlClash();feedback(e.message,true);}finally{updateFlClashCapacity();}});
 
 const percent=v=>Number.isFinite(v)?v.toFixed(1)+'%':'采样中';
 const mbps=v=>Number.isFinite(v)?(v*8/1e6).toFixed(2):'—';

@@ -6,9 +6,9 @@ import tempfile
 
 import enrollment_console as web
 
-REQUEST_ID = 'native-port-monitor-console-apply'
+REQUEST_ID = 'native-port-monitor-subscription-fix'
 FILES = tuple(Path(name) for name in (
-    'config/urls.py', 'console/views.py', 'console/port_monitor.py',
+    'config/urls.py', 'console/views.py', 'console/port_monitor.py', 'console/flclash.py',
     'static/console/app.js', 'static/console/style.css', 'templates/dashboard.html',
 ))
 
@@ -66,5 +66,10 @@ def dispatch(host, operation, request, revision):
     host.as_user(host.APP_USER, [target / '.venv/bin/python', 'manage.py', 'check', '--deploy', '--fail-level', 'WARNING'],
                  cwd=target, env=environment)
     web.activate(host, target, current)
-    print('PROJECT_PORT_MONITOR_CONSOLE=ACTIVE')
+    print('PROJECT_PORT_MONITOR_CONSOLE=ACTIVE', flush=True)
+    host.as_user(host.APP_USER, [target / '.venv/bin/python', 'manage.py', 'shell', '-c',
+                 "from console.port_monitor import snapshot; s=snapshot(); "
+                 "print('PROJECT_PORT_MONITOR_READBACK='+str(s['available'])+':'+"
+                 "str(sum(row.get(p) is not None for row in s['rows'] for p in ('windows','android'))))"],
+                 cwd=target, env=environment)
     return True
